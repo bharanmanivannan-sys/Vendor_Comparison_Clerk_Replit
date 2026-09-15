@@ -3,7 +3,12 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: |
+    Vendor Compare API for researched, metered product comparisons.
+
+    Customer applications authenticate `/v1` operations with a tenant-scoped API key:
+    `Authorization: Bearer vc_live_...`. Account, billing, and API-key management
+    operations use a signed-in Clerk session and, where documented, `X-Tenant-Id`.
 servers:
   - url: /api
     description: Base API path
@@ -284,6 +289,11 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/ComparisonInput" }
+            example:
+              prompt: Compare Tesla Model 3 and BYD Seal for an Australian buyer with a A$50,000 budget.
+              vendors: [Tesla Model 3, BYD Seal]
+              criteria: [Purchase price, Driving range, Warranty, Running costs]
+              urls: []
       responses:
         "201":
           description: Completed comparison
@@ -297,6 +307,20 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Comparison" }
+              example:
+                id: 142
+                status: complete
+                category: Electric vehicles
+                recommendation: BYD Seal
+                score: 84
+                executiveSummary: BYD Seal provides the stronger budget fit.
+                recommendationReason: It remains within budget while preserving range and warranty value.
+                vendors: [Tesla Model 3, BYD Seal]
+                vendorScores:
+                  - { vendor: Tesla Model 3, score: 77, verdict: Strong technology, above budget }
+                  - { vendor: BYD Seal, score: 84, verdict: Best overall fit }
+                nextSteps: [Confirm drive-away pricing, Book both test drives]
+                urls: [https://www.tesla.com/en_au/model3, https://www.bydautomotive.com.au/seal]
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -452,12 +476,25 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/ApiKeyCreateInput" }
+            example:
+              name: Production integration
+              scopes: [comparisons:read, comparisons:write, usage:read]
       responses:
         "201":
           description: Created API key
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiKeyCreated" }
+              example:
+                id: 7
+                name: Production integration
+                prefix: vc_live_ab12
+                scopes: [comparisons:read, comparisons:write, usage:read]
+                expiresAt: null
+                revokedAt: null
+                lastUsedAt: null
+                createdAt: "2026-09-15T01:00:00.000Z"
+                key: vc_live_ab12_example_returned_once
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -519,18 +556,27 @@ paths:
           required: true
           description: Exact tenant being managed; the Clerk user must be an owner or admin member.
           schema: { type: string, minLength: 1, maxLength: 200 }
-      description: Checkout is unavailable with a documented 503 configuration error until verified Whop company and plan configuration is present.
+      description: |
+        Creates a Whop-hosted payment page for the signed-in tenant administrator.
+        Redirect the customer to `purchaseUrl`. The redirect does not activate access:
+        the server verifies a successful non-refunded payment, active membership, and
+        current billing period before enabling API keys. Returns `503 billing_not_configured`
+        until verified Whop company and plan configuration is present.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/CheckoutInput" }
+            example:
+              redirectUrl: https://your-app.example.com/billing/complete
       responses:
         "201":
           description: Hosted checkout
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CheckoutResponse" }
+              example:
+                purchaseUrl: https://whop.com/checkout/example
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/ConfigurationError" }
@@ -559,14 +605,15 @@ paths:
 components:
   securitySchemes:
     ApiKeyAuth:
-      type: apiKey
-      in: header
-      name: Authorization
-      description: "Bearer API key (Authorization: Bearer vc_live_...). Scope is documented per operation."
+      type: http
+      scheme: bearer
+      bearerFormat: Vendor Compare API key
+      description: "Tenant-scoped API key. Send Authorization: Bearer vc_live_.... Scope is documented per operation. The plaintext key is returned only when created or rotated."
     ClerkBearer:
       type: http
       scheme: bearer
       bearerFormat: Clerk session
+      description: Signed-in Clerk session token for management operations only; do not use this credential for /v1 calls.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
