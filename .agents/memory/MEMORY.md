@@ -1,0 +1,2 @@
+- [API client compiler settings](api-client-dom-iterable.md) — generated Headers helpers require DOM.Iterable in the API client TypeScript libs.
+- [OpenAI web-search output](openai-web-search-output.md) — Responses web search cannot use JSON mode; request plain text and safely extract the JSON object.

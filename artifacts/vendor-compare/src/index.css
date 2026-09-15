@@ -1,0 +1,172 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@layer theme, base, clerk, components, utilities;
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card-border: hsl(var(--card-border));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: 43 33% 94%;
+  --foreground: 225 29% 17%;
+  --border: 40 20% 82%;
+  --input: 40 20% 78%;
+  --ring: 168 58% 39%;
+  --card: 42 40% 97%;
+  --card-foreground: 225 29% 17%;
+  --card-border: 40 22% 84%;
+  --primary: 168 58% 32%;
+  --primary-foreground: 44 42% 96%;
+  --secondary: 224 30% 23%;
+  --secondary-foreground: 42 40% 97%;
+  --muted: 40 24% 88%;
+  --muted-foreground: 224 12% 43%;
+  --accent: 47 88% 58%;
+  --accent-foreground: 224 30% 15%;
+  --destructive: 4 62% 48%;
+  --destructive-foreground: 42 40% 97%;
+  --app-font-sans: 'Plus Jakarta Sans', sans-serif;
+  --app-font-mono: 'Space Mono', monospace;
+  --radius: 0.9rem;
+  --shadow-sm: 0 2px 8px rgba(33, 39, 63, .06);
+  --shadow-md: 0 16px 35px rgba(33, 39, 63, .09);
+}
+
+.dark {
+  --background: 225 29% 14%;
+  --foreground: 42 40% 96%;
+  --border: 225 19% 27%;
+  --input: 225 18% 30%;
+  --ring: 168 58% 52%;
+  --card: 225 25% 18%;
+  --card-foreground: 42 40% 96%;
+  --card-border: 225 19% 27%;
+  --primary: 168 58% 47%;
+  --primary-foreground: 225 29% 14%;
+  --secondary: 42 40% 96%;
+  --secondary-foreground: 225 29% 14%;
+  --muted: 225 20% 23%;
+  --muted-foreground: 42 15% 70%;
+  --accent: 47 88% 58%;
+  --accent-foreground: 225 29% 14%;
+  --destructive: 4 62% 58%;
+  --destructive-foreground: 225 29% 14%;
+}
+
+@layer base {
+  * { @apply border-border; }
+  html { scroll-behavior: smooth; }
+  body { @apply font-sans antialiased bg-background text-foreground; }
+  button, a, input, textarea { -webkit-tap-highlight-color: transparent; }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-line {
+  0%, 100% { transform: scaleX(.55); opacity: .35; }
+  50% { transform: scaleX(1); opacity: 1; }
+}
+.animate-rise { animation: rise-in .55s cubic-bezier(.22,1,.36,1) both; }
+.animate-rise-1 { animation-delay: .08s; }
+.animate-rise-2 { animation-delay: .16s; }
+.animate-rise-3 { animation-delay: .24s; }
+.loading-line { animation: pulse-line 1.4s ease-in-out infinite; transform-origin: left; }
+@keyframes research-spin {
+  to { transform: rotate(360deg); }
+}
+.grain::after {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  opacity: .035;
+  z-index: 50;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
+}
+.display { font-family: 'Bricolage Grotesque', sans-serif; }
+.mono { font-family: var(--app-font-mono); }
+.focus-ring:focus-visible { outline: 3px solid hsl(var(--accent)); outline-offset: 3px; }
+
+[data-testid="comparison-composer"] label[for$="comparison-prompt"]::after {
+  content: "You can compare up to 5 products or vendors at a time.";
+  display: block;
+  margin-top: .5rem;
+  font-family: var(--app-font-sans);
+  font-size: .75rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+  letter-spacing: 0;
+  color: #a8b0c2;
+}
+
+[data-testid="comparison-composer"] label[for="comparison-composer-prompt"]::after {
+  color: #687083;
+}
+
+body.comparison-research-pending [data-testid="comparison-composer"] {
+  position: relative;
+  isolation: isolate;
+}
+
+body.comparison-research-pending [data-testid="comparison-composer"]::before {
+  content: "";
+  position: absolute;
+  z-index: 32;
+  top: 2rem;
+  left: 50%;
+  width: 2rem;
+  height: 2rem;
+  margin-left: -1rem;
+  border: 3px solid #d9d1bf;
+  border-top-color: #0f766e;
+  border-radius: 999px;
+  animation: research-spin .8s linear infinite;
+}
+
+body.comparison-research-pending [data-testid="comparison-composer"]::after {
+  content: "Researching and building your comparison\A\A Please keep this page open. This can take up to two minutes while we:\A 1. Identify the products, market and constraints\A 2. Research current official and independent sources\A 3. Score each option using the weighted criteria\A 4. Check for credible alternatives and trade-offs\A\A While you wait\A • A lower headline rate can cost more after fees and conditions.\A • We separate verified facts from estimates and assumptions.\A • Outside alternatives are explained separately, not silently added to the ranking.";
+  white-space: pre-line;
+  position: absolute;
+  z-index: 31;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 5rem 2rem 2rem;
+  border-radius: inherit;
+  background: rgba(248, 244, 232, .98);
+  color: #39435a;
+  font-size: .8rem;
+  font-weight: 600;
+  line-height: 1.55rem;
+  text-align: left;
+  box-shadow: 0 22px 55px rgba(32, 40, 64, .18);
+}

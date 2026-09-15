@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Vendor Compare"
+description = "A decision-support web app that helps teams compare products and services across vendors using structured criteria, pricing, features, SWOT analysis, and market insights."
+version = "1.0.0"
+id = "artifacts/vendor-compare"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24607
+
+[services.development]
+run = "pnpm --filter @workspace/vendor-compare run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/vendor-compare", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/vendor-compare/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24607"
+BASE_PATH = "/"

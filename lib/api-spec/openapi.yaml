@@ -1,0 +1,1059 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: comparisons
+    description: Vendor and product comparison operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [comparisons]
+      summary: Get comparison workspace summary
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons:
+    get:
+      operationId: listComparisons
+      tags: [comparisons]
+      summary: List the signed-in user's comparison history
+      responses:
+        "200":
+          description: Comparisons from the last 30 days
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ComparisonSummary"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+    post:
+      operationId: createComparison
+      tags: [comparisons]
+      summary: Create and analyze a new vendor comparison
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonInput"
+      responses:
+        "201":
+          description: Comparison analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comparison"
+        "400":
+          description: Invalid comparison input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /guest/comparisons:
+    post:
+      operationId: createGuestComparison
+      tags: [comparisons]
+      summary: Create an unsaved guest vendor comparison
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonInput"
+      responses:
+        "200":
+          description: Unsaved comparison analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuestComparison"
+        "400":
+          description: Invalid comparison input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "429":
+          description: Guest usage limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/parse:
+    post:
+      operationId: parseComparisonPrompt
+      tags: [comparisons]
+      summary: Parse a natural language comparison request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonPromptInput"
+      responses:
+        "200":
+          description: Parsed comparison request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParsedComparison"
+        "400":
+          description: Invalid prompt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /guest/comparisons/parse:
+    post:
+      operationId: parseGuestComparisonPrompt
+      tags: [comparisons]
+      summary: Parse a guest comparison prompt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonPromptInput"
+      responses:
+        "200":
+          description: Parsed comparison request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParsedComparison"
+        "400":
+          description: Invalid prompt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "429":
+          description: Guest usage limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}:
+    get:
+      operationId: getComparison
+      tags: [comparisons]
+      summary: Get a comparison analysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Comparison analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comparison"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Comparison not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+    delete:
+      operationId: deleteComparison
+      tags: [comparisons]
+      summary: Delete a comparison from history
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Comparison deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Comparison not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /v1/comparisons:
+    get:
+      operationId: externalListComparisons
+      tags: [commercial]
+      summary: List tenant comparisons
+      description: Requires an API key with the comparisons:read scope.
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Tenant comparisons
+          headers:
+            RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
+            RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+            RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
+            X-Quota-Included: { $ref: "#/components/headers/QuotaIncluded" }
+            X-Quota-Used: { $ref: "#/components/headers/QuotaUsed" }
+            X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ComparisonSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      operationId: externalCreateComparison
+      tags: [commercial]
+      summary: Create a metered tenant comparison
+      description: Requires an API key with the comparisons:write scope and an Idempotency-Key. Only successful completed comparisons consume usage; retries with the same request are replayed.
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique key for this request; reusing it with a changed body returns 409.
+          schema: { type: string, minLength: 8, maxLength: 255 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComparisonInput" }
+      responses:
+        "201":
+          description: Completed comparison
+          headers:
+            RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
+            RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+            RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
+            X-Quota-Included: { $ref: "#/components/headers/QuotaIncluded" }
+            X-Quota-Used: { $ref: "#/components/headers/QuotaUsed" }
+            X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comparison" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "402": { $ref: "#/components/responses/QuotaExceeded" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    parameters: []
+  /v1/comparisons/{id}:
+    get:
+      operationId: externalGetComparison
+      tags: [commercial]
+      summary: Get a tenant comparison
+      description: Requires an API key with the comparisons:read scope.
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Comparison
+          headers:
+            RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
+            RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+            RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
+            X-Quota-Included: { $ref: "#/components/headers/QuotaIncluded" }
+            X-Quota-Used: { $ref: "#/components/headers/QuotaUsed" }
+            X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comparison" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /v1/usage:
+    get:
+      operationId: getExternalUsage
+      tags: [commercial]
+      summary: Get monthly usage and quota
+      description: Requires an API key with the usage:read scope.
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: Usage
+          headers:
+            RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
+            RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+            RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
+            X-Quota-Included: { $ref: "#/components/headers/QuotaIncluded" }
+            X-Quota-Used: { $ref: "#/components/headers/QuotaUsed" }
+            X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /tenant/bootstrap:
+    post:
+      operationId: bootstrapTenant
+      tags: [management]
+      summary: Ensure a personal tenant for the signed-in Clerk user
+      security: [{ ClerkBearer: [] }]
+      responses:
+        "200":
+          description: Tenant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /tenant/usage:
+    get:
+      operationId: getTenantUsage
+      tags: [management]
+      summary: View tenant usage
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "200":
+          description: Usage
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /tenant/audit:
+    get:
+      operationId: listTenantAudit
+      tags: [management]
+      summary: List tenant audit events
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AuditEvent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /tenant/api-keys:
+    get:
+      operationId: listTenantApiKeys
+      tags: [management]
+      summary: List API key metadata
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "200":
+          description: API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApiKeyMetadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createTenantApiKey
+      tags: [management]
+      summary: Create an API key (plaintext is returned once)
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiKeyCreateInput" }
+      responses:
+        "201":
+          description: Created API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiKeyCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /tenant/api-keys/{id}/rotate:
+    post:
+      operationId: rotateTenantApiKey
+      tags: [management]
+      summary: Revoke an API key and issue a replacement
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "201":
+          description: Replacement key, plaintext returned once
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiKeyCreated" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /tenant/api-keys/{id}/revoke:
+    post:
+      operationId: revokeTenantApiKey
+      tags: [management]
+      summary: Revoke an API key
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204": { description: Revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /whop/checkout:
+    post:
+      operationId: createWhopCheckout
+      tags: [management]
+      summary: Create a hosted Whop checkout
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      description: Checkout is unavailable with a documented 503 configuration error until verified Whop company and plan configuration is present.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckoutInput" }
+      responses:
+        "201":
+          description: Hosted checkout
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ConfigurationError" }
+  /tenant/whop/reconcile:
+    post:
+      operationId: reconcileWhopBilling
+      tags: [management]
+      summary: Reconcile a stored Whop checkout server-side
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "200":
+          description: Verified or unverified billing status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingReconciliation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ConfigurationError" }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: "Bearer API key (Authorization: Bearer vc_live_...). Scope is documented per operation."
+    ClerkBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: Clerk session
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique key for this request. Reusing it with a changed body returns 409.
+      schema: { type: string, minLength: 8, maxLength: 255 }
+    TenantIdHeader:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      description: Exact tenant being managed; the Clerk user must be an owner or admin member.
+      schema: { type: string, minLength: 1, maxLength: 200 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+  headers:
+    RateLimitLimit:
+      description: Requests permitted per UTC minute.
+      schema: { type: integer }
+    RateLimitRemaining:
+      description: Requests remaining in the current UTC minute.
+      schema: { type: integer }
+    RateLimitReset:
+      description: Unix timestamp when the current minute resets.
+      schema: { type: integer }
+    QuotaIncluded:
+      description: Comparisons included in the current provider billing period (or calendar month for inactive/bootstrap display).
+      schema: { type: integer }
+    QuotaUsed:
+      description: Successful comparisons used in the current provider billing period (or calendar month for inactive/bootstrap display).
+      schema: { type: integer }
+    QuotaRemaining:
+      description: Comparisons remaining before the prepaid hard cap is reached.
+      schema: { type: integer }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Unauthorized:
+      description: Missing or invalid authentication
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Forbidden:
+      description: Authentication lacks the required scope or tenant role
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Conflict:
+      description: Idempotency key conflict
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    RateLimited:
+      description: Minute rate limit exceeded
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds until retry }
+        RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
+        RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+        RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    QuotaExceeded:
+      description: Prepaid comparison allowance exhausted
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds until the prepaid allowance resets }
+        X-Quota-Included: { $ref: "#/components/headers/QuotaIncluded" }
+        X-Quota-Used: { $ref: "#/components/headers/QuotaUsed" }
+        X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    ConfigurationError:
+      description: Required server configuration is not available
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    BadGateway:
+      description: Comparison analysis or durable finalization failed upstream
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  schemas:
+    LegacyErrorResponse:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+    ErrorResponse:
+      type: object
+      description: Stable structured error envelope; error is retained for legacy clients.
+      properties:
+        code: { type: string, example: invalid_request }
+        message: { type: string }
+        requestId: { type: string }
+        details: { type: object, additionalProperties: true }
+      required: [code, message]
+    Tenant:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        plan: { type: string }
+        billingStatus: { type: string, enum: [inactive, active, past_due] }
+        includedComparisons: { type: integer }
+        requestsPerMinute: { type: integer }
+      required: [id, name, plan, billingStatus, includedComparisons, requestsPerMinute]
+    BillingReconciliation:
+      type: object
+      properties:
+        status: { type: string, enum: [active, unverified] }
+        membershipId: { type: string, nullable: true }
+      required: [status]
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        actorId: { type: string }
+        action: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, actorId, action, metadata, createdAt]
+    ApiKeyCreateInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        scopes:
+          type: array
+          items: { type: string, enum: [comparisons:read, comparisons:write, usage:read] }
+        expiresAt: { type: string, format: date-time }
+      required: [name]
+    ApiKeyMetadata:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        prefix: { type: string }
+        scopes: { type: array, items: { type: string } }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, name, prefix, scopes, createdAt]
+    ApiKeyCreated:
+      allOf:
+        - $ref: "#/components/schemas/ApiKeyMetadata"
+        - type: object
+          properties:
+            key: { type: string, description: Plaintext key; returned only once. }
+          required: [key]
+    UsageSummary:
+      type: object
+      properties:
+        month: { type: string, example: "2025-01-15/2025-02-15", description: Provider period label; inactive/bootstrap tenants use YYYY-MM. }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        included: { type: integer }
+        used: { type: integer }
+        remaining: { type: integer, description: Comparisons remaining before the prepaid hard cap is reached. }
+        exhausted: { type: boolean }
+      required: [month, periodStart, periodEnd, included, used, remaining, exhausted]
+    CheckoutInput:
+      type: object
+      properties:
+        redirectUrl: { type: string, format: uri }
+      required: [redirectUrl]
+    CheckoutResponse:
+      type: object
+      properties:
+        purchaseUrl: { type: string, format: uri }
+      required: [purchaseUrl]
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    ComparisonInput:
+      type: object
+      properties:
+        prompt:
+          type: string
+          minLength: 8
+          maxLength: 2000
+        vendors:
+          type: array
+          minItems: 2
+          maxItems: 5
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+        urls:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            format: uri
+        criteria:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            minLength: 1
+            maxLength: 100
+      required: [prompt]
+    ComparisonPromptInput:
+      type: object
+      properties:
+        prompt:
+          type: string
+          minLength: 8
+          maxLength: 2000
+      required: [prompt]
+    ParsedComparison:
+      type: object
+      properties:
+        prompt:
+          type: string
+        vendors:
+          type: array
+          items:
+            type: string
+        urls:
+          type: array
+          items:
+            type: string
+        criteria:
+          type: array
+          items:
+            type: string
+        context:
+          $ref: "#/components/schemas/ComparisonContext"
+      required: [prompt, vendors, urls, criteria, context]
+    ComparisonContext:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        segment:
+          type: string
+        industry:
+          type: string
+        message:
+          type: string
+      required: [valid, segment, industry, message]
+    ComparisonSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        prompt:
+          type: string
+        vendors:
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+        recommendation:
+          type: string
+        score:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [complete, processing, failed]
+      required: [id, prompt, vendors, category, recommendation, score, createdAt, status]
+    Comparison:
+      allOf:
+        - $ref: "#/components/schemas/ComparisonSummary"
+        - type: object
+          properties:
+            urls:
+              type: array
+              items:
+                type: string
+            criteria:
+              type: array
+              items:
+                type: string
+            executiveSummary:
+              type: string
+            recommendationReason:
+              type: string
+            vendorScores:
+              type: array
+              items:
+                $ref: "#/components/schemas/VendorScore"
+            pricing:
+              type: array
+              items:
+                $ref: "#/components/schemas/AnalysisRow"
+            features:
+              type: array
+              items:
+                $ref: "#/components/schemas/AnalysisRow"
+            swot:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+            opportunities:
+              type: array
+              items:
+                type: string
+            insights:
+              type: array
+              items:
+                type: string
+            nextSteps:
+              type: array
+              items:
+                type: string
+          required: [urls, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps]
+    GuestComparison:
+      type: object
+      properties:
+        prompt:
+          type: string
+        vendors:
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+        recommendation:
+          type: string
+        score:
+          type: integer
+        status:
+          type: string
+          enum: [complete, processing, failed]
+        createdAt:
+          type: string
+          format: date-time
+        urls:
+          type: array
+          items:
+            type: string
+        criteria:
+          type: array
+          items:
+            type: string
+        executiveSummary:
+          type: string
+        recommendationReason:
+          type: string
+        vendorScores:
+          type: array
+          items:
+            $ref: "#/components/schemas/VendorScore"
+        pricing:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalysisRow"
+        features:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalysisRow"
+        swot:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        opportunities:
+          type: array
+          items:
+            type: string
+        insights:
+          type: array
+          items:
+            type: string
+        nextSteps:
+          type: array
+          items:
+            type: string
+      required: [prompt, vendors, category, recommendation, score, status, createdAt, urls, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps]
+    VendorScore:
+      type: object
+      properties:
+        vendor:
+          type: string
+        score:
+          type: integer
+        color:
+          type: string
+        verdict:
+          type: string
+        weightedScores:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeightedCriterionScore"
+        switchConditions:
+          type: array
+          description: Conditions under which this option should be preferred over the overall recommendation.
+          items:
+            type: string
+        vrio:
+          $ref: "#/components/schemas/VrioAssessment"
+        marketPosition:
+          $ref: "#/components/schemas/MarketPosition"
+      required: [vendor, score, color, verdict]
+    VrioDimension:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [strong, partial, weak, not_applicable]
+        rationale:
+          type: string
+      required: [status, rationale]
+    VrioAssessment:
+      type: object
+      properties:
+        value:
+          $ref: "#/components/schemas/VrioDimension"
+        rarity:
+          $ref: "#/components/schemas/VrioDimension"
+        imitability:
+          $ref: "#/components/schemas/VrioDimension"
+        organization:
+          $ref: "#/components/schemas/VrioDimension"
+        implication:
+          type: string
+      required: [value, rarity, imitability, organization, implication]
+    MarketPosition:
+      type: object
+      properties:
+        marketShare:
+          type: string
+          description: Latest credible market-share figure or an explicit unavailable statement.
+        marketSharePeriod:
+          type: string
+        market:
+          type: string
+        shareValue:
+          type: string
+          description: Public parent-company share price/value when applicable, otherwise Not applicable.
+        shareValueAsOf:
+          type: string
+        applicability:
+          type: string
+        evidence:
+          type: string
+      required: [marketShare, marketSharePeriod, market, shareValue, shareValueAsOf, applicability, evidence]
+    WeightedCriterionScore:
+      type: object
+      properties:
+        criterion:
+          type: string
+        weight:
+          type: integer
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        rationale:
+          type: string
+      required: [criterion, weight, score, rationale]
+    AnalysisRow:
+      type: object
+      properties:
+        dimension:
+          type: string
+        values:
+          type: object
+          additionalProperties:
+            type: string
+        winner:
+          type: string
+      required: [dimension, values, winner]
+    DashboardSummary:
+      type: object
+      properties:
+        totalComparisons:
+          type: integer
+        thisMonth:
+          type: integer
+        averageScore:
+          type: integer
+        topCategory:
+          type: string
+        recentComparisons:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComparisonSummary"
+      required: [totalComparisons, thisMonth, averageScore, topCategory, recentComparisons]
+
