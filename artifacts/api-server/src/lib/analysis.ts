@@ -20,12 +20,12 @@ export type ComparisonContext = {
   message: string;
 };
 
-const WEIGHTED_CRITERIA = [
+export const WEIGHTED_CRITERIA = [
   { criterion: "Meets Needs / Features", weight: 25 },
   { criterion: "Quality & Reliability", weight: 20 },
   { criterion: "Value for Money", weight: 20 },
   { criterion: "Brand Reputation", weight: 7 },
-  { criterion: "Customer Service", weight: 10 },
+  { criterion: "Customer Advocacy / NPS", weight: 10 },
   { criterion: "Innovation / Differentiation", weight: 10 },
   { criterion: "Sustainability", weight: 5 },
   { criterion: "Regulatory Compliance", weight: 3 },
@@ -653,7 +653,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               shape: analysisOutputShape(input.vendors),
               researchScope: "Customer outcomes, ease of use, market positioning, competitive advantage, long-term sustainability, needs/features, reliability, value, reputation, service, innovation, sustainability, compliance, purchase and ongoing costs, warranty, lifespan, reviews, target-market fit, differentiation, and after-sales support. Where applicable include security, legacy-system integration, time-to-market, and vendor support. For every named option, research VRIO evidence, the latest credible market-share figure for the relevant segment and geography, and public parent-company share price/value when applicable. Explicitly state unavailable or not applicable instead of inventing figures. Research credible options outside the named shortlist that could solve the underlying problem better.",
               outputInstructions: isProviderLevelCreditCardDiscovery
-                ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. If NPS is requested, cite a comparable survey with publisher, year, population, and methodology; never present company-level NPS as product-level NPS, and state unavailable when providers cannot be compared on the same basis. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
+                ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
                 : "Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, and complete every framework field. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs.",
             }),
           },

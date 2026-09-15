@@ -1,11 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  WEIGHTED_CRITERIA,
   missingCreditCardSourceVendors,
   normalizeLensWinner,
   parsePrompt,
   validateComparisonContext,
 } from "./analysis";
+
+test("includes NPS in the 100-point weighted decision model", () => {
+  assert.deepEqual(
+    WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Customer Advocacy / NPS"),
+    { criterion: "Customer Advocacy / NPS", weight: 10 },
+  );
+  assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
 
 test("parses the Australian no-annual-fee credit-card request", () => {
   const parsed = parsePrompt("I want to compare credit card products which offers no annual fees across the credit card providers in Australia. Choose Westpac, ANZ, CBA, NAB and any other relevant provider.");
