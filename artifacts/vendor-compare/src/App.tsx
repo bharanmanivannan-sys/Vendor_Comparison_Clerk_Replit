@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -92,110 +92,38 @@ const clerkPublishableKey = publishableKeyFromHost(
 );
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 
-function downloadComparisonPdf(comparison: any) {
-  const clean = (value: unknown) => String(value ?? '')
-    .replace(/[^\x20-\x7E]/g, (character) => ({ '—': '-', '–': '-', '’': "'", '“': '"', '”': '"' }[character] ?? ' '))
-    .replace(/\s+/g, ' ')
-    .trim();
-  const wrap = (value: unknown, width = 86) => {
-    const words = clean(value).split(' ').filter(Boolean);
-    const lines: string[] = [];
-    let line = '';
-    for (const word of words) {
-      if (`${line} ${word}`.trim().length > width && line) {
-        lines.push(line);
-        line = word;
-      } else {
-        line = `${line} ${word}`.trim();
-      }
-    }
-    if (line) lines.push(line);
-    return lines;
-  };
-  const lines: string[] = [
-    'VENDOR COMPARE REPORT',
-    '',
-    ...wrap(comparison.prompt, 76),
-    '',
-    `Category: ${clean(comparison.category)}`,
-    `Generated: ${new Date(comparison.createdAt || Date.now()).toLocaleString()}`,
-    '',
-    'EXECUTIVE SUMMARY',
-    ...wrap(comparison.executiveSummary),
-    '',
-    `RECOMMENDATION: ${clean(comparison.recommendation)} (${Math.round(comparison.score || 0)}/100)`,
-    ...wrap(comparison.recommendationReason),
-    '',
-    'WEIGHTED SCORECARD',
-  ];
-  for (const vendor of comparison.vendorScores || []) {
-    lines.push(`${clean(vendor.vendor)}: ${Math.round(vendor.score || 0)}/100 - ${clean(vendor.verdict)}`);
-    for (const item of vendor.weightedScores || []) {
-      lines.push(`  ${clean(item.criterion)} (${item.weight}%): ${Math.round(item.score || 0)}/100`);
-    }
-    for (const condition of vendor.switchConditions || []) lines.push(...wrap(`  Prefer when: ${clean(condition)}`));
-    if (vendor.vrio) {
-      lines.push(`  VRIO: V ${clean(vendor.vrio.value?.status)}; R ${clean(vendor.vrio.rarity?.status)}; I ${clean(vendor.vrio.imitability?.status)}; O ${clean(vendor.vrio.organization?.status)}`);
-      lines.push(...wrap(`  Strategic implication: ${clean(vendor.vrio.implication)}`));
-    }
-    if (vendor.marketPosition) {
-      lines.push(...wrap(`  Market share: ${clean(vendor.marketPosition.marketShare)} (${clean(vendor.marketPosition.marketSharePeriod)}, ${clean(vendor.marketPosition.market)})`));
-      lines.push(...wrap(`  Share value: ${clean(vendor.marketPosition.shareValue)} (${clean(vendor.marketPosition.shareValueAsOf)})`));
-    }
+async function downloadComparisonPdf(report: HTMLElement, comparison: any) {
+  const [{ default: html2canvas }, { PDFDocument }] = await Promise.all([
+    import('html2canvas'),
+    import('pdf-lib'),
+  ]);
+  await document.fonts.ready;
+  const pdf = await PDFDocument.create();
+  const pages = Array.from(report.querySelectorAll<HTMLElement>('[data-pdf-page]'));
+  for (const reportPage of pages) {
+    const canvas = await html2canvas(reportPage, {
+      scale: 2,
+      backgroundColor: '#f8f4e8',
+      useCORS: true,
+      logging: false,
+    });
+    const imageBytes = await fetch(canvas.toDataURL('image/png', 1)).then((response) => response.arrayBuffer());
+    const image = await pdf.embedPng(imageBytes);
+    const page = pdf.addPage([595.28, 841.89]);
+    page.drawImage(image, { x: 0, y: 0, width: 595.28, height: 841.89 });
   }
-  const addList = (title: string, items: unknown[] = []) => {
-    if (!items.length) return;
-    lines.push('', title);
-    for (const item of items) lines.push(...wrap(`- ${clean(item)}`));
-  };
-  const addRows = (title: string, rows: any[] = []) => {
-    if (!rows.length) return;
-    lines.push('', title);
-    for (const row of rows) {
-      lines.push(...wrap(`${clean(row.dimension)}: ${Object.entries(row.values || {}).map(([vendor, value]) => `${clean(vendor)} - ${clean(value)}`).join('; ')}`));
-      if (row.winner) lines.push(`  Best fit: ${clean(row.winner)}`);
-    }
-  };
-  addRows('PRICING LENS', comparison.pricing);
-  addRows('FEATURE LENS', comparison.features);
-  for (const [title, items] of Object.entries(comparison.swot || {})) addList(`SWOT - ${clean(title).toUpperCase()}`, items as unknown[]);
-  addList('OPPORTUNITIES', comparison.opportunities);
-  addList('INSIGHTS AND ALTERNATIVES', comparison.insights);
-  addList('NEXT STEPS', comparison.nextSteps);
-  if (comparison.urls?.length) addList('SOURCES', comparison.urls);
-
-  const pages: string[][] = [];
-  for (let index = 0; index < lines.length; index += 48) pages.push(lines.slice(index, index + 48));
-  const escapePdf = (value: string) => value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-  const objects: string[] = [];
-  const pageIds = pages.map((_, index) => 4 + index * 2);
-  objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
-  objects[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pages.length} >>`;
-  objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
-  pages.forEach((pageLines, index) => {
-    const pageId = pageIds[index];
-    const contentId = pageId + 1;
-    const content = `BT\n/F1 10 Tf\n48 794 Td\n14 TL\n${pageLines.map((line) => `(${escapePdf(line)}) Tj\nT*`).join('\n')}\nET`;
-    objects[pageId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`;
-    objects[contentId] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
-  });
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-  for (let id = 1; id < objects.length; id += 1) {
-    offsets[id] = pdf.length;
-    pdf += `${id} 0 obj\n${objects[id]}\nendobj\n`;
-  }
-  const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
-  for (let id = 1; id < objects.length; id += 1) pdf += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
-  pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  const blob = new Blob([pdf], { type: 'application/pdf' });
+  pdf.setTitle(`${comparison.category || 'Vendor comparison'} executive report`);
+  pdf.setSubject(comparison.prompt);
+  pdf.setCreator('Vendor Compare');
+  const pdfBytes = await pdf.save();
+  const pdfBuffer = pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength) as ArrayBuffer;
+  const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = href;
-  anchor.download = `${clean(comparison.category || 'vendor-comparison').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-report.pdf`;
+  anchor.download = `${String(comparison.category || 'vendor-comparison').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-executive-report.pdf`;
   anchor.click();
-  URL.revokeObjectURL(href);
+  window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
 }
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
@@ -466,6 +394,63 @@ function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
   return <section className="mt-14" data-testid="section-score-charts"><div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Weighted decision model</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">How the options score against your needs</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Scores combine feature fit, reliability, value, reputation, service, differentiation, sustainability, and regulatory compliance using the agreed weights.</p></div><div className="grid gap-5 xl:grid-cols-[1.35fr_.65fr]"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-4 sm:p-6"><div className="h-[390px] w-full"><ResponsiveContainer width="100%" height="100%" debounce={0}><RadarChart data={radarData} outerRadius="72%"><PolarGrid stroke="#d9d1bf" /><PolarAngleAxis dataKey="criterion" tick={{ fill: '#687083', fontSize: 10 }} /><PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: '#8a8b83', fontSize: 9 }} axisLine={false} /><Tooltip isAnimationActive={false} contentStyle={{ backgroundColor: '#fff', border: '1px solid #d5cebd', borderRadius: 10, fontSize: 12 }} /><Legend />{scoredVendors.map((vendor, index) => <Radar key={vendor.vendor} name={vendor.vendor} dataKey={vendor.vendor} stroke={colors[index] ?? colors[0]} fill={colors[index] ?? colors[0]} fillOpacity={0.16} strokeWidth={2} isAnimationActive={false} />)}</RadarChart></ResponsiveContainer></div></div><div className="rounded-2xl border border-[#d5cebd] bg-[#202840] p-4 text-[#f8f4e8] sm:p-6"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#bde3d8]">Weighted total / 100</p><div className="mt-5 h-[250px]"><ResponsiveContainer width="100%" height="100%" debounce={0}><BarChart data={overallData} layout="vertical" margin={{ left: 6, right: 18 }}><CartesianGrid stroke="#3a4664" horizontal={false} /><XAxis type="number" domain={[0, 100]} tick={{ fill: '#a8b0c2', fontSize: 10 }} /><YAxis type="category" dataKey="vendor" width={72} tick={{ fill: '#f8f4e8', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} /><Tooltip isAnimationActive={false} cursor={false} contentStyle={{ backgroundColor: '#fff', border: 0, borderRadius: 10, color: '#202840', fontSize: 12 }} /><Bar dataKey="score" name="Score" fill="#d9ef66" radius={[0, 5, 5, 0]} isAnimationActive={false} /></BarChart></ResponsiveContainer></div><div className="mt-4 flex flex-wrap gap-2">{scoredVendors[0].weightedScores.map((entry: any) => <span key={entry.criterion} className="rounded-md border border-[#3a4664] px-2 py-1 text-[9px] text-[#c9cfdb]">{entry.criterion} · {entry.weight}%</span>)}</div></div></div></section>;
 }
 
+function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
+  const runnerUp = [...(comparison.vendorScores || [])]
+    .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
+    .sort((a: any, b: any) => b.score - a.score)[0];
+  return <section className={compact ? '' : 'mt-10'} data-testid={compact ? undefined : 'section-executive-brief'}>
+    <div className="flex items-end justify-between gap-5">
+      <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Executive decision brief</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Decision, rationale, and action</h2></div>
+      <span className="mono text-[10px] uppercase text-[#85877f]">Prepared {new Date(comparison.createdAt || Date.now()).toLocaleDateString()}</span>
+    </div>
+    <div className="mt-5 grid gap-4 md:grid-cols-3">
+      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">Decision</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{comparison.recommendation}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{comparison.recommendationReason}</p></article>
+      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{comparison.executiveSummary}</p>{runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}</article>
+      <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
+    </div>
+  </section>;
+}
+
+function PdfPageHeader({ comparison, section, page }: { comparison: any; section: string; page: number }) {
+  return <header className="flex items-center justify-between border-b border-[#d9d1bf] pb-4"><div><p className="display text-lg font-bold text-[#202840]">Vendor Compare</p><p className="mono mt-1 text-[8px] uppercase tracking-[.16em] text-[#0f766e]">{section}</p></div><div className="text-right"><p className="text-[9px] text-[#687083]">{comparison.category}</p><p className="mono mt-1 text-[8px] text-[#999b92]">PAGE {page} / 4</p></div></header>;
+}
+
+function ExecutivePdfReport({ comparison, reportRef }: { comparison: any; reportRef: RefObject<HTMLDivElement | null> }) {
+  const alternatives = (comparison.insights || []).filter((item: string) => item.startsWith('Alternative outside comparison —'));
+  const coreInsights = (comparison.insights || []).filter((item: string) => !item.startsWith('Alternative outside comparison —'));
+  const swotEntries = Object.entries(comparison.swot || {}).filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —')) as [string, string[]][];
+  const pageClass = 'h-[1123px] w-[794px] overflow-hidden bg-[#f8f4e8] p-12 text-[#202840]';
+  return <div ref={reportRef} className="pointer-events-none absolute left-[-12000px] top-0 w-[794px]" aria-hidden="true">
+    <div className={pageClass} data-pdf-page>
+      <PdfPageHeader comparison={comparison} section="Executive report" page={1} />
+      <div className="mt-9"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#0f766e]">{comparison.category}</span><h1 className="display mt-5 text-4xl font-bold leading-[1.05] tracking-[-.05em]">{comparison.prompt}</h1></div>
+      <ExecutiveDecisionBrief comparison={comparison} compact />
+      <div className="mt-7 grid grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-[#d5cebd] bg-white p-5"><p className="mono text-[9px] uppercase text-[#85877f]">Decision score</p><p className="display mt-2 text-4xl font-bold text-[#0f766e]">{Math.round(comparison.score)}/100</p></div>
+        <div className="rounded-2xl border border-[#d5cebd] bg-white p-5"><p className="mono text-[9px] uppercase text-[#85877f]">Options assessed</p><p className="display mt-2 text-4xl font-bold text-[#202840]">{comparison.vendorScores?.length || 0}</p></div>
+      </div>
+      <p className="mt-8 border-t border-[#d9d1bf] pt-4 text-[9px] leading-4 text-[#85877f]">Decision-support material. Validate material commercial, legal, regulatory, and implementation assumptions before final approval.</p>
+    </div>
+    <div className={pageClass} data-pdf-page>
+      <PdfPageHeader comparison={comparison} section="Weighted decision model" page={2} />
+      <ScoreCharts vendorScores={comparison.vendorScores} />
+      <div className="mt-7 grid grid-cols-2 gap-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-xl border border-[#d5cebd] bg-white p-4" key={vendor.vendor}><div className="flex items-center justify-between"><p className="display text-lg font-bold">{vendor.vendor}</p><span className="mono text-sm font-bold text-[#0f766e]">{vendor.score}/100</span></div><p className="mt-2 text-[10px] leading-4 text-[#687083]">{vendor.verdict}</p></div>)}</div>
+    </div>
+    <div className={pageClass} data-pdf-page>
+      <PdfPageHeader comparison={comparison} section="Commercial and capability assessment" page={3} />
+      <div className="mt-8 grid gap-6"><AnalysisTable title="Pricing lens" rows={comparison.pricing} /><AnalysisTable title="Feature lens" rows={comparison.features} /></div>
+      <div className="mt-7 grid grid-cols-2 gap-5"><InsightList title="Key insights" items={coreInsights.slice(0, 4)} accent="yellow" /><InsightList title="Opportunities" items={(comparison.opportunities || []).slice(0, 4)} accent="teal" /></div>
+      {alternatives.length > 0 && <div className="mt-6 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5"><p className="mono text-[9px] font-bold uppercase tracking-[.15em] text-[#0f766e]">Alternative path</p><p className="mt-3 text-xs leading-5 text-[#39435a]">{alternatives[0].replace('Alternative outside comparison — ', '')}</p></div>}
+    </div>
+    <div className={pageClass} data-pdf-page>
+      <PdfPageHeader comparison={comparison} section="Strategic considerations and actions" page={4} />
+      <div className="mt-8 grid grid-cols-2 gap-4">{swotEntries.slice(0, 4).map(([key, values]) => <article className="rounded-2xl border border-[#d5cebd] bg-white p-5" key={key}><p className="mono text-[9px] font-bold uppercase text-[#b94d45]">{key}</p><ul className="mt-3 space-y-2">{values.slice(0, 4).map((value) => <li className="text-[10px] leading-4 text-[#626b7b]" key={value}>• {value}</li>)}</ul></article>)}</div>
+      <div className="mt-7 rounded-2xl bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">90-day action agenda</p><ol className="mt-4 grid gap-3">{(comparison.nextSteps || []).slice(0, 5).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5" key={step}><span className="mono font-bold text-[#d9ef66]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></div>
+      {comparison.urls?.length > 0 && <div className="mt-7"><p className="mono text-[9px] font-bold uppercase tracking-[.15em] text-[#0f766e]">Evidence sources</p><ol className="mt-3 space-y-2">{comparison.urls.slice(0, 8).map((url: string, index: number) => <li className="break-all text-[8px] leading-3 text-[#687083]" key={url}>{index + 1}. {url}</li>)}</ol></div>}
+    </div>
+  </div>;
+}
+
 function HeadToHead({ comparison }: { comparison: any }) {
   const recommendation = comparison.vendorScores?.find((vendor: any) => vendor.vendor === comparison.recommendation)
     ?? comparison.vendorScores?.[0];
@@ -722,6 +707,8 @@ function HistoryPage() {
 
 function AnalysisPage() {
   const [location] = useLocation();
+  const pdfReportRef = useRef<HTMLDivElement>(null);
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
   const guest = location === '/guest/result';
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -739,6 +726,17 @@ function AnalysisPage() {
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
   if (guest && !guestComparison) return <GuestShell><div className="mx-auto max-w-3xl px-5 py-20 text-center lg:px-10"><p className="mono text-xs uppercase tracking-[.2em] text-[#b94d45]">Guest result unavailable</p><h1 className="display mt-4 text-4xl font-bold tracking-[-.05em] text-[#202840]">That comparison has expired.</h1><p className="mt-4 text-sm leading-6 text-[#687083]">Run another guest comparison or create an account to keep a private 30-day history.</p><Link href="/guest" className="focus-ring mt-7 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]" data-testid="link-guest-result-restart"><ArrowLeft size={15} /> Run another comparison</Link></div></GuestShell>;
   const comparison = (guest ? guestComparison : data) as Comparison;
+  const exportPdf = async () => {
+    if (!pdfReportRef.current || pdfStatus === 'exporting') return;
+    setPdfStatus('exporting');
+    try {
+      await downloadComparisonPdf(pdfReportRef.current, comparison);
+      setPdfStatus('idle');
+    } catch (error) {
+      console.error('PDF export failed', error);
+      setPdfStatus('failed');
+    }
+  };
   const strategicEntries = Object.entries(comparison.swot || {}) as [string, string[]][];
   const swotEntries = strategicEntries.filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —'));
   const pestleEntries = strategicEntries.filter(([key]) => key.startsWith('PESTLE —')).map(([key, values]) => [key.replace('PESTLE — ', ''), values] as [string, string[]]);
@@ -746,7 +744,8 @@ function AnalysisPage() {
   const alternativeInsights = (comparison.insights || []).filter((item: string) => item.startsWith('Alternative outside comparison —'));
   const coreInsights = (comparison.insights || []).filter((item: string) => !item.startsWith('Alternative outside comparison —'));
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-8 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]"><p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">Recommended</p><div className="mt-5 flex items-center justify-between gap-4"><div><p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{comparison.recommendation}</p><p className="mt-2 text-xs text-[#a8b0c2]">Best overall fit</p></div><ScoreRing score={Math.round(comparison.score)} /></div><div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{comparison.recommendationReason}</div></div></div>
-      <div className="mt-6 flex justify-end"><button type="button" onClick={() => downloadComparisonPdf(comparison)} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e]" data-testid="button-download-pdf"><Download size={16} /> Download PDF report</button></div>
+      <ExecutiveDecisionBrief comparison={comparison} />
+       <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing executive PDF' : 'Download executive PDF'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
      <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor signal</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono text-xs font-bold text-[#0f766e]">{vendor.score}/100</span></div><p className="display mt-8 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${vendor.score}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
     <ScoreCharts vendorScores={comparison.vendorScores} />
      <HeadToHead comparison={comparison} />
@@ -758,7 +757,7 @@ function AnalysisPage() {
      <VrioSection vendorScores={comparison.vendorScores} />
      <MarketPositionSection vendorScores={comparison.vendorScores} />
      <section className="mt-14 grid gap-7 lg:grid-cols-3"><InsightList title="Opportunities" items={comparison.opportunities} accent="teal" /><InsightList title="Key insights" items={coreInsights} accent="yellow" /><InsightList title="Next steps" items={comparison.nextSteps} accent="red" /></section>
-    {comparison.urls?.length > 0 && <section className="mt-14 border-t border-[#d9d1bf] pt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Sources</p><div className="mt-4 flex flex-wrap gap-2">{comparison.urls.map((url) => <a className="focus-ring inline-flex max-w-full items-center gap-2 truncate rounded-lg border border-[#d0c8b7] bg-[#f8f4e8] px-3 py-2 text-xs text-[#566074] hover:border-[#0f766e] hover:text-[#0f766e]" href={url} target="_blank" rel="noreferrer" key={url} data-testid={`link-source-${url}`}><ExternalLink size={13} className="shrink-0" />{url}</a>)}</div></section>}</div></AppShell>;
+     {comparison.urls?.length > 0 && <section className="mt-14 border-t border-[#d9d1bf] pt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Sources</p><div className="mt-4 flex flex-wrap gap-2">{comparison.urls.map((url) => <a className="focus-ring inline-flex max-w-full items-center gap-2 truncate rounded-lg border border-[#d0c8b7] bg-[#f8f4e8] px-3 py-2 text-xs text-[#566074] hover:border-[#0f766e] hover:text-[#0f766e]" href={url} target="_blank" rel="noreferrer" key={url} data-testid={`link-source-${url}`}><ExternalLink size={13} className="shrink-0" />{url}</a>)}</div></section>}<ExecutivePdfReport comparison={comparison} reportRef={pdfReportRef} /></div></AppShell>;
 }
 
 function AnalysisTable({ title, rows = [] }: { title: string; rows?: any[] }) {
