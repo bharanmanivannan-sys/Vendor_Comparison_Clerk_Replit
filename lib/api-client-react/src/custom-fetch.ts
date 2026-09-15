@@ -367,5 +367,13 @@ export async function customFetch<T = unknown>(
     throw new ApiError(response, errorData, requestInfo);
   }
 
-  return (await parseSuccessBody(response, responseType, requestInfo)) as T;
+  const data = await parseSuccessBody(response, responseType, requestInfo);
+  if (
+    data && typeof data === "object"
+    && "code" in data && typeof data.code === "string"
+    && (("error" in data && typeof data.error === "string") || ("message" in data && typeof data.message === "string"))
+  ) {
+    throw new ApiError(response, data, requestInfo);
+  }
+  return data as T;
 }

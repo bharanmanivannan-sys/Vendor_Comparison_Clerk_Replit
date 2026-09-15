@@ -29,6 +29,19 @@ function sendError(res: Response, status: number, code: string, message: string)
   res.status(status).json({ error: message, code, message });
 }
 
+function startProcessingHeartbeat(res: Response): () => void {
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) res.writeProcessing();
+  }, 10_000);
+  heartbeat.unref();
+  const stop = () => {
+    clearInterval(heartbeat);
+    res.off("close", stop);
+  };
+  res.on("close", stop);
+  return stop;
+}
+
 function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
   const auth = getAuth(req);
   const userId = auth?.userId;
@@ -172,6 +185,7 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   }
   const urls = [...(validated.input.urls ?? [])];
   let analysis: AnalysisPayload;
+  const stopHeartbeat = startProcessingHeartbeat(res);
   try {
     analysis = await buildAnalysis({
       ...validated.input,
@@ -182,6 +196,8 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   } catch (error) {
     sendError(res, 502, "comparison_failed", error instanceof Error ? error.message : "Product research could not be completed.");
     return;
+  } finally {
+    stopHeartbeat();
   }
   res.json(CreateGuestComparisonResponse.parse({
     prompt: validated.input.prompt,
@@ -211,11 +227,14 @@ router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promis
   const { input, vendors, criteria } = validated;
   const urls = [...(input.urls ?? [])];
   let analysis: AnalysisPayload;
+  const stopHeartbeat = startProcessingHeartbeat(res);
   try {
     analysis = await buildAnalysis({ ...input, vendors, criteria, urls });
   } catch (error) {
     sendError(res, 502, "comparison_failed", error instanceof Error ? error.message : "Product research could not be completed.");
     return;
+  } finally {
+    stopHeartbeat();
   }
   const [created] = await db
     .insert(comparisonsTable)
