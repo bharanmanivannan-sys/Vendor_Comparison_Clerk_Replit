@@ -4,8 +4,10 @@ import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, use
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import {
+  useBootstrapTenant,
   useCreateComparison,
   useCreateGuestComparison,
+  useCreateWhopCheckout,
   useDeleteComparison,
   useGetComparison,
   useGetDashboardSummary,
@@ -18,7 +20,7 @@ import {
   customFetch,
   setAuthTokenGetter,
 } from '@workspace/api-client-react';
-import type { Comparison } from '@workspace/api-client-react';
+import type { Comparison, Tenant } from '@workspace/api-client-react';
 import {
   Bar,
   BarChart,
@@ -43,6 +45,7 @@ import {
   Clock3,
   Code2,
   Compass,
+  CreditCard,
   Download,
   ExternalLink,
   FileSearch,
@@ -636,7 +639,30 @@ function Portal() {
     data,
     { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) },
   );
-  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} onSubmit={createComparison} /></div></AppShell>;
+  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><ApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} onSubmit={createComparison} /></div></AppShell>;
+}
+
+function ApiAccessPanel() {
+  const bootstrap = useBootstrapTenant();
+  const checkout = useCreateWhopCheckout();
+  const [tenant, setTenant] = useState<Tenant | null>(null);
+  useEffect(() => {
+    bootstrap.mutate(undefined, { onSuccess: setTenant });
+  }, []);
+  const startCheckout = (currentTenant: Tenant) => checkout.mutate({
+    data: { redirectUrl: `${window.location.origin}${basePath}/user-portal?billing=return` },
+    headers: { 'X-Tenant-Id': currentTenant.id },
+  }, {
+    onSuccess: ({ purchaseUrl }) => window.location.assign(purchaseUrl),
+  });
+  const subscribe = () => {
+    if (tenant) startCheckout(tenant);
+    else bootstrap.mutate(undefined, { onSuccess: (created) => { setTenant(created); startCheckout(created); } });
+  };
+  const error = checkout.error || bootstrap.error;
+  const errorMessage = (error as any)?.data?.message || (error instanceof Error ? error.message : null);
+  const active = tenant?.billingStatus === 'active';
+  return <section className="animate-rise animate-rise-1 mt-8 rounded-2xl border border-[#202840] bg-[#202840] p-5 text-[#f8f4e8] sm:flex sm:items-center sm:justify-between sm:gap-8" data-testid="api-access-panel"><div><div className="flex items-center gap-2"><CreditCard size={15} className="text-[#d9ef66]" /><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#bde3d8]">Commercial API access</p></div><h2 className="display mt-3 text-2xl font-bold">{active ? 'Your API subscription is active' : 'Subscribe for production API access'}</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#c9cfdb]">{active ? 'Create and manage scoped API keys for your tenant.' : 'Hosted Whop checkout includes 100 completed comparisons per billing period and a 30 requests/minute limit.'}</p>{errorMessage && <p className="mt-3 rounded-lg border border-[#784f55] bg-[#3d3447] px-3 py-2 text-xs font-bold text-[#f0b6ad]" role="alert" data-testid="api-subscribe-error">{errorMessage}</p>}</div><div className="mt-5 shrink-0 sm:mt-0">{active ? <Link href="/api-docs" className="focus-ring inline-flex rounded-xl bg-[#d9ef66] px-5 py-3 text-sm font-bold text-[#202840]">Open API docs</Link> : <button type="button" onClick={subscribe} disabled={checkout.isPending || bootstrap.isPending} className="focus-ring inline-flex min-w-44 items-center justify-center gap-2 rounded-xl bg-[#d9ef66] px-5 py-3 text-sm font-bold text-[#202840] disabled:opacity-60" data-testid="button-subscribe-api">{checkout.isPending || bootstrap.isPending ? <LoaderCircle size={16} className="animate-spin" /> : <CreditCard size={16} />}{checkout.isPending ? 'Opening checkout' : bootstrap.isPending ? 'Loading account' : 'Subscribe with Whop'}</button>}</div></section>;
 }
 
 function GuestPortal() {
