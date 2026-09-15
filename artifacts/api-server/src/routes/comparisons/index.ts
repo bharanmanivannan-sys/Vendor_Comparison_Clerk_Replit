@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { getAuth } from "@clerk/express";
 import { and, desc, eq, gte } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import {
   CreateComparisonBody,
   CreateComparisonResponse,
@@ -22,24 +23,101 @@ const router: IRouter = Router();
 
 type AuthedRequest = Request & { userId?: string };
 const guestWindows = new Map<string, { count: number; resetAt: number }>();
+const comparisonJobs = new Map<string, {
+  owner: string;
+  status: "processing" | "complete" | "failed";
+  result?: unknown;
+  message?: string;
+  createdAt: number;
+}>();
 const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
+const JOB_TTL_MS = 15 * 60 * 1000;
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: message, code, message });
 }
 
-function startProcessingHeartbeat(res: Response): () => void {
-  const heartbeat = setInterval(() => {
-    if (!res.writableEnded && !res.destroyed) res.writeProcessing();
-  }, 10_000);
-  heartbeat.unref();
-  const stop = () => {
-    clearInterval(heartbeat);
-    res.off("close", stop);
-  };
-  res.on("close", stop);
-  return stop;
+function requestOwner(req: Request): string {
+  return req.ip || req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || "unknown";
+}
+
+function pruneComparisonJobs(): void {
+  const cutoff = Date.now() - JOB_TTL_MS;
+  for (const [id, job] of comparisonJobs) {
+    if (job.createdAt < cutoff) comparisonJobs.delete(id);
+  }
+}
+
+function startComparisonJob(options: {
+  owner: string;
+  userId?: string;
+  input: { prompt: string; urls?: string[] };
+  vendors: string[];
+  criteria: string[];
+}): string {
+  pruneComparisonJobs();
+  const id = randomUUID();
+  comparisonJobs.set(id, { owner: options.owner, status: "processing", createdAt: Date.now() });
+  void (async () => {
+    const urls = [...(options.input.urls ?? [])];
+    try {
+      const analysis = await buildAnalysis({
+        ...options.input,
+        vendors: options.vendors,
+        criteria: options.criteria,
+        urls,
+      });
+      const payload = {
+        prompt: options.input.prompt,
+        vendors: options.vendors,
+        urls,
+        criteria: options.criteria,
+        createdAt: new Date(),
+        ...analysis,
+      };
+      if (options.userId) {
+        const [created] = await db.insert(comparisonsTable).values({
+          userId: options.userId,
+          prompt: options.input.prompt,
+          vendors: options.vendors,
+          urls,
+          criteria: options.criteria,
+          ...analysis,
+        }).returning();
+        comparisonJobs.set(id, {
+          owner: options.owner,
+          status: "complete",
+          result: CreateComparisonResponse.parse(detailFromRow(created)),
+          createdAt: Date.now(),
+        });
+      } else {
+        comparisonJobs.set(id, {
+          owner: options.owner,
+          status: "complete",
+          result: CreateGuestComparisonResponse.parse(payload),
+          createdAt: Date.now(),
+        });
+      }
+    } catch (error) {
+      comparisonJobs.set(id, {
+        owner: options.owner,
+        status: "failed",
+        message: error instanceof Error ? error.message : "Product research could not be completed.",
+        createdAt: Date.now(),
+      });
+    }
+  })();
+  return id;
+}
+
+function sendComparisonJob(req: Request, res: Response, owner: string): void {
+  const job = comparisonJobs.get(String(req.params.id));
+  if (!job || job.owner !== owner) {
+    sendError(res, 404, "job_not_found", "Comparison job was not found or has expired.");
+    return;
+  }
+  res.json({ status: job.status, result: job.result, message: job.message });
 }
 
 function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
@@ -176,6 +254,27 @@ router.post("/guest/comparisons/parse", (req: Request, res): void => {
   res.json(ParseGuestComparisonPromptResponse.parse(parsePrompt(parsed.data.prompt)));
 });
 
+router.post("/guest/comparison-jobs", (req: Request, res): void => {
+  if (!allowGuestRequest(req, res)) return;
+  const validated = validateComparisonInput(req.body);
+  if ("error" in validated) {
+    sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
+    return;
+  }
+  const owner = `guest:${requestOwner(req)}`;
+  const jobId = startComparisonJob({
+    owner,
+    input: validated.input,
+    vendors: validated.vendors,
+    criteria: validated.criteria,
+  });
+  res.status(202).json({ jobId, status: "processing" });
+});
+
+router.get("/guest/comparison-jobs/:id", (req: Request, res): void => {
+  sendComparisonJob(req, res, `guest:${requestOwner(req)}`);
+});
+
 router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   if (!allowGuestRequest(req, res)) return;
   const validated = validateComparisonInput(req.body);
@@ -185,7 +284,6 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   }
   const urls = [...(validated.input.urls ?? [])];
   let analysis: AnalysisPayload;
-  const stopHeartbeat = startProcessingHeartbeat(res);
   try {
     analysis = await buildAnalysis({
       ...validated.input,
@@ -196,8 +294,6 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   } catch (error) {
     sendError(res, 502, "comparison_failed", error instanceof Error ? error.message : "Product research could not be completed.");
     return;
-  } finally {
-    stopHeartbeat();
   }
   res.json(CreateGuestComparisonResponse.parse({
     prompt: validated.input.prompt,
@@ -218,6 +314,27 @@ router.post("/comparisons/parse", requireAuth, async (req: AuthedRequest, res): 
   res.json(ParseComparisonPromptResponse.parse(parsePrompt(parsed.data.prompt)));
 });
 
+router.post("/comparison-jobs", requireAuth, (req: AuthedRequest, res): void => {
+  const validated = validateComparisonInput(req.body);
+  if ("error" in validated) {
+    sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
+    return;
+  }
+  const userId = req.userId as string;
+  const jobId = startComparisonJob({
+    owner: `user:${userId}`,
+    userId,
+    input: validated.input,
+    vendors: validated.vendors,
+    criteria: validated.criteria,
+  });
+  res.status(202).json({ jobId, status: "processing" });
+});
+
+router.get("/comparison-jobs/:id", requireAuth, (req: AuthedRequest, res): void => {
+  sendComparisonJob(req, res, `user:${req.userId as string}`);
+});
+
 router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
   const validated = validateComparisonInput(req.body);
   if ("error" in validated) {
@@ -227,14 +344,11 @@ router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promis
   const { input, vendors, criteria } = validated;
   const urls = [...(input.urls ?? [])];
   let analysis: AnalysisPayload;
-  const stopHeartbeat = startProcessingHeartbeat(res);
   try {
     analysis = await buildAnalysis({ ...input, vendors, criteria, urls });
   } catch (error) {
     sendError(res, 502, "comparison_failed", error instanceof Error ? error.message : "Product research could not be completed.");
     return;
-  } finally {
-    stopHeartbeat();
   }
   const [created] = await db
     .insert(comparisonsTable)

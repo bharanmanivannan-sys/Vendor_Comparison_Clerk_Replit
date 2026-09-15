@@ -362,8 +362,9 @@ function normalizeAnalysis(
 ): AnalysisPayload {
   const normalized = replaceVendorPlaceholders({ ...fallback, ...analysis }, vendors) as Partial<AnalysisPayload>;
   const allowed = new Set(vendors);
-  const vendorScores = Array.isArray(normalized.vendorScores)
-    ? normalized.vendorScores.slice(0, vendors.length).map((item, index) => {
+  const suppliedVendorScores = Array.isArray(normalized.vendorScores) ? normalized.vendorScores : [];
+  const vendorScores = vendors.map((vendor, index) => {
+      const item = suppliedVendorScores[index] ?? fallback.vendorScores[index];
       const fallbackVendor = fallback.vendorScores[index];
       const suppliedScores = Array.isArray(item.weightedScores) ? item.weightedScores : [];
       const suppliedScaleMaximum = Math.max(0, ...suppliedScores.map((entry) => Number(entry.score) || 0));
@@ -383,7 +384,7 @@ function normalizeAnalysis(
       const score = Math.round(weightedScores.reduce((total, entry) => total + entry.score * entry.weight, 0) / 100);
       return {
         ...item,
-        vendor: vendors[index] ?? item.vendor,
+          vendor,
         score,
         weightedScores,
         switchConditions: Array.isArray(item.switchConditions) && item.switchConditions.length
@@ -402,8 +403,7 @@ function normalizeAnalysis(
             evidence: "No exact supporting URL was returned for a comparable market-share or share-value figure.",
           },
       };
-    })
-    : fallback.vendorScores;
+    });
   const normalizeRows = (rows: AnalysisPayload["pricing"]) => Array.isArray(rows)
     ? rows.map((row) => ({
       ...row,

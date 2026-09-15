@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
@@ -15,6 +15,7 @@ import {
   getGetComparisonQueryKey,
   getGetDashboardSummaryQueryKey,
   getListComparisonsQueryKey,
+  customFetch,
   setAuthTokenGetter,
 } from '@workspace/api-client-react';
 import type { Comparison } from '@workspace/api-client-react';
@@ -570,6 +571,34 @@ function comparisonErrorMessage(error: unknown) {
   return data?.error || data?.message || message || 'The comparison research could not be completed. Please try again.';
 }
 
+type ComparisonJobState = {
+  status: 'processing' | 'complete' | 'failed';
+  result?: Comparison;
+  message?: string;
+};
+
+async function runComparisonJob(guest: boolean, data: { prompt: string; urls: string[] }): Promise<Comparison> {
+  const basePath = guest ? '/api/guest/comparison-jobs' : '/api/comparison-jobs';
+  const created = await customFetch<{ jobId: string }>(basePath, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const job = await customFetch<ComparisonJobState>(`${basePath}/${created.jobId}`);
+    if (job.status === 'complete' && job.result) return job.result;
+    if (job.status === 'failed') throw new Error(job.message || 'Product research could not be completed.');
+  }
+  throw new Error('Product research timed out. Please try again.');
+}
+
+function useComparisonJob(guest: boolean) {
+  return useMutation({
+    mutationFn: (data: { prompt: string; urls: string[] }) => runComparisonJob(guest, data),
+  });
+}
+
 function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; onSubmit: (data: { prompt: string; urls: string[] }) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [urls, setUrls] = useState<string[]>([]);
@@ -610,7 +639,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
 }
 
 function Portal() {
-  const create = useCreateComparison();
+  const create = useComparisonJob(false);
   const { data: summary } = useGetDashboardSummary();
   const [, setLocation] = useLocation();
   const initialPrompt = useMemo(() => {
@@ -619,17 +648,17 @@ function Portal() {
     return draft;
   }, []);
   const createComparison = (data: { prompt: string; urls: string[] }) => create.mutate(
-    { data },
+    data,
     { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) },
   );
   return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} onSubmit={createComparison} /></div></AppShell>;
 }
 
 function GuestPortal() {
-  const create = useCreateGuestComparison();
+  const create = useComparisonJob(true);
   const [, setLocation] = useLocation();
   const createComparison = (data: { prompt: string; urls: string[] }) => create.mutate(
-    { data },
+    data,
     {
       onSuccess: (comparison) => {
         window.sessionStorage.setItem('vendor-compare-guest-result', JSON.stringify(comparison));
