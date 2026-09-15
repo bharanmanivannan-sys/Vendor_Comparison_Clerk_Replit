@@ -66,6 +66,7 @@ function criteriaFor(prompt: string): string[] {
     { label: "Purchase rate and interest-free period", pattern: /\b(?:credit cards?|purchase rates?|interest rates?|interest.?free|lowest rates?)\b/ },
     { label: "Annual fee and total card cost", pattern: /\b(?:annual fees?|card fees?|lowest cost|value for money)\b/ },
     { label: "Rewards value and redemption", pattern: /\b(?:rewards?|points?|frequent flyer|cashback)\b/ },
+    { label: "Customer advocacy and NPS", pattern: /\b(?:nps|net promoter score|customer advocacy)\b/ },
     { label: "Minimum credit limit and eligibility", pattern: /\b(?:minimum (?:credit )?limit|credit limit|minimum limit|eligib)\b/ },
     { label: "Maintenance and servicing", pattern: /\b(?:maintenance|servicing|service costs?|repair|upkeep)\b/ },
     { label: "Five-year ownership cost", pattern: /\b(?:five|5)[ -]?year|\bretain\b|\bownership\b|\btotal cost\b/ },
@@ -104,6 +105,7 @@ function cleanVendorName(value: string): string {
     qbe: "QBE",
     "budget direct": "Budget Direct",
     westpac: "Westpac",
+    wbc: "Westpac",
     cba: "CBA",
     "commonwealth bank": "Commonwealth Bank",
     macquarie: "Macquarie",
@@ -405,11 +407,22 @@ function normalizeAnalysis(
       };
     });
   const normalizeRows = (rows: AnalysisPayload["pricing"]) => Array.isArray(rows)
-    ? rows.map((row) => ({
-      ...row,
-      values: Object.fromEntries(vendors.map((vendor) => [vendor, row.values?.[vendor] ?? "Validate with the vendor"])),
-      winner: allowed.has(row.winner) ? row.winner : vendors[0],
-    }))
+    ? rows.map((row) => {
+      const canonicalValues = Object.fromEntries(
+        Object.entries(row.values ?? {}).map(([vendor, value]) => [cleanVendorName(vendor), value]),
+      );
+      const canonicalWinner = cleanVendorName(row.winner ?? "");
+      return {
+        ...row,
+        values: Object.fromEntries(vendors.map((vendor) => [vendor, canonicalValues[vendor] ?? "Validate with the vendor"])),
+        winner: normalizeLensWinner(
+          row.dimension,
+          canonicalValues,
+          vendors,
+          allowed.has(canonicalWinner) ? canonicalWinner : "",
+        ),
+      };
+    })
     : [];
   const rankedScores = [...vendorScores].sort((a, b) => b.score - a.score);
   const recommendedVendor = rankedScores[0]?.vendor ?? fallback.recommendation;
@@ -428,6 +441,52 @@ function normalizeAnalysis(
     score: rankedScores[0]?.score ?? fallback.score,
     status: "complete",
   };
+}
+
+export function normalizeLensWinner(
+  dimension: string,
+  values: Record<string, string>,
+  vendors: string[],
+  suppliedWinner = "",
+): string {
+  const entries = vendors.map((vendor) => ({
+    vendor,
+    value: values[vendor] ?? "",
+    numeric: Number((values[vendor] ?? "").replaceAll(",", "").match(/\d+(?:\.\d+)?/)?.[0]),
+  }));
+  const comparable = entries.filter((entry) => Number.isFinite(entry.numeric));
+  if (comparable.length !== vendors.length) return vendors.includes(suppliedWinner) ? suppliedWinner : "Not established";
+  const lowerIsBetter = /\b(?:rate|fee|cost|price|minimum income|minimum credit limit)\b/i.test(dimension);
+  const higherIsBetter = /\b(?:days|rewards?|earn|welcome|bonus|cashback|nps|net promoter)\b/i.test(dimension);
+  if (!lowerIsBetter && !higherIsBetter) return vendors.includes(suppliedWinner) ? suppliedWinner : "Not established";
+  const best = (lowerIsBetter ? Math.min : Math.max)(...comparable.map((entry) => entry.numeric));
+  const winners = comparable.filter((entry) => entry.numeric === best).map((entry) => entry.vendor);
+  return winners.length === 1 ? winners[0] : `Tie: ${winners.join(", ")}`;
+}
+
+const CREDIT_CARD_SOURCE_DOMAINS: Record<string, string[]> = {
+  ANZ: ["anz.com.au"],
+  Westpac: ["westpac.com.au"],
+  WBC: ["westpac.com.au"],
+  NAB: ["nab.com.au"],
+  CBA: ["commbank.com.au"],
+  "Commonwealth Bank": ["commbank.com.au"],
+  Bankwest: ["bankwest.com.au"],
+};
+
+export function missingCreditCardSourceVendors(vendors: string[], sourceUrls: string[]): string[] {
+  const sourceHosts = sourceUrls.flatMap((source) => {
+    try {
+      return [new URL(source).hostname.toLowerCase().replace(/^www\./, "")];
+    } catch {
+      return [];
+    }
+  });
+  return vendors.filter((vendor) => {
+    const expectedDomains = CREDIT_CARD_SOURCE_DOMAINS[vendor];
+    if (!expectedDomains) return false;
+    return !expectedDomains.some((domain) => sourceHosts.some((host) => host === domain || host.endsWith(`.${domain}`)));
+  });
 }
 
 function parseJsonObject(text: string): Partial<AnalysisPayload> & { sources?: unknown } {
@@ -477,6 +536,24 @@ function collectHttpUrls(value: unknown, found = new Set<string>()): string[] {
     for (const item of Object.values(value)) collectHttpUrls(item, found);
   }
   return [...found];
+}
+
+function addParsedSourceUrls(sources: unknown, urls: string[]): void {
+  if (!Array.isArray(sources)) return;
+  for (const source of sources) {
+    const sourceUrl = typeof source === "string"
+      ? source
+      : source && typeof source === "object" && "url" in source && typeof source.url === "string"
+        ? source.url
+        : "";
+    if (!sourceUrl || urls.length >= 8) continue;
+    try {
+      const url = new URL(sourceUrl);
+      if ((url.protocol === "https:" || url.protocol === "http:") && !urls.includes(sourceUrl)) urls.push(sourceUrl);
+    } catch {
+      // Ignore malformed model-provided citations.
+    }
+  }
 }
 
 function analysisOutputShape(vendors: string[]) {
@@ -540,6 +617,7 @@ function analysisOutputShape(vendors: string[]) {
 
 export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPayload> {
   const fallback = fallbackAnalysis(input);
+  const userSuppliedUrls = [...input.urls];
   if (!client) return fallback;
   try {
     const context = validateComparisonContext(input.prompt, input.vendors);
@@ -575,7 +653,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               shape: analysisOutputShape(input.vendors),
               researchScope: "Customer outcomes, ease of use, market positioning, competitive advantage, long-term sustainability, needs/features, reliability, value, reputation, service, innovation, sustainability, compliance, purchase and ongoing costs, warranty, lifespan, reviews, target-market fit, differentiation, and after-sales support. Where applicable include security, legacy-system integration, time-to-market, and vendor support. For every named option, research VRIO evidence, the latest credible market-share figure for the relevant segment and geography, and public parent-company share price/value when applicable. Explicitly state unavailable or not applicable instead of inventing figures. Research credible options outside the named shortlist that could solve the underlying problem better.",
               outputInstructions: isProviderLevelCreditCardDiscovery
-                ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use current official Australian card pages. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
+                ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. If NPS is requested, cite a comparable survey with publisher, year, population, and methodology; never present company-level NPS as product-level NPS, and state unavailable when providers cannot be compared on the same basis. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
                 : "Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, and complete every framework field. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs.",
             }),
           },
@@ -631,21 +709,54 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (parsed.criteriaMet === false && !isProviderLevelCreditCardDiscovery) {
       throw new Error("Your input criteria can't be met across the products or services or brands chosen");
     }
-    if (Array.isArray(parsed.sources)) {
-      for (const source of parsed.sources) {
-        const sourceUrl = typeof source === "string"
-          ? source
-          : source && typeof source === "object" && "url" in source && typeof source.url === "string"
-            ? source.url
-            : "";
-        if (!sourceUrl || input.urls.length >= 8) continue;
-        try {
-          const url = new URL(sourceUrl);
-          if ((url.protocol === "https:" || url.protocol === "http:") && !input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
-        } catch {
-          // Ignore malformed model-provided citations.
-        }
+    addParsedSourceUrls(parsed.sources, input.urls);
+    const missingSources = isProviderLevelCreditCardDiscovery
+      ? missingCreditCardSourceVendors(input.vendors, input.urls)
+      : [];
+    if (missingSources.length) {
+      const correctedResearch = await retryAiStage("Credit card evidence completion", async () => {
+        const response = await client.responses.create({
+          model: "gpt-4.1-mini",
+          max_output_tokens: 8000,
+          tools: [{
+            type: "web_search",
+            search_context_size: "high",
+            external_web_access: true,
+            user_location: { type: "approximate" as const, country: "AU", timezone: "Australia/Sydney" },
+          }],
+          input: [
+            {
+              role: "system",
+              content: "You are correcting an evidence-incomplete Australian credit-card comparison. Search every named issuer's official Australian card pages. Return only one valid JSON object. Do not preserve unsupported values or winners.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                prompt: input.prompt,
+                vendors: input.vendors,
+                missingOfficialSourcesFor: missingSources,
+                existingDraft: parsed,
+                shape: analysisOutputShape(input.vendors),
+                instructions: "Return a complete replacement analysis plus criteriaMet, unmetCriteriaReason, and sources. Include at least one exact official product URL for every named provider. Every pricing and feature value must be supported by those sources; use 'Not publicly available' rather than inference. Determine row winners from the displayed values, use ties where values are equal, and do not default wins to the first provider. If NPS is requested, report it only from a comparable cited survey with publisher, year, population, and methodology; otherwise state that comparable provider NPS is unavailable.",
+              }),
+            },
+          ],
+        });
+        if (response.status !== "completed" || !response.output_text) throw new Error("Evidence completion returned no structured result.");
+        return response;
+      });
+      parsed = parseJsonObject(correctedResearch.output_text);
+      const correctedUrls = [...userSuppliedUrls];
+      for (const sourceUrl of collectHttpUrls(correctedResearch.output)) {
+        if (correctedUrls.length >= 8) break;
+        if (!correctedUrls.includes(sourceUrl)) correctedUrls.push(sourceUrl);
       }
+      addParsedSourceUrls(parsed.sources, correctedUrls);
+      const stillMissing = missingCreditCardSourceVendors(input.vendors, correctedUrls);
+      if (stillMissing.length) {
+        throw new Error(`Insufficient source coverage: no official product source was found for ${stillMissing.join(", ")}.`);
+      }
+      input.urls.splice(0, input.urls.length, ...correctedUrls.slice(0, 8));
     }
     const { vendors: _ignoredVendors, prompt: _ignoredPrompt, ...safeParsed } = parsed as typeof parsed & {
       vendors?: unknown;
@@ -674,7 +785,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     return normalized;
   } catch (error) {
     console.error("Product research failed", error);
-    if (error instanceof Error && error.message === "Your input criteria can't be met across the products or services or brands chosen") {
+    if (error instanceof Error && (
+      error.message === "Your input criteria can't be met across the products or services or brands chosen"
+      || error.message.startsWith("Insufficient source coverage:")
+    )) {
       throw error;
     }
     throw new Error("Product research could not be completed. Please try again.");
