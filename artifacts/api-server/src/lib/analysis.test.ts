@@ -108,6 +108,15 @@ test("accepts EV brand comparisons with long-term buy-versus-lease intent", () =
   assert.ok(parsed.criteria.includes("Long-term ownership cost"));
 });
 
+test("parses should-I-get choice wording with novated lease and budget", () => {
+  const parsed = parsePrompt("Should I get a Tesla or BYD when I go for a Novated lease? Which one is value for money? I'm looking at $70,000.00");
+  assert.deepEqual(parsed.vendors, ["Tesla", "BYD"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Electric vehicles");
+  assert.ok(parsed.criteria.includes("Buy, lease and financing comparison"));
+  assert.ok(parsed.criteria.includes("Budget fit"));
+});
+
 test("parses a product purchase-channel comparison", () => {
   const parsed = parsePrompt("Should I buy an HP laptop from JB Hi-Fi or the HP website itself?");
   assert.deepEqual(parsed.vendors, ["JB Hi-Fi", "HP website itself"]);

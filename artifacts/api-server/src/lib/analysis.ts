@@ -71,7 +71,7 @@ function criteriaFor(prompt: string): string[] {
     { label: "Maintenance and servicing", pattern: /\b(?:maintenance|servicing|service costs?|repair|upkeep)\b/ },
     { label: "Five-year ownership cost", pattern: /\b(?:five|5)[ -]?year|\bretain\b|\bownership\b|\btotal cost\b/ },
     { label: "Features", pattern: /\b(?:features?|technology|safety|comfort)\b/ },
-    { label: "Budget fit", pattern: /\b(?:budget|afford|price|pricing|aud|a\$|\$)\b/ },
+    { label: "Budget fit", pattern: /\b(?:budget|afford|price|pricing|aud|a\$)\b|\$/ },
     { label: "Range and charging", pattern: /\b(?:range|battery|charging|charger)\b/ },
     { label: "Resale value", pattern: /\b(?:resale|depreciation|retained value)\b/ },
     { label: "Warranty", pattern: /\b(?:warranty|coverage)\b/ },
@@ -165,14 +165,14 @@ export function parsePrompt(prompt: string) {
     /\b(?:move|moving|migrate|migrating|switch|switching)(?:\s+(?:my|our|the))?.*?\s+from\s+(.+?)\s+to\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const choicePair = normalized.match(
-    /\b(?:should\s+i\s+)?(?:choose|pick|select|recommend)\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
+    /\b(?:(?:should\s+i\s+)(?:choose|pick|select|get|go\s+with)|(?:choose|pick|select|recommend))\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const genericPair = normalized.match(
     /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against)\s+(.+?)(?=\s+(?:for|in|within|among|across|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const pair = purchaseChannelPair
     ? [purchaseChannelPair[0], purchaseChannelPair[2], purchaseChannelPair[3]]
-    : migrationPair ?? choicePair ?? betweenPair ?? withPair ?? genericPair;
+    : migrationPair ?? betweenPair ?? withPair ?? genericPair ?? choicePair;
   const before = normalized.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? normalized;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];

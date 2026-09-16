@@ -207,7 +207,98 @@ async function downloadComparisonPdf(comparison: any) {
     });
     appendixY -= 10;
   };
-  newAppendixPage();
+  const drawListSection = (title: string, items: unknown[]) => {
+    drawSection(
+      title,
+      (items || []).map((item, index) => ({ number: index + 1, item })),
+      [['Item', 'item']],
+    );
+  };
+  const formatValues = (values: Record<string, unknown> | undefined) => Object.entries(values || {})
+    .map(([vendor, value]) => `${vendor}: ${clean(value)}`)
+    .join(' | ');
+  const drawDetailedScoreCharts = () => {
+    newAppendixPage('Scorecard and weighted decision model');
+    appendixPage.drawText('OVERALL WEIGHTED SCORES', { x: margin, y: appendixY, size: 10, font: bold, color: teal });
+    appendixY -= 24;
+    (comparison.vendorScores || []).slice(0, 5).forEach((vendor: any) => {
+      const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
+      ensureSpace(48, 'Scorecard and weighted decision model');
+      appendixPage.drawText(clean(vendor.vendor), { x: margin, y: appendixY, size: 9, font: bold, color: navy });
+      appendixPage.drawText(`${Math.round(score)}/100`, { x: pageSize[0] - margin - 38, y: appendixY, size: 9, font: bold, color: navy });
+      appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth, height: 10, color: rgb(0.88, 0.86, 0.8) });
+      appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth * score / 100, height: 10, color: vendor.vendor === comparison.recommendation ? teal : red });
+      appendixY = drawLines(appendixPage, vendor.verdict, margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
+      appendixY -= 12;
+    });
+    (comparison.vendorScores || []).forEach((vendor: any) => {
+      ensureSpace(70, 'Weighted criteria');
+      appendixPage.drawText(clean(vendor.vendor).toUpperCase(), { x: margin, y: appendixY, size: 10, font: bold, color: teal });
+      appendixY -= 20;
+      (vendor.weightedScores || []).forEach((criterion: any) => {
+        ensureSpace(43, 'Weighted criteria');
+        const score = Math.max(0, Math.min(100, Number(criterion.score) || 0));
+        const label = `${clean(criterion.criterion)} (${Number(criterion.weight) || 0}% weight)`;
+        appendixPage.drawText(label, { x: margin, y: appendixY, size: 8, font: bold, color: navy });
+        appendixPage.drawText(`${Math.round(score)}`, { x: pageSize[0] - margin - 22, y: appendixY, size: 8, font: bold, color: navy });
+        appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth, height: 6, color: rgb(0.88, 0.86, 0.8) });
+        appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth * score / 100, height: 6, color: teal });
+        appendixY = drawLines(appendixPage, criterion.rationale, margin, appendixY - 25, { size: 7.6, lineHeight: 9.5, color: grey, maxLines: 3 });
+        appendixY -= 9;
+      });
+      if (vendor.switchConditions?.length) drawListSection(`When the recommendation could switch from ${vendor.vendor}`, vendor.switchConditions);
+    });
+  };
+  drawDetailedScoreCharts();
+  drawSection(
+    'Vendor verdicts',
+    comparison.vendorScores,
+    [['Vendor', 'vendor'], ['Weighted score', 'score'], ['Verdict', 'verdict']],
+  );
+  drawSection(
+    'Pricing analysis',
+    (comparison.pricing || []).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
+  );
+  drawSection(
+    'Feature and capability analysis',
+    (comparison.features || []).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
+  );
+  drawSection(
+    'SWOT, PESTLE, and SOAR findings',
+    Object.entries(comparison.swot || {}).map(([framework, findings]) => ({ framework, findings: (findings as unknown[]).map(clean).join(' | ') })),
+    [['Framework dimension', 'framework'], ['Findings', 'findings']],
+  );
+  drawSection(
+    'VRIO assessment',
+    Object.entries(comparison.vrio || {}).map(([vendor, assessment]: [string, any]) => ({
+      vendor,
+      value: `${assessment?.value?.status || 'Not established'} - ${assessment?.value?.rationale || ''}`,
+      rarity: `${assessment?.rarity?.status || 'Not established'} - ${assessment?.rarity?.rationale || ''}`,
+      imitability: `${assessment?.imitability?.status || 'Not established'} - ${assessment?.imitability?.rationale || ''}`,
+      organization: `${assessment?.organization?.status || 'Not established'} - ${assessment?.organization?.rationale || ''}`,
+      implication: assessment?.implication,
+    })),
+    [['Vendor', 'vendor'], ['Value', 'value'], ['Rarity', 'rarity'], ['Imitability', 'imitability'], ['Organization', 'organization'], ['Strategic implication', 'implication']],
+  );
+  drawSection(
+    'Market position and public value context',
+    Object.entries(comparison.marketPosition || {}).map(([vendor, position]: [string, any]) => ({
+      vendor,
+      marketShare: position?.marketShare,
+      period: position?.marketSharePeriod,
+      market: position?.market,
+      shareValue: position?.shareValue,
+      shareValueAsOf: position?.shareValueAsOf,
+      applicability: position?.applicability,
+      evidence: position?.evidence,
+    })),
+    [['Vendor', 'vendor'], ['Market share', 'marketShare'], ['Period', 'period'], ['Market', 'market'], ['Public share value', 'shareValue'], ['Value as of', 'shareValueAsOf'], ['Applicability', 'applicability'], ['Evidence', 'evidence']],
+  );
+  drawListSection('Key insights', comparison.insights || []);
+  drawListSection('Opportunities', comparison.opportunities || []);
+  drawListSection('Recommended next steps', comparison.nextSteps || []);
   drawSection('Context assumptions', (comparison.contextAssumptions || []).map((assumption: string) => ({ assumption })), [['Assumption', 'assumption']]);
   drawSection('Product and service equivalency', comparison.productEquivalency, [['Capability', 'capability'], ['Current arrangement', 'currentArrangement'], ['Target arrangement', 'targetArrangement'], ['Equivalency', 'equivalency'], ['Gap', 'gap']]);
   drawSection('Functional gap analysis', comparison.functionalGaps, [['Capability', 'capability'], ['Current state', 'currentState'], ['Target state', 'targetState'], ['Gap', 'gap'], ['Mitigation', 'mitigation'], ['Severity', 'severity']]);
@@ -215,7 +306,17 @@ async function downloadComparisonPdf(comparison: any) {
   drawSection('Migration sequence', comparison.migrationSequence, [['Phase', 'phase'], ['Objective', 'objective'], ['Dependencies', 'dependencies'], ['Exit criteria', 'exitCriteria'], ['Risk', 'risk']]);
   drawSection('Decision governance', comparison.decisionGovernance, [['Decision', 'decision'], ['Owner', 'owner'], ['Approvers', 'approvers'], ['Evidence required', 'evidenceRequired'], ['Decision gate', 'decisionGate']]);
   drawSection('Evidence sources', (comparison.urls || []).map((url: string) => ({ url })), [['Source', 'url']]);
-  pdf.setTitle(`${comparison.category || 'Vendor comparison'} executive report`);
+  const pages = pdf.getPages();
+  pages.forEach((page, index) => {
+    page.drawText(`Vendor Compare  |  ${index === 0 ? 'Executive summary' : 'Complete decision analysis'}  |  Page ${index + 1} of ${pages.length}`, {
+      x: margin,
+      y: 14,
+      size: 6.8,
+      font: regular,
+      color: grey,
+    });
+  });
+  pdf.setTitle(`${comparison.category || 'Vendor comparison'} complete decision report`);
   pdf.setSubject(comparison.prompt);
   pdf.setCreator('Vendor Compare');
   const pdfBytes = await pdf.save();
@@ -224,7 +325,7 @@ async function downloadComparisonPdf(comparison: any) {
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = href;
-  anchor.download = `${String(comparison.category || 'vendor-comparison').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-executive-report.pdf`;
+  anchor.download = `${String(comparison.category || 'vendor-comparison').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-complete-decision-report.pdf`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

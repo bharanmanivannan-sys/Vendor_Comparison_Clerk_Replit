@@ -13,6 +13,11 @@ import {
 
 const app: Express = express();
 
+// API responses are dynamic and frequently authenticated. Express ETags can
+// turn a fresh React Query request into a bodyless 304 after reload or tab
+// inactivity, leaving the client with no data to render.
+app.disable("etag");
+
 app.use(
   pinoHttp({
     logger,
@@ -47,6 +52,9 @@ app.use(
   })),
 );
 
-app.use("/api", router);
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+}, router);
 
 export default app;

@@ -8,6 +8,7 @@ const outdir = await mkdtemp(join(tmpdir(), "vendor-compare-api-tests-"));
 try {
   await build({
     entryPoints: [
+      "src/app.test.ts",
       "src/lib/analysis.test.ts",
       "src/services/billing.test.ts",
       "src/services/idempotency.test.ts",
@@ -24,8 +25,8 @@ try {
   });
   const result = spawnSync(
     process.execPath,
-    ["--test", join(outdir, "lib/analysis.test.js"), join(outdir, "services/billing.test.js"), join(outdir, "services/idempotency.test.js"), join(outdir, "routes/commercial.test.js")],
-    { stdio: "inherit", env: process.env },
+    ["--test", join(outdir, "app.test.js"), join(outdir, "lib/analysis.test.js"), join(outdir, "services/billing.test.js"), join(outdir, "services/idempotency.test.js"), join(outdir, "routes/commercial.test.js")],
+    { stdio: "inherit", env: { ...process.env, NODE_ENV: "production" } },
   );
   process.exitCode = result.status ?? 1;
 } finally {
