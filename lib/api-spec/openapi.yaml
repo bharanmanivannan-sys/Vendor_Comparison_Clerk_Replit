@@ -548,76 +548,13 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /stripe/checkout:
-    post:
-      operationId: createStripeCheckout
-      tags: [management]
-      summary: Create a hosted Stripe checkout
-      security: [{ ClerkBearer: [] }]
-      parameters:
-        - name: X-Tenant-Id
-          in: header
-          required: true
-          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
-          schema: { type: string, minLength: 1, maxLength: 200 }
-      description: |
-        Creates a Stripe-hosted subscription payment page for the signed-in tenant administrator.
-        Redirect the customer to `purchaseUrl`. The redirect does not activate access:
-        the server verifies a successful non-refunded payment, active subscription, and
-        current billing period before enabling API keys. Returns `503 billing_not_configured`
-        until a verified Stripe recurring price is configured.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/CheckoutInput" }
-            example:
-              redirectUrl: https://your-app.example.com/billing/complete
-      responses:
-        "201":
-          description: Hosted checkout
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CheckoutResponse" }
-              example:
-                purchaseUrl: https://checkout.stripe.com/c/pay/example
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-  /tenant/stripe/reconcile:
-    post:
-      operationId: reconcileStripeBilling
-      tags: [management]
-      summary: Reconcile a stored Stripe checkout server-side
-      security: [{ ClerkBearer: [] }]
-      parameters:
-        - name: X-Tenant-Id
-          in: header
-          required: true
-          description: Exact tenant being managed; the Clerk user must be an owner or admin member.
-          schema: { type: string, minLength: 1, maxLength: 200 }
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/BillingReconciliationInput" }
-      responses:
-        "200":
-          description: Verified or unverified billing status
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BillingReconciliation" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
 components:
   securitySchemes:
     ApiKeyAuth:
       type: http
       scheme: bearer
       bearerFormat: vc_beta_... or vc_live_...
-      description: "Tenant-scoped API key. Send Authorization: Bearer vc_live_.... Scope is documented per operation. The plaintext key is returned only when created or rotated."
+      description: "Tenant-scoped API key. Send Authorization: Bearer vc_beta_.... Scope is documented per operation. The plaintext key is returned only when created or rotated."
     ClerkBearer:
       type: http
       scheme: bearer
@@ -726,16 +663,6 @@ components:
         includedComparisons: { type: integer }
         requestsPerMinute: { type: integer }
       required: [id, name, plan, billingStatus, includedComparisons, requestsPerMinute]
-    BillingReconciliation:
-      type: object
-      properties:
-        status: { type: string, enum: [active, unverified] }
-        subscriptionId: { type: string, nullable: true }
-      required: [status]
-    BillingReconciliationInput:
-      type: object
-      properties:
-        checkoutSessionId: { type: string, minLength: 1, maxLength: 255 }
     AuditEvent:
       type: object
       properties:
@@ -784,16 +711,6 @@ components:
         remaining: { type: integer, description: Comparisons remaining before the prepaid hard cap is reached. }
         exhausted: { type: boolean }
       required: [month, periodStart, periodEnd, included, used, remaining, exhausted]
-    CheckoutInput:
-      type: object
-      properties:
-        redirectUrl: { type: string, format: uri }
-      required: [redirectUrl]
-    CheckoutResponse:
-      type: object
-      properties:
-        purchaseUrl: { type: string, format: uri }
-      required: [purchaseUrl]
     HealthStatus:
       type: object
       properties:

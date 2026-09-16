@@ -48,27 +48,6 @@ export interface Tenant {
   requestsPerMinute: number;
 }
 
-export type BillingReconciliationStatus = typeof BillingReconciliationStatus[keyof typeof BillingReconciliationStatus];
-
-
-export const BillingReconciliationStatus = {
-  active: 'active',
-  unverified: 'unverified',
-} as const;
-
-export interface BillingReconciliation {
-  status: BillingReconciliationStatus;
-  subscriptionId?: string | null;
-}
-
-export interface BillingReconciliationInput {
-  /**
-     * @minLength 1
-     * @maxLength 255
-     */
-  checkoutSessionId?: string;
-}
-
 export type AuditEventMetadata = { [key: string]: unknown };
 
 export interface AuditEvent {
@@ -124,14 +103,6 @@ export interface UsageSummary {
   /** Comparisons remaining before the prepaid hard cap is reached. */
   remaining: number;
   exhausted: boolean;
-}
-
-export interface CheckoutInput {
-  redirectUrl: string;
-}
-
-export interface CheckoutResponse {
-  purchaseUrl: string;
 }
 
 export interface HealthStatus {
@@ -536,24 +507,6 @@ export type RotateTenantApiKeyHeaders = {
 };
 
 export type RevokeTenantApiKeyHeaders = {
-/**
- * Exact tenant being managed; the Clerk user must be an owner or admin member.
- * @minLength 1
- * @maxLength 200
- */
-'X-Tenant-Id': string;
-};
-
-export type CreateStripeCheckoutHeaders = {
-/**
- * Exact tenant being managed; the Clerk user must be an owner or admin member.
- * @minLength 1
- * @maxLength 200
- */
-'X-Tenant-Id': string;
-};
-
-export type ReconcileStripeBillingHeaders = {
 /**
  * Exact tenant being managed; the Clerk user must be an owner or admin member.
  * @minLength 1

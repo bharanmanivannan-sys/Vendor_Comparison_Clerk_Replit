@@ -2,7 +2,7 @@
 
 Vendor Compare is an evidence-backed product comparison application. Users describe a decision in plain language, optionally provide source URLs, and receive researched product scoring, trade-offs, and a recommendation.
 
-The repository also includes a commercial, tenant-scoped API with prepaid usage controls and Stripe subscription integration.
+The repository also includes a free-beta, tenant-scoped API with usage controls.
 
 ## Features
 
@@ -13,9 +13,8 @@ The repository also includes a commercial, tenant-scoped API with prepaid usage 
 - Guest comparison flow
 - Clerk authentication for saved workspaces
 - Comparison history and dashboard
-- Tenant-scoped commercial API keys
-- Idempotent API requests, rate limits, and prepaid usage quotas
-- Stripe hosted checkout and server-side subscription reconciliation
+- Tenant-scoped beta API keys
+- Idempotent API requests, rate limits, and monthly usage quotas
 
 ## Repository structure
 
@@ -40,7 +39,6 @@ lib/api-spec/       API specifications
 - TanStack Query
 - Clerk authentication
 - OpenAI product research
-- Stripe checkout and subscriptions
 - pnpm workspaces
 
 ## Requirements
@@ -62,10 +60,7 @@ The application expects these server-side values:
 | `CLERK_SECRET_KEY` | Secret | Clerk server authentication |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Secret | Clerk web client |
 | `SESSION_SECRET` | Secret | Server session protection |
-| `STRIPE_PRODUCT_ID` | Configuration | Vendor Compare commercial API product |
-| `STRIPE_PRICE_ID` | Configuration | AUD monthly commercial API subscription price |
-
-Do not commit secret values. Stripe credentials are obtained server-side through the connected Replit integration.
+Do not commit secret values.
 
 ## Install
 
@@ -115,15 +110,9 @@ The commercial API provides:
 
 The API contract and generated clients are maintained from `lib/api-spec/openapi.yaml`.
 
-## Billing and access
+## Beta access
 
-Stripe is the billing source of truth. Customers are sent to Stripe-hosted checkout, and API access remains inactive until the server verifies:
-
-1. A successful, non-refunded payment
-2. An active subscription for the configured price and matching tenant
-3. A current billing period
-
-Scheduled server-side reconciliation runs at startup and every 15 minutes as a backstop for renewals, cancellations, refunds, and past-due changes.
+API access is currently free and does not require payment. Tenant-scoped keys remain subject to monthly usage quotas and per-minute rate limits.
 
 ## Security notes
 
@@ -131,7 +120,6 @@ Scheduled server-side reconciliation runs at startup and every 15 minutes as a b
 - Never expose connector credentials in frontend code.
 - API keys are stored as hashes and shown only when created.
 - Commercial write requests require an idempotency key.
-- Paid access fails closed when billing configuration or verification is unavailable.
 
 ## License
 

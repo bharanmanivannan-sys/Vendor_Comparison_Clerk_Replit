@@ -35,17 +35,11 @@ import type {
   AuditEvent,
   BadGatewayResponse,
   BadRequestResponse,
-  BillingReconciliation,
-  BillingReconciliationInput,
-  CheckoutInput,
-  CheckoutResponse,
   Comparison,
   ComparisonInput,
   ComparisonPromptInput,
   ComparisonSummary,
-  ConfigurationErrorResponse,
   ConflictResponse,
-  CreateStripeCheckoutHeaders,
   CreateTenantApiKeyHeaders,
   DashboardSummary,
   ExternalCreateComparisonHeaders,
@@ -62,7 +56,6 @@ import type {
   ParsedComparison,
   QuotaExceededResponse,
   RateLimitedResponse,
-  ReconcileStripeBillingHeaders,
   RevokeTenantApiKeyHeaders,
   RotateTenantApiKeyHeaders,
   Tenant,
@@ -1785,188 +1778,5 @@ export const useRevokeTenantApiKey = <TError = ErrorType<UnauthorizedResponse | 
         TContext
       > => {
       return useMutation(getRevokeTenantApiKeyMutationOptions(options));
-    }
-
-export const getCreateStripeCheckoutUrl = () => {
-
-
-
-
-  return `/api/stripe/checkout`
-}
-
-/**
- * Creates a Stripe-hosted subscription payment page for the signed-in tenant administrator.
- * Redirect the customer to `purchaseUrl`. The redirect does not activate access:
- * the server verifies a successful non-refunded payment, active subscription, and
- * current billing period before enabling API keys. Returns `503 billing_not_configured`
- * until a verified Stripe recurring price is configured.
- * @summary Create a hosted Stripe checkout
- */
-export const createStripeCheckout = async (checkoutInput: CheckoutInput,
-    headers: CreateStripeCheckoutHeaders, options?: Parameters<typeof customFetch>[1]): Promise<CheckoutResponse> => {
-
-    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
-    if (!h) return {};
-    if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Symbol.iterator in h) {
-      return Object.fromEntries(
-        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
-      );
-    }
-    const headers: Record<string, string | readonly string[]> = {};
-    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
-      if (value !== undefined) headers[name] = value;
-    }
-    return headers;
-  };
-return customFetch<CheckoutResponse>(getCreateStripeCheckoutUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json',...headers, ...getHeaders(options?.headers) },
-    body: JSON.stringify(checkoutInput)
-  }
-);}
-
-
-
-
-
-export const getCreateStripeCheckoutMutationKey = () => ['createStripeCheckout'] as const;
-
-export const getCreateStripeCheckoutMutationOptions = <TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ConfigurationErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStripeCheckout>>, TError,CreateStripeCheckoutMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof createStripeCheckout>>, TError,CreateStripeCheckoutMutationVariables, TContext> => {
-
-const mutationKey = getCreateStripeCheckoutMutationKey();
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createStripeCheckout>>, CreateStripeCheckoutMutationVariables> = (props) => {
-          const {data,headers} = props ?? {};
-
-          return  createStripeCheckout(data,headers,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type CreateStripeCheckoutMutationResult = NonNullable<Awaited<ReturnType<typeof createStripeCheckout>>>
-    export type CreateStripeCheckoutMutationBody = BodyType<CheckoutInput>
-    export type CreateStripeCheckoutMutationError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ConfigurationErrorResponse>
-    export type CreateStripeCheckoutMutationVariables = {data: BodyType<CheckoutInput>;headers: CreateStripeCheckoutHeaders}
-
-    /**
- * @summary Create a hosted Stripe checkout
- */
-export const useCreateStripeCheckout = <TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ConfigurationErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStripeCheckout>>, TError,CreateStripeCheckoutMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
- ): UseMutationResult<
-        Awaited<ReturnType<typeof createStripeCheckout>>,
-        TError,
-        CreateStripeCheckoutMutationVariables,
-        TContext
-      > => {
-      return useMutation(getCreateStripeCheckoutMutationOptions(options));
-    }
-
-export const getReconcileStripeBillingUrl = () => {
-
-
-
-
-  return `/api/tenant/stripe/reconcile`
-}
-
-/**
- * @summary Reconcile a stored Stripe checkout server-side
- */
-export const reconcileStripeBilling = async (headers: ReconcileStripeBillingHeaders,
-    billingReconciliationInput?: BillingReconciliationInput, options?: Parameters<typeof customFetch>[1]): Promise<BillingReconciliation> => {
-
-    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
-    if (!h) return {};
-    if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Symbol.iterator in h) {
-      return Object.fromEntries(
-        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
-      );
-    }
-    const headers: Record<string, string | readonly string[]> = {};
-    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
-      if (value !== undefined) headers[name] = value;
-    }
-    return headers;
-  };
-return customFetch<BillingReconciliation>(getReconcileStripeBillingUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json',...headers, ...getHeaders(options?.headers) },
-    body: JSON.stringify(billingReconciliationInput)
-  }
-);}
-
-
-
-
-
-export const getReconcileStripeBillingMutationKey = () => ['reconcileStripeBilling'] as const;
-
-export const getReconcileStripeBillingMutationOptions = <TError = ErrorType<BadRequestResponse | UnauthorizedResponse | ForbiddenResponse | ConfigurationErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reconcileStripeBilling>>, TError,ReconcileStripeBillingMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof reconcileStripeBilling>>, TError,ReconcileStripeBillingMutationVariables, TContext> => {
-
-const mutationKey = getReconcileStripeBillingMutationKey();
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof reconcileStripeBilling>>, ReconcileStripeBillingMutationVariables> = (props) => {
-          const {headers,data} = props ?? {};
-
-          return  reconcileStripeBilling(headers,data,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type ReconcileStripeBillingMutationResult = NonNullable<Awaited<ReturnType<typeof reconcileStripeBilling>>>
-    export type ReconcileStripeBillingMutationBody = BodyType<BillingReconciliationInput> | undefined
-    export type ReconcileStripeBillingMutationError = ErrorType<BadRequestResponse | UnauthorizedResponse | ForbiddenResponse | ConfigurationErrorResponse>
-    export type ReconcileStripeBillingMutationVariables = {headers: ReconcileStripeBillingHeaders;data?: BodyType<BillingReconciliationInput>}
-
-    /**
- * @summary Reconcile a stored Stripe checkout server-side
- */
-export const useReconcileStripeBilling = <TError = ErrorType<BadRequestResponse | UnauthorizedResponse | ForbiddenResponse | ConfigurationErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reconcileStripeBilling>>, TError,ReconcileStripeBillingMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
- ): UseMutationResult<
-        Awaited<ReturnType<typeof reconcileStripeBilling>>,
-        TError,
-        ReconcileStripeBillingMutationVariables,
-        TContext
-      > => {
-      return useMutation(getReconcileStripeBillingMutationOptions(options));
     }
 
