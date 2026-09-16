@@ -4,11 +4,15 @@ info:
   title: Api
   version: 0.1.0
   description: |
-    Vendor Compare API for researched, metered product comparisons.
+    API-only white-label service for researched, metered product comparisons.
 
     Customer applications authenticate `/v1` operations with a tenant-scoped API key:
-    `Authorization: Bearer vc_live_...`. Account, billing, and API-key management
-    operations use a signed-in Clerk session and, where documented, `X-Tenant-Id`.
+    `Authorization: Bearer vc_beta_...`. Calls are designed for a customer's backend,
+    workflow runner, or agent service; API keys must never be exposed in a branded
+    browser or mobile client. Responses are presentation-neutral structured JSON so
+    customers can apply their own brand, terminology, interaction design, and reports.
+    Account and API-key management operations use a signed-in Clerk session and, where
+    documented, `X-Tenant-Id`.
 servers:
   - url: /api
     description: Base API path
@@ -612,7 +616,7 @@ components:
     ApiKeyAuth:
       type: http
       scheme: bearer
-      bearerFormat: Vendor Compare API key
+      bearerFormat: vc_beta_... or vc_live_...
       description: "Tenant-scoped API key. Send Authorization: Bearer vc_live_.... Scope is documented per operation. The plaintext key is returned only when created or rotated."
     ClerkBearer:
       type: http
