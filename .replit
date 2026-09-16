@@ -23,7 +23,3 @@ timeoutMs = 20000
 channel = "stable-25_05"
 
 [userenv]
-
-[userenv.shared]
-STRIPE_PRICE_ID = "price_1UFuv2GvtCkAVzffxbpkKHuW"
-STRIPE_PRODUCT_ID = "prod_VGRouBBnoxNseA"

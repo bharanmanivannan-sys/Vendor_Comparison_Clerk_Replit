@@ -4,3 +4,5 @@
 - [Decision architecture](decision-architecture.md) — comparisons must map equivalency, gaps, service arrangements, migration sequence, and decision governance.
 - [Browser PDF exports](browser-pdf-exports.md) — generate reports natively with vector PDF primitives; avoid rasterizing hidden HTML.
 - [Comparison intent validation](comparison-intent-validation.md) — accept clear decisions with real options even when their category is not in the known segment list.
+- [White-label delivery](white-label-delivery.md) — white-label support is API-only; customers own the branded UI and call the comparison API from their backend.
+- [Free-beta publishing](free-beta-publishing.md) — production must not depend on a payment connector while access is free; billing can return later as a separate change.

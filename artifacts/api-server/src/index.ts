@@ -1,6 +1,5 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { reconcileAllStripeTenants } from "./services/billing";
 
 const rawPort = process.env["PORT"];
 
@@ -23,20 +22,5 @@ const server = app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
-  if (process.env.BILLING_ENABLED === "true" && process.env.STRIPE_PRICE_ID) {
-    const reconcile = async () => {
-      try {
-        const result = await reconcileAllStripeTenants();
-        logger.info(result, "Stripe billing reconciliation completed");
-      } catch (cause) {
-        logger.error({ err: cause }, "Stripe billing reconciliation failed");
-      }
-    };
-    void reconcile();
-    const interval = setInterval(reconcile, 15 * 60 * 1000);
-    interval.unref();
-    server.on("close", () => clearInterval(interval));
-  } else {
-    logger.info("Paid billing is disabled");
-  }
+  logger.info("Free beta API access is enabled");
 });

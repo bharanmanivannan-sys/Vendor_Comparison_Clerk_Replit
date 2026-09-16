@@ -2,17 +2,14 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { getAuth } from "@clerk/express";
 import { and, desc, eq } from "drizzle-orm";
 import {
-  BootstrapTenantResponse, ReconcileStripeBillingBody, CreateTenantApiKeyBody, CreateTenantApiKeyResponse,
-  CreateStripeCheckoutBody, CreateStripeCheckoutResponse, GetTenantUsageResponse,
+  BootstrapTenantResponse, CreateTenantApiKeyBody, CreateTenantApiKeyResponse, GetTenantUsageResponse,
   ListTenantApiKeysResponse, RevokeTenantApiKeyParams, RotateTenantApiKeyParams,
   RotateTenantApiKeyResponse,
 } from "@workspace/api-zod";
-import { apiKeysTable, auditEventsTable, db, stripeSubscriptionsTable } from "@workspace/db";
+import { apiKeysTable, auditEventsTable, db } from "@workspace/db";
 import { createApiKey, createApiKeyInTransaction, revokeApiKey, revokeApiKeyInTransaction } from "../services/apiKeys";
 import { ensurePersonalTenant, getAdminTenant } from "../services/tenant";
 import { getUsage } from "../services/usage";
-import { createStripeCheckout } from "../lib/stripeClient";
-import { reconcileStripeTenant } from "../services/billing";
 
 type ClerkRequest = Request & { clerkUserId?: string; tenantId?: string };
 const router: IRouter = Router();
@@ -142,77 +139,6 @@ router.post("/tenant/api-keys/:id/revoke", requireClerk, async (req: ClerkReques
     return;
   }
   res.sendStatus(204);
-});
-
-router.post(["/stripe/checkout", "/whop/checkout"], requireClerk, async (req: ClerkRequest, res): Promise<void> => {
-  if (process.env.BILLING_ENABLED !== "true") {
-    structuredError(res, 503, "billing_disabled", "Paid subscriptions are not currently available.");
-    return;
-  }
-  const admin = await requireAdmin(req, res);
-  if (!admin) return;
-  const parsed = CreateStripeCheckoutBody.safeParse(req.body);
-  if (!parsed.success) {
-    structuredError(res, 400, "invalid_request", parsed.error.message);
-    return;
-  }
-  const priceId = process.env.STRIPE_PRICE_ID;
-  if (!priceId) {
-    structuredError(res, 503, "billing_not_configured", "Stripe checkout requires verified STRIPE_PRICE_ID configuration.");
-    return;
-  }
-  try {
-    const checkout = await createStripeCheckout({
-      tenantId: admin.tenantId,
-      clerkUserId: admin.actorId,
-      priceId,
-      redirectUrl: parsed.data.redirectUrl,
-    });
-    const purchaseUrl = checkout.url;
-    if (!purchaseUrl || !checkout.id) throw new Error("Stripe did not return a hosted checkout.");
-    await db.transaction(async (tx) => {
-      await tx.insert(stripeSubscriptionsTable).values({
-        tenantId: admin.tenantId,
-        clerkUserId: admin.actorId,
-        checkoutSessionId: checkout.id,
-        priceId,
-        status: "pending",
-      });
-      await tx.insert(auditEventsTable).values({
-        tenantId: admin.tenantId,
-        actorId: admin.actorId,
-        action: "billing.checkout_created",
-        metadata: { checkoutSessionId: checkout.id, priceId, provider: "stripe" },
-      });
-    });
-    res.status(201).json(CreateStripeCheckoutResponse.parse({ purchaseUrl }));
-  } catch (cause) {
-    structuredError(res, 503, "billing_unavailable", cause instanceof Error ? cause.message : "Stripe checkout is unavailable.");
-  }
-});
-
-router.post(["/tenant/stripe/reconcile", "/tenant/whop/reconcile"], requireClerk, async (req: ClerkRequest, res): Promise<void> => {
-  if (process.env.BILLING_ENABLED !== "true") {
-    structuredError(res, 503, "billing_disabled", "Paid subscriptions are not currently available.");
-    return;
-  }
-  const admin = await requireAdmin(req, res);
-  if (!admin) return;
-  if (!process.env.STRIPE_PRICE_ID) {
-    structuredError(res, 503, "billing_not_configured", "Stripe billing reconciliation requires verified configuration.");
-    return;
-  }
-  try {
-    const parsed = ReconcileStripeBillingBody.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      structuredError(res, 400, "invalid_request", parsed.error.message);
-      return;
-    }
-    const result = await reconcileStripeTenant(admin.tenantId, parsed.data.checkoutSessionId);
-    res.json(result);
-  } catch (cause) {
-    structuredError(res, 503, "billing_unavailable", cause instanceof Error ? cause.message : "Stripe reconciliation is unavailable.");
-  }
 });
 
 export default router;

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { and, eq, gt, isNotNull, isNull, lte } from "drizzle-orm";
-import { apiKeysTable, auditEventsTable, db, tenantsTable } from "@workspace/db";
+import { and, eq, isNull } from "drizzle-orm";
+import { apiKeysTable, auditEventsTable, db } from "@workspace/db";
 
 export const API_KEY_SCOPES = ["comparisons:read", "comparisons:write", "usage:read"] as const;
 export type ApiKeyScope = typeof API_KEY_SCOPES[number];
@@ -17,29 +17,8 @@ function hashKey(value: string): string {
 
 function makePlaintextKey(): { key: string; prefix: string; hash: string } {
   const prefix = randomBytes(6).toString("hex");
-  const environment = process.env.BILLING_ENABLED === "true" ? "live" : "beta";
-  const key = `vc_${environment}_${prefix}_${randomBytes(32).toString("base64url")}`;
-  return { key, prefix: `vc_${environment}_${prefix}`, hash: hashKey(key) };
-}
-
-export function activeEntitlementConditions(tenantId?: string) {
-  const now = new Date();
-  return and(
-    ...(tenantId ? [eq(tenantsTable.id, tenantId)] : []),
-    eq(tenantsTable.billingStatus, "active"),
-    isNotNull(tenantsTable.billingPeriodStart),
-    isNotNull(tenantsTable.billingPeriodEnd),
-    lte(tenantsTable.billingPeriodStart, now),
-    gt(tenantsTable.billingPeriodEnd, now),
-  );
-}
-
-export async function isTenantBillingActive(tenantId: string, executor: any = db): Promise<boolean> {
-  if (process.env.BILLING_ENABLED !== "true") return true;
-  if (!process.env.STRIPE_PRICE_ID) return false;
-  const [tenant] = await executor.select({ id: tenantsTable.id })
-    .from(tenantsTable).where(activeEntitlementConditions(tenantId)).limit(1);
-  return Boolean(tenant);
+  const key = `vc_beta_${prefix}_${randomBytes(32).toString("base64url")}`;
+  return { key, prefix: `vc_beta_${prefix}`, hash: hashKey(key) };
 }
 
 export async function createApiKey(input: {
@@ -66,9 +45,6 @@ export async function createApiKeyInTransaction(
   if (scopes.some((scope) => !API_KEY_SCOPES.includes(scope as ApiKeyScope))) {
     throw new Error("Invalid API key scope");
   }
-  if (!(await isTenantBillingActive(input.tenantId, tx))) {
-    throw new Error("Tenant billing is inactive; verify an active Stripe subscription before creating API keys.");
-  }
   const [created] = await tx.insert(apiKeysTable).values({
     tenantId: input.tenantId,
     name: input.name,
@@ -87,7 +63,6 @@ export async function createApiKeyInTransaction(
 }
 
 export async function authenticateApiKey(authorization: string | undefined): Promise<AuthenticatedApiKey | null> {
-  if (process.env.BILLING_ENABLED === "true" && !process.env.STRIPE_PRICE_ID) return null;
   const match = authorization?.match(/^Bearer\s+(vc_(?:beta|live)_[A-Za-z0-9]+_[A-Za-z0-9_-]+)$/i);
   if (!match) return null;
   const plaintext = match[1];
@@ -95,16 +70,11 @@ export async function authenticateApiKey(authorization: string | undefined): Pro
   if (!prefixMatch) return null;
   const [candidate] = await db.select({
     key: apiKeysTable,
-    billingStatus: tenantsTable.billingStatus,
-    billingPeriodStart: tenantsTable.billingPeriodStart,
-    billingPeriodEnd: tenantsTable.billingPeriodEnd,
   })
     .from(apiKeysTable)
-    .innerJoin(tenantsTable, eq(tenantsTable.id, apiKeysTable.tenantId))
     .where(and(
       eq(apiKeysTable.keyPrefix, prefixMatch[1]),
       isNull(apiKeysTable.revokedAt),
-      ...(process.env.BILLING_ENABLED === "true" ? [activeEntitlementConditions()] : []),
     )).limit(1);
   if (
     !candidate
