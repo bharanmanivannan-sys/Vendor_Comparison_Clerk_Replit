@@ -17,8 +17,9 @@ function hashKey(value: string): string {
 
 function makePlaintextKey(): { key: string; prefix: string; hash: string } {
   const prefix = randomBytes(6).toString("hex");
-  const key = `vc_live_${prefix}_${randomBytes(32).toString("base64url")}`;
-  return { key, prefix: `vc_live_${prefix}`, hash: hashKey(key) };
+  const environment = process.env.BILLING_ENABLED === "true" ? "live" : "beta";
+  const key = `vc_${environment}_${prefix}_${randomBytes(32).toString("base64url")}`;
+  return { key, prefix: `vc_${environment}_${prefix}`, hash: hashKey(key) };
 }
 
 export function activeEntitlementConditions(tenantId?: string) {
@@ -34,6 +35,7 @@ export function activeEntitlementConditions(tenantId?: string) {
 }
 
 export async function isTenantBillingActive(tenantId: string, executor: any = db): Promise<boolean> {
+  if (process.env.BILLING_ENABLED !== "true") return true;
   if (!process.env.STRIPE_PRICE_ID) return false;
   const [tenant] = await executor.select({ id: tenantsTable.id })
     .from(tenantsTable).where(activeEntitlementConditions(tenantId)).limit(1);
@@ -85,11 +87,11 @@ export async function createApiKeyInTransaction(
 }
 
 export async function authenticateApiKey(authorization: string | undefined): Promise<AuthenticatedApiKey | null> {
-  if (!process.env.STRIPE_PRICE_ID) return null;
-  const match = authorization?.match(/^Bearer\s+(vc_live_[A-Za-z0-9]+_[A-Za-z0-9_-]+)$/i);
+  if (process.env.BILLING_ENABLED === "true" && !process.env.STRIPE_PRICE_ID) return null;
+  const match = authorization?.match(/^Bearer\s+(vc_(?:beta|live)_[A-Za-z0-9]+_[A-Za-z0-9_-]+)$/i);
   if (!match) return null;
   const plaintext = match[1];
-  const prefixMatch = plaintext.match(/^(vc_live_[A-Za-z0-9]+)/);
+  const prefixMatch = plaintext.match(/^(vc_(?:beta|live)_[A-Za-z0-9]+)/);
   if (!prefixMatch) return null;
   const [candidate] = await db.select({
     key: apiKeysTable,
@@ -100,10 +102,10 @@ export async function authenticateApiKey(authorization: string | undefined): Pro
     .from(apiKeysTable)
     .innerJoin(tenantsTable, eq(tenantsTable.id, apiKeysTable.tenantId))
     .where(and(
-    eq(apiKeysTable.keyPrefix, prefixMatch[1]),
-    isNull(apiKeysTable.revokedAt),
-    activeEntitlementConditions(),
-  )).limit(1);
+      eq(apiKeysTable.keyPrefix, prefixMatch[1]),
+      isNull(apiKeysTable.revokedAt),
+      ...(process.env.BILLING_ENABLED === "true" ? [activeEntitlementConditions()] : []),
+    )).limit(1);
   if (
     !candidate
     || (candidate.key.expiresAt && candidate.key.expiresAt.getTime() <= Date.now())

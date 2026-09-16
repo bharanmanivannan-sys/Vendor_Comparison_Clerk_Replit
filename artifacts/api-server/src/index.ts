@@ -23,7 +23,7 @@ const server = app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
-  if (process.env.STRIPE_PRICE_ID) {
+  if (process.env.BILLING_ENABLED === "true" && process.env.STRIPE_PRICE_ID) {
     const reconcile = async () => {
       try {
         const result = await reconcileAllStripeTenants();
@@ -37,6 +37,6 @@ const server = app.listen(port, (err) => {
     interval.unref();
     server.on("close", () => clearInterval(interval));
   } else {
-    logger.warn("Stripe billing reconciliation is disabled until STRIPE_PRICE_ID is configured");
+    logger.info("Paid billing is disabled");
   }
 });

@@ -64,7 +64,7 @@ function setQuotaHeaders(res: Response, usage: Awaited<ReturnType<typeof getUsag
 function quotaExceeded(res: Response, usage: Awaited<ReturnType<typeof getUsage>>) {
   setQuotaHeaders(res, usage);
   res.setHeader("Retry-After", Math.max(1, Math.ceil((new Date(usage.periodEnd).getTime() - Date.now()) / 1000)));
-  error(res, 402, "quota_exhausted", "The prepaid comparison allowance is exhausted. Purchase or activate a new allowance before retrying.");
+  error(res, 402, "quota_exhausted", "The beta comparison allowance is exhausted for the current calendar month.");
 }
 
 export function createCommercialRouter(overrides: Partial<CommercialDependencies> = {}): IRouter {

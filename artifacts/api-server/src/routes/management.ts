@@ -145,6 +145,10 @@ router.post("/tenant/api-keys/:id/revoke", requireClerk, async (req: ClerkReques
 });
 
 router.post(["/stripe/checkout", "/whop/checkout"], requireClerk, async (req: ClerkRequest, res): Promise<void> => {
+  if (process.env.BILLING_ENABLED !== "true") {
+    structuredError(res, 503, "billing_disabled", "Paid subscriptions are not currently available.");
+    return;
+  }
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   const parsed = CreateStripeCheckoutBody.safeParse(req.body);
@@ -188,6 +192,10 @@ router.post(["/stripe/checkout", "/whop/checkout"], requireClerk, async (req: Cl
 });
 
 router.post(["/tenant/stripe/reconcile", "/tenant/whop/reconcile"], requireClerk, async (req: ClerkRequest, res): Promise<void> => {
+  if (process.env.BILLING_ENABLED !== "true") {
+    structuredError(res, 503, "billing_disabled", "Paid subscriptions are not currently available.");
+    return;
+  }
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   if (!process.env.STRIPE_PRICE_ID) {

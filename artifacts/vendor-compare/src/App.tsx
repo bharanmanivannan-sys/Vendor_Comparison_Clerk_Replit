@@ -332,6 +332,7 @@ async function downloadComparisonPdf(comparison: any) {
   window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
 }
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const billingEnabled = import.meta.env.VITE_BILLING_ENABLED === 'true';
 
 function stripBase(path: string): string {
   return basePath && path.startsWith(basePath)
@@ -552,7 +553,11 @@ function AppShell({ children, guest = false }: { children: ReactNode; guest?: bo
   const { user } = useUser();
   const handleSignOut = () => { void signOut({ redirectUrl: basePath || '/' }); setLocation('/'); };
   if (guest) return <GuestShell>{children}</GuestShell>;
-  const navItems = [{ href: '/user-portal', label: 'Workspace', icon: LayoutDashboard }, { href: '/history', label: 'History', icon: History }, { href: '/api-docs', label: 'API docs', icon: Code2 }];
+  const navItems = [
+    { href: '/user-portal', label: 'Workspace', icon: LayoutDashboard },
+    { href: '/history', label: 'History', icon: History },
+    { href: '/api-docs', label: 'API docs', icon: Code2 },
+  ];
   return (
     <div className="grain min-h-[100dvh] bg-[#f2eee2]">
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-[#303b59] bg-[#202840] px-5 py-6 text-[#f8f4e8] transition-transform lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
@@ -801,7 +806,11 @@ function Portal() {
     data,
     { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) },
   );
-  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><ApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} onSubmit={createComparison} /></div></AppShell>;
+  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div>{billingEnabled ? <ApiAccessPanel /> : <BetaApiAccessPanel />}<div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} onSubmit={createComparison} /></div></AppShell>;
+}
+
+function BetaApiAccessPanel() {
+  return <section className="animate-rise animate-rise-1 mt-8 rounded-2xl border border-[#202840] bg-[#202840] p-5 text-[#f8f4e8] sm:flex sm:items-center sm:justify-between sm:gap-8" data-testid="api-beta-panel"><div><div className="flex items-center gap-2"><Code2 size={15} className="text-[#d9ef66]" /><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#bde3d8]">Developer API beta</p></div><h2 className="display mt-3 text-2xl font-bold">Integrate comparisons into your AI workflows</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#c9cfdb]">Use a scoped bearer API key with the versioned comparison endpoints. Beta access is currently free and subject to monthly and per-minute limits.</p></div><Link href="/api-docs" className="focus-ring mt-5 inline-flex shrink-0 rounded-xl bg-[#d9ef66] px-5 py-3 text-sm font-bold text-[#202840] sm:mt-0">Open API docs</Link></section>;
 }
 
 function ApiAccessPanel() {
@@ -1003,6 +1012,80 @@ function DecisionArchitecturePage() {
 }
 
 function ApiDocsPage() {
+  const createKeyExample = `# 1. Sign in, then bootstrap your personal tenant
+curl -X POST "$BASE_URL/api/tenant/bootstrap" \\
+  -H "Authorization: Bearer $CLERK_SESSION_TOKEN"
+
+# 2. Create a scoped beta key (the plaintext key is returned once)
+curl -X POST "$BASE_URL/api/tenant/api-keys" \\
+  -H "Authorization: Bearer $CLERK_SESSION_TOKEN" \\
+  -H "X-Tenant-Id: $TENANT_ID" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"n8n production workflow","scopes":["comparisons:read","comparisons:write","usage:read"]}'`;
+  const requestExample = `curl -X POST "$BASE_URL/api/v1/comparisons" \\
+  -H "Authorization: Bearer $VENDOR_COMPARE_API_KEY" \\
+  -H "Idempotency-Key: workflow-run-{{$execution.id}}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "prompt": "Should I use Jira or Asana for a 15-person product team managing tasks and process flows?",
+    "urls": [],
+    "criteria": [
+      "Workflow flexibility",
+      "Ease of adoption",
+      "Integrations",
+      "Administration effort",
+      "Long-term value"
+    ]
+  }'`;
+  const responseExample = `{
+  "id": 142,
+  "status": "complete",
+  "category": "Work management",
+  "recommendation": "Asana",
+  "score": 84,
+  "executiveSummary": "Asana is the stronger fit for a 15-person team...",
+  "recommendationReason": "It balances adoption speed and workflow control...",
+  "vendors": ["Jira", "Asana"],
+  "vendorScores": [
+    { "vendor": "Jira", "score": 78, "verdict": "Best for engineering-led complexity" },
+    { "vendor": "Asana", "score": 84, "verdict": "Best overall fit" }
+  ],
+  "pricing": [],
+  "features": [],
+  "weightedScores": [],
+  "contextAssumptions": [],
+  "productEquivalency": [],
+  "functionalGaps": [],
+  "serviceProductMap": [],
+  "migrationSequence": [],
+  "decisionGovernance": [],
+  "swot": {},
+  "pestle": [],
+  "soar": [],
+  "vrio": {},
+  "opportunities": [],
+  "insights": [],
+  "nextSteps": [],
+  "urls": ["https://..."]
+}`;
+  const endpoints = [
+    ['POST', '/api/tenant/bootstrap', 'Create or retrieve the signed-in developer tenant', 'Clerk session bearer token'],
+    ['POST', '/api/tenant/api-keys', 'Create a scoped beta API key', 'Clerk bearer + X-Tenant-Id'],
+    ['GET', '/api/v1/comparisons', 'List saved API comparisons', 'API key · comparisons:read'],
+    ['POST', '/api/v1/comparisons', 'Run an NLP comparison', 'API key · comparisons:write'],
+    ['GET', '/api/v1/comparisons/{id}', 'Retrieve a completed comparison', 'API key · comparisons:read'],
+    ['GET', '/api/v1/usage', 'Read beta usage and remaining allowance', 'API key · usage:read'],
+  ];
+  return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex gap-3"><Link href="/" className="focus-ring rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075]">Home</Link><Link href="/sign-up" className="focus-ring rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66]">Get beta access</Link></div></header><main className="mx-auto max-w-7xl px-5 pb-20 pt-10 lg:px-10">
+    <section className="grid gap-10 lg:grid-cols-[1fr_340px]"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">Developer API / free beta</p><h1 className="display mt-4 text-5xl font-bold tracking-[-.06em] text-[#202840] sm:text-7xl">Add researched decisions to any AI workflow.</h1><p className="mt-6 max-w-3xl text-base leading-7 text-[#667083]">Send a natural-language buying question and receive a structured comparison with weighted recommendations, evidence, strategic frameworks, risks, migration planning, and next steps. Beta access does not require payment.</p></div><aside className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[10px] uppercase tracking-[.16em] text-[#bde3d8]">Authentication standard</p><p className="display mt-4 text-2xl font-bold text-[#d9ef66]">HTTP Bearer API key</p><code className="mt-5 block rounded-lg bg-[#151b2c] p-3 text-[11px] text-[#bde3d8]">Authorization: Bearer vc_beta_...</code><p className="mt-4 text-xs leading-5 text-[#c9cfdb]">Create a scoped key once using your signed-in Clerk session. Store it in your workflow tool’s encrypted credential or secret store. Never place it in a prompt, browser URL, or client-side application.</p></aside></section>
+    <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Create an API key</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Use Clerk once, then automate with a bearer key</h2><p className="mt-3 max-w-3xl text-sm leading-6 text-[#687083]">Clerk protects account administration. The generated Vendor Compare key is the standard credential your server, agent, n8n workflow, Zapier action, Make scenario, or other HTTP-capable tool sends on every <code>/api/v1</code> request.</p><pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{createKeyExample}</pre></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / NLP request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Submit the decision in plain language</h2><p className="mt-3 text-sm leading-6 text-[#687083]"><code>prompt</code> is required. The API infers vendors and criteria when possible. You may supply two to five <code>vendors</code>, optional <code>criteria</code>, and trusted <code>urls</code>. Use a unique <code>Idempotency-Key</code> for every workflow execution so retries cannot create duplicate comparisons or consume allowance twice.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{requestExample}</pre></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Structured response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Map fields into downstream agents</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns HTTP <code>201</code> after research completes. Configure workflow HTTP steps with a timeout of at least 120 seconds. Route <code>recommendation</code> and <code>executiveSummary</code> into concise outputs, while retaining evidence, assumptions, gaps, and governance fields for audit and review.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></section>
+    <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">04 / Endpoint reference</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Versioned integration surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_250px_1fr_230px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
+    <section className="mt-14 grid gap-5 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">Retries</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Retry transient <code>502</code> responses with exponential backoff and the same idempotency key. A completed key replays its original response.</p></div><div><h3 className="font-bold text-[#202840]">Limits</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>429</code> includes <code>Retry-After</code>. Usage responses and comparison responses include quota headers. Beta allowances may change before general availability.</p></div><div><h3 className="font-bold text-[#202840]">Security</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Use the minimum scopes required, rotate exposed keys, keep calls server-side, validate returned evidence, and require human approval before procurement or migration actions.</p></div></section>
+  </main></div>;
+}
+
+function LegacyApiDocsPage() {
   const endpoints = [
     ['POST', '/guest/comparisons/parse', 'Parse a natural-language brief', 'Public · 12 requests/IP/hour'],
     ['POST', '/guest/comparisons', 'Run an unsaved researched comparison', 'Public · 12 requests/IP/hour'],
