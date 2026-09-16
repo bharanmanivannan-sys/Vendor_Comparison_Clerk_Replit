@@ -108,6 +108,15 @@ test("accepts EV brand comparisons with long-term buy-versus-lease intent", () =
   assert.ok(parsed.criteria.includes("Long-term ownership cost"));
 });
 
+test("parses EV battery-service comparisons with trailing punctuation", () => {
+  const parsed = parsePrompt('Compare Battery as service options, validity and price comparisons between MG and Mahindra Electric vehicles (4 wheeler)""');
+  assert.deepEqual(parsed.vendors, ["MG", "Mahindra"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Electric vehicles");
+  assert.ok(parsed.criteria.includes("Range and charging"));
+  assert.ok(parsed.criteria.includes("Budget fit"));
+});
+
 test("parses should-I-get choice wording with novated lease and budget", () => {
   const parsed = parsePrompt("Should I get a Tesla or BYD when I go for a Novated lease? Which one is value for money? I'm looking at $70,000.00");
   assert.deepEqual(parsed.vendors, ["Tesla", "BYD"]);

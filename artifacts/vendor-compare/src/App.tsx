@@ -735,13 +735,13 @@ async function runComparisonJob(guest: boolean, data: { prompt: string; urls: st
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  for (let attempt = 0; attempt < 180; attempt += 1) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     const job = await customFetch<ComparisonJobState>(`${basePath}/${created.jobId}`);
     if (job.status === 'complete' && job.result) return job.result;
     if (job.status === 'failed') throw new Error(job.message || 'Product research could not be completed.');
   }
-  throw new Error('Product research timed out. Please try again.');
+  throw new Error('Product research did not finish within five minutes. Please try again.');
 }
 
 function useComparisonJob(guest: boolean) {
