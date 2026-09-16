@@ -165,7 +165,7 @@ export function parsePrompt(prompt: string) {
     /\b(?:move|moving|migrate|migrating|switch|switching)(?:\s+(?:my|our|the))?.*?\s+from\s+(.+?)\s+to\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const choicePair = normalized.match(
-    /\b(?:(?:should\s+i\s+)(?:choose|pick|select|get|go\s+with)|(?:choose|pick|select|recommend))\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
+    /\b(?:(?:should\s+i\s+)(?:choose|pick|select|get|use|be\s+using|go\s+with)|(?:choose|pick|select|recommend))\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const genericPair = normalized.match(
     /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against)\s+(.+?)(?=\s+(?:for|in|within|among|across|when|which|because|to)\b|[?.!,]|$)/i,

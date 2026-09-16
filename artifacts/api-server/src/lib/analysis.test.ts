@@ -146,6 +146,13 @@ test("accepts unfamiliar service brands with a clear decision use case", () => {
   assert.equal(parsed.context.segment, "Product or service comparison");
 });
 
+test("parses should-I-be-using wording for team software", () => {
+  const parsed = parsePrompt("Should I be using JIRA or Asana for my team of 15 people to manage the tasks and the process flows?");
+  assert.deepEqual(parsed.vendors, ["JIRA", "Asana"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.industry, "Business operations");
+});
+
 test("requires separate variable and fixed home-loan rates plus an alternative", () => {
   assert.equal(hasHomeLoanResearchCoverage({
     pricing: [{ dimension: "Interest rates", values: {}, winner: "Not established" }],
