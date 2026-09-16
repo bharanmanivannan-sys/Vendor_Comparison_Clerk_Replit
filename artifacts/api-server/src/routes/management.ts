@@ -2,17 +2,17 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { getAuth } from "@clerk/express";
 import { and, desc, eq } from "drizzle-orm";
 import {
-  BootstrapTenantResponse, CreateTenantApiKeyBody, CreateTenantApiKeyResponse,
-  CreateWhopCheckoutBody, CreateWhopCheckoutResponse, GetTenantUsageResponse,
+  BootstrapTenantResponse, ReconcileStripeBillingBody, CreateTenantApiKeyBody, CreateTenantApiKeyResponse,
+  CreateStripeCheckoutBody, CreateStripeCheckoutResponse, GetTenantUsageResponse,
   ListTenantApiKeysResponse, RevokeTenantApiKeyParams, RotateTenantApiKeyParams,
   RotateTenantApiKeyResponse,
 } from "@workspace/api-zod";
-import { apiKeysTable, auditEventsTable, db, whopMembershipsTable } from "@workspace/db";
+import { apiKeysTable, auditEventsTable, db, stripeSubscriptionsTable } from "@workspace/db";
 import { createApiKey, createApiKeyInTransaction, revokeApiKey, revokeApiKeyInTransaction } from "../services/apiKeys";
 import { ensurePersonalTenant, getAdminTenant } from "../services/tenant";
 import { getUsage } from "../services/usage";
-import { getWhopClient } from "../lib/whopClient";
-import { reconcileWhopTenant } from "../services/billing";
+import { createStripeCheckout } from "../lib/stripeClient";
+import { reconcileStripeTenant } from "../services/billing";
 
 type ClerkRequest = Request & { clerkUserId?: string; tenantId?: string };
 const router: IRouter = Router();
@@ -144,62 +144,66 @@ router.post("/tenant/api-keys/:id/revoke", requireClerk, async (req: ClerkReques
   res.sendStatus(204);
 });
 
-router.post("/whop/checkout", requireClerk, async (req: ClerkRequest, res): Promise<void> => {
+router.post(["/stripe/checkout", "/whop/checkout"], requireClerk, async (req: ClerkRequest, res): Promise<void> => {
   const admin = await requireAdmin(req, res);
   if (!admin) return;
-  const parsed = CreateWhopCheckoutBody.safeParse(req.body);
+  const parsed = CreateStripeCheckoutBody.safeParse(req.body);
   if (!parsed.success) {
     structuredError(res, 400, "invalid_request", parsed.error.message);
     return;
   }
-  const companyId = process.env.WHOP_COMPANY_ID;
-  const planId = process.env.WHOP_PLAN_ID;
-  if (!companyId || !planId) {
-    structuredError(res, 503, "billing_not_configured", "Whop checkout requires verified WHOP_COMPANY_ID and WHOP_PLAN_ID configuration.");
+  const priceId = process.env.STRIPE_PRICE_ID;
+  if (!priceId) {
+    structuredError(res, 503, "billing_not_configured", "Stripe checkout requires verified STRIPE_PRICE_ID configuration.");
     return;
   }
   try {
-    const client = await getWhopClient();
-    const checkout = await client.checkoutConfigurations.create({
-      account_id: companyId,
-      plan_id: planId,
-      redirect_url: parsed.data.redirectUrl,
+    const checkout = await createStripeCheckout({
+      tenantId: admin.tenantId,
+      clerkUserId: admin.actorId,
+      priceId,
+      redirectUrl: parsed.data.redirectUrl,
     });
-    const purchaseUrl = checkout.purchase_url;
-    if (!purchaseUrl || !checkout.id) throw new Error("Whop did not return a hosted checkout.");
+    const purchaseUrl = checkout.url;
+    if (!purchaseUrl || !checkout.id) throw new Error("Stripe did not return a hosted checkout.");
     await db.transaction(async (tx) => {
-      await tx.insert(whopMembershipsTable).values({
+      await tx.insert(stripeSubscriptionsTable).values({
         tenantId: admin.tenantId,
         clerkUserId: admin.actorId,
-        checkoutConfigurationId: checkout.id!,
-        planId,
+        checkoutSessionId: checkout.id,
+        priceId,
         status: "pending",
       });
       await tx.insert(auditEventsTable).values({
         tenantId: admin.tenantId,
         actorId: admin.actorId,
         action: "billing.checkout_created",
-        metadata: { checkoutConfigurationId: checkout.id, planId },
+        metadata: { checkoutSessionId: checkout.id, priceId, provider: "stripe" },
       });
     });
-    res.status(201).json(CreateWhopCheckoutResponse.parse({ purchaseUrl }));
+    res.status(201).json(CreateStripeCheckoutResponse.parse({ purchaseUrl }));
   } catch (cause) {
-    structuredError(res, 503, "billing_unavailable", cause instanceof Error ? cause.message : "Whop checkout is unavailable.");
+    structuredError(res, 503, "billing_unavailable", cause instanceof Error ? cause.message : "Stripe checkout is unavailable.");
   }
 });
 
-router.post("/tenant/whop/reconcile", requireClerk, async (req: ClerkRequest, res): Promise<void> => {
+router.post(["/tenant/stripe/reconcile", "/tenant/whop/reconcile"], requireClerk, async (req: ClerkRequest, res): Promise<void> => {
   const admin = await requireAdmin(req, res);
   if (!admin) return;
-  if (!process.env.WHOP_COMPANY_ID || !process.env.WHOP_PLAN_ID) {
-    structuredError(res, 503, "billing_not_configured", "Whop billing reconciliation requires verified configuration.");
+  if (!process.env.STRIPE_PRICE_ID) {
+    structuredError(res, 503, "billing_not_configured", "Stripe billing reconciliation requires verified configuration.");
     return;
   }
   try {
-    const result = await reconcileWhopTenant(admin.tenantId, admin.actorId);
+    const parsed = ReconcileStripeBillingBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      structuredError(res, 400, "invalid_request", parsed.error.message);
+      return;
+    }
+    const result = await reconcileStripeTenant(admin.tenantId, parsed.data.checkoutSessionId);
     res.json(result);
   } catch (cause) {
-    structuredError(res, 503, "billing_unavailable", cause instanceof Error ? cause.message : "Whop reconciliation is unavailable.");
+    structuredError(res, 503, "billing_unavailable", cause instanceof Error ? cause.message : "Stripe reconciliation is unavailable.");
   }
 });
 

@@ -34,7 +34,7 @@ export function activeEntitlementConditions(tenantId?: string) {
 }
 
 export async function isTenantBillingActive(tenantId: string, executor: any = db): Promise<boolean> {
-  if (!process.env.WHOP_COMPANY_ID || !process.env.WHOP_PLAN_ID) return false;
+  if (!process.env.STRIPE_PRICE_ID) return false;
   const [tenant] = await executor.select({ id: tenantsTable.id })
     .from(tenantsTable).where(activeEntitlementConditions(tenantId)).limit(1);
   return Boolean(tenant);
@@ -65,7 +65,7 @@ export async function createApiKeyInTransaction(
     throw new Error("Invalid API key scope");
   }
   if (!(await isTenantBillingActive(input.tenantId, tx))) {
-    throw new Error("Tenant billing is inactive; verify an active Whop membership before creating API keys.");
+    throw new Error("Tenant billing is inactive; verify an active Stripe subscription before creating API keys.");
   }
   const [created] = await tx.insert(apiKeysTable).values({
     tenantId: input.tenantId,
@@ -85,7 +85,7 @@ export async function createApiKeyInTransaction(
 }
 
 export async function authenticateApiKey(authorization: string | undefined): Promise<AuthenticatedApiKey | null> {
-  if (!process.env.WHOP_COMPANY_ID || !process.env.WHOP_PLAN_ID) return null;
+  if (!process.env.STRIPE_PRICE_ID) return null;
   const match = authorization?.match(/^Bearer\s+(vc_live_[A-Za-z0-9]+_[A-Za-z0-9_-]+)$/i);
   if (!match) return null;
   const plaintext = match[1];

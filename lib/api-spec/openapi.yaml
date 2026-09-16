@@ -544,11 +544,11 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /whop/checkout:
+  /stripe/checkout:
     post:
-      operationId: createWhopCheckout
+      operationId: createStripeCheckout
       tags: [management]
-      summary: Create a hosted Whop checkout
+      summary: Create a hosted Stripe checkout
       security: [{ ClerkBearer: [] }]
       parameters:
         - name: X-Tenant-Id
@@ -557,11 +557,11 @@ paths:
           description: Exact tenant being managed; the Clerk user must be an owner or admin member.
           schema: { type: string, minLength: 1, maxLength: 200 }
       description: |
-        Creates a Whop-hosted payment page for the signed-in tenant administrator.
+        Creates a Stripe-hosted subscription payment page for the signed-in tenant administrator.
         Redirect the customer to `purchaseUrl`. The redirect does not activate access:
-        the server verifies a successful non-refunded payment, active membership, and
+        the server verifies a successful non-refunded payment, active subscription, and
         current billing period before enabling API keys. Returns `503 billing_not_configured`
-        until verified Whop company and plan configuration is present.
+        until a verified Stripe recurring price is configured.
       requestBody:
         required: true
         content:
@@ -576,15 +576,15 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CheckoutResponse" }
               example:
-                purchaseUrl: https://whop.com/checkout/example
+                purchaseUrl: https://checkout.stripe.com/c/pay/example
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/ConfigurationError" }
-  /tenant/whop/reconcile:
+  /tenant/stripe/reconcile:
     post:
-      operationId: reconcileWhopBilling
+      operationId: reconcileStripeBilling
       tags: [management]
-      summary: Reconcile a stored Whop checkout server-side
+      summary: Reconcile a stored Stripe checkout server-side
       security: [{ ClerkBearer: [] }]
       parameters:
         - name: X-Tenant-Id
@@ -592,6 +592,11 @@ paths:
           required: true
           description: Exact tenant being managed; the Clerk user must be an owner or admin member.
           schema: { type: string, minLength: 1, maxLength: 200 }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BillingReconciliationInput" }
       responses:
         "200":
           description: Verified or unverified billing status
@@ -721,8 +726,12 @@ components:
       type: object
       properties:
         status: { type: string, enum: [active, unverified] }
-        membershipId: { type: string, nullable: true }
+        subscriptionId: { type: string, nullable: true }
       required: [status]
+    BillingReconciliationInput:
+      type: object
+      properties:
+        checkoutSessionId: { type: string, minLength: 1, maxLength: 255 }
     AuditEvent:
       type: object
       properties:
@@ -805,7 +814,6 @@ components:
             maxLength: 120
         urls:
           type: array
-          maxItems: 8
           items:
             type: string
             format: uri
@@ -928,7 +936,31 @@ components:
               type: array
               items:
                 type: string
-          required: [urls, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps]
+            contextAssumptions:
+              type: array
+              description: Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.
+              items: { type: string }
+            productEquivalency:
+              type: array
+              description: Like-for-like mapping of current and target products or services, including partial equivalence and uncovered scope.
+              items: { $ref: "#/components/schemas/ProductEquivalencyItem" }
+            functionalGaps:
+              type: array
+              description: Required capabilities that are absent, partial, changed, or unverified in the target arrangement.
+              items: { $ref: "#/components/schemas/FunctionalGapItem" }
+            serviceProductMap:
+              type: array
+              description: Mapping between business services and the products, dependencies, and owners that enable them.
+              items: { $ref: "#/components/schemas/ServiceProductMapItem" }
+            migrationSequence:
+              type: array
+              description: Ordered migration phases with dependencies, exit criteria, and risk.
+              items: { $ref: "#/components/schemas/MigrationPhase" }
+            decisionGovernance:
+              type: array
+              description: Decision rights, evidence requirements, approvers, and approval gates.
+              items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
+          required: [urls, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
     GuestComparison:
       type: object
       properties:
@@ -992,7 +1024,25 @@ components:
           type: array
           items:
             type: string
-      required: [prompt, vendors, category, recommendation, score, status, createdAt, urls, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps]
+        contextAssumptions:
+          type: array
+          items: { type: string }
+        productEquivalency:
+          type: array
+          items: { $ref: "#/components/schemas/ProductEquivalencyItem" }
+        functionalGaps:
+          type: array
+          items: { $ref: "#/components/schemas/FunctionalGapItem" }
+        serviceProductMap:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceProductMapItem" }
+        migrationSequence:
+          type: array
+          items: { $ref: "#/components/schemas/MigrationPhase" }
+        decisionGovernance:
+          type: array
+          items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
+      required: [prompt, vendors, category, recommendation, score, status, createdAt, urls, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
     VendorScore:
       type: object
       properties:
@@ -1087,6 +1137,52 @@ components:
         winner:
           type: string
       required: [dimension, values, winner]
+    ProductEquivalencyItem:
+      type: object
+      properties:
+        capability: { type: string }
+        currentArrangement: { type: string }
+        targetArrangement: { type: string }
+        equivalency: { type: string, description: Full, partial, no direct equivalent, or unverified, with rationale. }
+        gap: { type: string }
+      required: [capability, currentArrangement, targetArrangement, equivalency, gap]
+    FunctionalGapItem:
+      type: object
+      properties:
+        capability: { type: string }
+        currentState: { type: string }
+        targetState: { type: string }
+        gap: { type: string }
+        mitigation: { type: string }
+        severity: { type: string, enum: [low, medium, high, critical] }
+      required: [capability, currentState, targetState, gap, mitigation, severity]
+    ServiceProductMapItem:
+      type: object
+      properties:
+        businessService: { type: string }
+        currentProduct: { type: string }
+        targetProduct: { type: string }
+        dependencies: { type: string }
+        owner: { type: string }
+      required: [businessService, currentProduct, targetProduct, dependencies, owner]
+    MigrationPhase:
+      type: object
+      properties:
+        phase: { type: string }
+        objective: { type: string }
+        dependencies: { type: string }
+        exitCriteria: { type: string }
+        risk: { type: string, enum: [low, medium, high, critical] }
+      required: [phase, objective, dependencies, exitCriteria, risk]
+    DecisionGovernanceItem:
+      type: object
+      properties:
+        decision: { type: string }
+        owner: { type: string }
+        approvers: { type: string }
+        evidenceRequired: { type: string }
+        decisionGate: { type: string }
+      required: [decision, owner, approvers, evidenceRequired, decisionGate]
     DashboardSummary:
       type: object
       properties:

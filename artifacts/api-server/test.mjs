@@ -11,6 +11,7 @@ try {
       "src/lib/analysis.test.ts",
       "src/services/billing.test.ts",
       "src/services/idempotency.test.ts",
+      "src/routes/commercial.test.ts",
     ],
     outdir,
     bundle: true,
@@ -23,7 +24,7 @@ try {
   });
   const result = spawnSync(
     process.execPath,
-    ["--test", join(outdir, "lib/analysis.test.js"), join(outdir, "services/billing.test.js"), join(outdir, "services/idempotency.test.js")],
+    ["--test", join(outdir, "lib/analysis.test.js"), join(outdir, "services/billing.test.js"), join(outdir, "services/idempotency.test.js"), join(outdir, "routes/commercial.test.js")],
     { stdio: "inherit", env: process.env },
   );
   process.exitCode = result.status ?? 1;

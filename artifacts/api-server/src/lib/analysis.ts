@@ -75,6 +75,9 @@ function criteriaFor(prompt: string): string[] {
     { label: "Range and charging", pattern: /\b(?:range|battery|charging|charger)\b/ },
     { label: "Resale value", pattern: /\b(?:resale|depreciation|retained value)\b/ },
     { label: "Warranty", pattern: /\b(?:warranty|coverage)\b/ },
+    { label: "Buy, lease and financing comparison", pattern: /\b(?:novated lease|lease|buy outright|cash purchase|finance option)\b/ },
+    { label: "Long-term ownership cost", pattern: /\b(?:\d+|seven|eight|ten)[ -]?years?\b|\blong[ -]?term ownership\b/ },
+    { label: "Purchase channel, fulfilment and support", pattern: /\b(?:buying|purchase|retailer|website|direct from|authorised dealer|authorized dealer)\b/ },
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
   const contextual = [
     { label: "Customer outcomes", pattern: /\b(?:outcomes?|goals?|results?|benefits?)\b/ },
@@ -88,6 +91,13 @@ function criteriaFor(prompt: string): string[] {
     { label: "Vendor support", pattern: /\b(?:vendor support|after-sales|technical support|customer service)\b/ },
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
   const selected = Array.from(new Set([...criteria, ...contextual]));
+  if (/\b(?:home loans?|mortgages?|housing loans?)\b/.test(normalized)) {
+    return Array.from(new Set([
+      "Variable rate, discounts and comparison rate",
+      "Fixed-rate terms, revert rate and break costs",
+      ...selected,
+    ]));
+  }
   return selected.length ? selected : ["Customer outcomes", "Ease of use", "Value for money", "Quality and reliability"];
 }
 
@@ -132,7 +142,12 @@ export function parsePrompt(prompt: string) {
   const list = normalized.match(
     /\b(?:across|among|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
   );
-  const explicitList = chosen?.[1] ?? list?.[1];
+  const comparedList = normalized.match(
+    /\bcompare\s+(.+?)(?=\s+for\b|[?.;]|$)/i,
+  );
+  const explicitList = chosen?.[1]
+    ?? list?.[1]
+    ?? (comparedList?.[1]?.includes(",") ? comparedList[1] : undefined);
   const listedVendors = explicitList
     ?.split(/\s*,\s*|\s*,?\s+and\s+/i)
     .map(cleanVendorName)
@@ -140,9 +155,24 @@ export function parsePrompt(prompt: string) {
   const betweenPair = normalized.match(
     /\b(?:compare|comparing|comparison\s+(?:of|between))?.*?\bbetween\s+(.+?)\s+and\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i,
   );
-  const pair = betweenPair ?? normalized.match(
-    /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i,
+  const withPair = normalized.match(
+    /\bcompare\s+([^?.!]+?)\s+with\s+(.+?)(?=\s+for\s+(?:my|our|a|an|the)\b|[?.!,]|$)/i,
   );
+  const purchaseChannelPair = normalized.match(
+    /\b(?:buy|buying|purchase|purchasing)\s+(?:an?\s+)?(.+?)\s+from\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
+  );
+  const migrationPair = normalized.match(
+    /\b(?:move|moving|migrate|migrating|switch|switching)(?:\s+(?:my|our|the))?.*?\s+from\s+(.+?)\s+to\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
+  );
+  const choicePair = normalized.match(
+    /\b(?:should\s+i\s+)?(?:choose|pick|select|recommend)\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
+  );
+  const genericPair = normalized.match(
+    /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against)\s+(.+?)(?=\s+(?:for|in|within|among|across|when|which|because|to)\b|[?.!,]|$)/i,
+  );
+  const pair = purchaseChannelPair
+    ? [purchaseChannelPair[0], purchaseChannelPair[2], purchaseChannelPair[3]]
+    : migrationPair ?? choicePair ?? betweenPair ?? withPair ?? genericPair;
   const before = normalized.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? normalized;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];
@@ -171,16 +201,25 @@ export function parsePrompt(prompt: string) {
 
 export function validateComparisonContext(prompt: string, vendors: string[]): ComparisonContext {
   const normalized = prompt.toLowerCase();
+  const hasVehicleBrandPair = /\b(?:tesla|byd)\b/.test(normalized)
+    && vendors.some((vendor) => /\b(?:tesla|byd)\b/i.test(vendor));
+  const hasBroadMarketInsightIntent = /\b(?:market insights?|market analysis|share prices?|market performance)\b/.test(normalized);
   const segmentMatches = [
     { label: "Credit cards", pattern: /\b(?:credit cards?|card products?|balance transfers?|rewards cards?)\b/ },
     { label: "Insurance", pattern: /\b(?:car|auto|vehicle|home|travel|health)?\s*insurance\b/ },
     { label: "Home loans", pattern: /\b(?:home loans?|mortgages?|housing loans?|owner.?occupier loans?)\b/ },
-    { label: "Electric vehicles", pattern: /\b(?:electric cars?|electric vehicles?|evs?|battery electric)\b/ },
+    {
+      label: "Electric vehicles",
+      pattern: hasVehicleBrandPair && !hasBroadMarketInsightIntent
+        ? /\b(?:electric cars?|electric vehicles?|evs?|battery electric|tesla|byd)\b/
+        : /\b(?:electric cars?|electric vehicles?|evs?|battery electric)\b/,
+    },
+    { label: "Computers and laptops", pattern: /\b(?:computers?|laptops?|notebooks?|workstations?|macbooks?|chromebooks?)\b/ },
     { label: "CRM", pattern: /\b(?:crm|salesforce|customer relationship)\b/ },
     { label: "Customer support", pattern: /\b(?:customer support|help desk|shared inbox|customer service|after.?sales support)\b/ },
     { label: "Work management", pattern: /\b(?:project management|task management|work management|collaboration)\b/ },
     { label: "Analytics", pattern: /\b(?:analytics|business intelligence|\bbi\b|data intelligence)\b/ },
-    { label: "Cloud infrastructure", pattern: /\b(?:cloud|hosting|infrastructure)\b/ },
+    { label: "Cloud infrastructure", pattern: /\b(?:cloud infrastructure|cloud platforms?|cloud services?|cloud hosting|hosting platforms?|infrastructure platforms?)\b/ },
     { label: "Marketing", pattern: /\b(?:marketing automation|email marketing|campaign management)\b/ },
     { label: "Accounting", pattern: /\b(?:accounting|bookkeeping|finance software)\b/ },
     { label: "Communication", pattern: /\b(?:team chat|messaging|video conferencing)\b/ },
@@ -193,7 +232,9 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
   const namesAustralianInsurer = /\b(?:youi|allianz|aami|nrma|qbe|budget direct|toyota insurance)\b/.test(normalized);
   const namesAustralianBank = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz)\b/.test(normalized);
   const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank)\b/i;
-  const technologyBrands = /\b(?:apple|tesla|microsoft|google|samsung)\b/i;
+  const automotiveBrands = /\b(?:tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes)\b/i;
+  const technologyBrands = /\b(?:apple|hp|microsoft|google|samsung|dell|lenovo|asus|acer)\b/i;
+  const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon)\b/i;
   const investmentBrands = /\b(?:vanguard|betashares|ishares)\b/i;
   const industryMatches = [
     ...(isInsuranceDecision ? [namesAustralianInsurer || isAustralianMarket ? "Australian insurance" : "Insurance"] : []),
@@ -217,19 +258,34 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
     "automotive",
   ].filter((industry) => new RegExp(`\\b${industry.replace(" ", "\\s+")}\\b`, "i").test(normalized)),
   ];
-  const segment = segmentMatches[0] ?? "";
+  const hasPurchaseChannelIntent = /\b(?:buy|buying|purchase|purchasing).*\b(?:from|retailer|website|store|direct)\b/.test(normalized);
+  const hasMigrationIntent = /\b(?:move|moving|migrate|migrating|migration|switch|switching).*\b(?:from|to)\b/.test(normalized);
+  const hasFinancingIntent = /\b(?:lease|novated lease|buy outright|finance|cash purchase)\b/.test(normalized);
+  const hasComparisonIntent = /\b(?:compare|comparing|comparison|versus|vs\.?|which|choose|recommend|should i)\b/.test(normalized);
+  const fallbackSegment = hasPurchaseChannelIntent
+    ? "Purchase channels"
+    : hasMigrationIntent
+      ? "Platform migration"
+      : hasFinancingIntent
+        ? "Purchase and financing options"
+        : hasComparisonIntent
+          ? "Product or service comparison"
+          : "";
+  const segment = segmentMatches[0] ?? fallbackSegment;
   const vendorDomains = vendors.map((vendor) => {
     if (bankBrands.test(vendor)) return "banking";
+    if (automotiveBrands.test(vendor)) return "automotive";
     if (technologyBrands.test(vendor)) return "technology";
+    if (retailBrands.test(vendor)) return "retail";
     if (investmentBrands.test(vendor)) return "investments";
     return "unknown";
   });
-  const isCrossSegmentIntent = /\b(?:after.?sales support|customer support|customer service|market insights?|market analysis|share prices?|recommendations?)\b/i.test(normalized)
+  const isCrossSegmentIntent = /\b(?:after.?sales support|customer support|customer service|market insights?|market analysis|share prices?|recommendations?|buy|buying|purchase|retailer|website|direct|migrate|migration|moving|switch)\b/i.test(normalized)
     && !/\b(?:credit cards?|home loans?|mortgages?|insurance|electric vehicles?|watch products?)\b/i.test(normalized);
   const knownDomains = new Set(vendorDomains.filter((domain) => domain !== "unknown"));
-  const inferredUseCase = /\b(?:legacy|integration|migration|team|company|business|organisation|organization|customer data|workflow)\b/.test(normalized)
+  const inferredUseCase = /\b(?:legacy|integration|migration|migrate|moving|switch|team|company|business|organisation|organization|customer data|workflow)\b/.test(normalized)
     ? "Business operations"
-    : /\b(?:buy|purchase|budget|personal use|home use)\b/.test(normalized)
+    : /\b(?:buy|buying|purchase|lease|novated|budget|personal use|home use|website|retailer)\b/.test(normalized)
       ? "Consumer purchase"
       : "";
   const industry = industryMatches[0] ?? inferredUseCase;
@@ -252,7 +308,7 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
       message: "Credit card comparisons must use providers that offer credit card products. Replace unrelated brands or change the comparison criterion.",
     };
   }
-  if (segmentMatches.length === 0) {
+  if (segmentMatches.length === 0 && !fallbackSegment) {
     return { valid: false, segment, industry, message: "Name what you are comparing, such as electric vehicles, CRM platforms, customer support tools, or analytics products." };
   }
   if (segmentMatches.length > 1) {
@@ -338,6 +394,42 @@ function fallbackAnalysis(input: AnalysisInput): AnalysisPayload {
     opportunities: ["Run a focused proof of concept against your highest-value workflow", "Ask both vendors for a transparent three-year total cost view", "Use implementation timelines as a negotiation lever"],
     insights: ["The fastest decision is not always the lowest-cost decision; implementation drag compounds quickly.", "A structured pilot will resolve the biggest uncertainty faster than another feature checklist.", `The decision currently favors ${winner}, but the final choice should be tied to the rollout owner and success metric.`],
     nextSteps: ["Confirm the top three decision criteria with stakeholders", "Validate pricing with a like-for-like scope", "Schedule a technical fit session and implementation plan review"],
+    contextAssumptions: [
+      "Industry, regulatory obligations, security requirements, budget, timing, integration landscape, data migration scope, and technical maturity must be confirmed where the request does not state them.",
+      "Any inferred current-state or target-state arrangement is a planning scenario, not a verified implementation fact.",
+    ],
+    productEquivalency: vendors.map((vendor) => ({
+      capability: "Core business outcome",
+      currentArrangement: "Current product or service arrangement not fully specified",
+      targetArrangement: vendor,
+      equivalency: "Partial equivalency pending workflow and requirement validation",
+      gap: "Confirm feature depth, operating model, integrations, data, controls, and service coverage.",
+    })),
+    functionalGaps: [{
+      capability: "End-to-end functional coverage",
+      currentState: "Current-state capability baseline not fully specified",
+      targetState: `Supported by ${winner}`,
+      gap: "Detailed process and exception-path validation is required",
+      mitigation: "Run requirements traceability, representative workflow demonstrations, and a controlled proof of concept.",
+      severity: "Medium",
+    }],
+    serviceProductMap: [{
+      businessService: "Primary service in scope",
+      currentProduct: "Current arrangement to be confirmed",
+      targetProduct: winner,
+      dependencies: "Identity, data, integrations, reporting, security controls, support, and operating procedures",
+      owner: "Executive sponsor and accountable service owner to be assigned",
+    }],
+    migrationSequence: [
+      { phase: "1. Mobilise and validate", objective: "Confirm scope, requirements, baseline, governance, and success measures.", dependencies: "Executive sponsor and service owner", exitCriteria: "Approved business case and traceability baseline", risk: "Medium" },
+      { phase: "2. Design and prove", objective: "Map equivalencies and gaps, design the target arrangement, and prove critical workflows.", dependencies: "Architecture, security, data, and vendor access", exitCriteria: "Approved target design and proof-of-concept outcomes", risk: "Medium" },
+      { phase: "3. Migrate and transition", objective: "Sequence data, integrations, process change, training, cutover, and rollback.", dependencies: "Tested migration tooling and operational readiness", exitCriteria: "Reconciled data, accepted controls, and go-live approval", risk: "High" },
+      { phase: "4. Stabilise and optimise", objective: "Measure adoption, service performance, benefits, and residual gaps.", dependencies: "Operational ownership and monitoring", exitCriteria: "Benefits review and accepted handover", risk: "Low" },
+    ],
+    decisionGovernance: [
+      { decision: "Approve preferred option and target arrangement", owner: "Executive sponsor", approvers: "Finance, technology, security, risk, operations, and affected business owner", evidenceRequired: "Score rationale, equivalency map, gap analysis, TCO, risks, due diligence, and implementation plan", decisionGate: "Before contract commitment" },
+      { decision: "Approve migration and production cutover", owner: "Accountable service owner", approvers: "Technology, security, risk, data, operations, and business readiness leads", evidenceRequired: "Test results, reconciliations, training readiness, support model, rollback plan, and residual-risk acceptance", decisionGate: "Before go-live" },
+    ],
   };
 }
 
@@ -354,6 +446,23 @@ function replaceVendorPlaceholders(value: unknown, vendors: string[]): unknown {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceVendorPlaceholders(item, vendors)]));
   }
   return value;
+}
+
+export function normalizeVrioStatus(value: unknown): "strong" | "partial" | "weak" | "not_applicable" {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "strong") return "strong";
+  if (normalized === "weak") return "weak";
+  if (normalized === "not_applicable" || normalized === "n/a" || normalized === "na") return "not_applicable";
+  if (normalized === "partial" || normalized.startsWith("partit") || normalized.startsWith("partia")) return "partial";
+  return "partial";
+}
+
+function normalizeRisk(value: unknown): "low" | "medium" | "high" | "critical" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized.includes("critical")) return "critical";
+  if (normalized.includes("high")) return "high";
+  if (normalized.includes("low")) return "low";
+  return "medium";
 }
 
 function normalizeAnalysis(
@@ -384,6 +493,14 @@ function normalizeAnalysis(
         };
       });
       const score = Math.round(weightedScores.reduce((total, entry) => total + entry.score * entry.weight, 0) / 100);
+      const suppliedVrio = item.vrio ?? fallbackVendor?.vrio;
+      const fallbackVrio = fallbackVendor?.vrio;
+      const vrioDimension = (dimension: "value" | "rarity" | "imitability" | "organization") => ({
+        status: normalizeVrioStatus(suppliedVrio?.[dimension]?.status),
+        rationale: suppliedVrio?.[dimension]?.rationale
+          || fallbackVrio?.[dimension]?.rationale
+          || "Current evidence supports a partial assessment.",
+      });
       return {
         ...item,
           vendor,
@@ -392,7 +509,13 @@ function normalizeAnalysis(
         switchConditions: Array.isArray(item.switchConditions) && item.switchConditions.length
           ? item.switchConditions.slice(0, 4)
           : fallbackVendor?.switchConditions,
-        vrio: item.vrio ?? fallbackVendor?.vrio,
+        vrio: {
+          value: vrioDimension("value"),
+          rarity: vrioDimension("rarity"),
+          imitability: vrioDimension("imitability"),
+          organization: vrioDimension("organization"),
+          implication: suppliedVrio?.implication || fallbackVrio?.implication || "Validate this capability against the exact product and borrower context.",
+        },
         marketPosition: item.marketPosition && /https?:\/\//i.test(item.marketPosition.evidence ?? "")
           ? item.marketPosition
           : {
@@ -429,12 +552,22 @@ function normalizeAnalysis(
   const suppliedRecommendation = typeof normalized.recommendation === "string"
     ? normalized.recommendation.trim()
     : "";
+  const functionalGaps = (Array.isArray(normalized.functionalGaps) ? normalized.functionalGaps : fallback.functionalGaps ?? [])
+    .map((item) => ({ ...item, severity: normalizeRisk(item.severity) }));
+  const migrationSequence = (Array.isArray(normalized.migrationSequence) ? normalized.migrationSequence : fallback.migrationSequence ?? [])
+    .map((item) => ({ ...item, risk: normalizeRisk(item.risk) }));
   return {
     ...fallback,
     ...normalized,
     vendorScores,
     pricing: normalizeRows(normalized.pricing ?? fallback.pricing),
     features: normalizeRows(normalized.features ?? fallback.features),
+    contextAssumptions: Array.isArray(normalized.contextAssumptions) ? normalized.contextAssumptions : fallback.contextAssumptions,
+    productEquivalency: Array.isArray(normalized.productEquivalency) ? normalized.productEquivalency : fallback.productEquivalency,
+    functionalGaps,
+    serviceProductMap: Array.isArray(normalized.serviceProductMap) ? normalized.serviceProductMap : fallback.serviceProductMap,
+    migrationSequence,
+    decisionGovernance: Array.isArray(normalized.decisionGovernance) ? normalized.decisionGovernance : fallback.decisionGovernance,
     recommendation: preserveSpecificRecommendation && suppliedRecommendation
       ? suppliedRecommendation
       : recommendedVendor,
@@ -474,6 +607,53 @@ const CREDIT_CARD_SOURCE_DOMAINS: Record<string, string[]> = {
   Bankwest: ["bankwest.com.au"],
 };
 
+const HOME_LOAN_OFFICIAL_SOURCES: Record<string, string[]> = {
+  Westpac: [
+    "https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates",
+  ],
+  ANZ: [
+    "https://www.anz.com.au/personal/home-loans/interest-rates",
+  ],
+  NAB: [
+    "https://www.nab.com.au/personal/interest-rates-fees-and-charges/home-loan-interest-rates",
+  ],
+  CBA: [
+    "https://www.commbank.com.au/home-loans/interest-rates.html",
+  ],
+  "Commonwealth Bank": [
+    "https://www.commbank.com.au/home-loans/interest-rates.html",
+  ],
+};
+
+const MACQUARIE_HOME_LOAN_SOURCES = [
+  "https://www.macquarie.com.au/home-loans/home-loan-rates.html",
+  "https://www.macquarie.com.au/home-loans/investor-home-loans.html",
+];
+
+export function officialHomeLoanSourcesFor(vendors: string[]): string[] {
+  const namedBankSources = vendors.flatMap((vendor) => HOME_LOAN_OFFICIAL_SOURCES[vendor] ?? []);
+  const alternativeSources = vendors.includes("Macquarie") ? [] : MACQUARIE_HOME_LOAN_SOURCES;
+  return Array.from(new Set([...namedBankSources, ...alternativeSources]));
+}
+
+function ensureCredibleHomeLoanAlternative(
+  analysis: Partial<AnalysisPayload> & { sources?: unknown },
+  vendors: string[],
+): void {
+  if (vendors.includes("Macquarie")) return;
+  const insights = Array.isArray(analysis.insights)
+    ? analysis.insights.filter((insight) => !/\balternatives?\b/i.test(insight))
+    : [];
+  insights.push(
+    "Alternative outside comparison — Macquarie Bank: Compare its current investor home-loan rates, fees, eligibility, offset features, and serviceability outcome with the shortlisted banks; its official investor product and rate pages provide the supporting terms and trade-offs.",
+  );
+  analysis.insights = insights;
+  const sources = Array.isArray(analysis.sources)
+    ? analysis.sources.filter((source): source is string => typeof source === "string")
+    : [];
+  analysis.sources = Array.from(new Set([...sources, ...MACQUARIE_HOME_LOAN_SOURCES]));
+}
+
 export function missingCreditCardSourceVendors(vendors: string[], sourceUrls: string[]): string[] {
   const sourceHosts = sourceUrls.flatMap((source) => {
     try {
@@ -487,6 +667,17 @@ export function missingCreditCardSourceVendors(vendors: string[], sourceUrls: st
     if (!expectedDomains) return false;
     return !expectedDomains.some((domain) => sourceHosts.some((host) => host === domain || host.endsWith(`.${domain}`)));
   });
+}
+
+export function hasHomeLoanResearchCoverage(analysis: Partial<AnalysisPayload>): boolean {
+  const dimensions = Array.isArray(analysis.pricing)
+    ? analysis.pricing.map((entry) => entry?.dimension ?? "")
+    : [];
+  const hasVariableRates = dimensions.some((dimension) => /\bvariable\b/i.test(dimension));
+  const hasFixedRates = dimensions.some((dimension) => /\bfixed\b/i.test(dimension));
+  const hasAlternative = Array.isArray(analysis.insights)
+    && analysis.insights.some((insight) => /\balternatives?\b/i.test(insight));
+  return hasVariableRates && hasFixedRates && hasAlternative;
 }
 
 function parseJsonObject(text: string): Partial<AnalysisPayload> & { sources?: unknown } {
@@ -546,7 +737,7 @@ function addParsedSourceUrls(sources: unknown, urls: string[]): void {
       : source && typeof source === "object" && "url" in source && typeof source.url === "string"
         ? source.url
         : "";
-    if (!sourceUrl || urls.length >= 8) continue;
+    if (!sourceUrl) continue;
     try {
       const url = new URL(sourceUrl);
       if ((url.protocol === "https:" || url.protocol === "http:") && !urls.includes(sourceUrl)) urls.push(sourceUrl);
@@ -556,9 +747,45 @@ function addParsedSourceUrls(sources: unknown, urls: string[]): void {
   }
 }
 
-function analysisOutputShape(vendors: string[]) {
+export function dedupeReferenceUrls(urls: string[]): string[] {
+  const unique = new Map<string, string>();
+  for (const source of urls) {
+    try {
+      const url = new URL(source);
+      for (const key of Array.from(url.searchParams.keys())) {
+        if (/^utm_/i.test(key) || /^(?:gclid|fbclid)$/i.test(key)) url.searchParams.delete(key);
+      }
+      url.hash = "";
+      if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+      const canonical = url.toString();
+      if (!unique.has(canonical)) unique.set(canonical, canonical);
+    } catch {
+      // Invalid references are rejected at the API boundary and ignored here.
+    }
+  }
+  return Array.from(unique.values());
+}
+
+function analysisOutputShape(vendors: string[], isHomeLoan = false) {
   const values = Object.fromEntries(vendors.map((vendor) => [vendor, ""]));
   const vrioDimension = { status: "strong|partial|weak|not_applicable", rationale: "" };
+  const pricing = isHomeLoan
+    ? [
+        { dimension: "Variable investor rate and comparison rate", values, winner: "" },
+        { dimension: "1-year fixed investor rate and comparison rate", values, winner: "" },
+        { dimension: "2-year fixed investor rate and comparison rate", values, winner: "" },
+        { dimension: "3-year fixed investor rate and comparison rate", values, winner: "" },
+        { dimension: "Fees, repayments and total-cost implications", values, winner: "" },
+      ]
+    : [{ dimension: "", values, winner: "" }];
+  const features = isHomeLoan
+    ? [
+        { dimension: "Variable investor product", values, winner: "" },
+        { dimension: "Fixed investor product", values, winner: "" },
+        { dimension: "Offset, redraw and repayment flexibility", values, winner: "" },
+        { dimension: "Investor eligibility, LVR and LMI constraints", values, winner: "" },
+      ]
+    : [{ dimension: "", values, winner: "" }];
   return {
     category: "",
     recommendation: "",
@@ -590,8 +817,8 @@ function analysisOutputShape(vendors: string[]) {
         evidence: "",
       },
     })),
-    pricing: [{ dimension: "", values, winner: "" }],
-    features: [{ dimension: "", values, winner: "" }],
+    pricing,
+    features,
     swot: {
       Strengths: [""],
       Weaknesses: [""],
@@ -609,9 +836,17 @@ function analysisOutputShape(vendors: string[]) {
       "SOAR — Results": [""],
     },
     opportunities: [""],
-    insights: [""],
+    insights: isHomeLoan
+      ? ["Alternative outside comparison — <name>: evidence-based rationale and trade-offs"]
+      : [""],
     nextSteps: [""],
-    sources: [""],
+    contextAssumptions: [""],
+    productEquivalency: [{ capability: "", currentArrangement: "", targetArrangement: "", equivalency: "", gap: "" }],
+    functionalGaps: [{ capability: "", currentState: "", targetState: "", gap: "", mitigation: "", severity: "low|medium|high|critical" }],
+    serviceProductMap: [{ businessService: "", currentProduct: "", targetProduct: "", dependencies: "", owner: "" }],
+    migrationSequence: [{ phase: "", objective: "", dependencies: "", exitCriteria: "", risk: "low|medium|high|critical" }],
+    decisionGovernance: [{ decision: "", owner: "", approvers: "", evidenceRequired: "", decisionGate: "" }],
+    sources: ["Include every HTTP/HTTPS URL consulted or cited in the analysis; do not limit this list."],
   };
 }
 
@@ -622,6 +857,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
   try {
     const context = validateComparisonContext(input.prompt, input.vendors);
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
+    const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
+    if (isProviderLevelHomeLoanDiscovery) {
+      for (const sourceUrl of officialHomeLoanSourcesFor(input.vendors)) {
+        if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
+      }
+    }
     const researchResponse = await retryAiStage("Product research", async () => {
       const response = await client.responses.create({
         model: "gpt-4.1-mini",
@@ -644,17 +885,21 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             content: JSON.stringify({
               task: isProviderLevelCreditCardDiscovery
                 ? "For each named provider, discover the single current credit card that best matches the user's criteria, then compare those exact products."
-                : "Research the named options for a weighted comparison and strategic assessment.",
+                : isProviderLevelHomeLoanDiscovery
+                  ? "For each named bank, discover and compare its current variable-rate and fixed-rate investor home-loan products, then identify credible alternatives outside the shortlist."
+                  : "Research the named options for a weighted comparison and strategic assessment.",
               prompt: input.prompt,
               vendors: input.vendors,
               context,
               suppliedUrls: input.urls,
               criteria: input.criteria,
-              shape: analysisOutputShape(input.vendors),
-              researchScope: "Customer outcomes, ease of use, market positioning, competitive advantage, long-term sustainability, needs/features, reliability, value, reputation, service, innovation, sustainability, compliance, purchase and ongoing costs, warranty, lifespan, reviews, target-market fit, differentiation, and after-sales support. Where applicable include security, legacy-system integration, time-to-market, and vendor support. For every named option, research VRIO evidence, the latest credible market-share figure for the relevant segment and geography, and public parent-company share price/value when applicable. Explicitly state unavailable or not applicable instead of inventing figures. Research credible options outside the named shortlist that could solve the underlying problem better.",
+              shape: analysisOutputShape(input.vendors, isProviderLevelHomeLoanDiscovery),
+              researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
-                : "Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, and complete every framework field. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs.",
+                : isProviderLevelHomeLoanDiscovery
+                  ? "Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current Australian investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, LMI or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, LVR, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable."
+                  : "Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.",
             }),
           },
         ],
@@ -666,7 +911,6 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       return response;
     });
     for (const sourceUrl of collectHttpUrls(researchResponse.output)) {
-      if (input.urls.length >= 8) break;
       if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
     }
     let parsed: Partial<AnalysisPayload> & {
@@ -694,7 +938,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 prompt: input.prompt,
                 vendors: input.vendors,
                 criteria: input.criteria,
-                shape: analysisOutputShape(input.vendors),
+                shape: analysisOutputShape(input.vendors, isProviderLevelHomeLoanDiscovery),
                 draft: researchResponse.output_text,
                 instructions: `Preserve supported facts and complete missing fields concisely. Return criteriaMet and unmetCriteriaReason. Use 0–100 scores and the supplied weights.${isProviderLevelCreditCardDiscovery ? " Recommend one exact card product by full name. State the minimum credit limit or explicitly say it was unavailable. Include annual-fee trade-offs and one or two outside-card alternatives as insights beginning exactly 'Alternative outside comparison — <name>:'." : ""}`,
               }),
@@ -710,6 +954,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       throw new Error("Your input criteria can't be met across the products or services or brands chosen");
     }
     addParsedSourceUrls(parsed.sources, input.urls);
+    if (isProviderLevelHomeLoanDiscovery) ensureCredibleHomeLoanAlternative(parsed, input.vendors);
     const missingSources = isProviderLevelCreditCardDiscovery
       ? missingCreditCardSourceVendors(input.vendors, input.urls)
       : [];
@@ -748,7 +993,6 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       parsed = parseJsonObject(correctedResearch.output_text);
       const correctedUrls = [...userSuppliedUrls];
       for (const sourceUrl of collectHttpUrls(correctedResearch.output)) {
-        if (correctedUrls.length >= 8) break;
         if (!correctedUrls.includes(sourceUrl)) correctedUrls.push(sourceUrl);
       }
       addParsedSourceUrls(parsed.sources, correctedUrls);
@@ -756,7 +1000,58 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       if (stillMissing.length) {
         throw new Error(`Insufficient source coverage: no official product source was found for ${stillMissing.join(", ")}.`);
       }
-      input.urls.splice(0, input.urls.length, ...correctedUrls.slice(0, 8));
+      input.urls.splice(0, input.urls.length, ...correctedUrls);
+    }
+    const missingHomeLoanSources = isProviderLevelHomeLoanDiscovery
+      ? missingCreditCardSourceVendors(input.vendors, input.urls)
+      : [];
+    if (isProviderLevelHomeLoanDiscovery && (!hasHomeLoanResearchCoverage(parsed) || missingHomeLoanSources.length)) {
+      const correctedResearch = await retryAiStage("Home loan product completion", async () => {
+        const response = await client.responses.create({
+          model: "gpt-4.1-mini",
+          max_output_tokens: 8000,
+          tools: [{
+            type: "web_search",
+            search_context_size: "high",
+            external_web_access: true,
+            user_location: { type: "approximate" as const, country: "AU", timezone: "Australia/Sydney" },
+          }],
+          input: [
+            {
+              role: "system",
+              content: "You are correcting an incomplete Australian investor home-loan comparison. Search current official lender product and rate pages for every named bank. Return only one complete valid JSON object matching the supplied shape. Do not preserve unsupported rates, assumptions, or winners.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                prompt: input.prompt,
+                vendors: input.vendors,
+                missingOfficialSourcesFor: missingHomeLoanSources,
+                existingDraft: parsed,
+                shape: analysisOutputShape(input.vendors, true),
+                instructions: "Return a complete replacement analysis plus criteriaMet, unmetCriteriaReason, and sources. Include at least one exact official Australian investor home-loan or rate URL for every named bank. Pricing must contain separate rows clearly labelled for variable rate and comparison rate, and for current fixed rates by term. Also compare revert-rate and break-cost risk, fees, offset/redraw, investor eligibility, LVR/LMI constraints, and repayments or total-cost implications for the stated loan amount. Never imply an advertised rate is a personalised quote; mark unavailable inputs and conditional rates explicitly. Include one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' and explain the rationale and trade-offs. Determine winners from displayed comparable values, use ties when appropriate, use 0–100 scores, preserve weights, and complete SWOT, PESTLE, SOAR, VRIO, switch conditions, and market context.",
+              }),
+            },
+          ],
+        });
+        if (response.status !== "completed" || !response.output_text) throw new Error("Home loan completion returned no structured result.");
+        const completedAnalysis = parseJsonObject(response.output_text);
+        if (!hasHomeLoanResearchCoverage(completedAnalysis)) {
+          throw new Error("Home loan completion omitted variable rates, fixed rates, or an outside alternative.");
+        }
+        return { response, completedAnalysis };
+      });
+      parsed = correctedResearch.completedAnalysis;
+      ensureCredibleHomeLoanAlternative(parsed, input.vendors);
+      const correctedUrls = [...input.urls];
+      for (const sourceUrl of collectHttpUrls(correctedResearch.response.output)) {
+        if (!correctedUrls.includes(sourceUrl)) correctedUrls.push(sourceUrl);
+      }
+      addParsedSourceUrls(parsed.sources, correctedUrls);
+      input.urls.splice(0, input.urls.length, ...correctedUrls);
+      if (!hasHomeLoanResearchCoverage(parsed)) {
+        throw new Error("The researched result did not include separate variable and fixed rates plus an outside alternative.");
+      }
     }
     const { vendors: _ignoredVendors, prompt: _ignoredPrompt, ...safeParsed } = parsed as typeof parsed & {
       vendors?: unknown;
@@ -782,6 +1077,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
+    input.urls.splice(0, input.urls.length, ...dedupeReferenceUrls(input.urls));
     return normalized;
   } catch (error) {
     console.error("Product research failed", error);

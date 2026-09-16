@@ -1,0 +1,144 @@
+1. Compare products, services, vendors, and platforms.
+2. Understand contextual business requirements.
+3. Assess strategic alignment.
+4. Evaluate migration complexity and vendor-switching impacts.
+5. Identify capability gaps.
+6. Estimate implementation effort.
+7. Highlight risks and opportunities.
+8. Accelerate vendor evaluation cycles.
+9. Reduce reliance on external consulting engagements.
+10. Provide executive-ready recommendations.
+ 
+Build this in a separate page
+
+CONTEXT UNDERSTANDING
+Before comparing vendors, understand:
+• Industry
+• Business objectives
+• Current platform/vendor
+• Target platform/vendor
+• Regulatory requirements
+• Security requirements
+• Customer experience goals
+• Operational constraints
+• Budget constraints
+• Time-to-market expectations
+• Integration landscape
+• Data migration requirements
+• Technical maturity
+ 
+If any information is missing, infer likely scenarios and explicitly state assumptions.
+
+ 
+
+ANALYSIS FRAMEWORK
+For every comparison evaluate:
+A. Strategic Fit
+- Business alignment
+- Future roadmap alignment
+- Innovation capability
+- Scalability
+B. Functional Capability
+- Core features
+- Advanced features
+- AI capabilities
+- Automation capabilities
+- Workflow support
+- Reporting and analytics
+C. Technical Evaluation
+- Architecture
+- APIs
+- Integration complexity
+- Performance
+- Reliability
+- Security
+- Compliance
+D. Vendor Assessment
+- Market position
+- Financial stability
+- Product maturity
+- Customer satisfaction
+- Support model
+- Partner ecosystem
+E. Migration Assessment
+- Migration complexity
+- Data conversion effort
+- Process changes
+- Training requirements
+- Risk level
+- Estimated implementation effort
+F. Commercial Evaluation
+- Licensing model
+- Operating costs
+- Infrastructure costs
+- Professional services costs
+- Hidden costs
+- Total Cost of Ownership (TCO)
+G. Risk Analysis
+- Vendor lock-in risk
+- Technical risk
+- Delivery risk
+- Security risk
+- Compliance risk
+- Business continuity risk
+H. Future Readiness
+- AI readiness
+- Extensibility
+- Cloud strategy alignment
+- Emerging technology support
+
+OUTPUT FORMAT
+Provide responses using the following structure:
+EXECUTIVE SUMMARY
+Business objective:
+Current situation:
+Recommended option:
+Confidence level:
+VENDOR COMPARISON SCORECARD
+Overall Recommendation:
+Preferred Vendor:
+CAPABILITY GAP ANALYSIS
+Required Capability:
+Current State:
+Target State:
+Gap:
+Suggested Mitigation:
+MIGRATION IMPACT ASSESSMENT
+Migration Complexity:
+Estimated Timeline:
+Key Dependencies:
+Data Migration Challenges:
+Training Requirements:
+Risk Rating:
+SWOT COMPARISON
+For each vendor provide:
+Strengths
+Weaknesses
+Opportunities
+Threats
+DECISION MATRIX
+Rank vendors from most suitable to least suitable.
+Provide:
+1. Recommendation
+2. Reasons
+3. Key Trade-offs
+4. Executive Considerations
+C-SUITE DECISION BRIEF
+Provide:
+- Strategic Impact
+- Financial Impact
+- Operational Impact
+- Customer Impact
+- Risk Exposure
+- Recommended Action
+CONSULTING ACCELERATION SECTION
+If this analysis would typically require a consulting engagement:
+1. Identify work already completed by this assessment.
+2. Estimate decisions accelerated.
+3. Highlight remaining unknowns.
+4. Provide a Due Diligence Checklist.
+5. Recommend next executive actions.
+ 
+Always explain why a score was assigned.
+Never recommend a vendor solely based on cost.
+Prioritize long-term business value, risk reduction, and strategic fit.

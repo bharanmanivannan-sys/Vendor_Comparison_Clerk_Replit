@@ -201,6 +201,12 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     opportunities: row.opportunities,
     insights: row.insights,
     nextSteps: row.nextSteps,
+    contextAssumptions: row.contextAssumptions,
+    productEquivalency: row.productEquivalency,
+    functionalGaps: row.functionalGaps,
+    serviceProductMap: row.serviceProductMap,
+    migrationSequence: row.migrationSequence,
+    decisionGovernance: row.decisionGovernance,
   };
 }
 

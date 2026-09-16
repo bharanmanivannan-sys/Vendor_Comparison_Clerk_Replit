@@ -2,8 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   WEIGHTED_CRITERIA,
+  dedupeReferenceUrls,
+  hasHomeLoanResearchCoverage,
   missingCreditCardSourceVendors,
   normalizeLensWinner,
+  normalizeVrioStatus,
+  officialHomeLoanSourcesFor,
   parsePrompt,
   validateComparisonContext,
 } from "./analysis";
@@ -72,6 +76,108 @@ test("normalizes WBC to Westpac in a provider list", () => {
 
   assert.deepEqual(parsed.vendors, ["ANZ", "Westpac", "NAB", "CBA"]);
   assert.ok(parsed.criteria.includes("Customer advocacy and NPS"));
+});
+
+test("parses comma-separated bank providers before a home-loan category", () => {
+  const parsed = parsePrompt(
+    "Can you compare Westpac, ANZ, NAB, CBA for Home loan for an Investment property for 1.3M? Please provide an alternative",
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "CBA"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Home loans");
+  assert.ok(parsed.criteria.includes("Variable rate, discounts and comparison rate"));
+  assert.ok(parsed.criteria.includes("Fixed-rate terms, revert rate and break costs"));
+  assert.ok(parsed.criteria.includes("Investor-loan eligibility and conditions"));
+  assert.ok(parsed.criteria.includes("Fees and total borrowing cost"));
+});
+
+test("parses products joined by with before a use-case clause", () => {
+  const parsed = parsePrompt("I want to compare Salesforce marketing cloud with Adobe experience manager for my CRM tool. Help me which of the tool is easy to integrate with my legacy tools.");
+  assert.deepEqual(parsed.vendors, ["Salesforce marketing cloud", "Adobe experience manager"]);
+  assert.equal(parsed.context.valid, true);
+  assert.ok(parsed.criteria.includes("Legacy-system integration"));
+});
+
+test("accepts EV brand comparisons with long-term buy-versus-lease intent", () => {
+  const parsed = parsePrompt("Compare BYD vs Tesla which I will use for 7 years. Should I go with Novated lease or buy outright?");
+  assert.deepEqual(parsed.vendors, ["BYD", "Tesla"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Electric vehicles");
+  assert.ok(parsed.criteria.includes("Buy, lease and financing comparison"));
+  assert.ok(parsed.criteria.includes("Long-term ownership cost"));
+});
+
+test("parses a product purchase-channel comparison", () => {
+  const parsed = parsePrompt("Should I buy an HP laptop from JB Hi-Fi or the HP website itself?");
+  assert.deepEqual(parsed.vendors, ["JB Hi-Fi", "HP website itself"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Computers and laptops");
+  assert.ok(parsed.criteria.includes("Purchase channel, fulfilment and support"));
+});
+
+test("parses platform migration phrasing with from and to", () => {
+  const parsed = parsePrompt("We are moving our customer platform from Salesforce to Adobe Experience Manager for enterprise operations.");
+  assert.deepEqual(parsed.vendors, ["Salesforce", "Adobe Experience Manager"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.industry, "Business operations");
+});
+
+test("accepts unfamiliar products when two real options and comparison intent are clear", () => {
+  const parsed = parsePrompt("Compare Dyson vs Miele for a vacuum cleaner I will keep for 8 years.");
+  assert.deepEqual(parsed.vendors, ["Dyson", "Miele"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Product or service comparison");
+});
+
+test("accepts unfamiliar service brands with a clear decision use case", () => {
+  const parsed = parsePrompt("Should I choose DHL or FedEx for international business shipping?");
+  assert.deepEqual(parsed.vendors, ["DHL", "FedEx"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Product or service comparison");
+});
+
+test("requires separate variable and fixed home-loan rates plus an alternative", () => {
+  assert.equal(hasHomeLoanResearchCoverage({
+    pricing: [{ dimension: "Interest rates", values: {}, winner: "Not established" }],
+    insights: [],
+  }), false);
+  assert.equal(hasHomeLoanResearchCoverage({
+    pricing: [
+      { dimension: "Variable rate and comparison rate", values: {}, winner: "Not established" },
+      { dimension: "Fixed rates by term", values: {}, winner: "Not established" },
+    ],
+    insights: ["Macquarie is a credible alternative for investor lending, subject to serviceability."],
+  }), true);
+});
+
+test("normalizes model VRIO spelling variants before response validation", () => {
+  assert.equal(normalizeVrioStatus("partitional"), "partial");
+  assert.equal(normalizeVrioStatus("not applicable"), "not_applicable");
+  assert.equal(normalizeVrioStatus("unexpected"), "partial");
+});
+
+test("keeps every distinct reference while removing tracking duplicates", () => {
+  assert.deepEqual(dedupeReferenceUrls([
+    "https://example.com/rates",
+    "https://example.com/rates/?utm_source=openai",
+    "https://example.com/rates?term=2-years&utm_campaign=research",
+    "https://other.example/products#rates",
+  ]), [
+    "https://example.com/rates",
+    "https://example.com/rates?term=2-years",
+    "https://other.example/products",
+  ]);
+});
+
+test("seeds official variable and fixed home-loan sources for named banks", () => {
+  const sources = officialHomeLoanSourcesFor(["Westpac", "ANZ", "NAB", "CBA"]);
+  assert.equal(sources.length, 6);
+  assert.ok(sources.some((url) => url.includes("westpac.com.au")));
+  assert.ok(sources.some((url) => url.includes("anz.com.au")));
+  assert.ok(sources.some((url) => url.includes("nab.com.au")));
+  assert.ok(sources.some((url) => url.includes("commbank.com.au")));
+  assert.ok(sources.some((url) => url.includes("macquarie.com.au")));
 });
 
 test("requires an official source for every named credit-card provider", () => {

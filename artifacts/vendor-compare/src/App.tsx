@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -7,7 +7,8 @@ import {
   useBootstrapTenant,
   useCreateComparison,
   useCreateGuestComparison,
-  useCreateWhopCheckout,
+  useCreateStripeCheckout,
+  useReconcileStripeBilling,
   useDeleteComparison,
   useGetComparison,
   useGetDashboardSummary,
@@ -95,26 +96,125 @@ const clerkPublishableKey = publishableKeyFromHost(
 );
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 
-async function downloadComparisonPdf(report: HTMLElement, comparison: any) {
-  const [{ default: html2canvas }, { PDFDocument }] = await Promise.all([
-    import('html2canvas'),
-    import('pdf-lib'),
-  ]);
-  await document.fonts.ready;
+async function downloadComparisonPdf(comparison: any) {
+  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   const pdf = await PDFDocument.create();
-  const pages = Array.from(report.querySelectorAll<HTMLElement>('[data-pdf-page]'));
-  for (const reportPage of pages) {
-    const canvas = await html2canvas(reportPage, {
-      scale: 2,
-      backgroundColor: '#f8f4e8',
-      useCORS: true,
-      logging: false,
+  const regular = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const navy = rgb(0.125, 0.157, 0.251);
+  const teal = rgb(0.059, 0.463, 0.431);
+  const lime = rgb(0.851, 0.937, 0.4);
+  const cream = rgb(0.973, 0.957, 0.91);
+  const grey = rgb(0.38, 0.42, 0.5);
+  const red = rgb(0.725, 0.302, 0.271);
+  const pageSize: [number, number] = [595.28, 841.89];
+  const margin = 42;
+  const contentWidth = pageSize[0] - margin * 2;
+  const clean = (value: unknown) => String(value ?? 'Not established').replace(/[^\x20-\x7E]/g, ' ');
+  const wrap = (text: unknown, fontSize: number, maxWidth: number, font = regular) => {
+    const words = clean(text).split(/\s+/);
+    const lines: string[] = [];
+    let line = '';
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) line = candidate;
+      else {
+        if (line) lines.push(line);
+        line = word;
+      }
+    }
+    if (line) lines.push(line);
+    return lines.length ? lines : [''];
+  };
+  const drawLines = (page: any, text: unknown, x: number, y: number, options: { size?: number; maxWidth?: number; lineHeight?: number; font?: any; color?: any; maxLines?: number } = {}) => {
+    const size = options.size ?? 9;
+    const lineHeight = options.lineHeight ?? size * 1.35;
+    const lines = wrap(text, size, options.maxWidth ?? contentWidth, options.font ?? regular).slice(0, options.maxLines);
+    lines.forEach((line, index) => page.drawText(line, { x, y: y - index * lineHeight, size, font: options.font ?? regular, color: options.color ?? navy }));
+    return y - lines.length * lineHeight;
+  };
+  const addHeader = (page: any, title: string, subtitle: string) => {
+    page.drawRectangle({ x: 0, y: pageSize[1] - 84, width: pageSize[0], height: 84, color: navy });
+    page.drawText('VENDOR COMPARE', { x: margin, y: pageSize[1] - 34, size: 9, font: bold, color: lime });
+    page.drawText(title, { x: margin, y: pageSize[1] - 58, size: 18, font: bold, color: cream });
+    page.drawText(subtitle, { x: margin, y: pageSize[1] - 74, size: 8, font: regular, color: rgb(0.78, 0.82, 0.88) });
+    return pageSize[1] - 108;
+  };
+  const summary = pdf.addPage(pageSize);
+  let y = addHeader(summary, 'C-Suite Decision Summary', clean(comparison.category || 'Product and service comparison'));
+  y = drawLines(summary, comparison.prompt, margin, y, { size: 15, lineHeight: 18, font: bold, maxLines: 3 });
+  y -= 10;
+  summary.drawRectangle({ x: margin, y: y - 83, width: contentWidth, height: 83, color: teal });
+  summary.drawText('RECOMMENDED OPTION', { x: margin + 16, y: y - 21, size: 8, font: bold, color: cream });
+  summary.drawText(clean(comparison.recommendation), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
+  summary.drawText(`${Math.round(Number(comparison.score) || 0)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
+  y -= 105;
+  summary.drawText('EXECUTIVE RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
+  y = drawLines(summary, comparison.executiveSummary, margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
+  y -= 8;
+  summary.drawText('WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
+  y -= 19;
+  (comparison.vendorScores || []).slice(0, 5).forEach((vendor: any) => {
+    const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
+    summary.drawText(clean(vendor.vendor), { x: margin, y, size: 8.5, font: bold, color: navy });
+    summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290, height: 9, color: rgb(0.88, 0.86, 0.8) });
+    summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290 * score / 100, height: 9, color: vendor.vendor === comparison.recommendation ? teal : red });
+    summary.drawText(`${Math.round(score)}`, { x: margin + 428, y, size: 8.5, font: bold, color: navy });
+    y -= 21;
+  });
+  y -= 3;
+  const keyRisk = comparison.functionalGaps?.find((gap: any) => ['critical', 'high'].includes(String(gap.severity).toLowerCase())) ?? comparison.functionalGaps?.[0];
+  const firstGate = comparison.decisionGovernance?.[0];
+  const actions = (comparison.nextSteps || []).slice(0, 3);
+  summary.drawText('C-SUITE FOCUS', { x: margin, y, size: 8, font: bold, color: teal });
+  y -= 16;
+  y = drawLines(summary, `Strategic impact: ${comparison.recommendationReason}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
+  y -= 5;
+  y = drawLines(summary, `Primary gap or risk: ${keyRisk ? `${keyRisk.capability} - ${keyRisk.gap} (${keyRisk.severity})` : 'Validate material functional, delivery, security, and compliance risks.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
+  y -= 5;
+  y = drawLines(summary, `Decision gate: ${firstGate ? `${firstGate.decisionGate}; owner: ${firstGate.owner}` : 'Assign an executive sponsor and approval gate before commitment.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
+  y -= 8;
+  summary.drawText('NEXT EXECUTIVE ACTIONS', { x: margin, y, size: 8, font: bold, color: teal });
+  y -= 15;
+  actions.forEach((action: string, index: number) => { y = drawLines(summary, `${index + 1}. ${action}`, margin, y, { size: 8.5, lineHeight: 11.5, maxLines: 2 }); y -= 3; });
+  summary.drawText('One-page executive summary. Detailed equivalency, gaps, migration, governance, and sources follow.', { x: margin, y: 24, size: 7.5, font: regular, color: grey });
+
+  let appendixPage: any;
+  let appendixY = 0;
+  const newAppendixPage = (section = 'Extended Decision Report') => {
+    appendixPage = pdf.addPage(pageSize);
+    appendixY = addHeader(appendixPage, section, clean(comparison.prompt).slice(0, 90));
+  };
+  const ensureSpace = (needed: number, section?: string) => {
+    if (!appendixPage || appendixY - needed < 38) newAppendixPage(section);
+  };
+  const drawSection = (title: string, rows: any[], fields: Array<[string, string]>) => {
+    ensureSpace(46, title);
+    appendixPage.drawText(title.toUpperCase(), { x: margin, y: appendixY, size: 10, font: bold, color: teal });
+    appendixY -= 20;
+    if (!rows?.length) rows = [{ unavailable: 'No supported data was returned.' }];
+    rows.forEach((row, index) => {
+      const fieldLines = fields.flatMap(([label, key]) => wrap(`${label}: ${row?.[key] ?? 'Not established'}`, 8.2, contentWidth - 24));
+      const height = Math.max(42, fieldLines.length * 11 + 20);
+      ensureSpace(height + 10, title);
+      appendixPage.drawRectangle({ x: margin, y: appendixY - height + 7, width: contentWidth, height, color: index % 2 ? rgb(0.96, 0.95, 0.91) : rgb(0.91, 0.94, 0.91) });
+      let rowY = appendixY - 8;
+      fields.forEach(([label, key]) => {
+        rowY = drawLines(appendixPage, `${label}: ${row?.[key] ?? 'Not established'}`, margin + 12, rowY, { size: 8.2, lineHeight: 11, maxWidth: contentWidth - 24 });
+        rowY -= 2;
+      });
+      appendixY -= height + 8;
     });
-    const imageBytes = await fetch(canvas.toDataURL('image/png', 1)).then((response) => response.arrayBuffer());
-    const image = await pdf.embedPng(imageBytes);
-    const page = pdf.addPage([595.28, 841.89]);
-    page.drawImage(image, { x: 0, y: 0, width: 595.28, height: 841.89 });
-  }
+    appendixY -= 10;
+  };
+  newAppendixPage();
+  drawSection('Context assumptions', (comparison.contextAssumptions || []).map((assumption: string) => ({ assumption })), [['Assumption', 'assumption']]);
+  drawSection('Product and service equivalency', comparison.productEquivalency, [['Capability', 'capability'], ['Current arrangement', 'currentArrangement'], ['Target arrangement', 'targetArrangement'], ['Equivalency', 'equivalency'], ['Gap', 'gap']]);
+  drawSection('Functional gap analysis', comparison.functionalGaps, [['Capability', 'capability'], ['Current state', 'currentState'], ['Target state', 'targetState'], ['Gap', 'gap'], ['Mitigation', 'mitigation'], ['Severity', 'severity']]);
+  drawSection('Service and product arrangement mapping', comparison.serviceProductMap, [['Business service', 'businessService'], ['Current product', 'currentProduct'], ['Target product', 'targetProduct'], ['Dependencies', 'dependencies'], ['Owner', 'owner']]);
+  drawSection('Migration sequence', comparison.migrationSequence, [['Phase', 'phase'], ['Objective', 'objective'], ['Dependencies', 'dependencies'], ['Exit criteria', 'exitCriteria'], ['Risk', 'risk']]);
+  drawSection('Decision governance', comparison.decisionGovernance, [['Decision', 'decision'], ['Owner', 'owner'], ['Approvers', 'approvers'], ['Evidence required', 'evidenceRequired'], ['Decision gate', 'decisionGate']]);
+  drawSection('Evidence sources', (comparison.urls || []).map((url: string) => ({ url })), [['Source', 'url']]);
   pdf.setTitle(`${comparison.category || 'Vendor comparison'} executive report`);
   pdf.setSubject(comparison.prompt);
   pdf.setCreator('Vendor Compare');
@@ -125,7 +225,9 @@ async function downloadComparisonPdf(report: HTMLElement, comparison: any) {
   const anchor = document.createElement('a');
   anchor.href = href;
   anchor.download = `${String(comparison.category || 'vendor-comparison').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-executive-report.pdf`;
+  document.body.appendChild(anchor);
   anchor.click();
+  anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
 }
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -414,46 +516,6 @@ function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: a
   </section>;
 }
 
-function PdfPageHeader({ comparison, section, page }: { comparison: any; section: string; page: number }) {
-  return <header className="flex items-center justify-between border-b border-[#d9d1bf] pb-4"><div><p className="display text-lg font-bold text-[#202840]">Vendor Compare</p><p className="mono mt-1 text-[8px] uppercase tracking-[.16em] text-[#0f766e]">{section}</p></div><div className="text-right"><p className="text-[9px] text-[#687083]">{comparison.category}</p><p className="mono mt-1 text-[8px] text-[#999b92]">PAGE {page} / 4</p></div></header>;
-}
-
-function ExecutivePdfReport({ comparison, reportRef }: { comparison: any; reportRef: RefObject<HTMLDivElement | null> }) {
-  const alternatives = (comparison.insights || []).filter((item: string) => item.startsWith('Alternative outside comparison —'));
-  const coreInsights = (comparison.insights || []).filter((item: string) => !item.startsWith('Alternative outside comparison —'));
-  const swotEntries = Object.entries(comparison.swot || {}).filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —')) as [string, string[]][];
-  const pageClass = 'h-[1123px] w-[794px] overflow-hidden bg-[#f8f4e8] p-12 text-[#202840]';
-  return <div ref={reportRef} className="pointer-events-none absolute left-[-12000px] top-0 w-[794px]" aria-hidden="true">
-    <div className={pageClass} data-pdf-page>
-      <PdfPageHeader comparison={comparison} section="Executive report" page={1} />
-      <div className="mt-9"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[9px] font-bold uppercase tracking-[.12em] text-[#0f766e]">{comparison.category}</span><h1 className="display mt-5 text-4xl font-bold leading-[1.05] tracking-[-.05em]">{comparison.prompt}</h1></div>
-      <ExecutiveDecisionBrief comparison={comparison} compact />
-      <div className="mt-7 grid grid-cols-2 gap-4">
-        <div className="rounded-2xl border border-[#d5cebd] bg-white p-5"><p className="mono text-[9px] uppercase text-[#85877f]">Decision score</p><p className="display mt-2 text-4xl font-bold text-[#0f766e]">{Math.round(comparison.score)}/100</p></div>
-        <div className="rounded-2xl border border-[#d5cebd] bg-white p-5"><p className="mono text-[9px] uppercase text-[#85877f]">Options assessed</p><p className="display mt-2 text-4xl font-bold text-[#202840]">{comparison.vendorScores?.length || 0}</p></div>
-      </div>
-      <p className="mt-8 border-t border-[#d9d1bf] pt-4 text-[9px] leading-4 text-[#85877f]">Decision-support material. Validate material commercial, legal, regulatory, and implementation assumptions before final approval.</p>
-    </div>
-    <div className={pageClass} data-pdf-page>
-      <PdfPageHeader comparison={comparison} section="Weighted decision model" page={2} />
-      <ScoreCharts vendorScores={comparison.vendorScores} />
-      <div className="mt-7 grid grid-cols-2 gap-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-xl border border-[#d5cebd] bg-white p-4" key={vendor.vendor}><div className="flex items-center justify-between"><p className="display text-lg font-bold">{vendor.vendor}</p><span className="mono text-sm font-bold text-[#0f766e]">{vendor.score}/100</span></div><p className="mt-2 text-[10px] leading-4 text-[#687083]">{vendor.verdict}</p></div>)}</div>
-    </div>
-    <div className={pageClass} data-pdf-page>
-      <PdfPageHeader comparison={comparison} section="Commercial and capability assessment" page={3} />
-      <div className="mt-8 grid gap-6"><AnalysisTable title="Pricing lens" rows={comparison.pricing} /><AnalysisTable title="Feature lens" rows={comparison.features} /></div>
-      <div className="mt-7 grid grid-cols-2 gap-5"><InsightList title="Key insights" items={coreInsights.slice(0, 4)} accent="yellow" /><InsightList title="Opportunities" items={(comparison.opportunities || []).slice(0, 4)} accent="teal" /></div>
-      {alternatives.length > 0 && <div className="mt-6 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5"><p className="mono text-[9px] font-bold uppercase tracking-[.15em] text-[#0f766e]">Alternative path</p><p className="mt-3 text-xs leading-5 text-[#39435a]">{alternatives[0].replace('Alternative outside comparison — ', '')}</p></div>}
-    </div>
-    <div className={pageClass} data-pdf-page>
-      <PdfPageHeader comparison={comparison} section="Strategic considerations and actions" page={4} />
-      <div className="mt-8 grid grid-cols-2 gap-4">{swotEntries.slice(0, 4).map(([key, values]) => <article className="rounded-2xl border border-[#d5cebd] bg-white p-5" key={key}><p className="mono text-[9px] font-bold uppercase text-[#b94d45]">{key}</p><ul className="mt-3 space-y-2">{values.slice(0, 4).map((value) => <li className="text-[10px] leading-4 text-[#626b7b]" key={value}>• {value}</li>)}</ul></article>)}</div>
-      <div className="mt-7 rounded-2xl bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">90-day action agenda</p><ol className="mt-4 grid gap-3">{(comparison.nextSteps || []).slice(0, 5).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5" key={step}><span className="mono font-bold text-[#d9ef66]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></div>
-      {comparison.urls?.length > 0 && <div className="mt-7"><p className="mono text-[9px] font-bold uppercase tracking-[.15em] text-[#0f766e]">Evidence sources</p><ol className="mt-3 space-y-2">{comparison.urls.slice(0, 8).map((url: string, index: number) => <li className="break-all text-[8px] leading-3 text-[#687083]" key={url}>{index + 1}. {url}</li>)}</ol></div>}
-    </div>
-  </div>;
-}
-
 function HeadToHead({ comparison }: { comparison: any }) {
   const recommendation = comparison.vendorScores?.find((vendor: any) => vendor.vendor === comparison.recommendation)
     ?? comparison.vendorScores?.[0];
@@ -539,7 +601,6 @@ function ParsedBrief({ parsed, onCreate, pending }: { parsed: any; onCreate: (in
     try {
       const url = new URL(value);
       if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error();
-      if (urls.length >= 8) return;
       setUrls([...urls, value]);
       setUrlDraft('');
       setUrlError('');
@@ -602,7 +663,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     try {
       const url = new URL(value);
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
-      if (urls.length >= 8 || urls.includes(value)) return;
+      if (urls.includes(value)) return;
       setUrls((current) => [...current, value]);
       setUrlDraft('');
       setUrlError('');
@@ -644,10 +705,20 @@ function Portal() {
 
 function ApiAccessPanel() {
   const bootstrap = useBootstrapTenant();
-  const checkout = useCreateWhopCheckout();
+  const checkout = useCreateStripeCheckout();
+  const reconcile = useReconcileStripeBilling();
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  const returningFromCheckout = new URLSearchParams(window.location.search).get('billing') === 'return';
   useEffect(() => {
-    bootstrap.mutate(undefined, { onSuccess: setTenant });
+    bootstrap.mutate(undefined, { onSuccess: (currentTenant) => {
+      setTenant(currentTenant);
+      if (returningFromCheckout) {
+        const checkoutSessionId = new URLSearchParams(window.location.search).get('session_id') ?? undefined;
+        reconcile.mutate({ data: { checkoutSessionId }, headers: { 'X-Tenant-Id': currentTenant.id } }, {
+          onSuccess: () => bootstrap.mutate(undefined, { onSuccess: setTenant }),
+        });
+      }
+    } });
   }, []);
   const startCheckout = (currentTenant: Tenant) => checkout.mutate({
     data: { redirectUrl: `${window.location.origin}${basePath}/user-portal?billing=return` },
@@ -659,10 +730,10 @@ function ApiAccessPanel() {
     if (tenant) startCheckout(tenant);
     else bootstrap.mutate(undefined, { onSuccess: (created) => { setTenant(created); startCheckout(created); } });
   };
-  const error = checkout.error || bootstrap.error;
+  const error = reconcile.error || checkout.error || bootstrap.error;
   const errorMessage = (error as any)?.data?.message || (error instanceof Error ? error.message : null);
   const active = tenant?.billingStatus === 'active';
-  return <section className="animate-rise animate-rise-1 mt-8 rounded-2xl border border-[#202840] bg-[#202840] p-5 text-[#f8f4e8] sm:flex sm:items-center sm:justify-between sm:gap-8" data-testid="api-access-panel"><div><div className="flex items-center gap-2"><CreditCard size={15} className="text-[#d9ef66]" /><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#bde3d8]">Commercial API access</p></div><h2 className="display mt-3 text-2xl font-bold">{active ? 'Your API subscription is active' : 'Subscribe for production API access'}</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#c9cfdb]">{active ? 'Create and manage scoped API keys for your tenant.' : 'Hosted Whop checkout includes 100 completed comparisons per billing period and a 30 requests/minute limit.'}</p>{errorMessage && <p className="mt-3 rounded-lg border border-[#784f55] bg-[#3d3447] px-3 py-2 text-xs font-bold text-[#f0b6ad]" role="alert" data-testid="api-subscribe-error">{errorMessage}</p>}</div><div className="mt-5 shrink-0 sm:mt-0">{active ? <Link href="/api-docs" className="focus-ring inline-flex rounded-xl bg-[#d9ef66] px-5 py-3 text-sm font-bold text-[#202840]">Open API docs</Link> : <button type="button" onClick={subscribe} disabled={checkout.isPending || bootstrap.isPending} className="focus-ring inline-flex min-w-44 items-center justify-center gap-2 rounded-xl bg-[#d9ef66] px-5 py-3 text-sm font-bold text-[#202840] disabled:opacity-60" data-testid="button-subscribe-api">{checkout.isPending || bootstrap.isPending ? <LoaderCircle size={16} className="animate-spin" /> : <CreditCard size={16} />}{checkout.isPending ? 'Opening checkout' : bootstrap.isPending ? 'Loading account' : 'Subscribe with Whop'}</button>}</div></section>;
+  return <section className="animate-rise animate-rise-1 mt-8 rounded-2xl border border-[#202840] bg-[#202840] p-5 text-[#f8f4e8] sm:flex sm:items-center sm:justify-between sm:gap-8" data-testid="api-access-panel"><div><div className="flex items-center gap-2"><CreditCard size={15} className="text-[#d9ef66]" /><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#bde3d8]">Commercial API access</p></div><h2 className="display mt-3 text-2xl font-bold">{active ? 'Your API subscription is active' : reconcile.isPending ? 'Verifying your Stripe payment' : 'Subscribe for production API access'}</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#c9cfdb]">{active ? 'Create and manage scoped API keys for your tenant.' : reconcile.isPending ? 'Please wait while the server verifies payment, subscription, and billing period.' : 'Secure Stripe checkout includes 100 completed comparisons per billing period and a 30 requests/minute limit.'}</p>{errorMessage && <p className="mt-3 rounded-lg border border-[#784f55] bg-[#3d3447] px-3 py-2 text-xs font-bold text-[#f0b6ad]" role="alert" data-testid="api-subscribe-error">{errorMessage}</p>}</div><div className="mt-5 shrink-0 sm:mt-0">{active ? <Link href="/api-docs" className="focus-ring inline-flex rounded-xl bg-[#d9ef66] px-5 py-3 text-sm font-bold text-[#202840]">Open API docs</Link> : <button type="button" onClick={subscribe} disabled={returningFromCheckout || reconcile.isPending || checkout.isPending || bootstrap.isPending} className="focus-ring inline-flex min-w-44 items-center justify-center gap-2 rounded-xl bg-[#d9ef66] px-5 py-3 text-sm font-bold text-[#202840] disabled:opacity-60" data-testid="button-subscribe-api">{reconcile.isPending || checkout.isPending || bootstrap.isPending ? <LoaderCircle size={16} className="animate-spin" /> : <CreditCard size={16} />}{reconcile.isPending ? 'Verifying payment' : checkout.isPending ? 'Opening checkout' : bootstrap.isPending ? 'Loading account' : returningFromCheckout ? 'Payment verification pending' : 'Subscribe with Stripe'}</button>}</div></section>;
 }
 
 function GuestPortal() {
@@ -733,7 +804,6 @@ function HistoryPage() {
 
 function AnalysisPage() {
   const [location] = useLocation();
-  const pdfReportRef = useRef<HTMLDivElement>(null);
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
   const guest = location === '/guest/result';
   const params = useParams<{ id: string }>();
@@ -753,10 +823,10 @@ function AnalysisPage() {
   if (guest && !guestComparison) return <GuestShell><div className="mx-auto max-w-3xl px-5 py-20 text-center lg:px-10"><p className="mono text-xs uppercase tracking-[.2em] text-[#b94d45]">Guest result unavailable</p><h1 className="display mt-4 text-4xl font-bold tracking-[-.05em] text-[#202840]">That comparison has expired.</h1><p className="mt-4 text-sm leading-6 text-[#687083]">Run another guest comparison or create an account to keep a private 30-day history.</p><Link href="/guest" className="focus-ring mt-7 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]" data-testid="link-guest-result-restart"><ArrowLeft size={15} /> Run another comparison</Link></div></GuestShell>;
   const comparison = (guest ? guestComparison : data) as Comparison;
   const exportPdf = async () => {
-    if (!pdfReportRef.current || pdfStatus === 'exporting') return;
+    if (pdfStatus === 'exporting') return;
     setPdfStatus('exporting');
     try {
-      await downloadComparisonPdf(pdfReportRef.current, comparison);
+      await downloadComparisonPdf(comparison);
       setPdfStatus('idle');
     } catch (error) {
       console.error('PDF export failed', error);
@@ -770,8 +840,9 @@ function AnalysisPage() {
   const alternativeInsights = (comparison.insights || []).filter((item: string) => item.startsWith('Alternative outside comparison —'));
   const coreInsights = (comparison.insights || []).filter((item: string) => !item.startsWith('Alternative outside comparison —'));
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-8 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]"><p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">Recommended</p><div className="mt-5 flex items-center justify-between gap-4"><div><p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{comparison.recommendation}</p><p className="mt-2 text-xs text-[#a8b0c2]">Best overall fit</p></div><ScoreRing score={Math.round(comparison.score)} /></div><div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{comparison.recommendationReason}</div></div></div>
-      <ExecutiveDecisionBrief comparison={comparison} />
-       <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing executive PDF' : 'Download executive PDF'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
+       <ExecutiveDecisionBrief comparison={comparison} />
+       <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
+        <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing C-suite report' : 'Download C-suite + extended PDF'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
      <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor signal</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono text-xs font-bold text-[#0f766e]">{vendor.score}/100</span></div><p className="display mt-8 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${vendor.score}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
     <ScoreCharts vendorScores={comparison.vendorScores} />
      <HeadToHead comparison={comparison} />
@@ -783,16 +854,51 @@ function AnalysisPage() {
      <VrioSection vendorScores={comparison.vendorScores} />
      <MarketPositionSection vendorScores={comparison.vendorScores} />
      <section className="mt-14 grid gap-7 lg:grid-cols-3"><InsightList title="Opportunities" items={comparison.opportunities} accent="teal" /><InsightList title="Key insights" items={coreInsights} accent="yellow" /><InsightList title="Next steps" items={comparison.nextSteps} accent="red" /></section>
-     {comparison.urls?.length > 0 && <section className="mt-14 border-t border-[#d9d1bf] pt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Sources</p><div className="mt-4 flex flex-wrap gap-2">{comparison.urls.map((url) => <a className="focus-ring inline-flex max-w-full items-center gap-2 truncate rounded-lg border border-[#d0c8b7] bg-[#f8f4e8] px-3 py-2 text-xs text-[#566074] hover:border-[#0f766e] hover:text-[#0f766e]" href={url} target="_blank" rel="noreferrer" key={url} data-testid={`link-source-${url}`}><ExternalLink size={13} className="shrink-0" />{url}</a>)}</div></section>}<ExecutivePdfReport comparison={comparison} reportRef={pdfReportRef} /></div></AppShell>;
+      {comparison.urls?.length > 0 && <section className="mt-14 border-t border-[#d9d1bf] pt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Sources</p><div className="mt-4 flex flex-wrap gap-2">{comparison.urls.map((url) => <a className="focus-ring inline-flex max-w-full items-center gap-2 truncate rounded-lg border border-[#d0c8b7] bg-[#f8f4e8] px-3 py-2 text-xs text-[#566074] hover:border-[#0f766e] hover:text-[#0f766e]" href={url} target="_blank" rel="noreferrer" key={url} data-testid={`link-source-${url}`}><ExternalLink size={13} className="shrink-0" />{url}</a>)}</div></section>}</div></AppShell>;
 }
 
 function AnalysisTable({ title, rows = [] }: { title: string; rows?: any[] }) {
   return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><div className="border-b border-[#e3ddcf] px-5 py-4"><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[450px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3 font-bold">Dimension</th>{rows[0] && Object.keys(rows[0].values || {}).map((vendor) => <th className="px-3 py-3 font-bold" key={vendor}>{vendor}</th>)}<th className="px-5 py-3 font-bold">Winner</th></tr></thead><tbody>{rows.map((row) => <tr className="border-t border-[#e7e2d4]" key={row.dimension}><td className="px-5 py-4 font-bold text-[#202840]">{row.dimension}</td>{Object.values(row.values || {}).map((value, index) => <td className="px-3 py-4 text-[#687083]" key={`${row.dimension}-${index}`}>{value as string}</td>)}<td className="px-5 py-4 font-bold text-[#0f766e]">{row.winner}</td></tr>)}</tbody></table>{!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No lens data available for this comparison.</div>}</div></div>;
 }
 
+const fieldLabel = (field: string) => field.replace(/([A-Z])/g, ' $1').replace(/^./, (value) => value.toUpperCase());
+
+function StructuredTable({ title, rows = [], columns, compact = false }: { title: string; rows?: any[]; columns: string[]; compact?: boolean }) {
+  return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><div className={`border-b border-[#e3ddcf] ${compact ? 'px-4 py-3' : 'px-5 py-4'}`}><h3 className={`display font-bold text-[#202840] ${compact ? 'text-sm' : 'text-lg'}`}>{title}</h3></div><div className="overflow-x-auto"><table className={`w-full text-left ${compact ? 'min-w-[650px] text-[8px]' : 'min-w-[760px] text-xs'}`}><thead className="bg-[#e7e2d4] uppercase tracking-[.08em] text-[#83857c]"><tr>{columns.map((column) => <th className={compact ? 'px-3 py-2' : 'px-4 py-3'} key={column}>{fieldLabel(column)}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr className="border-t border-[#e7e2d4]" key={`${title}-${index}`}>{columns.map((column) => <td className={`${compact ? 'px-3 py-2 leading-3' : 'px-4 py-4 leading-5'} align-top text-[#626b7b] ${column === columns[0] ? 'font-bold text-[#202840]' : ''}`} key={column}>{String(row?.[column] || 'Not established')}</td>)}</tr>)}</tbody></table>{!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No supported data was returned.</div>}</div></div>;
+}
+
+function DecisionArchitectureContent({ comparison }: { comparison: any }) {
+  return <div>
+    <section className="rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">Context and assumptions</p><h2 className="display mt-2 text-2xl font-bold text-[#202840]">What must be true for this analysis to hold</h2><ul className="mt-5 space-y-3">{(comparison.contextAssumptions || []).map((item: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#566074]" key={`${item}-${index}`}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{item}</li>)}</ul></section>
+    <div className="mt-7 grid gap-7"><StructuredTable title="Product equivalency mapping" rows={comparison.productEquivalency} columns={['capability', 'currentArrangement', 'targetArrangement', 'equivalency', 'gap']} /><StructuredTable title="Functional gap analysis" rows={comparison.functionalGaps} columns={['capability', 'currentState', 'targetState', 'gap', 'mitigation', 'severity']} /><StructuredTable title="Service / product arrangement mapping" rows={comparison.serviceProductMap} columns={['businessService', 'currentProduct', 'targetProduct', 'dependencies', 'owner']} /><StructuredTable title="Migration sequence" rows={comparison.migrationSequence} columns={['phase', 'objective', 'dependencies', 'exitCriteria', 'risk']} /><StructuredTable title="Decision governance" rows={comparison.decisionGovernance} columns={['decision', 'owner', 'approvers', 'evidenceRequired', 'decisionGate']} /></div>
+  </div>;
+}
+
 function InsightList({ title, items = [], accent }: { title: string; items?: string[]; accent: 'teal' | 'yellow' | 'red' }) {
   const accentClass = accent === 'yellow' ? 'bg-[#d9ef66]' : accent === 'red' ? 'bg-[#b94d45]' : 'bg-[#0f766e]';
   return <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><div className="flex items-center gap-2"><span className={`size-2 rounded-full ${accentClass}`} /><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div><ul className="mt-5 space-y-4">{items.map((item, index) => <li className="flex gap-3 text-xs leading-5 text-[#626b7b]" key={`${item}-${index}`}><span className="mono text-[10px] font-bold text-[#a1a195]">{String(index + 1).padStart(2, '0')}</span><span>{item}</span></li>)}{!items.length && <li className="text-xs text-[#85877f]">Nothing noted yet.</li>}</ul></div>;
+}
+
+function DecisionArchitecturePage() {
+  const [location] = useLocation();
+  const guest = location === '/guest/decision-plan';
+  const params = useParams<{ id: string }>();
+  const id = Number(params.id);
+  const [guestComparison] = useState<any>(() => {
+    if (!guest) return null;
+    try {
+      const raw = window.sessionStorage.getItem('vendor-compare-guest-result');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const { data, isLoading, isError, refetch } = useGetComparison(id, { query: { enabled: !guest && Boolean(id), queryKey: getGetComparisonQueryKey(id) } });
+  if (!guest && isLoading) return <AppShell><LoadingPanel label="Loading decision plan" /></AppShell>;
+  if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
+  const comparison = guest ? guestComparison : data;
+  if (!comparison) return <AppShell guest={guest}><ErrorPanel /></AppShell>;
+  return <AppShell guest={guest}><main className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? '/guest/result' : `/comparisons/${id}`} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline"><ArrowLeft size={14} /> Back to comparison</Link><div className="mt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#b94d45]">Decision architecture</p><h1 className="display mt-3 max-w-4xl text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Equivalency, gaps, migration, and governance.</h1><p className="mt-4 max-w-3xl text-sm leading-6 text-[#687083]">A structured transition view for {comparison.recommendation}. Validate assumptions and evidence with accountable stakeholders before contract or cutover approval.</p></div><div className="mt-10"><DecisionArchitectureContent comparison={comparison} /></div></main></AppShell>;
 }
 
 function ApiDocsPage() {
@@ -805,8 +911,8 @@ function ApiDocsPage() {
     ['GET', '/api/v1/usage', 'Inspect prepaid usage and remaining quota', 'Bearer API key · usage:read'],
     ['POST', '/api/tenant/api-keys', 'Create, rotate, or revoke keys', 'Clerk tenant admin'],
     ['GET', '/api/tenant/audit', 'Review tenant audit events', 'Clerk admin + X-Tenant-Id'],
-    ['POST', '/api/whop/checkout', 'Create hosted Whop checkout', 'Clerk tenant admin · verified config'],
-    ['POST', '/api/tenant/whop/reconcile', 'Verify checkout and activate tenant', 'Clerk admin + X-Tenant-Id'],
+    ['POST', '/api/stripe/checkout', 'Create hosted Stripe checkout', 'Clerk tenant admin · verified config'],
+    ['POST', '/api/tenant/stripe/reconcile', 'Verify checkout and activate tenant', 'Clerk admin + X-Tenant-Id'],
   ];
   const example = `curl -X POST "$BASE_URL/api/v1/comparisons" \\
   -H "Authorization: Bearer vc_live_..." \\
@@ -831,22 +937,38 @@ function ApiDocsPage() {
     { "vendor": "Tesla Model 3", "score": 77, "verdict": "Strong technology, above budget" },
     { "vendor": "BYD Seal", "score": 84, "verdict": "Best overall fit" }
   ],
+  "contextAssumptions": ["Current integration and data-migration scope must be confirmed."],
+  "productEquivalency": [
+    { "capability": "Driver assistance", "currentArrangement": "Tesla Model 3", "targetArrangement": "BYD Seal", "equivalency": "Partial", "gap": "Feature operation and inclusions differ." }
+  ],
+  "functionalGaps": [
+    { "capability": "Charging-network access", "currentState": "Tesla network", "targetState": "Third-party networks", "gap": "Different access arrangement", "mitigation": "Validate routes and memberships", "severity": "medium" }
+  ],
+  "serviceProductMap": [
+    { "businessService": "Fleet mobility", "currentProduct": "Tesla Model 3", "targetProduct": "BYD Seal", "dependencies": "Charging, insurance, servicing", "owner": "Fleet manager" }
+  ],
+  "migrationSequence": [
+    { "phase": "1. Validate", "objective": "Confirm requirements and equivalency", "dependencies": "Fleet baseline", "exitCriteria": "Approved fit assessment", "risk": "medium" }
+  ],
+  "decisionGovernance": [
+    { "decision": "Approve fleet change", "owner": "Fleet executive", "approvers": "Finance, operations, risk", "evidenceRequired": "TCO, safety, charging and service evidence", "decisionGate": "Before order" }
+  ],
   "nextSteps": ["Confirm drive-away pricing", "Book both test drives"],
   "urls": ["https://www.tesla.com/en_au/model3", "https://www.bydautomotive.com.au/seal"]
 }`;
-  const checkoutExample = `curl -X POST "$BASE_URL/api/whop/checkout" \\
+  const checkoutExample = `curl -X POST "$BASE_URL/api/stripe/checkout" \\
   -H "Authorization: Bearer $CLERK_SESSION_TOKEN" \\
   -H "X-Tenant-Id: $TENANT_ID" \\
   -H "Content-Type: application/json" \\
   -d '{"redirectUrl":"https://your-app.example.com/billing/complete"}'
 
 # 201 response
-{ "purchaseUrl": "https://whop.com/checkout/..." }`;
-  return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex gap-3"><Link href="/" className="focus-ring rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075]">Home</Link><Link href="/guest" className="focus-ring rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66]">Try the API flow</Link></div></header><main className="mx-auto max-w-7xl px-5 pb-20 pt-10 lg:px-10"><div className="grid gap-10 lg:grid-cols-[1fr_320px]"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">Developer platform / live contract</p><h1 className="display mt-4 text-5xl font-bold tracking-[-.06em] text-[#202840] sm:text-7xl">Vendor Compare API</h1><p className="mt-6 max-w-3xl text-base leading-7 text-[#667083]">Embed researched comparisons, weighted recommendations, VRIO analysis, alternatives, and market context in a white-label product. First-party Clerk sessions and the tenant-scoped, metered <code>/api/v1</code> customer API are available now.</p></div><aside className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[10px] uppercase tracking-[.16em] text-[#bde3d8]">Commercial service</p><p className="display mt-4 text-2xl font-bold text-[#d9ef66]">Prepaid tenant API</p><ul className="mt-5 space-y-3 text-xs leading-5 text-[#c9cfdb]"><li>API-key tenant isolation</li><li>Durable completed-job metering</li><li>100 prepaid comparisons per billing period</li><li>Idempotent comparison jobs</li><li>Versioned /v1 contracts</li></ul><p className="mt-5 border-t border-[#3a4664] pt-4 text-[11px] leading-5 text-[#9fa9bd]">The prepaid allowance is a hard cap: requests return 402 after it is exhausted. Tenants remain inactive until server-verified Whop membership reconciliation.</p></aside></div>
-    <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Get access</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">From signup to your first API call</h2><div className="mt-6 grid gap-4 md:grid-cols-4">{[['1', 'Create an account', 'Sign in with Clerk. The app creates your tenant workspace.'], ['2', 'Subscribe with Whop', 'Start hosted checkout from the signed-in workspace and complete payment on Whop.'], ['3', 'Wait for verification', 'Access activates only after the server verifies payment, membership, and the current billing period.'], ['4', 'Create an API key', 'Create a scoped key, copy it once, and store it in a server-side secret manager.']].map(([number, title, text]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={number}><span className="mono text-xs font-bold text-[#b94d45]">{number}</span><h3 className="mt-3 font-bold text-[#202840]">{title}</h3><p className="mt-2 text-xs leading-5 text-[#687083]">{text}</p></article>)}</div><div className="mt-5 rounded-xl border border-[#e3b6ac] bg-[#f7e4df] px-5 py-4 text-xs leading-5 text-[#8d5650]"><strong>Checkout availability:</strong> hosted checkout returns <code>503 billing_not_configured</code> until the verified Whop company and plan are configured. A checkout redirect alone never activates API access.</div><Link href="/user-portal" className="focus-ring mt-5 inline-flex rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]">Sign in to manage API access</Link></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Authentication</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Two credentials, two purposes</h2><div className="mt-5 space-y-3"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Commercial API key</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer vc_live_...</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use this for every <code>/api/v1</code> request. Grant only the needed scopes: <code>comparisons:read</code>, <code>comparisons:write</code>, and <code>usage:read</code>.</p></div><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Clerk session token</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer &lt;Clerk session token&gt;</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use only for account, billing, and key management. Tenant operations also require <code>X-Tenant-Id</code> and owner/admin membership. Do not use a Clerk token for <code>/api/v1</code>.</p></div></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Subscription request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Start hosted Whop checkout</h2><p className="mt-3 text-sm leading-6 text-[#687083]">Redirect the customer to the returned purchase URL. Server reconciliation—not the browser redirect—activates access and keeps renewals, cancellations, refunds, and past-due status synchronized.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{checkoutExample}</pre></div></div></section>
+{ "purchaseUrl": "https://checkout.stripe.com/c/pay/..." }`;
+  return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex gap-3"><Link href="/" className="focus-ring rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075]">Home</Link><Link href="/guest" className="focus-ring rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66]">Try the API flow</Link></div></header><main className="mx-auto max-w-7xl px-5 pb-20 pt-10 lg:px-10"><div className="grid gap-10 lg:grid-cols-[1fr_320px]"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">Developer platform / live contract</p><h1 className="display mt-4 text-5xl font-bold tracking-[-.06em] text-[#202840] sm:text-7xl">Vendor Compare API</h1><p className="mt-6 max-w-3xl text-base leading-7 text-[#667083]">Embed researched comparisons, weighted recommendations, VRIO analysis, alternatives, and market context in a white-label product. First-party Clerk sessions and the tenant-scoped, metered <code>/api/v1</code> customer API are available now.</p></div><aside className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[10px] uppercase tracking-[.16em] text-[#bde3d8]">Commercial service</p><p className="display mt-4 text-2xl font-bold text-[#d9ef66]">Prepaid tenant API</p><ul className="mt-5 space-y-3 text-xs leading-5 text-[#c9cfdb]"><li>API-key tenant isolation</li><li>Durable completed-job metering</li><li>100 prepaid comparisons per billing period</li><li>Idempotent comparison jobs</li><li>Versioned /v1 contracts</li></ul><p className="mt-5 border-t border-[#3a4664] pt-4 text-[11px] leading-5 text-[#9fa9bd]">The prepaid allowance is a hard cap: requests return 402 after it is exhausted. Tenants remain inactive until server-verified Stripe subscription reconciliation.</p></aside></div>
+    <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Get access</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">From signup to your first API call</h2><div className="mt-6 grid gap-4 md:grid-cols-4">{[['1', 'Create an account', 'Sign in with Clerk. The app creates your tenant workspace.'], ['2', 'Subscribe with Stripe', 'Start hosted checkout from the signed-in workspace and complete payment on Stripe.'], ['3', 'Wait for verification', 'Access activates only after the server verifies payment, subscription, and the current billing period.'], ['4', 'Create an API key', 'Create a scoped key, copy it once, and store it in a server-side secret manager.']].map(([number, title, text]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={number}><span className="mono text-xs font-bold text-[#b94d45]">{number}</span><h3 className="mt-3 font-bold text-[#202840]">{title}</h3><p className="mt-2 text-xs leading-5 text-[#687083]">{text}</p></article>)}</div><div className="mt-5 rounded-xl border border-[#c8d99a] bg-[#e8f2bd] px-5 py-4 text-xs leading-5 text-[#35665c]"><strong>Checkout availability:</strong> Stripe sandbox checkout is configured at A$49 per month. A checkout redirect alone never activates API access.</div><Link href="/user-portal" className="focus-ring mt-5 inline-flex rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]">Sign in to manage API access</Link></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Authentication</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Two credentials, two purposes</h2><div className="mt-5 space-y-3"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Commercial API key</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer vc_live_...</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use this for every <code>/api/v1</code> request. Grant only the needed scopes: <code>comparisons:read</code>, <code>comparisons:write</code>, and <code>usage:read</code>.</p></div><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Clerk session token</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer &lt;Clerk session token&gt;</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use only for account, billing, and key management. Tenant operations also require <code>X-Tenant-Id</code> and owner/admin membership. Do not use a Clerk token for <code>/api/v1</code>.</p></div></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Subscription request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Start hosted Stripe checkout</h2><p className="mt-3 text-sm leading-6 text-[#687083]">Redirect the customer to the returned purchase URL. Server reconciliation—not the browser redirect—activates access and keeps renewals, cancellations, refunds, and past-due status synchronized.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{checkoutExample}</pre></div></div></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">04 / Endpoints</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Current API surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_240px_1fr_220px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to five named options and up to eight source URLs.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The complete response also includes weighted criteria, pricing, features, VRIO, SWOT, alternatives, and sources.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[520px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to five named options and any number of distinct HTTP/HTTPS evidence URLs. Include current and target arrangements, constraints, regulatory and security requirements, integrations, migration scope, budget, and timing when known; omitted context is returned as explicit assumptions.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The contract includes weighted score rationale, product equivalency, functional gaps, service/product arrangements, migration phases, decision governance, VRIO, SWOT, alternatives, and every distinct collected source. Cost never determines the recommendation by itself.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[620px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
      <section className="mt-14 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">07 / Errors and limits</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Build for explicit failure states</h2><div className="mt-6 grid gap-5 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">401 / 403</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Missing or invalid keys return <code>invalid_api_key</code>. A valid key without the operation scope returns <code>insufficient_scope</code>.</p></div><div><h3 className="font-bold text-[#202840]">402 / 429</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>quota_exhausted</code> means the prepaid allowance is consumed. <code>rate_limit_exceeded</code> includes a <code>Retry-After</code> header.</p></div><div><h3 className="font-bold text-[#202840]">409 / 502</h3><p className="mt-2 text-xs leading-5 text-[#566074]">A changed body cannot reuse an idempotency key. Upstream research failures do not consume quota and may be retried with the same key.</p></div></div><pre className="mt-5 overflow-x-auto rounded-xl bg-[#202840] p-4 text-[11px] text-[#d9ef66]">{`{ "code": "insufficient_scope", "message": "The API key requires the comparisons:write scope." }`}</pre></section>
   </main></div>;
 }
@@ -895,7 +1017,7 @@ function AuthTokenBridge() {
 }
 
 function Router() {
-  return <RoutedErrorBoundary><Switch><Route path="/" component={ClerkHomeRoute} /><Route path="/sign-in/*?" component={() => <AuthPage mode="sign-in" />} /><Route path="/sign-up/*?" component={() => <AuthPage mode="sign-up" />} /><Route path="/api-docs" component={ApiDocsPage} /><Route path="/guest" component={GuestPortal} /><Route path="/guest/result" component={AnalysisPage} /><Route path="/user-portal" component={ClerkPortalRoute} /><Route path="/history" component={() => <ClerkProtectedRoute><HistoryPage /></ClerkProtectedRoute>} /><Route path="/comparisons/:id" component={() => <ClerkProtectedRoute><AnalysisPage /></ClerkProtectedRoute>} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
+  return <RoutedErrorBoundary><Switch><Route path="/" component={ClerkHomeRoute} /><Route path="/sign-in/*?" component={() => <AuthPage mode="sign-in" />} /><Route path="/sign-up/*?" component={() => <AuthPage mode="sign-up" />} /><Route path="/api-docs" component={ApiDocsPage} /><Route path="/guest" component={GuestPortal} /><Route path="/guest/result" component={AnalysisPage} /><Route path="/guest/decision-plan" component={DecisionArchitecturePage} /><Route path="/user-portal" component={ClerkPortalRoute} /><Route path="/history" component={() => <ClerkProtectedRoute><HistoryPage /></ClerkProtectedRoute>} /><Route path="/comparisons/:id/decision-plan" component={() => <ClerkProtectedRoute><DecisionArchitecturePage /></ClerkProtectedRoute>} /><Route path="/comparisons/:id" component={() => <ClerkProtectedRoute><AnalysisPage /></ClerkProtectedRoute>} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
 }
 
 function App() {

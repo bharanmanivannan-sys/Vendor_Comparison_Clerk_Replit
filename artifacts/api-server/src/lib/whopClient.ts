@@ -14,7 +14,7 @@ type WhopMembership = {
   user_id: string;
   status: string;
   current_period_end: string | null;
-  created_at?: string | null;
+  created_at: string;
 };
 
 type WhopCheckoutConfiguration = {

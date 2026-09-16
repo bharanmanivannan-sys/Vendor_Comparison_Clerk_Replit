@@ -47,6 +47,22 @@ export const comparisonsTable = pgTable("comparisons", {
   opportunities: jsonb("opportunities").$type<string[]>().notNull(),
   insights: jsonb("insights").$type<string[]>().notNull(),
   nextSteps: jsonb("next_steps").$type<string[]>().notNull(),
+  contextAssumptions: jsonb("context_assumptions").$type<string[]>().notNull().default([]),
+  productEquivalency: jsonb("product_equivalency").$type<Array<{
+    capability: string; currentArrangement: string; targetArrangement: string; equivalency: string; gap: string;
+  }>>().notNull().default([]),
+  functionalGaps: jsonb("functional_gaps").$type<Array<{
+    capability: string; currentState: string; targetState: string; gap: string; mitigation: string; severity: string;
+  }>>().notNull().default([]),
+  serviceProductMap: jsonb("service_product_map").$type<Array<{
+    businessService: string; currentProduct: string; targetProduct: string; dependencies: string; owner: string;
+  }>>().notNull().default([]),
+  migrationSequence: jsonb("migration_sequence").$type<Array<{
+    phase: string; objective: string; dependencies: string; exitCriteria: string; risk: string;
+  }>>().notNull().default([]),
+  decisionGovernance: jsonb("decision_governance").$type<Array<{
+    decision: string; owner: string; approvers: string; evidenceRequired: string; decisionGate: string;
+  }>>().notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

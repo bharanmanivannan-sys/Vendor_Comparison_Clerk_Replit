@@ -7,22 +7,26 @@ import {
   GetExternalUsageResponse,
 } from "@workspace/api-zod";
 import { comparisonsTable, db, tenantsTable, usageEventsTable } from "@workspace/db";
-import { buildAnalysis, type AnalysisPayload } from "../lib/analysis";
+import { buildAnalysis as buildAnalysisDefault, type AnalysisPayload } from "../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../lib/security";
-import { authenticateApiKey, type AuthenticatedApiKey } from "../services/apiKeys";
+import { authenticateApiKey as authenticateApiKeyDefault, type AuthenticatedApiKey } from "../services/apiKeys";
 import { beginIdempotency, completeIdempotency, failIdempotency, requestHash, startIdempotencyHeartbeat } from "../services/idempotency";
-import { consumeRateLimit } from "../services/rateLimit";
+import { consumeRateLimit as consumeRateLimitDefault } from "../services/rateLimit";
 import { getUsage, getUsageForExecutor } from "../services/usage";
 import { detailFromRow, summaryFromRow, validateComparisonInput } from "./comparisons";
 
 type CommercialRequest = Request & { apiKey?: AuthenticatedApiKey };
-const router: IRouter = Router();
+type CommercialDependencies = {
+  authenticateApiKey: typeof authenticateApiKeyDefault;
+  consumeRateLimit: typeof consumeRateLimitDefault;
+  buildAnalysis: typeof buildAnalysisDefault;
+};
 
 function error(res: Response, status: number, code: string, message: string, details?: unknown) {
   res.status(status).json({ code, message, ...(details === undefined ? {} : { details }) });
 }
 
-function requireApiKey(scope: string) {
+function requireApiKey(scope: string, authenticateApiKey: CommercialDependencies["authenticateApiKey"]) {
   return async (req: CommercialRequest, res: Response, next: NextFunction): Promise<void> => {
     const apiKey = await authenticateApiKey(req.headers.authorization);
     if (!apiKey) {
@@ -38,7 +42,7 @@ function requireApiKey(scope: string) {
   };
 }
 
-async function rateLimit(req: CommercialRequest, res: Response): Promise<boolean> {
+async function rateLimit(req: CommercialRequest, res: Response, consumeRateLimit: CommercialDependencies["consumeRateLimit"]): Promise<boolean> {
   const state = await consumeRateLimit(req.apiKey!.tenantId);
   res.setHeader("RateLimit-Limit", state.limit);
   res.setHeader("RateLimit-Remaining", state.remaining);
@@ -63,8 +67,17 @@ function quotaExceeded(res: Response, usage: Awaited<ReturnType<typeof getUsage>
   error(res, 402, "quota_exhausted", "The prepaid comparison allowance is exhausted. Purchase or activate a new allowance before retrying.");
 }
 
-router.get("/v1/comparisons", requireApiKey("comparisons:read"), async (req: CommercialRequest, res): Promise<void> => {
-  if (!(await rateLimit(req, res))) return;
+export function createCommercialRouter(overrides: Partial<CommercialDependencies> = {}): IRouter {
+  const dependencies: CommercialDependencies = {
+    authenticateApiKey: authenticateApiKeyDefault,
+    consumeRateLimit: consumeRateLimitDefault,
+    buildAnalysis: buildAnalysisDefault,
+    ...overrides,
+  };
+  const router: IRouter = Router();
+
+router.get("/v1/comparisons", requireApiKey("comparisons:read", dependencies.authenticateApiKey), async (req: CommercialRequest, res): Promise<void> => {
+  if (!(await rateLimit(req, res, dependencies.consumeRateLimit))) return;
   const queryResult = ExternalListComparisonsQueryParams.safeParse(req.query);
   if (!queryResult.success) {
     error(res, 400, "invalid_query", "limit must be between 1 and 100.");
@@ -85,8 +98,8 @@ router.get("/v1/comparisons", requireApiKey("comparisons:read"), async (req: Com
   res.json(ExternalListComparisonsResponse.parse(rows.map(summaryFromRow)));
 });
 
-router.post("/v1/comparisons", requireApiKey("comparisons:write"), async (req: CommercialRequest, res): Promise<void> => {
-  if (!(await rateLimit(req, res))) return;
+router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.authenticateApiKey), async (req: CommercialRequest, res): Promise<void> => {
+  if (!(await rateLimit(req, res, dependencies.consumeRateLimit))) return;
   const idempotencyKey = req.header("Idempotency-Key");
   if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 255) {
     error(res, 400, "idempotency_key_required", "Idempotency-Key must be 8 to 255 characters.");
@@ -126,7 +139,7 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write"), async (req: C
   const heartbeat = startIdempotencyHeartbeat(key, idempotencyKey, ownershipToken);
   let analysis: AnalysisPayload;
   try {
-    analysis = await buildAnalysis({ ...input, vendors, criteria, urls });
+    analysis = await dependencies.buildAnalysis({ ...input, vendors, criteria, urls });
     if (heartbeat.hasLostOwnership()) throw new Error("Idempotency ownership was lost while processing.");
   } catch (cause) {
     heartbeat.stop();
@@ -187,8 +200,8 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write"), async (req: C
   res.status(201).json(committed.responseBody);
 });
 
-router.get("/v1/comparisons/:id", requireApiKey("comparisons:read"), async (req: CommercialRequest, res): Promise<void> => {
-  if (!(await rateLimit(req, res))) return;
+router.get("/v1/comparisons/:id", requireApiKey("comparisons:read", dependencies.authenticateApiKey), async (req: CommercialRequest, res): Promise<void> => {
+  if (!(await rateLimit(req, res, dependencies.consumeRateLimit))) return;
   const params = ExternalGetComparisonParams.safeParse(req.params);
   if (!params.success) {
     error(res, 400, "invalid_id", "Comparison id must be an integer.");
@@ -206,11 +219,14 @@ router.get("/v1/comparisons/:id", requireApiKey("comparisons:read"), async (req:
   res.json(ExternalGetComparisonResponse.parse(detailFromRow(row)));
 });
 
-router.get("/v1/usage", requireApiKey("usage:read"), async (req: CommercialRequest, res): Promise<void> => {
-  if (!(await rateLimit(req, res))) return;
+router.get("/v1/usage", requireApiKey("usage:read", dependencies.authenticateApiKey), async (req: CommercialRequest, res): Promise<void> => {
+  if (!(await rateLimit(req, res, dependencies.consumeRateLimit))) return;
   const usage = await getUsage(req.apiKey!.tenantId);
   setQuotaHeaders(res, usage);
   res.json(GetExternalUsageResponse.parse(usage));
 });
 
-export default router;
+  return router;
+}
+
+export default createCommercialRouter();

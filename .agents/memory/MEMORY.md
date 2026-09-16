@@ -1,2 +1,6 @@
 - [API client compiler settings](api-client-dom-iterable.md) — generated Headers helpers require DOM.Iterable in the API client TypeScript libs.
 - [OpenAI web-search output](openai-web-search-output.md) — Responses web search cannot use JSON mode; request plain text and safely extract the JSON object.
+- [Long AI requests in browsers](long-ai-browser-requests.md) — use submit-and-poll jobs; synchronous research and HTTP 102 heartbeats can surface as Failed to fetch.
+- [Decision architecture](decision-architecture.md) — comparisons must map equivalency, gaps, service arrangements, migration sequence, and decision governance.
+- [Browser PDF exports](browser-pdf-exports.md) — generate reports natively with vector PDF primitives; avoid rasterizing hidden HTML.
+- [Comparison intent validation](comparison-intent-validation.md) — accept clear decisions with real options even when their category is not in the known segment list.
