@@ -20,6 +20,14 @@ export type ComparisonContext = {
   message: string;
 };
 
+export type ResearchMarket = {
+  country: string;
+  countryCode: "IN" | "AU" | "US" | "GB";
+  currency: "INR" | "AUD" | "USD" | "GBP";
+  timezone: string;
+  inferredFrom: string;
+};
+
 export const WEIGHTED_CRITERIA = [
   { criterion: "Meets Needs / Features", weight: 25 },
   { criterion: "Quality & Reliability", weight: 20 },
@@ -128,6 +136,36 @@ function cleanVendorName(value: string): string {
     .sort((a, b) => b.length - a.length)
     .find((provider) => new RegExp(`\\b${provider}\\b`, "i").test(cleaned));
   return knownName ? knownProviders[knownName] : cleaned;
+}
+
+export function inferResearchMarket(prompt: string, vendors: string[]): ResearchMarket {
+  const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
+  if (/\b(?:india|indian|inr|rupees?|₹|mahindra|tata motors?|jsw mg)\b/.test(normalized)) {
+    return { country: "India", countryCode: "IN", currency: "INR", timezone: "Asia/Kolkata", inferredFrom: "query location, currency, or strong local product cues" };
+  }
+  if (/\b(?:united kingdom|britain|british|uk|gbp|pounds?|£)\b/.test(normalized)) {
+    return { country: "United Kingdom", countryCode: "GB", currency: "GBP", timezone: "Europe/London", inferredFrom: "query location or currency" };
+  }
+  if (/\b(?:united states|usa|u\.s\.|usd|us dollars?)\b/.test(normalized)) {
+    return { country: "United States", countryCode: "US", currency: "USD", timezone: "America/New_York", inferredFrom: "query location or currency" };
+  }
+  return { country: "Australia", countryCode: "AU", currency: "AUD", timezone: "Australia/Sydney", inferredFrom: "application default or Australian query cues" };
+}
+
+export function officialMarketSourcesFor(prompt: string, vendors: string[], market: ResearchMarket): string[] {
+  const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
+  if (
+    market.countryCode === "IN"
+    && /\bmg\b/.test(normalized)
+    && /\b(?:battery|baas|electric vehicles?|ev)\b/.test(normalized)
+  ) {
+    return [
+      "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
+      "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india",
+      "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/service",
+    ];
+  }
+  return [];
 }
 
 function isPlaceholderVendor(value: string): boolean {
@@ -716,15 +754,25 @@ async function retryAiStage<T>(stage: string, operation: () => Promise<T>): Prom
   throw lastError;
 }
 
+function cleanEvidenceUrl(source: string): string | null {
+  if (/\s/.test(source) || /%(?:20|09|0a|0d)/i.test(source)) return null;
+  try {
+    const url = new URL(source.replace(/[.,;:]+$/, ""));
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (url.username || url.password) return null;
+    const decodedPath = decodeURIComponent(url.pathname);
+    if (/\b(?:information|data|details?)\s+(?:is\s+)?(?:limited|unavailable|missing)|\bas of \d{4}\b/i.test(decodedPath)) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function collectHttpUrls(value: unknown, found = new Set<string>()): string[] {
   if (typeof value === "string") {
     for (const match of value.matchAll(/https?:\/\/[^\s"'<>\])}]+/g)) {
-      try {
-        const url = new URL(match[0].replace(/[.,;:]+$/, ""));
-        found.add(url.toString());
-      } catch {
-        // Ignore malformed URLs from provider metadata.
-      }
+      const cleanUrl = cleanEvidenceUrl(match[0]);
+      if (cleanUrl) found.add(cleanUrl);
     }
   } else if (Array.isArray(value)) {
     for (const item of value) collectHttpUrls(item, found);
@@ -743,12 +791,8 @@ function addParsedSourceUrls(sources: unknown, urls: string[]): void {
         ? source.url
         : "";
     if (!sourceUrl) continue;
-    try {
-      const url = new URL(sourceUrl);
-      if ((url.protocol === "https:" || url.protocol === "http:") && !urls.includes(sourceUrl)) urls.push(sourceUrl);
-    } catch {
-      // Ignore malformed model-provided citations.
-    }
+    const cleanUrl = cleanEvidenceUrl(sourceUrl);
+    if (cleanUrl && !urls.includes(cleanUrl)) urls.push(cleanUrl);
   }
 }
 
@@ -756,7 +800,9 @@ export function dedupeReferenceUrls(urls: string[]): string[] {
   const unique = new Map<string, string>();
   for (const source of urls) {
     try {
-      const url = new URL(source);
+      const cleanUrl = cleanEvidenceUrl(source);
+      if (!cleanUrl) continue;
+      const url = new URL(cleanUrl);
       for (const key of Array.from(url.searchParams.keys())) {
         if (/^utm_/i.test(key) || /^(?:gclid|fbclid)$/i.test(key)) url.searchParams.delete(key);
       }
@@ -861,6 +907,22 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
   if (!client) return fallback;
   try {
     const context = validateComparisonContext(input.prompt, input.vendors);
+    const researchMarket = inferResearchMarket(input.prompt, input.vendors);
+    const currentDate = new Date().toISOString().slice(0, 10);
+    const oldestFallbackDate = new Date();
+    oldestFallbackDate.setUTCFullYear(oldestFallbackDate.getUTCFullYear() - 1);
+    const oldestFallbackDateText = oldestFallbackDate.toISOString().slice(0, 10);
+    for (const sourceUrl of officialMarketSourcesFor(input.prompt, input.vendors, researchMarket)) {
+      if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
+    }
+    const marketResearchInstructions = [
+      `Treat ${researchMarket.country} as the user's market and present all comparable monetary values in ${researchMarket.currency}.`,
+      "Search official local product, service, brand, pricing, warranty, finance, subscription, and support pages first.",
+      "If a local official page is unavailable, search the brand's official United States site, then official United Kingdom site, then official Australian site, then the geographically nearest official regional or global site. Clearly label when evidence is from another market.",
+      `For prices from another currency, preserve the original amount and convert it to ${researchMarket.currency} using a current reputable foreign-exchange source. State the exchange rate, source URL, and as-of date; do not present converted amounts as official local prices.`,
+      `For non-official fallback evidence, search newest-first beginning with ${currentDate.slice(0, 7)} and use only reputable sources published or materially updated on or after ${oldestFallbackDateText}. Include the publication/update date and URL. Undated or older fallback sources must be treated as unavailable, not used as current evidence.`,
+      "Official current product pages may be used when they are undated, but time-sensitive claims such as prices and offers must be marked with the retrieval/as-of date.",
+    ].join(" ");
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
     if (isProviderLevelHomeLoanDiscovery) {
@@ -876,9 +938,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           type: "web_search",
           search_context_size: "low",
           external_web_access: true,
-          ...(context.industry.toLowerCase().includes("australian") ? {
-            user_location: { type: "approximate" as const, country: "AU", timezone: "Australia/Sydney" },
-          } : {}),
+          user_location: {
+            type: "approximate" as const,
+            country: researchMarket.countryCode,
+            timezone: researchMarket.timezone,
+          },
         }],
         input: [
           {
@@ -896,9 +960,19 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               prompt: input.prompt,
               vendors: input.vendors,
               context,
+              researchMarket,
+              currentDate,
+              officialSourcePriority: [
+                `Official ${researchMarket.country} pages`,
+                "Official United States pages",
+                "Official United Kingdom pages",
+                "Official Australian pages",
+                "Nearest official regional or global pages",
+              ],
               suppliedUrls: input.urls,
               criteria: input.criteria,
               shape: analysisOutputShape(input.vendors, isProviderLevelHomeLoanDiscovery),
+              marketResearchInstructions,
               researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
@@ -943,9 +1017,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 prompt: input.prompt,
                 vendors: input.vendors,
                 criteria: input.criteria,
+                researchMarket,
+                currentDate,
                 shape: analysisOutputShape(input.vendors, isProviderLevelHomeLoanDiscovery),
                 draft: researchResponse.output_text,
-                instructions: `Preserve supported facts and complete missing fields concisely. Return criteriaMet and unmetCriteriaReason. Use 0–100 scores and the supplied weights.${isProviderLevelCreditCardDiscovery ? " Recommend one exact card product by full name. State the minimum credit limit or explicitly say it was unavailable. Include annual-fee trade-offs and one or two outside-card alternatives as insights beginning exactly 'Alternative outside comparison — <name>:'." : ""}`,
+                instructions: `Preserve supported facts and complete missing fields concisely. ${marketResearchInstructions} Return criteriaMet and unmetCriteriaReason. Use 0–100 scores and the supplied weights.${isProviderLevelCreditCardDiscovery ? " Recommend one exact card product by full name. State the minimum credit limit or explicitly say it was unavailable. Include annual-fee trade-offs and one or two outside-card alternatives as insights beginning exactly 'Alternative outside comparison — <name>:'." : ""}`,
               }),
             },
           ],

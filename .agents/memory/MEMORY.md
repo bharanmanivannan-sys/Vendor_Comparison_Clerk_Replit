@@ -6,3 +6,4 @@
 - [Comparison intent validation](comparison-intent-validation.md) — accept clear decisions with real options even when their category is not in the known segment list.
 - [White-label delivery](white-label-delivery.md) — white-label support is API-only; customers own the branded UI and call the comparison API from their backend.
 - [Free-beta publishing](free-beta-publishing.md) — production must not depend on a payment connector while access is free; billing can return later as a separate change.
+- [Market-aware research](market-aware-research.md) — prioritize official local evidence, localize currency, and limit non-official fallback evidence to the trailing year.

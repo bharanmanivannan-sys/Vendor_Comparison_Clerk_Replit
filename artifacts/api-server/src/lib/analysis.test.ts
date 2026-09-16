@@ -4,9 +4,11 @@ import {
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
   hasHomeLoanResearchCoverage,
+  inferResearchMarket,
   missingCreditCardSourceVendors,
   normalizeLensWinner,
   normalizeVrioStatus,
+  officialMarketSourcesFor,
   officialHomeLoanSourcesFor,
   parsePrompt,
   validateComparisonContext,
@@ -115,6 +117,15 @@ test("parses EV battery-service comparisons with trailing punctuation", () => {
   assert.equal(parsed.context.segment, "Electric vehicles");
   assert.ok(parsed.criteria.includes("Range and charging"));
   assert.ok(parsed.criteria.includes("Budget fit"));
+  const market = inferResearchMarket(parsed.prompt, parsed.vendors);
+  assert.equal(market.countryCode, "IN");
+  assert.equal(market.currency, "INR");
+  assert.ok(officialMarketSourcesFor(parsed.prompt, parsed.vendors, market).some((url) => url.includes("mgmotor.co.in") && url.includes("baas-faq")));
+});
+
+test("uses the requested market currency for Australian and UK comparisons", () => {
+  assert.equal(inferResearchMarket("Compare EVs in Australia", ["BYD", "Tesla"]).currency, "AUD");
+  assert.equal(inferResearchMarket("Compare EVs in the UK", ["BYD", "Tesla"]).currency, "GBP");
 });
 
 test("parses should-I-get choice wording with novated lease and budget", () => {
@@ -192,6 +203,15 @@ test("keeps every distinct reference while removing tracking duplicates", () => 
     "https://example.com/rates",
     "https://example.com/rates?term=2-years",
     "https://other.example/products",
+  ]);
+});
+
+test("rejects explanatory text disguised as an evidence URL", () => {
+  assert.deepEqual(dedupeReferenceUrls([
+    "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
+    "https://www.mgmotor.co.in/windsor-ev%20(information%20limited%20as%20of%202026-09)",
+  ]), [
+    "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
   ]);
 });
 
