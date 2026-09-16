@@ -975,9 +975,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               marketResearchInstructions,
               researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
               outputInstructions: isProviderLevelCreditCardDiscovery
-                ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
+                ? `Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
                 : isProviderLevelHomeLoanDiscovery
-                  ? "Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current Australian investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, LMI or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, LVR, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable."
+                  ? `Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current ${researchMarket.country} investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, mortgage-insurance or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, loan-to-value ratio, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable.`
                   : "Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.",
             }),
           },
@@ -1048,12 +1048,16 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             type: "web_search",
             search_context_size: "high",
             external_web_access: true,
-            user_location: { type: "approximate" as const, country: "AU", timezone: "Australia/Sydney" },
+            user_location: {
+              type: "approximate" as const,
+              country: researchMarket.countryCode,
+              timezone: researchMarket.timezone,
+            },
           }],
           input: [
             {
               role: "system",
-              content: "You are correcting an evidence-incomplete Australian credit-card comparison. Search every named issuer's official Australian card pages. Return only one valid JSON object. Do not preserve unsupported values or winners.",
+              content: `You are correcting an evidence-incomplete ${researchMarket.country} credit-card comparison. Search every named issuer's official local card pages. Return only one valid JSON object. Do not preserve unsupported values or winners.`,
             },
             {
               role: "user",
@@ -1063,7 +1067,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 missingOfficialSourcesFor: missingSources,
                 existingDraft: parsed,
                 shape: analysisOutputShape(input.vendors),
-                instructions: "Return a complete replacement analysis plus criteriaMet, unmetCriteriaReason, and sources. Include at least one exact official product URL for every named provider. Every pricing and feature value must be supported by those sources; use 'Not publicly available' rather than inference. Determine row winners from the displayed values, use ties where values are equal, and do not default wins to the first provider. If NPS is requested, report it only from a comparable cited survey with publisher, year, population, and methodology; otherwise state that comparable provider NPS is unavailable.",
+                instructions: `${marketResearchInstructions} Return a complete replacement analysis plus criteriaMet, unmetCriteriaReason, and sources. Include at least one exact official product URL for every named provider. Every pricing and feature value must be supported by those sources; use 'Not publicly available' rather than inference. Determine row winners from the displayed values, use ties where values are equal, and do not default wins to the first provider. If NPS is requested, report it only from a comparable cited survey with publisher, year, population, and methodology; otherwise state that comparable provider NPS is unavailable.`,
               }),
             },
           ],
@@ -1095,12 +1099,16 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             type: "web_search",
             search_context_size: "high",
             external_web_access: true,
-            user_location: { type: "approximate" as const, country: "AU", timezone: "Australia/Sydney" },
+            user_location: {
+              type: "approximate" as const,
+              country: researchMarket.countryCode,
+              timezone: researchMarket.timezone,
+            },
           }],
           input: [
             {
               role: "system",
-              content: "You are correcting an incomplete Australian investor home-loan comparison. Search current official lender product and rate pages for every named bank. Return only one complete valid JSON object matching the supplied shape. Do not preserve unsupported rates, assumptions, or winners.",
+              content: `You are correcting an incomplete ${researchMarket.country} investor home-loan comparison. Search current official local lender product and rate pages for every named bank. Return only one complete valid JSON object matching the supplied shape. Do not preserve unsupported rates, assumptions, or winners.`,
             },
             {
               role: "user",
@@ -1110,7 +1118,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 missingOfficialSourcesFor: missingHomeLoanSources,
                 existingDraft: parsed,
                 shape: analysisOutputShape(input.vendors, true),
-                instructions: "Return a complete replacement analysis plus criteriaMet, unmetCriteriaReason, and sources. Include at least one exact official Australian investor home-loan or rate URL for every named bank. Pricing must contain separate rows clearly labelled for variable rate and comparison rate, and for current fixed rates by term. Also compare revert-rate and break-cost risk, fees, offset/redraw, investor eligibility, LVR/LMI constraints, and repayments or total-cost implications for the stated loan amount. Never imply an advertised rate is a personalised quote; mark unavailable inputs and conditional rates explicitly. Include one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' and explain the rationale and trade-offs. Determine winners from displayed comparable values, use ties when appropriate, use 0–100 scores, preserve weights, and complete SWOT, PESTLE, SOAR, VRIO, switch conditions, and market context.",
+                instructions: `${marketResearchInstructions} Return a complete replacement analysis plus criteriaMet, unmetCriteriaReason, and sources. Include at least one exact official investor home-loan or rate URL for every named bank in the inferred market. Pricing must contain separate rows clearly labelled for variable rate and comparison rate, and for current fixed rates by term. Also compare revert-rate and break-cost risk, fees, offset/redraw, investor eligibility, LVR/LMI constraints, and repayments or total-cost implications for the stated loan amount. Never imply an advertised rate is a personalised quote; mark unavailable inputs and conditional rates explicitly. Include one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' and explain the rationale and trade-offs. Determine winners from displayed comparable values, use ties when appropriate, use 0–100 scores, preserve weights, and complete SWOT, PESTLE, SOAR, VRIO, switch conditions, and market context.`,
               }),
             },
           ],
@@ -1154,7 +1162,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       }
       if (!normalized.insights.some((insight) => insight.startsWith("Alternative outside comparison —"))) {
         normalized.insights.push(
-          "Alternative outside comparison — Other Australian low-fee cards: Compare current low-rate and no-annual-fee offers from issuers outside the shortlist; verify fees, eligibility, rewards value, and card acceptance before applying.",
+          `Alternative outside comparison — Other ${researchMarket.country} low-fee cards: Compare current low-rate and no-annual-fee offers from issuers outside the shortlist; verify fees, eligibility, rewards value, and card acceptance before applying.`,
         );
       }
     }
