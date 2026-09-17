@@ -10,3 +10,4 @@
 - [Comparison grammar precedence](comparison-grammar-precedence.md) — explicit pairs and genuine lists need separate precedence so objective phrases never become vendor labels.
 - [Visitor analytics privacy](visitor-analytics-privacy.md) — count guest and authenticated browser sessions with keyed pseudonyms and 90-day inactivity retention.
 - [Open-ended option discovery](open-ended-option-discovery.md) — select concrete products before full analysis; large output templates can preserve misleading parser labels.
+- [GitHub connector blob uploads](github-connector-blob-uploads.md) — upload Git Data blobs serially with base64; concurrent raw text can trigger proxy filtering.
