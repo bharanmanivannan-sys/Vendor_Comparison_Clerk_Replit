@@ -221,11 +221,20 @@ export function parsePrompt(prompt: string) {
   const before = normalized.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? normalized;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];
+  const hasExplicitVendorList = listedVendors.length >= 2
+    && (Boolean(chosen) || Boolean(explicitList?.includes(",")));
+  const parsedPairVendors = [firstVendor, secondVendor]
+    .filter(Boolean)
+    .map((value) => cleanVendorName(value as string));
   const vendors = Array.from(
     new Set((
-      betweenPair || listedVendors.length < 2
-        ? [firstVendor, secondVendor].filter(Boolean).map((value) => cleanVendorName(value as string))
-        : listedVendors
+      betweenPair
+        ? parsedPairVendors
+        : hasExplicitVendorList
+          ? listedVendors
+          : pair
+            ? parsedPairVendors
+            : listedVendors
     )),
   )
     .filter((value) => value && !isPlaceholderVendor(value));

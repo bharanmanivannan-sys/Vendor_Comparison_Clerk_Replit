@@ -187,6 +187,27 @@ test("interprets vague which-is-better prompts as a comparison", () => {
   assert.equal(parsed.context.segment, "Product or service comparison");
 });
 
+test("does not replace compared vendors with objective phrases introduced by across", () => {
+  const parsed = parsePrompt(
+    "Compare Salesforce Financial Services Cloud and Microsoft Dynamics 365 across my product and services for the consumer market.",
+  );
+
+  assert.deepEqual(parsed.vendors, [
+    "Salesforce Financial Services Cloud",
+    "Microsoft Dynamics 365",
+  ]);
+  assert.equal(parsed.context.valid, true);
+});
+
+test("continues to parse genuine provider lists introduced by from", () => {
+  const parsed = parsePrompt(
+    "Recommend rewards credit cards from ANZ and Westpac for Australian customers.",
+  );
+
+  assert.deepEqual(parsed.vendors, ["ANZ", "Westpac"]);
+  assert.equal(parsed.context.valid, true);
+});
+
 test("requires separate variable and fixed home-loan rates plus an alternative", () => {
   assert.equal(hasHomeLoanResearchCoverage({
     pricing: [{ dimension: "Interest rates", values: {}, winner: "Not established" }],
