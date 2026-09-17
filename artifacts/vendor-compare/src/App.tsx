@@ -354,6 +354,38 @@ async function downloadComparisonPdf(comparison: any) {
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
 }
+
+function downloadComparisonJson(comparison: any) {
+  const evidenceRecords = (comparison.vendorScores || []).flatMap((vendor: any) => (
+    (vendor.weightedScores || []).flatMap((criterion: any) => (
+      (criterion.evidence || []).map((evidence: any) => ({
+        comparisonId: comparison.id ?? null,
+        vendor: vendor.vendor,
+        criterion: criterion.criterion,
+        criterionScore: criterion.score,
+        criterionWeight: criterion.weight,
+        ...evidence,
+      }))
+    ))
+  ));
+  const dataset = {
+    datasetVersion: '1.0',
+    exportedAt: new Date().toISOString(),
+    description: 'Complete Vendor Compare report and source-linked score evidence for independent validation.',
+    comparison,
+    evidenceRecords,
+    sourceUrls: comparison.urls || [],
+  };
+  const blob = new Blob([JSON.stringify(dataset, null, 2)], { type: 'application/json' });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.download = `${String(comparison.category || 'vendor-comparison').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-evidence-dataset.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
+}
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 function stripBase(path: string): string {
@@ -978,6 +1010,7 @@ function LegacyHistoryPage() {
 function AnalysisPage() {
   const [location, setLocation] = useLocation();
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
+  const [jsonStatus, setJsonStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
   const guest = location === '/guest/result';
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -1006,6 +1039,25 @@ function AnalysisPage() {
       setPdfStatus('failed');
     }
   };
+  const exportJson = () => {
+    if (jsonStatus === 'exporting') return;
+    setJsonStatus('exporting');
+    try {
+      downloadComparisonJson(comparison);
+      setJsonStatus('idle');
+    } catch (error) {
+      console.error('Evidence JSON export failed', error);
+      setJsonStatus('failed');
+    }
+  };
+  const evidenceRecords = (comparison.vendorScores || []).flatMap((vendor: any) => (
+    (vendor.weightedScores || []).flatMap((criterion: any) => criterion.evidence || [])
+  ));
+  const verifiedEvidenceCount = evidenceRecords.filter((evidence: any) => evidence.evidenceKind !== 'unverified' && evidence.sourceUrl).length;
+  const sourceCount = new Set(evidenceRecords.map((evidence: any) => evidence.sourceUrl).filter(Boolean)).size;
+  const averageConfidence = evidenceRecords.length
+    ? Math.round(evidenceRecords.reduce((total: number, evidence: any) => total + Number(evidence.confidence || 0), 0) / evidenceRecords.length)
+    : 0;
   const strategicEntries = Object.entries(comparison.swot || {}) as [string, string[]][];
   const swotEntries = strategicEntries.filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —'));
   const pestleEntries = strategicEntries.filter(([key]) => key.startsWith('PESTLE —')).map(([key, values]) => [key.replace('PESTLE — ', ''), values] as [string, string[]]);
@@ -1022,7 +1074,29 @@ function AnalysisPage() {
     setLocation(guest ? '/guest' : '/user-portal');
   };
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-8 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]"><p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">Recommended</p><div className="mt-5 flex items-center justify-between gap-4"><div><p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{comparison.recommendation}</p><p className="mt-2 text-xs text-[#a8b0c2]">Best overall fit</p></div><ScoreRing score={Math.round(comparison.score)} /></div><div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{comparison.recommendationReason}</div></div></div>
-       <ExecutiveDecisionBrief comparison={comparison} />
+        <ExecutiveDecisionBrief comparison={comparison} />
+        <section className="mt-6 rounded-2xl border border-[#9ebbb0] bg-[#dcefe9] p-5 sm:p-6" data-testid="tile-evidence-dataset">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex gap-4">
+              <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#0f766e] text-[#f8f4e8]"><FileSearch size={19} /></div>
+              <div>
+                <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Evidence dataset</p>
+                <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Validate every score.</h2>
+                <p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">Download the complete report plus the source-linked claims, raw metrics, confidence, normalization method, canonical weights, and weighted contributions used by the model.</p>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl border border-[#b9d3c7] bg-[#f8f4e8] px-3 py-2" data-testid="text-evidence-record-count"><p className="mono text-[9px] uppercase tracking-[.1em] text-[#7b817e]">Claims</p><p className="mt-1 text-sm font-bold text-[#202840]">{evidenceRecords.length}</p></div>
+                <div className="rounded-xl border border-[#b9d3c7] bg-[#f8f4e8] px-3 py-2" data-testid="text-evidence-source-count"><p className="mono text-[9px] uppercase tracking-[.1em] text-[#7b817e]">Sources</p><p className="mt-1 text-sm font-bold text-[#202840]">{sourceCount}</p></div>
+                <div className="rounded-xl border border-[#b9d3c7] bg-[#f8f4e8] px-3 py-2" data-testid="text-evidence-confidence"><p className="mono text-[9px] uppercase tracking-[.1em] text-[#7b817e]">Confidence</p><p className="mt-1 text-sm font-bold text-[#202840]">{averageConfidence}%</p></div>
+              </div>
+              <button type="button" onClick={exportJson} disabled={jsonStatus === 'exporting'} className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-[#202840] px-4 py-3 text-xs font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-evidence-json">{jsonStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={15} /> : <Download size={15} />}{jsonStatus === 'exporting' ? 'Preparing JSON' : 'Download JSON'}</button>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[#b9d3c7] pt-4 text-[11px] text-[#566074]" data-testid="text-evidence-dataset-summary"><span><strong className="text-[#202840]">{verifiedEvidenceCount}</strong> verified claims</span><span>JSON includes the full comparison</span><span>Suitable for independent model validation</span></div>
+          {jsonStatus === 'failed' && <p className="mt-3 text-xs font-bold text-[#b94d45]" role="alert" data-testid="status-evidence-json-error">The JSON export could not be generated. Please try again.</p>}
+        </section>
        <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
         <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
      <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor signal</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono text-xs font-bold text-[#0f766e]">{vendor.score}/100</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${vendor.score}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
