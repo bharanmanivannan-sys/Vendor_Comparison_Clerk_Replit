@@ -48,6 +48,12 @@ export const GetDashboardSummaryResponse = zod.object({
 
 
 /**
+ * @summary Record one pseudonymized browser session for traction analytics
+ */
+export const RecordVisitorSessionResponse = zod.void()
+
+
+/**
  * @summary List the signed-in user's comparison history
  */
 export const ListComparisonsResponseItem = zod.object({

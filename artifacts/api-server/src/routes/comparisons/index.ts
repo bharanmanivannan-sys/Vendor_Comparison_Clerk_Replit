@@ -18,6 +18,7 @@ import {
 import { comparisonsTable, db } from "@workspace/db";
 import { buildAnalysis, parsePrompt, validateComparisonContext, type AnalysisPayload } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
+import { recordVisitorSession } from "../../services/visitorSessions";
 
 const router: IRouter = Router();
 
@@ -37,6 +38,12 @@ const JOB_TTL_MS = 15 * 60 * 1000;
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: message, code, message });
 }
+
+router.post("/visitor-session", async (req: Request, res: Response): Promise<void> => {
+  const accessMode = getAuth(req).userId ? "authenticated" : "guest";
+  await recordVisitorSession(req, res, accessMode);
+  res.status(204).end();
+});
 
 function requestOwner(req: Request): string {
   return req.ip || req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || "unknown";

@@ -21,6 +21,8 @@ tags:
     description: Health operations
   - name: comparisons
     description: Vendor and product comparison operations
+  - name: analytics
+    description: Privacy-preserving traction analytics
 paths:
   /healthz:
     get:
@@ -53,6 +55,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /visitor-session:
+    post:
+      operationId: recordVisitorSession
+      tags: [analytics]
+      summary: Record one pseudonymized browser session for traction analytics
+      responses:
+        "204":
+          description: Session recorded
   /comparisons:
     get:
       operationId: listComparisons

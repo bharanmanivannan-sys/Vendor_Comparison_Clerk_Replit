@@ -245,6 +245,80 @@ export function useGetDashboardSummary<TData = Awaited<ReturnType<typeof getDash
 
 
 
+export const getRecordVisitorSessionUrl = () => {
+
+
+
+
+  return `/api/visitor-session`
+}
+
+/**
+ * @summary Record one pseudonymized browser session for traction analytics
+ */
+export const recordVisitorSession = async ( options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getRecordVisitorSessionUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getRecordVisitorSessionMutationKey = () => ['recordVisitorSession'] as const;
+
+export const getRecordVisitorSessionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordVisitorSession>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof recordVisitorSession>>, TError,void, TContext> => {
+
+const mutationKey = getRecordVisitorSessionMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordVisitorSession>>, void> = () => {
+
+
+          return  recordVisitorSession(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RecordVisitorSessionMutationResult = NonNullable<Awaited<ReturnType<typeof recordVisitorSession>>>
+
+    export type RecordVisitorSessionMutationError = ErrorType<unknown>
+
+
+    /**
+ * @summary Record one pseudonymized browser session for traction analytics
+ */
+export const useRecordVisitorSession = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordVisitorSession>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof recordVisitorSession>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getRecordVisitorSessionMutationOptions(options));
+    }
+
 export const getListComparisonsUrl = () => {
 
 

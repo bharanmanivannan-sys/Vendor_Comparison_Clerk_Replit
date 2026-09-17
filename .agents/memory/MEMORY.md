@@ -8,3 +8,4 @@
 - [Free-beta publishing](free-beta-publishing.md) — production must not depend on a payment connector while access is free; billing can return later as a separate change.
 - [Market-aware research](market-aware-research.md) — prioritize official local evidence, localize currency, and limit non-official fallback evidence to the trailing year.
 - [Comparison grammar precedence](comparison-grammar-precedence.md) — explicit pairs and genuine lists need separate precedence so objective phrases never become vendor labels.
+- [Visitor analytics privacy](visitor-analytics-privacy.md) — count guest and authenticated browser sessions with keyed pseudonyms and 90-day inactivity retention.

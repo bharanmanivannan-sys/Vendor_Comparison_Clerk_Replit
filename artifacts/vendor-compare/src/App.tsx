@@ -17,6 +17,7 @@ import {
   getGetDashboardSummaryQueryKey,
   getListComparisonsQueryKey,
   customFetch,
+  recordVisitorSession,
   setAuthTokenGetter,
 } from '@workspace/api-client-react';
 import type { Comparison, Tenant } from '@workspace/api-client-react';
@@ -1266,7 +1267,7 @@ function ClerkPortalRoute() {
 }
 
 function AuthTokenBridge() {
-  const { getToken, isSignedIn } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
   useEffect(() => {
     setAuthTokenGetter(isSignedIn ? () => getToken() : null);
     const refreshAfterInactivity = () => {
@@ -1283,6 +1284,10 @@ function AuthTokenBridge() {
       setAuthTokenGetter(null);
     };
   }, [getToken, isSignedIn]);
+  useEffect(() => {
+    if (!isLoaded) return;
+    void recordVisitorSession().catch(() => undefined);
+  }, [getToken, isLoaded, isSignedIn]);
   return null;
 }
 
