@@ -13,6 +13,7 @@ try {
       "src/services/idempotency.test.ts",
       "src/services/visitorSessions.test.ts",
       "src/routes/commercial.test.ts",
+      "src/routes/comparisons.test.ts",
       "src/routes/stripeIsolation.test.ts",
       "src/services/apiKeys.test.ts",
     ],
@@ -27,7 +28,7 @@ try {
   });
   const result = spawnSync(
     process.execPath,
-    ["--test", join(outdir, "app.test.js"), join(outdir, "lib/analysis.test.js"), join(outdir, "services/apiKeys.test.js"), join(outdir, "services/idempotency.test.js"), join(outdir, "services/visitorSessions.test.js"), join(outdir, "routes/commercial.test.js"), join(outdir, "routes/stripeIsolation.test.js")],
+    ["--test", join(outdir, "app.test.js"), join(outdir, "lib/analysis.test.js"), join(outdir, "services/apiKeys.test.js"), join(outdir, "services/idempotency.test.js"), join(outdir, "services/visitorSessions.test.js"), join(outdir, "routes/commercial.test.js"), join(outdir, "routes/comparisons.test.js"), join(outdir, "routes/stripeIsolation.test.js")],
     { stdio: "inherit", env: { ...process.env, NODE_ENV: "production" } },
   );
   process.exitCode = result.status ?? 1;

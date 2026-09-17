@@ -128,7 +128,9 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.a
     return;
   }
   const body = ExternalCreateComparisonBody.safeParse(req.body);
-  const validated = body.success ? validateComparisonInput(body.data) : { error: "Invalid comparison input." as const };
+  const validated = body.success
+    ? await validateComparisonInput(body.data)
+    : { error: "Invalid comparison input." as const };
   if ("error" in validated) {
     await failIdempotency(key, idempotencyKey, ownershipToken);
     error(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");

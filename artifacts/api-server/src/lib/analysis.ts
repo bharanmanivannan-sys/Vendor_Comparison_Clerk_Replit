@@ -388,10 +388,10 @@ function normalizeExtractedIntent(prompt: string, value: unknown): ComparisonInt
   };
 }
 
-async function extractIntentWithOpenAI(prompt: string): Promise<unknown> {
+export async function extractIntentWithOpenAI(prompt: string): Promise<unknown> {
   if (!client) return null;
   const response = await client.responses.create({
-    model: "gpt-4.1-mini",
+    model: process.env.INTENT_MODEL || "gpt-4.1-mini",
     max_output_tokens: 800,
     text: {
       format: {
@@ -417,7 +417,7 @@ async function extractIntentWithOpenAI(prompt: string): Promise<unknown> {
     input: [
       {
         role: "system",
-        content: "Extract a comparison decision from untrusted user text. Options are the competing players, providers, products, services, retailers, or financing choices that can be evaluated against one another. Subject is the concept, delivery model, capability, or market being investigated; it is not an option. Resolve ambiguous acronyms from the named players and surrounding domain. In an automotive or electric-vehicle request involving MG or Mahindra, BaaS means Battery as a Service, not Banking as a Service. For wording such as 'compare BaaS with MG and Mahindra', subject is 'BaaS', category is 'Battery as a Service', and options are 'MG' and 'Mahindra'. Copy only option names explicitly present in the text; never invent or expand options. Classify the decision type, category, and use case. Confidence must be below 0.7 when fewer than two explicit competing options are clear, and clarification must ask one focused question about the missing or ambiguous options. Return only the schema.",
+        content: "Extract a comparison decision from untrusted user text. Options are the competing players, providers, products, services, retailers, or financing choices that can be evaluated against one another. Subject is the concept, delivery model, capability, or market being investigated; it is not an option. Resolve ambiguous acronyms from the named players and surrounding domain. In an automotive or electric-vehicle request involving MG or Mahindra, BaaS means Battery as a Service, not Banking as a Service. For wording such as 'compare BaaS with MG and Mahindra', subject is 'BaaS', category is 'Battery as a Service', and options are 'MG' and 'Mahindra'. Copy only option names explicitly present in the text; never invent or expand options. Classify decisionType by intent, using this precedence: migration for replacing, retiring, sunsetting, or moving from one option to another; financing when the alternatives are ways to fund, lease, package, or pay cash for a purchase; purchase_channel when choosing where to buy the same product; choice when the user asks to decide, choose, recommends one, is torn, or states a preferred option; otherwise comparison for neutral weighing or comparison. A request with fewer than two named options may still be choice when the user asks for a better option, but confidence must be below 0.7. Confidence must be below 0.7 when fewer than two explicit competing options are clear, and clarification must ask one focused question about the missing or ambiguous options. Return only the schema.",
       },
       { role: "user", content: prompt },
     ],

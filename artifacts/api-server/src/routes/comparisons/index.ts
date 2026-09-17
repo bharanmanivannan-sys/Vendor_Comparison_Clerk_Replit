@@ -154,7 +154,10 @@ function allowGuestRequest(req: Request, res: Response): boolean {
   return true;
 }
 
-export function validateComparisonInput(body: unknown) {
+export async function validateComparisonInput(
+  body: unknown,
+  parseWithIntent = parsePromptWithIntent,
+) {
   if (
     body && typeof body === "object" && "vendors" in body
     && Array.isArray(body.vendors) && body.vendors.length > 5
@@ -170,13 +173,18 @@ export function validateComparisonInput(body: unknown) {
   if (!validateHttpUrls(urls) || (input.vendors ?? []).some((vendor) => !isSafeUserInput(vendor))) {
     return { error: "Use valid HTTPS or HTTP URLs and plain vendor names." } as const;
   }
-  const parsedPrompt = parsePrompt(input.prompt);
+  const hasProvidedVendors = (input.vendors?.length ?? 0) >= 2;
+  const parsedPrompt = hasProvidedVendors
+    ? parsePrompt(input.prompt)
+    : await parseWithIntent(input.prompt);
   if (parsedPrompt.vendors.length > 5) {
     return { error: "You can compare up to 5 products or vendors at a time. Remove one or more options and try again." } as const;
   }
-  const vendors = (input.vendors?.length ?? 0) >= 2 ? input.vendors as string[] : parsedPrompt.vendors;
+  const vendors = hasProvidedVendors ? input.vendors as string[] : parsedPrompt.vendors;
   const criteria = input.criteria?.length ? input.criteria : parsedPrompt.criteria;
-  const context = validateComparisonContext(input.prompt, vendors);
+  const context = hasProvidedVendors
+    ? validateComparisonContext(input.prompt, vendors)
+    : parsedPrompt.context;
   if (!context.valid) return { error: context.message } as const;
   return { input, vendors, criteria, context } as const;
 }
@@ -267,9 +275,9 @@ router.post("/guest/comparisons/parse", async (req: Request, res): Promise<void>
   res.json(ParseGuestComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
 });
 
-router.post("/guest/comparison-jobs", (req: Request, res): void => {
+router.post("/guest/comparison-jobs", async (req: Request, res): Promise<void> => {
   if (!allowGuestRequest(req, res)) return;
-  const validated = validateComparisonInput(req.body);
+  const validated = await validateComparisonInput(req.body);
   if ("error" in validated) {
     sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
     return;
@@ -290,7 +298,7 @@ router.get("/guest/comparison-jobs/:id", (req: Request, res): void => {
 
 router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   if (!allowGuestRequest(req, res)) return;
-  const validated = validateComparisonInput(req.body);
+  const validated = await validateComparisonInput(req.body);
   if ("error" in validated) {
     sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
     return;
@@ -327,8 +335,8 @@ router.post("/comparisons/parse", requireAuth, async (req: AuthedRequest, res): 
   res.json(ParseComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
 });
 
-router.post("/comparison-jobs", requireAuth, (req: AuthedRequest, res): void => {
-  const validated = validateComparisonInput(req.body);
+router.post("/comparison-jobs", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
+  const validated = await validateComparisonInput(req.body);
   if ("error" in validated) {
     sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
     return;
@@ -349,7 +357,7 @@ router.get("/comparison-jobs/:id", requireAuth, (req: AuthedRequest, res): void 
 });
 
 router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
-  const validated = validateComparisonInput(req.body);
+  const validated = await validateComparisonInput(req.body);
   if ("error" in validated) {
     sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
     return;
