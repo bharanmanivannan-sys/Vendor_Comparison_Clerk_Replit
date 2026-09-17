@@ -83,6 +83,7 @@ function categoryFor(prompt: string): string {
   if (/\b(?:credit cards?|card products?|rewards cards?)\b/.test(normalized)) return "Credit cards";
   if (/\b(?:car|auto|vehicle|home|travel|health)?\s*insurance\b/.test(normalized)) return "Insurance";
   if (/\b(?:home loans?|mortgages?|housing loans?)\b/.test(normalized)) return "Home loans";
+  if (/\b(?:baas|battery[- ]as[- ]a[- ]service)\b/.test(normalized)) return "Battery as a Service";
   if (/\b(?:electric car|electric vehicle|evs?|battery electric|tesla|byd)\b/.test(normalized)) return "Electric vehicles";
   if (/(crm|sales|customer relationship)/.test(normalized)) return "CRM";
   if (/(support|help desk|shared inbox|customer service)/.test(normalized)) return "Customer support";
@@ -259,6 +260,9 @@ export function parsePrompt(prompt: string) {
   const withPair = normalized.match(
     /\bcompare\s+([^?.!]+?)\s+with\s+(.+?)(?=\s+for\s+(?:my|our|a|an|the)\b|[?.!,]|$)/i,
   );
+  const subjectWithPair = normalized.match(
+    /\bcompare\s+(?:baas|battery[- ]as[- ]a[- ]service)\s+with\s+(.+?)\s+(?:&|and)\s+(.+?)(?=[?.!,]|$)/i,
+  );
   const purchaseChannelPair = normalized.match(
     /\b(?:buy|buying|purchase|purchasing)\s+(?:an?\s+)?(.+?)\s+from\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
@@ -279,7 +283,7 @@ export function parsePrompt(prompt: string) {
   );
   const pair = purchaseChannelPair
     ? [purchaseChannelPair[0], purchaseChannelPair[2], purchaseChannelPair[3]]
-    : migrationPair ?? betweenPair ?? withPair ?? genericPair ?? choicePair ?? whichIsBetterPair ?? directPair;
+    : migrationPair ?? betweenPair ?? subjectWithPair ?? withPair ?? genericPair ?? choicePair ?? whichIsBetterPair ?? directPair;
   const before = normalized.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? normalized;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];
@@ -503,6 +507,7 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
     { label: "Credit cards", pattern: /\b(?:credit cards?|card products?|balance transfers?|rewards cards?)\b/ },
     { label: "Insurance", pattern: /\b(?:car|auto|vehicle|home|travel|health)?\s*insurance\b/ },
     { label: "Home loans", pattern: /\b(?:home loans?|mortgages?|housing loans?|owner.?occupier loans?)\b/ },
+    { label: "Battery as a Service", pattern: /\b(?:baas|battery[- ]as[- ]a[- ]service)\b/ },
     {
       label: "Electric vehicles",
       pattern: hasVehicleBrandPair && !hasBroadMarketInsightIntent
@@ -527,7 +532,7 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
   const namesAustralianInsurer = /\b(?:youi|allianz|aami|nrma|qbe|budget direct|toyota insurance)\b/.test(normalized);
   const namesAustralianBank = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz)\b/.test(normalized);
   const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank)\b/i;
-  const automotiveBrands = /\b(?:tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes)\b/i;
+  const automotiveBrands = /\b(?:tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra)\b/i;
   const technologyBrands = /\b(?:apple|hp|microsoft|google|samsung|dell|lenovo|asus|acer)\b/i;
   const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon)\b/i;
   const investmentBrands = /\b(?:vanguard|betashares|ishares)\b/i;

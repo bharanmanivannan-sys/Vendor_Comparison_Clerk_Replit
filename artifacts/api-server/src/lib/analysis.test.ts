@@ -170,6 +170,21 @@ test("parses EV battery-service comparisons with trailing punctuation", () => {
   assert.ok(officialMarketSourcesFor(parsed.prompt, parsed.vendors, market).some((url) => url.includes("mgmotor.co.in") && url.includes("baas-faq")));
 });
 
+test("fallback parsing treats BaaS as the subject and splits MG and Mahindra", async () => {
+  const prompt = "Can you help me compare BaaS with MG & Mahindra. What exactly this means? Who are the players?";
+  const deterministic = parsePrompt(prompt);
+  const fallback = await parsePromptWithIntent(prompt, async () => {
+    throw new Error("Intent model unavailable");
+  });
+
+  assert.deepEqual(deterministic.vendors, ["MG", "Mahindra"]);
+  assert.equal(deterministic.context.segment, "Battery as a Service");
+  assert.deepEqual(fallback.vendors, ["MG", "Mahindra"]);
+  assert.equal(fallback.intent.subject, "Battery as a Service");
+  assert.equal(fallback.context.segment, "Battery as a Service");
+  assert.equal(fallback.context.valid, true);
+});
+
 test("uses the requested market currency for Australian and UK comparisons", () => {
   assert.equal(inferResearchMarket("Compare EVs in Australia", ["BYD", "Tesla"]).currency, "AUD");
   assert.equal(inferResearchMarket("Compare EVs in the UK", ["BYD", "Tesla"]).currency, "GBP");
