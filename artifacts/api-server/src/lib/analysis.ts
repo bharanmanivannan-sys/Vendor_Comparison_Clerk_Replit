@@ -318,7 +318,26 @@ export function isObjectivePhraseVendor(value: string): boolean {
   return isPlaceholderVendor(value)
     || /^(?:across|among|within|for)\b/.test(normalized)
     || /\b(?:my|our|your|their)\s+(?:products?|services?|business|customers?|market|team|organisation|organization)\b/.test(normalized)
-    || /^(?:products?|services?|features?|capabilities?|requirements?|objectives?|use cases?)\s+(?:for|across|within|in|to|that|which)\b/.test(normalized);
+    || /^(?:products?|services?|features?|capabilities?|requirements?|objectives?|use cases?)\s+(?:for|across|within|in|to|that|which)\b/.test(normalized)
+    || /\b(?:legacy systems?|modern platforms?|anything exists?|would help|could help)\b/.test(normalized)
+    || /^(?:do|help|what|which|how|if|whether)\b/.test(normalized);
+}
+
+export function selectRecommendationLabel(
+  suppliedRecommendation: string,
+  recommendedVendor: string,
+  vendors: string[],
+  preserveSpecificRecommendation = false,
+): string {
+  const exactVendor = vendors.find(
+    (vendor) => vendor.toLowerCase() === suppliedRecommendation.trim().toLowerCase(),
+  );
+  if (!preserveSpecificRecommendation) return recommendedVendor;
+  if (exactVendor) return exactVendor;
+  return suppliedRecommendation.trim()
+    && !isObjectivePhraseVendor(suppliedRecommendation)
+    ? suppliedRecommendation.trim()
+    : recommendedVendor;
 }
 
 export function resolveComparisonVendors(
@@ -1049,9 +1068,12 @@ function normalizeAnalysis(
     serviceProductMap: Array.isArray(normalized.serviceProductMap) ? normalized.serviceProductMap : fallback.serviceProductMap,
     migrationSequence,
     decisionGovernance,
-    recommendation: preserveSpecificRecommendation && suppliedRecommendation
-      ? suppliedRecommendation
-      : recommendedVendor,
+    recommendation: selectRecommendationLabel(
+      suppliedRecommendation,
+      recommendedVendor,
+      vendors,
+      preserveSpecificRecommendation,
+    ),
     score: rankedScores[0]?.score ?? fallback.score,
     status: "complete",
   };

@@ -5,6 +5,7 @@ import {
   dedupeReferenceUrls,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
+  isObjectivePhraseVendor,
   missingCreditCardSourceVendors,
   normalizeDecisionGovernance,
   normalizeEvidenceRecords,
@@ -18,6 +19,7 @@ import {
   parsePrompt,
   parsePromptWithIntent,
   resolveComparisonVendors,
+  selectRecommendationLabel,
   validateFinalEvidenceUrls,
   validateComparisonContext,
 } from "./analysis";
@@ -662,6 +664,52 @@ test("uses researched product names when parsed vendors are objective phrases", 
     "Salesforce Financial Services Cloud",
     "Microsoft Dynamics 365",
   ]);
+});
+
+test("treats open-ended legacy migration fragments as discovery objectives", async () => {
+  const prompt = "I'm looking to migrate my Cards Management System and Personal loans from Vision Plus legacy system. What are the modern platforms that would help me to do that if anything exists? How do I integrate with my existing CRM, loyalty solutions and scheme providers such as VISA and Mastercard";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Vision Plus legacy system", "do that if anything exists"],
+      decisionType: "migration",
+      category: "Cards and lending platforms",
+      useCase: "Replace a legacy cards and personal-loans platform",
+      confidence: 0.91,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.vendors, [
+    "Vision Plus legacy system",
+    "do that if anything exists",
+  ]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[0]), true);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
+  assert.deepEqual(resolveComparisonVendors(parsed.vendors, [
+    { vendor: "Kobble" },
+    { vendor: "Change Financial" },
+  ]), ["Kobble", "Change Financial"]);
+});
+
+test("never preserves an objective phrase as the recommendation label", () => {
+  assert.equal(
+    selectRecommendationLabel(
+      "Vision Plus legacy system. What are the modern platforms that would help me",
+      "Kobble",
+      ["Kobble", "Change Financial"],
+      true,
+    ),
+    "Kobble",
+  );
+  assert.equal(
+    selectRecommendationLabel("kobble", "Change Financial", ["Kobble", "Change Financial"], true),
+    "Kobble",
+  );
+  assert.equal(
+    selectRecommendationLabel("Kobble", "Change Financial", ["Kobble", "Change Financial"]),
+    "Change Financial",
+  );
 });
 
 test("keeps explicit requested vendors and excludes alternatives from ranked options", () => {
