@@ -7,6 +7,7 @@ import {
   inferResearchMarket,
   missingCreditCardSourceVendors,
   normalizeDecisionGovernance,
+  normalizeEvidenceRecords,
   normalizeLensWinner,
   normalizeMarketPositionEvidence,
   normalizeProviderRole,
@@ -20,6 +21,7 @@ import {
   validateFinalEvidenceUrls,
   validateComparisonContext,
 } from "./analysis";
+import { flattenComparisonEvidence } from "../services/comparisonPersistence";
 import { checkEvidenceUrls } from "./security";
 
 const extracted = (value: object) => async () => value;
@@ -60,6 +62,175 @@ test("normalizes market-position evidence arrays into the string response contra
     "https://example.com/market-share; https://example.com/share-value",
   );
   assert.equal(typeof evidence, "string");
+});
+
+test("normalizes direct advocacy percentages into deterministic weighted evidence", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://research.example.com/advocacy",
+    exactClaim: "80% of surveyed users would advocate for Product A.",
+    rawMetricValue: 80,
+    rawMetricUnit: "percent",
+    sampleSize: 500,
+    evidenceKind: "quantitative",
+    supportDirection: "supports",
+    confidence: 90,
+    normalizedScore: 12,
+  }], "Customer Advocacy / NPS", 10, ["https://research.example.com/advocacy"]);
+
+  assert.equal(evidence.normalizedScore, 80);
+  assert.equal(evidence.weightedContribution, 8);
+  assert.equal(evidence.sampleSize, 500);
+  assert.equal(evidence.normalizationMethod, "direct_percentage");
+});
+
+test("inverts adverse percentage metrics instead of rewarding higher failure rates", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://research.example.com/reliability",
+    exactClaim: "The measured complaint rate was 20 percent.",
+    rawMetricValue: 20,
+    rawMetricUnit: "percent",
+    evidenceKind: "quantitative",
+    supportDirection: "contradicts",
+    confidence: 85,
+  }], "Quality & Reliability", 20, ["https://research.example.com/reliability"]);
+
+  assert.equal(evidence.normalizedScore, 80);
+  assert.equal(evidence.weightedContribution, 16);
+  assert.equal(evidence.normalizationMethod, "inverse_percentage");
+  assert.equal(evidence.criterionWeight, 20);
+});
+
+test("canonicalizes legacy against direction to contradicts", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://research.example.com/incidents",
+    exactClaim: "Service incidents affected 15 percent of surveyed customers.",
+    rawMetricValue: 15,
+    rawMetricUnit: "percent",
+    evidenceKind: "quantitative",
+    supportDirection: "against",
+    confidence: 80,
+  }], "Quality & Reliability", 20, ["https://research.example.com/incidents"]);
+
+  assert.equal(evidence.supportDirection, "contradicts");
+  assert.equal(evidence.normalizedScore, 85);
+  assert.equal(evidence.normalizationMethod, "inverse_percentage");
+});
+
+test("preserves sourced qualitative sustainability evidence and explicit normalization", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://company.example.com/sustainability-report",
+    sourcePublisher: "Product A",
+    exactClaim: "The audited report documents renewable material sourcing and measured emissions reductions.",
+    evidenceKind: "qualitative",
+    supportDirection: "supports",
+    confidence: 72,
+    normalizedScore: 60,
+    normalizationMethod: "documented_targets_and_measured_progress",
+  }], "Sustainability", 5, ["https://company.example.com/sustainability-report"]);
+
+  assert.equal(evidence.normalizedScore, 60);
+  assert.equal(evidence.weightedContribution, 3);
+  assert.equal(evidence.confidence, 72);
+  assert.equal(evidence.sourcePublisher, "Product A");
+});
+
+test("uses neutral low-confidence evidence when a criterion has no valid source", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://invented.example.com/review",
+    exactClaim: "Unsupported positive review claim.",
+    evidenceKind: "quantitative",
+    confidence: 99,
+    normalizedScore: 95,
+  }], "Quality & Reliability", 20, ["https://allowed.example.com/source"]);
+
+  assert.equal(evidence.evidenceKind, "unverified");
+  assert.equal(evidence.confidence, 0);
+  assert.equal(evidence.normalizedScore, 50);
+  assert.equal(evidence.weightedContribution, 10);
+});
+
+test("materializes normalized score evidence into repository rows", () => {
+  const rows = flattenComparisonEvidence(42, {
+    urls: ["https://research.example.com/advocacy"],
+    vendorScores: [{
+      vendor: "Product A",
+      score: 80,
+      color: "#000000",
+      verdict: "Strong",
+      weightedScores: [{
+        criterion: "Customer Advocacy / NPS",
+        weight: 10,
+        score: 80,
+        rationale: "Supported by the cited survey.",
+        evidence: [{
+          sourceUrl: "https://research.example.com/advocacy",
+          exactClaim: "80% of surveyed users would advocate for Product A.",
+          rawMetricValue: 80,
+          rawMetricUnit: "percent",
+          sampleSize: 500,
+          evidenceKind: "quantitative",
+          supportDirection: "supports",
+          confidence: 90,
+          normalizedScore: 80,
+          criterionWeight: 10,
+          weightedContribution: 8,
+          normalizationMethod: "direct_percentage",
+        }],
+      }],
+    }],
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.comparisonId, 42);
+  assert.equal(rows[0]?.vendor, "Product A");
+  assert.equal(rows[0]?.normalizedScore, 80);
+  assert.equal(rows[0]?.weightedContribution, "8.00");
+  assert.equal(rows[0]?.rawMetricValue, "80");
+});
+
+test("materialized evidence contributions reconcile exactly across multiple rows", () => {
+  const rows = flattenComparisonEvidence(43, {
+    urls: [],
+    vendorScores: [{
+      vendor: "Product A",
+      score: 50,
+      color: "#000000",
+      verdict: "Unverified",
+      weightedScores: [{
+        criterion: "Quality & Reliability",
+        weight: 20,
+        score: 50,
+        rationale: "No verified evidence.",
+        evidence: [
+          {
+            exactClaim: "First claim is unverified.",
+            retrievalDate: "2026-09-17",
+            evidenceKind: "unverified",
+            supportDirection: "neutral",
+            confidence: 0,
+            normalizedScore: 50,
+            criterionWeight: 20,
+            weightedContribution: 10,
+            normalizationMethod: "missing_evidence_neutral",
+          },
+          {
+            exactClaim: "Second claim is unverified.",
+            retrievalDate: "2026-09-17",
+            evidenceKind: "unverified",
+            supportDirection: "neutral",
+            confidence: 0,
+            normalizedScore: 50,
+            criterionWeight: 20,
+            weightedContribution: 10,
+            normalizationMethod: "missing_evidence_neutral",
+          },
+        ],
+      }],
+    }],
+  });
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows.reduce((total, row) => total + Number(row.weightedContribution), 0), 10);
 });
 
 test("normalizes strategic provider classifications", () => {

@@ -14,6 +14,7 @@ import { beginIdempotency, completeIdempotency, failIdempotency, requestHash, st
 import { consumeRateLimit as consumeRateLimitDefault } from "../services/rateLimit";
 import { getUsage, getUsageForExecutor } from "../services/usage";
 import { detailFromRow, summaryFromRow, validateComparisonInput } from "./comparisons";
+import { persistComparisonWithEvidence } from "../services/comparisonPersistence";
 
 type CommercialRequest = Request & { apiKey?: AuthenticatedApiKey };
 type CommercialDependencies = {
@@ -157,7 +158,7 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.a
       if (!lockedTenant) throw new Error("TENANT_NOT_FOUND");
       const lockedUsage = await getUsageForExecutor(tx, key);
       if (lockedUsage.used >= lockedUsage.included) throw new Error("QUOTA_EXHAUSTED");
-      const [comparison] = await tx.insert(comparisonsTable).values({
+      const comparison = await persistComparisonWithEvidence(tx, {
         tenantId: key,
         userId: `api-key:${req.apiKey!.id}`,
         prompt: input.prompt,
@@ -165,7 +166,7 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.a
         urls,
         criteria,
         ...analysis,
-      }).returning();
+      });
       await tx.insert(usageEventsTable).values({
         tenantId: key,
         comparisonId: comparison.id,

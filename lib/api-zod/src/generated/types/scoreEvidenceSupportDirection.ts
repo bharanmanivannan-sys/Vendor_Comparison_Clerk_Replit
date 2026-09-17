@@ -14,16 +14,13 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ScoreEvidence } from './scoreEvidence';
 
-export interface WeightedCriterionScore {
-  criterion: string;
-  weight: number;
-  /**
-     * @minimum 0
-     * @maximum 100
-     */
-  score: number;
-  rationale: string;
-  evidence?: ScoreEvidence[];
-}
+export type ScoreEvidenceSupportDirection = typeof ScoreEvidenceSupportDirection[keyof typeof ScoreEvidenceSupportDirection];
+
+
+export const ScoreEvidenceSupportDirection = {
+  supports: 'supports',
+  contradicts: 'contradicts',
+  context: 'context',
+  neutral: 'neutral',
+} as const;

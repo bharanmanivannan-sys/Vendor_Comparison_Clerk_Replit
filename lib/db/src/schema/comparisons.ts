@@ -24,7 +24,15 @@ export const comparisonsTable = pgTable("comparisons", {
     verdict: string;
     providerRole?: "accelerator" | "leader" | "core_provider" | "expert";
     providerRoleRationale?: string;
-    weightedScores?: Array<{ criterion: string; weight: number; score: number; rationale: string }>;
+     weightedScores?: Array<{
+       criterion: string; weight: number; score: number; rationale: string;
+       evidence?: Array<{
+         sourceUrl?: string; sourceTitle?: string; sourcePublisher?: string; sourceDate?: string;
+         retrievalDate?: string; exactClaim: string; rawMetricValue?: number; rawMetricUnit?: string;
+         sampleSize?: number; evidenceKind: string; supportDirection: string; confidence: number;
+         normalizedScore: number; criterionWeight: number; weightedContribution: number; normalizationMethod: string;
+       }>;
+     }>;
     switchConditions?: string[];
     vrio?: {
       value: { status: string; rationale: string };

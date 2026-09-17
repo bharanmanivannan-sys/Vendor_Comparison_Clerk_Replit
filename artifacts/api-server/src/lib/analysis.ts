@@ -7,6 +7,108 @@ export type AnalysisPayload = Omit<
   "userId" | "prompt" | "vendors" | "urls" | "criteria"
 >;
 
+type EvidenceRecord = NonNullable<NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["weightedScores"]>[number]["evidence"]>[number];
+
+function clampScore(value: unknown, fallback = 0): number {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, Math.round(number))) : fallback;
+}
+
+function normalizeDate(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return undefined;
+  const normalized = value.trim();
+  const parsed = new Date(`${normalized}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized
+    ? undefined
+    : normalized;
+}
+
+/** Strictly canonicalize AI evidence before it can affect a score or be persisted. */
+export function normalizeEvidenceRecords(
+  value: unknown,
+  criterion: string,
+  weight: number,
+  allowedUrls: string[] = [],
+): EvidenceRecord[] {
+  const allowed = new Set(dedupeReferenceUrls(allowedUrls));
+  const rows = Array.isArray(value) ? value : [];
+  const normalized = rows.flatMap((item): EvidenceRecord[] => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const rawUrl = typeof row.sourceUrl === "string" ? cleanEvidenceUrl(row.sourceUrl) : null;
+    if (rawUrl && !allowed.has(rawUrl)) return [];
+    const rawMetric = typeof row.rawMetricValue === "number" && Number.isFinite(row.rawMetricValue)
+      ? row.rawMetricValue : undefined;
+    const unit = typeof row.rawMetricUnit === "string" ? row.rawMetricUnit.trim() : undefined;
+    const isPercentage = rawMetric !== undefined && /%|percent|percentage/i.test(unit ?? "");
+    const requestedKind = typeof row.evidenceKind === "string" ? row.evidenceKind.trim().toLowerCase() : "unverified";
+    const evidenceKind = ["quantitative", "percentage", "qualitative", "analyst_judgment", "unverified"].includes(requestedKind)
+      ? requestedKind
+      : "unverified";
+    const verifiedEvidence = evidenceKind !== "unverified" && evidenceKind !== "analyst_judgment";
+    if (verifiedEvidence && !rawUrl) return [];
+    const rawDirection = typeof row.supportDirection === "string" ? row.supportDirection.trim().toLowerCase() : "neutral";
+    const requestedDirection = rawDirection === "against" ? "contradicts" : rawDirection;
+    const supportDirection = ["supports", "contradicts", "context", "neutral"].includes(requestedDirection)
+      ? requestedDirection
+      : "neutral";
+    const exactClaim = typeof row.exactClaim === "string" ? row.exactClaim.trim() : "";
+    if (!exactClaim) return [];
+    const normalizationHint = typeof row.normalizationMethod === "string"
+      ? row.normalizationMethod.trim().toLowerCase()
+      : "";
+    const isAdversePercentage = supportDirection === "contradicts"
+      || normalizationHint === "inverse_percentage"
+      || (
+        /(?:complaint|defect|failure|churn|return|incident|downtime|interest rate|fee rate)/i.test(exactClaim)
+        && !/(?:reduction|reduced|decrease|improvement)/i.test(exactClaim)
+      );
+    const score = evidenceKind === "unverified"
+      ? 50
+      : isPercentage
+        ? isAdversePercentage ? 100 - clampScore(rawMetric) : clampScore(rawMetric)
+        : clampScore(row.normalizedScore, 50);
+    const confidence = evidenceKind === "unverified"
+      ? Math.min(10, clampScore(row.confidence, 0))
+      : evidenceKind === "analyst_judgment"
+        ? Math.min(25, clampScore(row.confidence, 0))
+        : clampScore(row.confidence, 0);
+    return [{
+      sourceUrl: rawUrl ?? undefined,
+      sourceTitle: typeof row.sourceTitle === "string" ? row.sourceTitle.trim() : undefined,
+      sourcePublisher: typeof row.sourcePublisher === "string" ? row.sourcePublisher.trim() : undefined,
+      sourceDate: normalizeDate(row.sourceDate),
+      retrievalDate: normalizeDate(row.retrievalDate) ?? new Date().toISOString().slice(0, 10),
+      exactClaim,
+      rawMetricValue: rawMetric,
+      rawMetricUnit: unit,
+      sampleSize: typeof row.sampleSize === "number" && Number.isInteger(row.sampleSize) && row.sampleSize >= 0 ? row.sampleSize : undefined,
+      evidenceKind,
+      supportDirection,
+      confidence,
+      normalizedScore: score,
+      criterionWeight: weight,
+      weightedContribution: Number((score * weight / 100).toFixed(2)),
+      normalizationMethod: evidenceKind === "unverified"
+        ? "missing_evidence_neutral"
+        : isPercentage
+          ? isAdversePercentage ? "inverse_percentage" : "direct_percentage"
+          : (typeof row.normalizationMethod === "string" ? row.normalizationMethod.trim() : "analyst_or_qualitative"),
+    }];
+  });
+  return normalized.length ? normalized : [{
+    exactClaim: "No verified evidence was returned for this criterion.",
+    retrievalDate: new Date().toISOString().slice(0, 10),
+    evidenceKind: "unverified",
+    supportDirection: "neutral",
+    confidence: 0,
+    normalizedScore: 50,
+    criterionWeight: weight,
+    weightedContribution: Number((50 * weight / 100).toFixed(2)),
+    normalizationMethod: "missing_evidence_neutral",
+  }];
+}
+
 type AnalysisInput = {
   prompt: string;
   vendors: string[];
@@ -625,16 +727,17 @@ function fallbackAnalysis(input: AnalysisInput): AnalysisPayload {
   const vendors = input.vendors.slice(0, 5);
   const scores = vendors.map((vendor, index) => ({
     vendor,
-    score: Math.max(68, 91 - index * 7),
+    score: 50,
     color: ["#1c7c78", "#df7b48", "#6b61c9", "#bc5a85"][index] ?? "#1c7c78",
     verdict: index === 0 ? "Best overall fit" : index === 1 ? "Strong alternative" : "Worth a closer look",
     providerRole: (["leader", "core_provider", "expert", "accelerator"] as const)[index % 4],
     providerRoleRationale: "Provisional classification based on breadth, specialization, market position, and likely contribution to the target operating model.",
-    weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }, criterionIndex) => ({
+    weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
       criterion,
       weight,
-      score: Math.max(60, 90 - index * 6 - (criterionIndex % 3) * 3),
+      score: 50,
       rationale: "Validate this provisional score against current product research and your specific operating context.",
+      evidence: normalizeEvidenceRecords(undefined, criterion, weight, input.urls),
     })),
     switchConditions: [
       index === 0
@@ -818,6 +921,7 @@ function normalizeAnalysis(
   fallback: AnalysisPayload,
   vendors: string[],
   preserveSpecificRecommendation = false,
+  allowedEvidenceUrls: string[] = [],
 ): AnalysisPayload {
   const normalized = replaceVendorPlaceholders({ ...fallback, ...analysis }, vendors) as Partial<AnalysisPayload>;
   const allowed = new Set(vendors);
@@ -826,18 +930,34 @@ function normalizeAnalysis(
       const item = suppliedVendorScores[index] ?? fallback.vendorScores[index];
       const fallbackVendor = fallback.vendorScores[index];
       const suppliedScores = Array.isArray(item.weightedScores) ? item.weightedScores : [];
-      const suppliedScaleMaximum = Math.max(0, ...suppliedScores.map((entry) => Number(entry.score) || 0));
-      const scoreMultiplier = suppliedScaleMaximum <= 5 ? 20 : suppliedScaleMaximum <= 10 ? 10 : 1;
       const weightedScores = WEIGHTED_CRITERIA.map(({ criterion, weight }) => {
         const supplied = suppliedScores.find((entry) => entry.criterion?.toLowerCase() === criterion.toLowerCase());
         const fallbackEntry = fallbackVendor?.weightedScores?.find((entry) => entry.criterion === criterion);
+        const normalizedEvidence = normalizeEvidenceRecords(supplied?.evidence, criterion, weight, allowedEvidenceUrls);
+        const usableEvidence = normalizedEvidence.filter((entry) => entry.evidenceKind !== "unverified");
+        const totalConfidence = usableEvidence.reduce((total, entry) => total + Math.max(1, entry.confidence), 0);
+        const evidenceScore = usableEvidence.length
+          ? Math.round(usableEvidence.reduce(
+            (total, entry) => total + entry.normalizedScore * Math.max(1, entry.confidence),
+            0,
+          ) / totalConfidence)
+          : 50;
+        const evidence = normalizedEvidence.map((entry) => ({
+          ...entry,
+          criterionWeight: weight,
+          weightedContribution: usableEvidence.length
+            ? Number((
+              evidenceScore * weight / 100
+              * (entry.evidenceKind === "unverified" ? 0 : Math.max(1, entry.confidence) / totalConfidence)
+            ).toFixed(2))
+            : Number((50 * weight / 100).toFixed(2)),
+        }));
         return {
           criterion,
           weight,
-          score: Math.max(0, Math.min(100, Math.round(
-            supplied?.score == null ? Number(fallbackEntry?.score ?? 70) : Number(supplied.score) * scoreMultiplier,
-          ))),
+          score: evidenceScore,
           rationale: supplied?.rationale || fallbackEntry?.rationale || "Score based on the researched evidence.",
+          evidence,
         };
       });
       const score = Math.round(weightedScores.reduce((total, entry) => total + entry.score * entry.weight, 0) / 100);
@@ -1149,7 +1269,11 @@ export async function validateFinalEvidenceUrls(
 ): Promise<{ reachable: string[]; unavailableInsights: string[] }> {
   const results = await checker(dedupeReferenceUrls(urls));
   return {
-    reachable: results.filter((result) => result.available).map((result) => result.finalUrl ?? result.url),
+    reachable: results
+      .filter((result) => result.available)
+      .flatMap((result) => result.finalUrl && result.finalUrl !== result.url
+        ? [result.url, result.finalUrl]
+        : [result.url]),
     unavailableInsights: results
       .filter((result) => !result.available)
       .map((result) => `Evidence unavailable — ${result.url}: ${unavailableEvidenceLabels[result.reason ?? "unreachable"]}. Claims depending only on this source are unverified.`),
@@ -1190,7 +1314,14 @@ function analysisOutputShape(vendors: string[], isHomeLoan = false) {
       verdict: "",
       providerRole: "accelerator|leader|core_provider|expert",
       providerRoleRationale: "",
-      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({ criterion, weight, score: 0, rationale: "" })),
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion, weight, score: 0, rationale: "",
+        evidence: [{ sourceUrl: "", sourceTitle: "", sourcePublisher: "", sourceDate: "", retrievalDate: "",
+          exactClaim: "", rawMetricValue: 0, rawMetricUnit: "", sampleSize: 0,
+          evidenceKind: "quantitative|percentage|qualitative|analyst_judgment|unverified", supportDirection: "supports|contradicts|context|neutral",
+          confidence: 0, normalizedScore: 0, criterionWeight: weight, weightedContribution: 0,
+          normalizationMethod: "direct_percentage|qualitative_explicit|analyst_judgment|missing_evidence_neutral" }],
+      })),
       switchConditions: ["", ""],
       vrio: {
         value: vrioDimension,
@@ -1335,7 +1466,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "Never treat search-result snippets, AI summaries, affiliate pages, anonymous posts, forums, or user-generated reviews as authoritative evidence.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
-      "Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
+      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
     ].join(" ");
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
@@ -1390,11 +1521,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               shape: analysisOutputShape(researchShapeVendors, isProviderLevelHomeLoanDiscovery),
               marketResearchInstructions,
               researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
-              outputInstructions: isProviderLevelCreditCardDiscovery
+             outputInstructions: isProviderLevelCreditCardDiscovery
                 ? `${providerRoleInstructions}Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
                 : isProviderLevelHomeLoanDiscovery
                   ? `${providerRoleInstructions}Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current ${researchMarket.country} investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, mortgage-insurance or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, loan-to-value ratio, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable.`
-                  : `${vendorDiscoveryInstructions}${providerRoleInstructions}Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Return approvers and evidenceRequired as concise strings, not arrays. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.`,
+                   : `${vendorDiscoveryInstructions}${providerRoleInstructions}Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Return approvers and evidenceRequired as concise strings, not arrays. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.`,
             }),
           },
         ],
@@ -1585,6 +1716,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const vendorsWereResolved = resolvedVendors.some((vendor, index) => vendor !== input.vendors[index]);
     if (vendorsWereResolved) input.vendors.splice(0, input.vendors.length, ...resolvedVendors);
     const normalizationFallback = vendorsWereResolved ? fallbackAnalysis(input) : fallback;
+    const evidenceAvailability = await validateFinalEvidenceUrls(input.urls);
+    input.urls.splice(0, input.urls.length, ...dedupeReferenceUrls(evidenceAvailability.reachable));
     const normalized = normalizeAnalysis(
       {
         ...safeParsed,
@@ -1594,6 +1727,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       normalizationFallback,
       resolvedVendors,
       isProviderLevelCreditCardDiscovery,
+      input.urls,
     );
     if (isProviderLevelCreditCardDiscovery) {
       if (!/minimum (?:credit )?limit/i.test(normalized.recommendationReason)) {
@@ -1605,9 +1739,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
-    const evidence = await validateFinalEvidenceUrls(input.urls);
-    input.urls.splice(0, input.urls.length, ...dedupeReferenceUrls(evidence.reachable));
-    for (const insight of evidence.unavailableInsights) {
+    for (const insight of evidenceAvailability.unavailableInsights) {
       if (!normalized.insights.includes(insight)) normalized.insights.push(insight);
     }
     return normalized;

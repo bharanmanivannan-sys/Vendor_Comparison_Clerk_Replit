@@ -96,6 +96,17 @@ export const CreateComparisonBody = zod.object({
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
 
 
 export const CreateComparisonResponse = zod.object({
@@ -123,7 +134,25 @@ export const CreateComparisonResponse = zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
   "score": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
-  "rationale": zod.string()
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "sampleSize": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string()
+})).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
@@ -236,6 +265,17 @@ export const CreateGuestComparisonBody = zod.object({
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
 
 
 export const CreateGuestComparisonResponse = zod.object({
@@ -261,7 +301,25 @@ export const CreateGuestComparisonResponse = zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
   "score": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax),
-  "rationale": zod.string()
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "sampleSize": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string()
+})).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
@@ -437,6 +495,17 @@ export const GetComparisonParams = zod.object({
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
 
 
 export const GetComparisonResponse = zod.object({
@@ -464,7 +533,25 @@ export const GetComparisonResponse = zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
   "score": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
-  "rationale": zod.string()
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "sampleSize": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string()
+})).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
@@ -624,6 +711,17 @@ export const ExternalCreateComparisonBody = zod.object({
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
 
 
 export const ExternalCreateComparisonResponse = zod.object({
@@ -651,7 +749,25 @@ export const ExternalCreateComparisonResponse = zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
   "score": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
-  "rationale": zod.string()
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "sampleSize": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string()
+})).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
@@ -748,6 +864,17 @@ export const ExternalGetComparisonParams = zod.object({
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
 
 
 export const ExternalGetComparisonResponse = zod.object({
@@ -775,7 +902,25 @@ export const ExternalGetComparisonResponse = zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
   "score": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
-  "rationale": zod.string()
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "sampleSize": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string()
+})).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({

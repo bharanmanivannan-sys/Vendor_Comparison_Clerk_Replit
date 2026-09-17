@@ -215,6 +215,59 @@ export const VendorScoreProviderRole = {
   expert: 'expert',
 } as const;
 
+export type ScoreEvidenceEvidenceKind = typeof ScoreEvidenceEvidenceKind[keyof typeof ScoreEvidenceEvidenceKind];
+
+
+export const ScoreEvidenceEvidenceKind = {
+  quantitative: 'quantitative',
+  percentage: 'percentage',
+  qualitative: 'qualitative',
+  analyst_judgment: 'analyst_judgment',
+  unverified: 'unverified',
+} as const;
+
+export type ScoreEvidenceSupportDirection = typeof ScoreEvidenceSupportDirection[keyof typeof ScoreEvidenceSupportDirection];
+
+
+export const ScoreEvidenceSupportDirection = {
+  supports: 'supports',
+  contradicts: 'contradicts',
+  context: 'context',
+  neutral: 'neutral',
+} as const;
+
+export interface ScoreEvidence {
+  sourceUrl?: string;
+  sourceTitle?: string;
+  sourcePublisher?: string;
+  sourceDate?: string;
+  retrievalDate: string;
+  exactClaim: string;
+  rawMetricValue?: number;
+  rawMetricUnit?: string;
+  /** @minimum 0 */
+  sampleSize?: number;
+  evidenceKind: ScoreEvidenceEvidenceKind;
+  supportDirection: ScoreEvidenceSupportDirection;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  confidence: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  normalizedScore: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  criterionWeight: number;
+  weightedContribution: number;
+  normalizationMethod: string;
+}
+
 export interface WeightedCriterionScore {
   criterion: string;
   weight: number;
@@ -224,6 +277,7 @@ export interface WeightedCriterionScore {
      */
   score: number;
   rationale: string;
+  evidence?: ScoreEvidence[];
 }
 
 export type VrioDimensionStatus = typeof VrioDimensionStatus[keyof typeof VrioDimensionStatus];

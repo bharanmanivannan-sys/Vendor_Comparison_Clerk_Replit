@@ -14,16 +14,14 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ScoreEvidence } from './scoreEvidence';
 
-export interface WeightedCriterionScore {
-  criterion: string;
-  weight: number;
-  /**
-     * @minimum 0
-     * @maximum 100
-     */
-  score: number;
-  rationale: string;
-  evidence?: ScoreEvidence[];
-}
+export type ScoreEvidenceEvidenceKind = typeof ScoreEvidenceEvidenceKind[keyof typeof ScoreEvidenceEvidenceKind];
+
+
+export const ScoreEvidenceEvidenceKind = {
+  quantitative: 'quantitative',
+  percentage: 'percentage',
+  qualitative: 'qualitative',
+  analyst_judgment: 'analyst_judgment',
+  unverified: 'unverified',
+} as const;

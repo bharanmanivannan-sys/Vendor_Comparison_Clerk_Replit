@@ -12,3 +12,4 @@
 - [Open-ended option discovery](open-ended-option-discovery.md) — select concrete products before full analysis; large output templates can preserve misleading parser labels.
 - [GitHub connector blob uploads](github-connector-blob-uploads.md) — upload Git Data blobs serially with base64; concurrent raw text can trigger proxy filtering.
 - [Intent extraction safety](intent-extraction-safety.md) — model-extracted options must be verbatim prompt content and still pass deterministic comparison validation.
+- [Evidence-backed scoring](evidence-backed-scoring.md) — score evidence must be validated before ranking, use canonical weights, and reconcile exactly with persisted contributions.

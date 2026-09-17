@@ -19,6 +19,7 @@ import { comparisonsTable, db } from "@workspace/db";
 import { buildAnalysis, parsePrompt, parsePromptWithIntent, validateComparisonContext, type AnalysisPayload } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
+import { persistComparisonAtomically } from "../../services/comparisonPersistence";
 
 const router: IRouter = Router();
 
@@ -84,14 +85,14 @@ function startComparisonJob(options: {
         ...analysis,
       };
       if (options.userId) {
-        const [created] = await db.insert(comparisonsTable).values({
+        const created = await persistComparisonAtomically({
           userId: options.userId,
           prompt: options.input.prompt,
           vendors: options.vendors,
           urls,
           criteria: options.criteria,
           ...analysis,
-        }).returning();
+        });
         comparisonJobs.set(id, {
           owner: options.owner,
           status: "complete",
@@ -371,17 +372,14 @@ router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promis
     sendError(res, 502, "comparison_failed", error instanceof Error ? error.message : "Product research could not be completed.");
     return;
   }
-  const [created] = await db
-    .insert(comparisonsTable)
-    .values({
+  const created = await persistComparisonAtomically({
       userId: req.userId as string,
       prompt: input.prompt,
       vendors,
       urls,
       criteria,
       ...analysis,
-    })
-    .returning();
+  });
   res.status(201).json(CreateComparisonResponse.parse(detailFromRow(created)));
 });
 

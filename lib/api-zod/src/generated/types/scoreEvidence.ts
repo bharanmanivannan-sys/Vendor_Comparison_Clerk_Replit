@@ -14,16 +14,37 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ScoreEvidence } from './scoreEvidence';
+import type { ScoreEvidenceEvidenceKind } from './scoreEvidenceEvidenceKind';
+import type { ScoreEvidenceSupportDirection } from './scoreEvidenceSupportDirection';
 
-export interface WeightedCriterionScore {
-  criterion: string;
-  weight: number;
+export interface ScoreEvidence {
+  sourceUrl?: string;
+  sourceTitle?: string;
+  sourcePublisher?: string;
+  sourceDate?: Date;
+  retrievalDate: Date;
+  exactClaim: string;
+  rawMetricValue?: number;
+  rawMetricUnit?: string;
+  /** @minimum 0 */
+  sampleSize?: number;
+  evidenceKind: ScoreEvidenceEvidenceKind;
+  supportDirection: ScoreEvidenceSupportDirection;
   /**
      * @minimum 0
      * @maximum 100
      */
-  score: number;
-  rationale: string;
-  evidence?: ScoreEvidence[];
+  confidence: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  normalizedScore: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  criterionWeight: number;
+  weightedContribution: number;
+  normalizationMethod: string;
 }

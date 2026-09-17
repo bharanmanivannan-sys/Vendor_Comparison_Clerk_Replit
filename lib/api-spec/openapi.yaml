@@ -1087,7 +1087,59 @@ components:
           maximum: 100
         rationale:
           type: string
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScoreEvidence"
       required: [criterion, weight, score, rationale]
+    ScoreEvidence:
+      type: object
+      properties:
+        sourceUrl:
+          type: string
+          format: uri
+        sourceTitle:
+          type: string
+        sourcePublisher:
+          type: string
+        sourceDate:
+          type: string
+          format: date
+        retrievalDate:
+          type: string
+          format: date
+        exactClaim:
+          type: string
+        rawMetricValue:
+          type: number
+        rawMetricUnit:
+          type: string
+        sampleSize:
+          type: integer
+          minimum: 0
+        evidenceKind:
+          type: string
+          enum: [quantitative, percentage, qualitative, analyst_judgment, unverified]
+        supportDirection:
+          type: string
+          enum: [supports, contradicts, context, neutral]
+        confidence:
+          type: integer
+          minimum: 0
+          maximum: 100
+        normalizedScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+        criterionWeight:
+          type: integer
+          minimum: 0
+          maximum: 100
+        weightedContribution:
+          type: number
+        normalizationMethod:
+          type: string
+      required: [retrievalDate, exactClaim, evidenceKind, supportDirection, confidence, normalizedScore, criterionWeight, weightedContribution, normalizationMethod]
     AnalysisRow:
       type: object
       properties:
