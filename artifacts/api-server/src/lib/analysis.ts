@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { InsertComparison } from "@workspace/db";
+import { checkEvidenceUrls, type EvidenceUrlResult } from "./security";
 
 export type AnalysisPayload = Omit<
   InsertComparison,
@@ -31,6 +32,30 @@ export type ComparisonIntent = {
 };
 
 type IntentExtractor = (prompt: string) => Promise<unknown>;
+
+const INTENT_EXTRACTION_TIMEOUT_MS = 2_000;
+
+async function extractIntentWithin(
+  prompt: string,
+  extractor: IntentExtractor,
+  timeoutMs: number,
+): Promise<unknown> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      extractor(prompt),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Intent extraction timed out")),
+          timeoutMs,
+        );
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 export type ResearchMarket = {
   country: string;
@@ -405,11 +430,19 @@ async function extractIntentWithOpenAI(prompt: string): Promise<unknown> {
 export async function parsePromptWithIntent(
   prompt: string,
   extractor: IntentExtractor = extractIntentWithOpenAI,
+  options: { timeoutMs?: number } = {},
 ) {
   const parsed = parsePrompt(prompt);
   let extracted: ComparisonIntent | null = null;
   try {
-    extracted = normalizeExtractedIntent(parsed.prompt, await extractor(parsed.prompt));
+    extracted = normalizeExtractedIntent(
+      parsed.prompt,
+      await extractIntentWithin(
+        parsed.prompt,
+        extractor,
+        options.timeoutMs ?? INTENT_EXTRACTION_TIMEOUT_MS,
+      ),
+    );
   } catch {
     extracted = null;
   }
@@ -1086,6 +1119,27 @@ export function dedupeReferenceUrls(urls: string[]): string[] {
   return Array.from(unique.values());
 }
 
+const unavailableEvidenceLabels: Record<NonNullable<EvidenceUrlResult["reason"]>, string> = {
+  blocked_destination: "blocked because it resolves to a private or internal network",
+  timeout: "timed out during the availability check",
+  access_restricted: "requires authentication or denies automated access",
+  unreachable: "could not be reached successfully",
+  too_many_redirects: "exceeded the safe redirect limit",
+};
+
+export async function validateFinalEvidenceUrls(
+  urls: string[],
+  checker: typeof checkEvidenceUrls = checkEvidenceUrls,
+): Promise<{ reachable: string[]; unavailableInsights: string[] }> {
+  const results = await checker(dedupeReferenceUrls(urls));
+  return {
+    reachable: results.filter((result) => result.available).map((result) => result.finalUrl ?? result.url),
+    unavailableInsights: results
+      .filter((result) => !result.available)
+      .map((result) => `Evidence unavailable — ${result.url}: ${unavailableEvidenceLabels[result.reason ?? "unreachable"]}. Claims depending only on this source are unverified.`),
+  };
+}
+
 function analysisOutputShape(vendors: string[], isHomeLoan = false) {
   const values = Object.fromEntries(vendors.map((vendor) => [vendor, ""]));
   const vrioDimension = { status: "strong|partial|weak|not_applicable", rationale: "" };
@@ -1535,7 +1589,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
-    input.urls.splice(0, input.urls.length, ...dedupeReferenceUrls(input.urls));
+    const evidence = await validateFinalEvidenceUrls(input.urls);
+    input.urls.splice(0, input.urls.length, ...dedupeReferenceUrls(evidence.reachable));
+    for (const insight of evidence.unavailableInsights) {
+      if (!normalized.insights.includes(insight)) normalized.insights.push(insight);
+    }
     return normalized;
   } catch (error) {
     console.error("Product research failed", error);

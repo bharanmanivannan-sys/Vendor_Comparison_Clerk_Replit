@@ -16,8 +16,10 @@ import {
   parsePrompt,
   parsePromptWithIntent,
   resolveComparisonVendors,
+  validateFinalEvidenceUrls,
   validateComparisonContext,
 } from "./analysis";
+import { checkEvidenceUrls } from "./security";
 
 const extracted = (value: object) => async () => value;
 const intent = (value: object) => ({ subject: "", ...value });
@@ -313,6 +315,31 @@ test("asks a focused clarification for low-confidence extraction", async () => {
   assert.equal(parsed.intent.confidence, 0.35);
 });
 
+test("falls back to deterministic parsing when intent extraction times out", async () => {
+  const parsed = await parsePromptWithIntent(
+    "Slack vs Microsoft Teams",
+    async () => new Promise(() => {}),
+    { timeoutMs: 5 },
+  );
+
+  assert.deepEqual(parsed.vendors, ["Slack", "Microsoft Teams"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.intent.decisionType, "comparison");
+});
+
+test("keeps deterministic clarification behavior after a transient extractor failure", async () => {
+  const parsed = await parsePromptWithIntent(
+    "We need a better platform for the team.",
+    async () => { throw new Error("provider unavailable"); },
+  );
+
+  assert.equal(parsed.context.valid, false);
+  assert.equal(
+    parsed.context.message,
+    "Which two specific products, services, or providers would you like to compare?",
+  );
+});
+
 test("rejects invented, placeholder, and cross-domain extracted options", async () => {
   const invented = await parsePromptWithIntent(
     "Should we choose Linear or Jira?",
@@ -491,6 +518,80 @@ test("rejects explanatory text disguised as an evidence URL", () => {
   ]), [
     "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
   ]);
+});
+
+const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+
+test("follows a bounded redirect to reachable evidence", async () => {
+  const seen: string[] = [];
+  const [result] = await checkEvidenceUrls(["https://example.com/old"], {
+    lookupHost: publicLookup,
+    request: async (url) => {
+      seen.push(url.toString());
+      return url.pathname === "/old"
+        ? { status: 302, location: "/current" }
+        : { status: 200 };
+    },
+  });
+  assert.equal(result.available, true);
+  assert.equal(result.finalUrl, "https://example.com/current");
+  assert.deepEqual(seen, ["https://example.com/old", "https://example.com/current"]);
+});
+
+test("stops evidence checks after the redirect limit", async () => {
+  const [result] = await checkEvidenceUrls(["https://example.com/one"], {
+    maxRedirects: 1,
+    lookupHost: publicLookup,
+    request: async () => ({ status: 302, location: "/again" }),
+  });
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "too_many_redirects");
+});
+
+test("marks timed-out evidence unavailable", async () => {
+  const [result] = await checkEvidenceUrls(["https://example.com/slow"], {
+    lookupHost: publicLookup,
+    request: async () => { throw new Error("timeout"); },
+  });
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "timeout");
+});
+
+test("blocks private and loopback destinations before requesting them", async () => {
+  let requested = false;
+  const results = await checkEvidenceUrls([
+    "http://localhost/admin",
+    "https://private.example/data",
+    "http://169.254.169.254/latest/meta-data",
+  ], {
+    lookupHost: async (hostname) => hostname === "private.example"
+      ? [{ address: "10.0.0.8", family: 4 }]
+      : publicLookup(),
+    request: async () => {
+      requested = true;
+      return { status: 200 };
+    },
+  });
+  assert.equal(requested, false);
+  assert.ok(results.every((result) => result.reason === "blocked_destination"));
+});
+
+test("keeps reachable evidence and clearly marks unavailable sources", async () => {
+  const result = await validateFinalEvidenceUrls([
+    "https://example.com/available",
+    "https://example.com/restricted",
+    "https://example.com/missing",
+  ], async (urls) => urls.map((url) => url.endsWith("/available")
+    ? { url, available: true, finalUrl: url }
+    : {
+        url,
+        available: false,
+        reason: url.endsWith("/restricted") ? "access_restricted" : "unreachable",
+      }));
+  assert.deepEqual(result.reachable, ["https://example.com/available"]);
+  assert.equal(result.unavailableInsights.length, 2);
+  assert.match(result.unavailableInsights[0], /Evidence unavailable.*requires authentication.*unverified/);
+  assert.match(result.unavailableInsights[1], /Evidence unavailable.*could not be reached.*unverified/);
 });
 
 test("seeds official variable and fixed home-loan sources for named banks", () => {

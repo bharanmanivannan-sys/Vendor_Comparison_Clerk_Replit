@@ -13,7 +13,6 @@
   "dependencies": {
     "@clerk/express": "^2.1.67",
     "@clerk/shared": "^4.31.1",
-    "@whop/sdk": "^1.1.4",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "cookie-parser": "^1.4.7",
