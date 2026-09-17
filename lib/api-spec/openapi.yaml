@@ -985,6 +985,13 @@ components:
           type: string
         verdict:
           type: string
+        providerRole:
+          type: string
+          description: Strategic market role of the product, service, or brand in this decision context.
+          enum: [accelerator, leader, core_provider, expert]
+        providerRoleRationale:
+          type: string
+          description: Evidence-based explanation for the assigned strategic market role.
         weightedScores:
           type: array
           items:

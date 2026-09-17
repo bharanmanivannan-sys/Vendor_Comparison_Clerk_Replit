@@ -251,15 +251,23 @@ export function parsePrompt(prompt: string) {
   const parsedPairVendors = [firstVendor, secondVendor]
     .filter(Boolean)
     .map((value) => cleanVendorName(value as string));
+  const pairStartsBeforeChosenList = Boolean(
+    pair === withPair
+    && chosen
+    && typeof chosen.index === "number"
+    && normalized.indexOf(withPair?.[0] ?? "") < chosen.index,
+  );
+  const shouldPreferPair = Boolean(
+    pair
+    && (betweenPair || !hasExplicitVendorList || pairStartsBeforeChosenList),
+  );
   const vendors = Array.from(
     new Set((
-      betweenPair
+      shouldPreferPair
         ? parsedPairVendors
         : hasExplicitVendorList
           ? listedVendors
-          : pair
-            ? parsedPairVendors
-            : listedVendors
+          : listedVendors
     )),
   )
     .filter((value) => value && !isPlaceholderVendor(value));
@@ -411,6 +419,8 @@ function fallbackAnalysis(input: AnalysisInput): AnalysisPayload {
     score: Math.max(68, 91 - index * 7),
     color: ["#1c7c78", "#df7b48", "#6b61c9", "#bc5a85"][index] ?? "#1c7c78",
     verdict: index === 0 ? "Best overall fit" : index === 1 ? "Strong alternative" : "Worth a closer look",
+    providerRole: (["leader", "core_provider", "expert", "accelerator"] as const)[index % 4],
+    providerRoleRationale: "Provisional classification based on breadth, specialization, market position, and likely contribution to the target operating model.",
     weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }, criterionIndex) => ({
       criterion,
       weight,
@@ -540,6 +550,45 @@ export function normalizeVrioStatus(value: unknown): "strong" | "partial" | "wea
   return "partial";
 }
 
+export function normalizeProviderRole(value: unknown): "accelerator" | "leader" | "core_provider" | "expert" {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "accelerator") return "accelerator";
+  if (normalized === "core_provider" || normalized === "core") return "core_provider";
+  if (normalized === "expert" || normalized === "specialist") return "expert";
+  return "leader";
+}
+
+export function normalizeTextField(value: unknown, fallback = ""): string {
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((item) => typeof item === "string" ? item.trim() : String(item ?? "").trim())
+      .filter(Boolean)
+      .join("; ");
+    return joined || fallback;
+  }
+  if (typeof value === "string") return value.trim() || fallback;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return fallback;
+}
+
+export function normalizeDecisionGovernance(
+  value: unknown,
+  fallback: NonNullable<AnalysisPayload["decisionGovernance"]> = [],
+): NonNullable<AnalysisPayload["decisionGovernance"]> {
+  const source = Array.isArray(value) ? value : fallback;
+  return source.map((item, index) => {
+    const row = item as unknown as Record<string, unknown>;
+    const fallbackRow = fallback[index];
+    return {
+      decision: normalizeTextField(row.decision, fallbackRow?.decision ?? "Confirm the decision scope."),
+      owner: normalizeTextField(row.owner, fallbackRow?.owner ?? "Executive sponsor"),
+      approvers: normalizeTextField(row.approvers, fallbackRow?.approvers ?? "Named accountable approvers"),
+      evidenceRequired: normalizeTextField(row.evidenceRequired, fallbackRow?.evidenceRequired ?? "Validated decision evidence"),
+      decisionGate: normalizeTextField(row.decisionGate, fallbackRow?.decisionGate ?? "Formal approval before commitment"),
+    };
+  });
+}
+
 function normalizeRisk(value: unknown): "low" | "medium" | "high" | "critical" {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized.includes("critical")) return "critical";
@@ -586,8 +635,13 @@ function normalizeAnalysis(
       });
       return {
         ...item,
-          vendor,
+        vendor,
         score,
+        providerRole: normalizeProviderRole(item.providerRole ?? fallbackVendor?.providerRole),
+        providerRoleRationale: normalizeTextField(
+          item.providerRoleRationale,
+          fallbackVendor?.providerRoleRationale ?? "Validate this role against the option's breadth, specialization, market position, and contribution to the target operating model.",
+        ),
         weightedScores,
         switchConditions: Array.isArray(item.switchConditions) && item.switchConditions.length
           ? item.switchConditions.slice(0, 4)
@@ -639,6 +693,10 @@ function normalizeAnalysis(
     .map((item) => ({ ...item, severity: normalizeRisk(item.severity) }));
   const migrationSequence = (Array.isArray(normalized.migrationSequence) ? normalized.migrationSequence : fallback.migrationSequence ?? [])
     .map((item) => ({ ...item, risk: normalizeRisk(item.risk) }));
+  const decisionGovernance = normalizeDecisionGovernance(
+    normalized.decisionGovernance,
+    fallback.decisionGovernance,
+  );
   return {
     ...fallback,
     ...normalized,
@@ -650,7 +708,7 @@ function normalizeAnalysis(
     functionalGaps,
     serviceProductMap: Array.isArray(normalized.serviceProductMap) ? normalized.serviceProductMap : fallback.serviceProductMap,
     migrationSequence,
-    decisionGovernance: Array.isArray(normalized.decisionGovernance) ? normalized.decisionGovernance : fallback.decisionGovernance,
+    decisionGovernance,
     recommendation: preserveSpecificRecommendation && suppliedRecommendation
       ? suppliedRecommendation
       : recommendedVendor,
@@ -889,6 +947,8 @@ function analysisOutputShape(vendors: string[], isHomeLoan = false) {
       score: 0,
       color: "",
       verdict: "",
+      providerRole: "accelerator|leader|core_provider|expert",
+      providerRoleRationale: "",
       weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({ criterion, weight, score: 0, rationale: "" })),
       switchConditions: ["", ""],
       vrio: {
@@ -1016,6 +1076,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const vendorDiscoveryInstructions = vendorDiscoveryWasRequired
       ? "The shortlist was selected from the user's objective. Preserve these exact product names throughout the scorecard, tables, winners, and recommendation. Put other credible products only in insights as outside-shortlist alternatives; do not rank them. "
       : "";
+    const providerRoleInstructions = "For every ranked option, set providerRole to exactly one of accelerator, leader, core_provider, or expert. Use accelerator when it primarily speeds transformation or time-to-value; leader for broad, mature, market-leading capability; core_provider when it is suited as a foundational operating backbone; and expert for deep specialist capability. Explain the context-specific classification in providerRoleRationale. ";
     const currentDate = new Date().toISOString().slice(0, 10);
     const oldestFallbackDate = new Date();
     oldestFallbackDate.setUTCFullYear(oldestFallbackDate.getUTCFullYear() - 1);
@@ -1089,10 +1150,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               marketResearchInstructions,
               researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
               outputInstructions: isProviderLevelCreditCardDiscovery
-                ? `Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
+                ? `${providerRoleInstructions}Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
                 : isProviderLevelHomeLoanDiscovery
-                  ? `Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current ${researchMarket.country} investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, mortgage-insurance or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, loan-to-value ratio, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable.`
-                  : `${vendorDiscoveryInstructions}Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.`,
+                  ? `${providerRoleInstructions}Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current ${researchMarket.country} investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, mortgage-insurance or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, loan-to-value ratio, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable.`
+                  : `${vendorDiscoveryInstructions}${providerRoleInstructions}Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Return approvers and evidenceRequired as concise strings, not arrays. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.`,
             }),
           },
         ],

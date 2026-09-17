@@ -6,7 +6,10 @@ import {
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
   missingCreditCardSourceVendors,
+  normalizeDecisionGovernance,
   normalizeLensWinner,
+  normalizeProviderRole,
+  normalizeTextField,
   normalizeVrioStatus,
   officialMarketSourcesFor,
   officialHomeLoanSourcesFor,
@@ -21,6 +24,29 @@ test("includes NPS in the 100-point weighted decision model", () => {
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("normalizes governance lists into the string response contract", () => {
+  const [governance] = normalizeDecisionGovernance([{
+    decision: "Approve product",
+    owner: "CIO",
+    approvers: ["CIO", "Risk Committee"],
+    evidenceRequired: ["Security review", "Commercial validation"],
+    decisionGate: "Executive approval",
+  }]);
+
+  assert.equal(governance.approvers, "CIO; Risk Committee");
+  assert.equal(governance.evidenceRequired, "Security review; Commercial validation");
+  assert.equal(typeof governance.approvers, "string");
+  assert.equal(typeof governance.evidenceRequired, "string");
+  assert.equal(normalizeTextField([], "Fallback evidence"), "Fallback evidence");
+});
+
+test("normalizes strategic provider classifications", () => {
+  assert.equal(normalizeProviderRole("Core Provider"), "core_provider");
+  assert.equal(normalizeProviderRole("specialist"), "expert");
+  assert.equal(normalizeProviderRole("accelerator"), "accelerator");
+  assert.equal(normalizeProviderRole("Leader"), "leader");
 });
 
 test("parses the Australian no-annual-fee credit-card request", () => {
@@ -198,6 +224,17 @@ test("does not replace compared vendors with objective phrases introduced by acr
     "Microsoft Dynamics 365",
   ]);
   assert.equal(parsed.context.valid, true);
+});
+
+test("keeps an explicit comparison pair when later context contains use wording", () => {
+  const parsed = parsePrompt(
+    "Compare Salesforce Financial Services Cloud with Oracle CX for Financial Services. Use the same decision context and criteria as this assessment: unify customer data and digital communications.",
+  );
+
+  assert.deepEqual(parsed.vendors, [
+    "Salesforce Financial Services Cloud",
+    "Oracle CX for Financial Services",
+  ]);
 });
 
 test("continues to parse genuine provider lists introduced by from", () => {

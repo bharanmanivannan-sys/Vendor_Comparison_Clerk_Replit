@@ -66,6 +66,7 @@ export * from './tenantIdHeaderParameter';
 export * from './unauthorizedResponse';
 export * from './usageSummary';
 export * from './vendorScore';
+export * from './vendorScoreProviderRole';
 export * from './vrioAssessment';
 export * from './vrioDimension';
 export * from './vrioDimensionStatus';

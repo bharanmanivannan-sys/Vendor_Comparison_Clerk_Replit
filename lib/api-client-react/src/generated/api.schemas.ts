@@ -176,6 +176,19 @@ export interface ComparisonSummary {
 
 export type ComparisonSwot = {[key: string]: string[]};
 
+/**
+ * Strategic market role of the product, service, or brand in this decision context.
+ */
+export type VendorScoreProviderRole = typeof VendorScoreProviderRole[keyof typeof VendorScoreProviderRole];
+
+
+export const VendorScoreProviderRole = {
+  accelerator: 'accelerator',
+  leader: 'leader',
+  core_provider: 'core_provider',
+  expert: 'expert',
+} as const;
+
 export interface WeightedCriterionScore {
   criterion: string;
   weight: number;
@@ -227,6 +240,10 @@ export interface VendorScore {
   score: number;
   color: string;
   verdict: string;
+  /** Strategic market role of the product, service, or brand in this decision context. */
+  providerRole?: VendorScoreProviderRole;
+  /** Evidence-based explanation for the assigned strategic market role. */
+  providerRoleRationale?: string;
   weightedScores?: WeightedCriterionScore[];
   /** Conditions under which this option should be preferred over the overall recommendation. */
   switchConditions?: string[];

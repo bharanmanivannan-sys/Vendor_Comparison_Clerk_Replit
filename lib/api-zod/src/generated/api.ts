@@ -117,6 +117,8 @@ export const CreateComparisonResponse = zod.object({
   "score": zod.number().int(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
@@ -253,6 +255,8 @@ export const CreateGuestComparisonResponse = zod.object({
   "score": zod.number().int(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
@@ -426,6 +430,8 @@ export const GetComparisonResponse = zod.object({
   "score": zod.number().int(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
@@ -611,6 +617,8 @@ export const ExternalCreateComparisonResponse = zod.object({
   "score": zod.number().int(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),
@@ -733,6 +741,8 @@ export const ExternalGetComparisonResponse = zod.object({
   "score": zod.number().int(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int(),

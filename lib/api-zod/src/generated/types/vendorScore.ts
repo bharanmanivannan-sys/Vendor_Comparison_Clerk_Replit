@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { MarketPosition } from './marketPosition';
+import type { VendorScoreProviderRole } from './vendorScoreProviderRole';
 import type { VrioAssessment } from './vrioAssessment';
 import type { WeightedCriterionScore } from './weightedCriterionScore';
 
@@ -23,6 +24,10 @@ export interface VendorScore {
   score: number;
   color: string;
   verdict: string;
+  /** Strategic market role of the product, service, or brand in this decision context. */
+  providerRole?: VendorScoreProviderRole;
+  /** Evidence-based explanation for the assigned strategic market role. */
+  providerRoleRationale?: string;
   weightedScores?: WeightedCriterionScore[];
   /** Conditions under which this option should be preferred over the overall recommendation. */
   switchConditions?: string[];

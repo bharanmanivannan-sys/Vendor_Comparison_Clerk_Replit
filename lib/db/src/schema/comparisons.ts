@@ -22,6 +22,8 @@ export const comparisonsTable = pgTable("comparisons", {
     score: number;
     color: string;
     verdict: string;
+    providerRole?: "accelerator" | "leader" | "core_provider" | "expert";
+    providerRoleRationale?: string;
     weightedScores?: Array<{ criterion: string; weight: number; score: number; rationale: string }>;
     switchConditions?: string[];
     vrio?: {
