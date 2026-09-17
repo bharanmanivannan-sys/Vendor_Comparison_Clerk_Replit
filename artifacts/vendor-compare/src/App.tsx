@@ -894,6 +894,73 @@ function HistoryPage() {
   const { data, isLoading, isError, refetch } = useListComparisons();
   const queryClient = useQueryClient();
   const deleteMutation = useDeleteComparison();
+  const [searchText, setSearchText] = useState('');
+  const [startAt, setStartAt] = useState('');
+  const [endAt, setEndAt] = useState('');
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const filtered = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    const start = startAt ? new Date(startAt).getTime() : Number.NEGATIVE_INFINITY;
+    const end = endAt ? new Date(endAt).getTime() : Number.POSITIVE_INFINITY;
+    return (data || [])
+      .filter((item) => {
+        const created = new Date(item.createdAt).getTime();
+        const searchable = `${item.prompt} ${item.category} ${item.recommendation}`.toLowerCase();
+        return created >= start && created <= end && (!query || searchable.includes(query));
+      })
+      .sort((a, b) => {
+        const difference = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return sortOrder === 'newest' ? difference : -difference;
+      });
+  }, [data, searchText, startAt, endAt, sortOrder]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  useEffect(() => setPage(1), [searchText, startAt, endAt, sortOrder]);
+  const clearFilters = () => {
+    setSearchText('');
+    setStartAt('');
+    setEndAt('');
+    setSortOrder('newest');
+  };
+  const deleteItem = (id: number) => {
+    if (!window.confirm('Remove this comparison from your history?')) return;
+    deleteMutation.mutate({ id }, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getListComparisonsQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+      },
+    });
+  };
+  if (isLoading) return <AppShell><LoadingPanel label="Loading comparison history" /></AppShell>;
+  if (isError) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
+  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14">
+    <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+      <div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Archive / 30 days</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840]">Your decision trail.</h1><p className="mt-3 text-sm text-[#687083]">Search, filter, and sort the calls your team has been thinking through.</p></div>
+      <Link href="/user-portal" className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8]" data-testid="link-new-comparison"><Plus size={15} /> New comparison</Link>
+    </div>
+    <section className="mt-10 rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-4 sm:p-5" aria-label="History filters">
+      <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(180px,.7fr)_minmax(180px,.7fr)_160px_auto]">
+        <label className="text-[11px] font-bold text-[#556075]">Text search<div className="relative mt-2"><Search className="absolute left-3 top-3 text-[#929389]" size={16} /><input className="focus-ring w-full rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] py-2.5 pl-10 pr-4 text-sm text-[#202840] placeholder:text-[#9a9a90]" placeholder="Prompt, category, or recommendation" value={searchText} onChange={(event) => setSearchText(event.target.value)} data-testid="input-history-search" /></div></label>
+        <label className="text-[11px] font-bold text-[#556075]">From date and time<input type="datetime-local" className="focus-ring mt-2 w-full rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] px-3 py-2.5 text-xs text-[#202840]" value={startAt} onChange={(event) => setStartAt(event.target.value)} data-testid="input-history-start" /></label>
+        <label className="text-[11px] font-bold text-[#556075]">To date and time<input type="datetime-local" className="focus-ring mt-2 w-full rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] px-3 py-2.5 text-xs text-[#202840]" value={endAt} onChange={(event) => setEndAt(event.target.value)} data-testid="input-history-end" /></label>
+        <label className="text-[11px] font-bold text-[#556075]">Sort<select className="focus-ring mt-2 w-full rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] px-3 py-2.5 text-xs text-[#202840]" value={sortOrder} onChange={(event) => setSortOrder(event.target.value as 'newest' | 'oldest')} data-testid="select-history-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+        <button type="button" onClick={clearFilters} className="focus-ring self-end rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] px-4 py-2.5 text-xs font-bold text-[#687083]" data-testid="button-history-clear"><Filter size={14} className="mr-2 inline" />Clear</button>
+      </div>
+    </section>
+    <div className="mt-5 flex items-center justify-between text-[11px] text-[#7f817e]"><span>{filtered.length} {filtered.length === 1 ? 'comparison' : 'comparisons'} found</span><span>Showing {filtered.length ? (currentPage - 1) * pageSize + 1 : 0}–{Math.min(currentPage * pageSize, filtered.length)}</span></div>
+    <div className="mt-3 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{visible.map((item, index) => <ComparisonRow key={item.id} item={item} index={(currentPage - 1) * pageSize + index} onDelete={deleteItem} />)}{!visible.length && <div className="p-14 text-center"><Clock3 className="mx-auto text-[#0f766e]" size={24} /><p className="mt-4 text-sm font-bold text-[#202840]">No comparisons match these filters.</p><p className="mt-2 text-xs text-[#7b7e7b]">Clear one or more filters or start a new comparison.</p></div>}</div>
+    {pageCount > 1 && <nav className="mt-5 flex items-center justify-between" aria-label="History pages"><button type="button" disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="focus-ring rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] px-4 py-2.5 text-xs font-bold text-[#202840] disabled:opacity-40" data-testid="button-history-previous"><ArrowLeft size={14} className="mr-2 inline" />Previous</button><span className="mono text-[10px] text-[#687083]">Page {currentPage} of {pageCount}</span><button type="button" disabled={currentPage === pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))} className="focus-ring rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] px-4 py-2.5 text-xs font-bold text-[#202840] disabled:opacity-40" data-testid="button-history-next">Next<ArrowRight size={14} className="ml-2 inline" /></button></nav>}
+    <p className="mt-4 flex items-center gap-2 text-[11px] text-[#8b8b83]"><ShieldCheck size={13} /> History is automatically limited to the most recent 30 days. Dates and times use your device timezone.</p>
+  </div></AppShell>;
+}
+
+function LegacyHistoryPage() {
+  const { data, isLoading, isError, refetch } = useListComparisons();
+  const queryClient = useQueryClient();
+  const deleteMutation = useDeleteComparison();
   const [filter, setFilter] = useState('');
   const recent = useMemo(() => (data || []).filter((item) => Date.now() - new Date(item.createdAt).getTime() <= 30 * 24 * 60 * 60 * 1000).filter((item) => `${item.prompt} ${item.category} ${item.recommendation}`.toLowerCase().includes(filter.toLowerCase())), [data, filter]);
   const deleteItem = (id: number) => { if (window.confirm('Remove this comparison from your history?')) deleteMutation.mutate({ id }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListComparisonsQueryKey() }); queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() }); } }); };
