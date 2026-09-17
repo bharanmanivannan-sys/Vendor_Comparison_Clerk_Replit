@@ -173,6 +173,31 @@ function isPlaceholderVendor(value: string): boolean {
     || /^(?:any|another|other)\s+(?:other\s+)?relevant\s+(?:provider|vendor|brand|product|service)s?$/i.test(value.trim());
 }
 
+export function isObjectivePhraseVendor(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return isPlaceholderVendor(value)
+    || /^(?:across|among|within|for)\b/.test(normalized)
+    || /\b(?:my|our|your|their)\s+(?:products?|services?|business|customers?|market|team|organisation|organization)\b/.test(normalized)
+    || /^(?:products?|services?|features?|capabilities?|requirements?|objectives?|use cases?)\s+(?:for|across|within|in|to|that|which)\b/.test(normalized);
+}
+
+export function resolveComparisonVendors(
+  requestedVendors: string[],
+  researchedVendorScores: Array<{ vendor?: unknown }> | undefined,
+): string[] {
+  if (!requestedVendors.some(isObjectivePhraseVendor) || !Array.isArray(researchedVendorScores)) {
+    return requestedVendors;
+  }
+  const researchedVendors = Array.from(new Set(
+    researchedVendorScores
+      .map((item) => typeof item.vendor === "string" ? cleanVendorName(item.vendor) : "")
+      .filter((vendor) => vendor && !isObjectivePhraseVendor(vendor)),
+  ));
+  return researchedVendors.length === requestedVendors.length
+    ? researchedVendors
+    : requestedVendors;
+}
+
 export function parsePrompt(prompt: string) {
   const normalized = prompt.replace(/\s+/g, " ").trim();
   const chosen = normalized.match(
@@ -917,12 +942,80 @@ function analysisOutputShape(vendors: string[], isHomeLoan = false) {
 }
 
 export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPayload> {
-  const fallback = fallbackAnalysis(input);
+  let fallback = fallbackAnalysis(input);
   const userSuppliedUrls = [...input.urls];
   if (!client) return fallback;
   try {
+    const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor);
+    let discoveredAlternativeInsights: string[] = [];
+    if (vendorDiscoveryWasRequired) {
+      const requestedCount = input.vendors.length;
+      const discoveryResponse = await client.responses.create({
+        model: "gpt-4.1-mini",
+        max_output_tokens: 1200,
+        tools: [{
+          type: "web_search",
+          search_context_size: "medium",
+          external_web_access: true,
+        }],
+        input: [
+          {
+            role: "system",
+            content: "Select a concrete product shortlist before a detailed comparison. Return only one valid JSON object with vendors and alternatives arrays. Use exact, publicly available product or service names, not categories, objectives, market descriptions, parent companies, or placeholders.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              prompt: input.prompt,
+              numberOfProducts: requestedCount,
+              instructions: `Choose exactly ${requestedCount} products that best fit the stated decision. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
+              shape: {
+                vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
+                alternatives: [{ name: "Exact alternative product name", rationale: "", tradeOffs: "" }],
+              },
+            }),
+          },
+        ],
+      });
+      if (discoveryResponse.status !== "completed" || !discoveryResponse.output_text) {
+        throw new Error("Product discovery returned no shortlist.");
+      }
+      const discovery = parseJsonObject(discoveryResponse.output_text);
+      const rawDiscoveredVendors: unknown[] = Array.isArray((discovery as { vendors?: unknown }).vendors)
+        ? (discovery as { vendors: unknown[] }).vendors
+        : [];
+      const discoveredVendors = Array.from(new Set(
+        rawDiscoveredVendors
+          .map((vendor) => typeof vendor === "string" ? cleanVendorName(vendor) : "")
+          .filter((vendor) => vendor && !isObjectivePhraseVendor(vendor)),
+      ));
+      if (discoveredVendors.length !== requestedCount) {
+        throw new Error("Product discovery did not return a complete concrete shortlist.");
+      }
+      const rawAlternatives: unknown[] = Array.isArray((discovery as { alternatives?: unknown }).alternatives)
+        ? (discovery as { alternatives: unknown[] }).alternatives
+        : [];
+      discoveredAlternativeInsights = rawAlternatives
+        .flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const row = item as { name?: unknown; rationale?: unknown; tradeOffs?: unknown };
+          const name = typeof row.name === "string" ? cleanVendorName(row.name) : "";
+          if (!name || discoveredVendors.some((vendor) => vendor.toLowerCase() === name.toLowerCase())) return [];
+          const rationale = typeof row.rationale === "string" ? row.rationale.trim() : "";
+          const tradeOffs = typeof row.tradeOffs === "string" ? row.tradeOffs.trim() : "";
+          return [`Alternative outside comparison — ${name}: ${rationale || "A credible option for the stated objective."} Trade-offs: ${tradeOffs || "Validate product fit, implementation effort, and total cost against the shortlist."}`];
+        })
+        .slice(0, 2);
+      input.vendors.splice(0, input.vendors.length, ...discoveredVendors);
+      fallback = fallbackAnalysis(input);
+    }
     const context = validateComparisonContext(input.prompt, input.vendors);
     const researchMarket = inferResearchMarket(input.prompt, input.vendors);
+    const requiresVendorDiscovery = input.vendors.some(isObjectivePhraseVendor);
+    const researchShapeVendors = input.vendors;
+    const vendorDiscoveryInstructions = vendorDiscoveryWasRequired
+      ? "The shortlist was selected from the user's objective. Preserve these exact product names throughout the scorecard, tables, winners, and recommendation. Put other credible products only in insights as outside-shortlist alternatives; do not rank them. "
+      : "";
     const currentDate = new Date().toISOString().slice(0, 10);
     const oldestFallbackDate = new Date();
     oldestFallbackDate.setUTCFullYear(oldestFallbackDate.getUTCFullYear() - 1);
@@ -971,7 +1064,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           {
             role: "user",
             content: JSON.stringify({
-              task: isProviderLevelCreditCardDiscovery
+              task: vendorDiscoveryWasRequired
+                ? "Compare the concrete product shortlist selected for the user's objective."
+                : isProviderLevelCreditCardDiscovery
                 ? "For each named provider, discover the single current credit card that best matches the user's criteria, then compare those exact products."
                 : isProviderLevelHomeLoanDiscovery
                   ? "For each named bank, discover and compare its current variable-rate and fixed-rate investor home-loan products, then identify credible alternatives outside the shortlist."
@@ -990,14 +1085,14 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               ],
               suppliedUrls: input.urls,
               criteria: input.criteria,
-              shape: analysisOutputShape(input.vendors, isProviderLevelHomeLoanDiscovery),
+              shape: analysisOutputShape(researchShapeVendors, isProviderLevelHomeLoanDiscovery),
               marketResearchInstructions,
               researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? `Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
                 : isProviderLevelHomeLoanDiscovery
                   ? `Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current ${researchMarket.country} investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, mortgage-insurance or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, loan-to-value ratio, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable.`
-                  : "Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.",
+                  : `${vendorDiscoveryInstructions}Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.`,
             }),
           },
         ],
@@ -1161,18 +1256,41 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         throw new Error("The researched result did not include separate variable and fixed rates plus an outside alternative.");
       }
     }
+    if (discoveredAlternativeInsights.length) {
+      const existingInsights = Array.isArray(parsed.insights) ? parsed.insights : [];
+      for (const alternative of discoveredAlternativeInsights) {
+        const name = alternative.slice("Alternative outside comparison — ".length).split(":")[0]?.trim().toLowerCase();
+        const alreadyIncluded = existingInsights.some((insight) => (
+          typeof insight === "string"
+          && insight.startsWith("Alternative outside comparison —")
+          && insight.toLowerCase().includes(`— ${name}:`)
+        ));
+        if (!alreadyIncluded) existingInsights.push(alternative);
+      }
+      parsed.insights = existingInsights;
+    }
     const { vendors: _ignoredVendors, prompt: _ignoredPrompt, ...safeParsed } = parsed as typeof parsed & {
       vendors?: unknown;
       prompt?: unknown;
     };
+    const resolvedVendors = resolveComparisonVendors(
+      input.vendors,
+      Array.isArray(parsed.vendorScores) ? parsed.vendorScores : undefined,
+    );
+    if (requiresVendorDiscovery && resolvedVendors === input.vendors) {
+      throw new Error("Product research did not return concrete comparable product names. Refine the request or try again.");
+    }
+    const vendorsWereResolved = resolvedVendors.some((vendor, index) => vendor !== input.vendors[index]);
+    if (vendorsWereResolved) input.vendors.splice(0, input.vendors.length, ...resolvedVendors);
+    const normalizationFallback = vendorsWereResolved ? fallbackAnalysis(input) : fallback;
     const normalized = normalizeAnalysis(
       {
         ...safeParsed,
-        category: typeof parsed.category === "string" ? parsed.category : fallback.category,
-        score: typeof parsed.score === "number" ? Math.round(parsed.score) : fallback.score,
+        category: typeof parsed.category === "string" ? parsed.category : normalizationFallback.category,
+        score: typeof parsed.score === "number" ? Math.round(parsed.score) : normalizationFallback.score,
       },
-      fallback,
-      input.vendors,
+      normalizationFallback,
+      resolvedVendors,
       isProviderLevelCreditCardDiscovery,
     );
     if (isProviderLevelCreditCardDiscovery) {

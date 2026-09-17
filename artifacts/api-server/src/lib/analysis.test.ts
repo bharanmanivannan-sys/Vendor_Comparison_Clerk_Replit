@@ -11,6 +11,7 @@ import {
   officialMarketSourcesFor,
   officialHomeLoanSourcesFor,
   parsePrompt,
+  resolveComparisonVendors,
   validateComparisonContext,
 } from "./analysis";
 
@@ -206,6 +207,35 @@ test("continues to parse genuine provider lists introduced by from", () => {
 
   assert.deepEqual(parsed.vendors, ["ANZ", "Westpac"]);
   assert.equal(parsed.context.valid, true);
+});
+
+test("uses researched product names when parsed vendors are objective phrases", () => {
+  const resolved = resolveComparisonVendors(
+    ["across my product", "services for the consumer market"],
+    [
+      { vendor: "Salesforce Financial Services Cloud" },
+      { vendor: "Microsoft Dynamics 365" },
+    ],
+  );
+
+  assert.deepEqual(resolved, [
+    "Salesforce Financial Services Cloud",
+    "Microsoft Dynamics 365",
+  ]);
+});
+
+test("keeps explicit requested vendors and excludes alternatives from ranked options", () => {
+  const resolved = resolveComparisonVendors(
+    ["Salesforce", "Microsoft"],
+    [
+      { vendor: "Salesforce Financial Services Cloud" },
+      { vendor: "Microsoft Dynamics 365" },
+    ],
+  );
+
+  assert.deepEqual(resolved, ["Salesforce", "Microsoft"]);
+  assert.equal(resolved.includes("Oracle"), false);
+  assert.equal(resolved.includes("SuiteCRM"), false);
 });
 
 test("requires separate variable and fixed home-loan rates plus an alternative", () => {
