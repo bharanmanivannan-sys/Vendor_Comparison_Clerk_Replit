@@ -8,6 +8,7 @@ import {
   missingCreditCardSourceVendors,
   normalizeDecisionGovernance,
   normalizeLensWinner,
+  normalizeMarketPositionEvidence,
   normalizeProviderRole,
   normalizeTextField,
   normalizeVrioStatus,
@@ -46,6 +47,19 @@ test("normalizes governance lists into the string response contract", () => {
   assert.equal(typeof governance.approvers, "string");
   assert.equal(typeof governance.evidenceRequired, "string");
   assert.equal(normalizeTextField([], "Fallback evidence"), "Fallback evidence");
+});
+
+test("normalizes market-position evidence arrays into the string response contract", () => {
+  const evidence = normalizeMarketPositionEvidence([
+    "https://example.com/market-share",
+    "https://example.com/share-value",
+  ]);
+
+  assert.equal(
+    evidence,
+    "https://example.com/market-share; https://example.com/share-value",
+  );
+  assert.equal(typeof evidence, "string");
 });
 
 test("normalizes strategic provider classifications", () => {
