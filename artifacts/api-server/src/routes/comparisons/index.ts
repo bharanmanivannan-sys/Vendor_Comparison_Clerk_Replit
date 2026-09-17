@@ -16,7 +16,7 @@ import {
   ParseGuestComparisonPromptResponse,
 } from "@workspace/api-zod";
 import { comparisonsTable, db } from "@workspace/db";
-import { buildAnalysis, parsePrompt, validateComparisonContext, type AnalysisPayload } from "../../lib/analysis";
+import { buildAnalysis, parsePrompt, parsePromptWithIntent, validateComparisonContext, type AnalysisPayload } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
 
@@ -257,14 +257,14 @@ router.get("/comparisons", requireAuth, async (req: AuthedRequest, res): Promise
   res.json(ListComparisonsResponse.parse(rows.map(summaryFromRow)));
 });
 
-router.post("/guest/comparisons/parse", (req: Request, res): void => {
+router.post("/guest/comparisons/parse", async (req: Request, res): Promise<void> => {
   if (!allowGuestRequest(req, res)) return;
   const parsed = ParseComparisonPromptBody.safeParse(req.body);
   if (!parsed.success || !isSafeUserInput(parsed.data?.prompt ?? "")) {
     sendError(res, 400, "invalid_prompt", "Enter a plain-language comparison without markup, SQL, or instruction injection.");
     return;
   }
-  res.json(ParseGuestComparisonPromptResponse.parse(parsePrompt(parsed.data.prompt)));
+  res.json(ParseGuestComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
 });
 
 router.post("/guest/comparison-jobs", (req: Request, res): void => {
@@ -324,7 +324,7 @@ router.post("/comparisons/parse", requireAuth, async (req: AuthedRequest, res): 
     sendError(res, 400, "invalid_prompt", "Enter a plain-language comparison without markup, SQL, or instruction injection.");
     return;
   }
-  res.json(ParseComparisonPromptResponse.parse(parsePrompt(parsed.data.prompt)));
+  res.json(ParseComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
 });
 
 router.post("/comparison-jobs", requireAuth, (req: AuthedRequest, res): void => {

@@ -783,7 +783,32 @@ components:
             type: string
         context:
           $ref: "#/components/schemas/ComparisonContext"
-      required: [prompt, vendors, urls, criteria, context]
+        intent:
+          $ref: "#/components/schemas/ComparisonIntent"
+      required: [prompt, vendors, urls, criteria, context, intent]
+    ComparisonIntent:
+      type: object
+      properties:
+        options:
+          type: array
+          items:
+            type: string
+        subject:
+          type: string
+        decisionType:
+          type: string
+          enum: [comparison, choice, purchase_channel, financing, migration]
+        category:
+          type: string
+        useCase:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        clarification:
+          type: string
+      required: [options, subject, decisionType, category, useCase, confidence, clarification]
     ComparisonContext:
       type: object
       properties:

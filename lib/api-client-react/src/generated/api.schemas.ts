@@ -146,12 +146,38 @@ export interface ComparisonContext {
   message: string;
 }
 
+export type ComparisonIntentDecisionType = typeof ComparisonIntentDecisionType[keyof typeof ComparisonIntentDecisionType];
+
+
+export const ComparisonIntentDecisionType = {
+  comparison: 'comparison',
+  choice: 'choice',
+  purchase_channel: 'purchase_channel',
+  financing: 'financing',
+  migration: 'migration',
+} as const;
+
+export interface ComparisonIntent {
+  options: string[];
+  subject: string;
+  decisionType: ComparisonIntentDecisionType;
+  category: string;
+  useCase: string;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  confidence: number;
+  clarification: string;
+}
+
 export interface ParsedComparison {
   prompt: string;
   vendors: string[];
   urls: string[];
   criteria: string[];
   context: ComparisonContext;
+  intent: ComparisonIntent;
 }
 
 export type ComparisonSummaryStatus = typeof ComparisonSummaryStatus[keyof typeof ComparisonSummaryStatus];

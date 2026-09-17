@@ -14,9 +14,13 @@ import {
   officialMarketSourcesFor,
   officialHomeLoanSourcesFor,
   parsePrompt,
+  parsePromptWithIntent,
   resolveComparisonVendors,
   validateComparisonContext,
 } from "./analysis";
+
+const extracted = (value: object) => async () => value;
+const intent = (value: object) => ({ subject: "", ...value });
 
 test("includes NPS in the 100-point weighted decision model", () => {
   assert.deepEqual(
@@ -212,6 +216,178 @@ test("interprets vague which-is-better prompts as a comparison", () => {
   assert.deepEqual(parsed.vendors, ["Slack", "Microsoft Teams"]);
   assert.equal(parsed.context.valid, true);
   assert.equal(parsed.context.segment, "Product or service comparison");
+});
+
+test("extracts unfamiliar consumer wording into the comparison brief", async () => {
+  const parsed = await parsePromptWithIntent(
+    "Help me decide whether the Breville Barista Touch or De'Longhi La Specialista suits a small apartment.",
+    extracted(intent({
+      options: ["Breville Barista Touch", "De'Longhi La Specialista"],
+      decisionType: "choice",
+      category: "Espresso machines",
+      useCase: "Small-apartment home coffee",
+      confidence: 0.94,
+      clarification: "",
+    })),
+  );
+  assert.deepEqual(parsed.vendors, ["Breville Barista Touch", "De'Longhi La Specialista"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Espresso machines");
+  assert.equal(parsed.intent.decisionType, "choice");
+});
+
+test("extracts developer and product-manager wording without phrase rules", async () => {
+  const corpus = [
+    {
+      prompt: "For our TypeScript SDK, weigh Kysely against Drizzle ORM under edge-runtime constraints.",
+      options: ["Kysely", "Drizzle ORM"],
+      decisionType: "comparison",
+      category: "Database libraries",
+    },
+    {
+      prompt: "Our product team is torn between Productboard and airfocus for quarterly discovery planning.",
+      options: ["Productboard", "airfocus"],
+      decisionType: "choice",
+      category: "Product management platforms",
+    },
+  ] as const;
+  for (const item of corpus) {
+    const parsed = await parsePromptWithIntent(item.prompt, extracted(intent({
+      options: item.options,
+      decisionType: item.decisionType,
+      category: item.category,
+      useCase: "Team workflow",
+      confidence: 0.9,
+      clarification: "",
+    })));
+    assert.deepEqual(parsed.vendors, [...item.options]);
+    assert.equal(parsed.context.valid, true);
+    assert.equal(parsed.context.segment, item.category);
+  }
+});
+
+test("extracts executive migration and financing decisions", async () => {
+  const corpus = [
+    {
+      prompt: "The board needs a view on retiring Workday in favour of Rippling across global people operations.",
+      options: ["Workday", "Rippling"],
+      decisionType: "migration",
+      category: "HR platforms",
+    },
+    {
+      prompt: "Model salary packaging through Smartleasing against paying cash for the Polestar 4.",
+      options: ["Smartleasing", "paying cash"],
+      decisionType: "financing",
+      category: "Vehicle financing",
+    },
+  ] as const;
+  for (const item of corpus) {
+    const parsed = await parsePromptWithIntent(item.prompt, extracted(intent({
+      options: item.options,
+      decisionType: item.decisionType,
+      category: item.category,
+      useCase: "Executive decision",
+      confidence: 0.91,
+      clarification: "",
+    })));
+    assert.deepEqual(parsed.vendors, [...item.options]);
+    assert.equal(parsed.intent.decisionType, item.decisionType);
+    assert.equal(parsed.context.valid, true);
+  }
+});
+
+test("asks a focused clarification for low-confidence extraction", async () => {
+  const parsed = await parsePromptWithIntent(
+    "We need a better platform for the team.",
+    extracted(intent({
+      options: [],
+      decisionType: "choice",
+      category: "Team software",
+      useCase: "Internal operations",
+      confidence: 0.35,
+      clarification: "Which two platforms are on your shortlist?",
+    })),
+  );
+  assert.equal(parsed.context.valid, false);
+  assert.equal(parsed.context.message, "Which two platforms are on your shortlist?");
+  assert.equal(parsed.intent.confidence, 0.35);
+});
+
+test("rejects invented, placeholder, and cross-domain extracted options", async () => {
+  const invented = await parsePromptWithIntent(
+    "Should we choose Linear or Jira?",
+    extracted(intent({
+      options: ["Linear", "Jira", "Asana"],
+      decisionType: "choice",
+      category: "Work management",
+      useCase: "Software team",
+      confidence: 0.98,
+      clarification: "",
+    })),
+  );
+  assert.deepEqual(invented.vendors, ["Linear", "Jira"]);
+
+  const placeholders = await parsePromptWithIntent(
+    "Compare Vendor A with Vendor B for payroll.",
+    extracted(intent({
+      options: ["Vendor A", "Vendor B"],
+      decisionType: "comparison",
+      category: "Payroll",
+      useCase: "Business operations",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+  assert.equal(placeholders.context.valid, false);
+
+  const crossDomain = await parsePromptWithIntent(
+    "Weigh Apple against Westpac for a credit card product.",
+    extracted(intent({
+      options: ["Apple", "Westpac"],
+      decisionType: "comparison",
+      category: "Credit cards",
+      useCase: "Consumer purchase",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+  assert.equal(crossDomain.context.valid, false);
+});
+
+test("treats BaaS as the subject and MG and Mahindra as the players", async () => {
+  const parsed = await parsePromptWithIntent(
+    "Can you help me compare BaaS with MG & Mahindra. What exactly this means? Who are the players?",
+    extracted(intent({
+      options: ["MG", "Mahindra"],
+      subject: "BaaS",
+      decisionType: "comparison",
+      category: "Battery as a Service",
+      useCase: "Understand and compare the named vehicle providers' BaaS offerings",
+      confidence: 0.96,
+      clarification: "",
+    })),
+  );
+  assert.deepEqual(parsed.vendors, ["MG", "Mahindra"]);
+  assert.equal(parsed.intent.subject, "BaaS");
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Battery as a Service");
+  assert.ok(parsed.criteria.includes("Range and charging"));
+});
+
+test("removes a comparison subject accidentally repeated as an option", async () => {
+  const parsed = await parsePromptWithIntent(
+    "Compare BaaS with MG and Mahindra.",
+    extracted(intent({
+      options: ["BaaS", "MG", "Mahindra"],
+      subject: "BaaS",
+      decisionType: "comparison",
+      category: "Battery as a Service",
+      useCase: "Vehicle ownership",
+      confidence: 0.9,
+      clarification: "",
+    })),
+  );
+  assert.deepEqual(parsed.vendors, ["MG", "Mahindra"]);
 });
 
 test("does not replace compared vendors with objective phrases introduced by across", () => {

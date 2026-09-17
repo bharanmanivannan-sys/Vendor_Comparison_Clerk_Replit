@@ -359,6 +359,11 @@ export const ParseComparisonPromptBody = zod.object({
   "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax)
 })
 
+export const parseComparisonPromptResponseIntentConfidenceMin = 0;
+export const parseComparisonPromptResponseIntentConfidenceMax = 1;
+
+
+
 export const ParseComparisonPromptResponse = zod.object({
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()),
@@ -369,6 +374,15 @@ export const ParseComparisonPromptResponse = zod.object({
   "segment": zod.string(),
   "industry": zod.string(),
   "message": zod.string()
+}),
+  "intent": zod.object({
+  "options": zod.array(zod.string()),
+  "subject": zod.string(),
+  "decisionType": zod.enum(['comparison', 'choice', 'purchase_channel', 'financing', 'migration']),
+  "category": zod.string(),
+  "useCase": zod.string(),
+  "confidence": zod.number().min(parseComparisonPromptResponseIntentConfidenceMin).max(parseComparisonPromptResponseIntentConfidenceMax),
+  "clarification": zod.string()
 })
 })
 
@@ -385,6 +399,11 @@ export const ParseGuestComparisonPromptBody = zod.object({
   "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax)
 })
 
+export const parseGuestComparisonPromptResponseIntentConfidenceMin = 0;
+export const parseGuestComparisonPromptResponseIntentConfidenceMax = 1;
+
+
+
 export const ParseGuestComparisonPromptResponse = zod.object({
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()),
@@ -395,6 +414,15 @@ export const ParseGuestComparisonPromptResponse = zod.object({
   "segment": zod.string(),
   "industry": zod.string(),
   "message": zod.string()
+}),
+  "intent": zod.object({
+  "options": zod.array(zod.string()),
+  "subject": zod.string(),
+  "decisionType": zod.enum(['comparison', 'choice', 'purchase_channel', 'financing', 'migration']),
+  "category": zod.string(),
+  "useCase": zod.string(),
+  "confidence": zod.number().min(parseGuestComparisonPromptResponseIntentConfidenceMin).max(parseGuestComparisonPromptResponseIntentConfidenceMax),
+  "clarification": zod.string()
 })
 })
 

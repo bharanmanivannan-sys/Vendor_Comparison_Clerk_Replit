@@ -14,14 +14,18 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonContext } from './comparisonContext';
-import type { ComparisonIntent } from './comparisonIntent';
+import type { ComparisonIntentDecisionType } from './comparisonIntentDecisionType';
 
-export interface ParsedComparison {
-  prompt: string;
-  vendors: string[];
-  urls: string[];
-  criteria: string[];
-  context: ComparisonContext;
-  intent: ComparisonIntent;
+export interface ComparisonIntent {
+  options: string[];
+  subject: string;
+  decisionType: ComparisonIntentDecisionType;
+  category: string;
+  useCase: string;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  confidence: number;
+  clarification: string;
 }

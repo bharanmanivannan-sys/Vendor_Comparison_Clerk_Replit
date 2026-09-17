@@ -14,14 +14,14 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonContext } from './comparisonContext';
-import type { ComparisonIntent } from './comparisonIntent';
 
-export interface ParsedComparison {
-  prompt: string;
-  vendors: string[];
-  urls: string[];
-  criteria: string[];
-  context: ComparisonContext;
-  intent: ComparisonIntent;
-}
+export type ComparisonIntentDecisionType = typeof ComparisonIntentDecisionType[keyof typeof ComparisonIntentDecisionType];
+
+
+export const ComparisonIntentDecisionType = {
+  comparison: 'comparison',
+  choice: 'choice',
+  purchase_channel: 'purchase_channel',
+  financing: 'financing',
+  migration: 'migration',
+} as const;

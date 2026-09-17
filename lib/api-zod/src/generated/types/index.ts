@@ -28,6 +28,8 @@ export * from './badRequestResponse';
 export * from './comparison';
 export * from './comparisonContext';
 export * from './comparisonInput';
+export * from './comparisonIntent';
+export * from './comparisonIntentDecisionType';
 export * from './comparisonPromptInput';
 export * from './comparisonSummary';
 export * from './comparisonSummaryStatus';

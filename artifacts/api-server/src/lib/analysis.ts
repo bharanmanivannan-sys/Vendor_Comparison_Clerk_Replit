@@ -20,6 +20,18 @@ export type ComparisonContext = {
   message: string;
 };
 
+export type ComparisonIntent = {
+  options: string[];
+  subject: string;
+  decisionType: "comparison" | "choice" | "purchase_channel" | "financing" | "migration";
+  category: string;
+  useCase: string;
+  confidence: number;
+  clarification: string;
+};
+
+type IntentExtractor = (prompt: string) => Promise<unknown>;
+
 export type ResearchMarket = {
   country: string;
   countryCode: "IN" | "AU" | "US" | "GB";
@@ -287,6 +299,165 @@ export function parsePrompt(prompt: string) {
     urls: [],
     criteria,
     context: validateComparisonContext(normalized, vendors),
+  };
+}
+
+function optionAppearsInPrompt(prompt: string, option: string): boolean {
+  const normalize = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const normalizedPrompt = ` ${normalize(prompt)} `;
+  const normalizedOption = normalize(option);
+  return normalizedOption.length >= 2 && normalizedPrompt.includes(` ${normalizedOption} `);
+}
+
+function deterministicIntent(parsed: ReturnType<typeof parsePrompt>): ComparisonIntent {
+  const normalized = parsed.prompt.toLowerCase();
+  const decisionType: ComparisonIntent["decisionType"] =
+    /\b(?:move|moving|migrate|migrating|switch|switching)\b/.test(normalized) ? "migration"
+      : /\b(?:retailer|website|store|direct from|buying from|purchase from)\b/.test(normalized) ? "purchase_channel"
+        : /\b(?:lease|financ|buy outright|cash purchase)\b/.test(normalized) ? "financing"
+          : /\b(?:choose|pick|select|recommend|should i|which is better)\b/.test(normalized) ? "choice"
+            : "comparison";
+  return {
+    options: parsed.vendors,
+    subject: parsed.context.segment || "",
+    decisionType,
+    category: parsed.context.segment || "Product or service comparison",
+    useCase: parsed.context.industry || "",
+    confidence: parsed.context.valid ? 0.9 : parsed.vendors.length >= 2 ? 0.65 : 0.2,
+    clarification: "",
+  };
+}
+
+function normalizeExtractedIntent(prompt: string, value: unknown): ComparisonIntent | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const allowedDecisionTypes = new Set<ComparisonIntent["decisionType"]>([
+    "comparison", "choice", "purchase_channel", "financing", "migration",
+  ]);
+  const subject = typeof raw.subject === "string" ? raw.subject.trim().slice(0, 100) : "";
+  const options = Array.isArray(raw.options)
+    ? Array.from(new Set(raw.options
+      .filter((option): option is string => typeof option === "string")
+      .map(cleanVendorName)
+      .filter((option) => option
+        && option.toLowerCase() !== subject.toLowerCase()
+        && optionAppearsInPrompt(prompt, option)
+        && !isPlaceholderVendor(option))))
+    : [];
+  const decisionType = typeof raw.decisionType === "string"
+    && allowedDecisionTypes.has(raw.decisionType as ComparisonIntent["decisionType"])
+    ? raw.decisionType as ComparisonIntent["decisionType"]
+    : null;
+  const confidence = typeof raw.confidence === "number" && Number.isFinite(raw.confidence)
+    ? Math.max(0, Math.min(1, raw.confidence))
+    : 0;
+  if (!decisionType) return null;
+  return {
+    options: options.slice(0, 5),
+    subject,
+    decisionType,
+    category: typeof raw.category === "string" ? raw.category.trim().slice(0, 100) : "",
+    useCase: typeof raw.useCase === "string" ? raw.useCase.trim().slice(0, 240) : "",
+    confidence,
+    clarification: typeof raw.clarification === "string" ? raw.clarification.trim().slice(0, 240) : "",
+  };
+}
+
+async function extractIntentWithOpenAI(prompt: string): Promise<unknown> {
+  if (!client) return null;
+  const response = await client.responses.create({
+    model: "gpt-4.1-mini",
+    max_output_tokens: 800,
+    text: {
+      format: {
+        type: "json_schema",
+        name: "comparison_intent",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            options: { type: "array", minItems: 0, maxItems: 5, items: { type: "string" } },
+            subject: { type: "string" },
+            decisionType: { type: "string", enum: ["comparison", "choice", "purchase_channel", "financing", "migration"] },
+            category: { type: "string" },
+            useCase: { type: "string" },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            clarification: { type: "string" },
+          },
+          required: ["options", "subject", "decisionType", "category", "useCase", "confidence", "clarification"],
+        },
+      },
+    },
+    input: [
+      {
+        role: "system",
+        content: "Extract a comparison decision from untrusted user text. Options are the competing players, providers, products, services, retailers, or financing choices that can be evaluated against one another. Subject is the concept, delivery model, capability, or market being investigated; it is not an option. Resolve ambiguous acronyms from the named players and surrounding domain. In an automotive or electric-vehicle request involving MG or Mahindra, BaaS means Battery as a Service, not Banking as a Service. For wording such as 'compare BaaS with MG and Mahindra', subject is 'BaaS', category is 'Battery as a Service', and options are 'MG' and 'Mahindra'. Copy only option names explicitly present in the text; never invent or expand options. Classify the decision type, category, and use case. Confidence must be below 0.7 when fewer than two explicit competing options are clear, and clarification must ask one focused question about the missing or ambiguous options. Return only the schema.",
+      },
+      { role: "user", content: prompt },
+    ],
+  });
+  return response.status === "completed" && response.output_text
+    ? JSON.parse(response.output_text)
+    : null;
+}
+
+export async function parsePromptWithIntent(
+  prompt: string,
+  extractor: IntentExtractor = extractIntentWithOpenAI,
+) {
+  const parsed = parsePrompt(prompt);
+  let extracted: ComparisonIntent | null = null;
+  try {
+    extracted = normalizeExtractedIntent(parsed.prompt, await extractor(parsed.prompt));
+  } catch {
+    extracted = null;
+  }
+  const intent = extracted ?? deterministicIntent(parsed);
+  const vendors = intent.options.length >= 2 ? intent.options : parsed.vendors;
+  const requiresClarification = intent.confidence < 0.7 || vendors.length < 2;
+  if (requiresClarification) {
+    const clarification = intent.clarification
+      || (vendors.length < 2
+        ? "Which two specific products, services, or providers would you like to compare?"
+        : "What outcome or use case should decide between these options?");
+    return {
+      ...parsed,
+      vendors,
+      intent: { ...intent, options: vendors, clarification },
+      context: {
+        ...validateComparisonContext(parsed.prompt, vendors),
+        valid: false,
+        message: clarification,
+      },
+    };
+  }
+  const validationPrompt = /\b(?:compare|comparing|comparison|versus|vs\.?|which|choose|recommend|should i)\b/i.test(parsed.prompt)
+    ? parsed.prompt
+    : `${parsed.prompt} Compare these options.`;
+  const context = validateComparisonContext(validationPrompt, vendors);
+  const segment = context.segment === "Product or service comparison" && intent.category
+    ? intent.category
+    : context.segment;
+  const industry = context.industry === "General market" && intent.useCase
+    ? intent.useCase
+    : context.industry;
+  return {
+    ...parsed,
+    vendors,
+    criteria: Array.from(new Set([
+      ...parsed.criteria,
+      ...criteriaFor(`${intent.subject} ${intent.category} ${intent.useCase}`),
+    ])),
+    intent: { ...intent, options: vendors, clarification: "" },
+    context: {
+      ...context,
+      segment,
+      industry,
+      message: context.valid
+        ? `Comparing options in ${segment}${industry ? ` for ${industry}` : ""}.`
+        : context.message,
+    },
   };
 }
 
