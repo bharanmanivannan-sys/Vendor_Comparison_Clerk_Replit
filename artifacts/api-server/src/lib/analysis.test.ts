@@ -173,6 +173,20 @@ test("parses should-I-be-using wording for team software", () => {
   assert.equal(parsed.context.industry, "Business operations");
 });
 
+test("interprets concise versus prompts without requiring extra wording", () => {
+  const parsed = parsePrompt("Slack vs Microsoft Teams");
+  assert.deepEqual(parsed.vendors, ["Slack", "Microsoft Teams"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Product or service comparison");
+});
+
+test("interprets vague which-is-better prompts as a comparison", () => {
+  const parsed = parsePrompt("Which is better: Slack or Microsoft Teams?");
+  assert.deepEqual(parsed.vendors, ["Slack", "Microsoft Teams"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Product or service comparison");
+});
+
 test("requires separate variable and fixed home-loan rates plus an alternative", () => {
   assert.equal(hasHomeLoanResearchCoverage({
     pricing: [{ dimension: "Interest rates", values: {}, winner: "Not established" }],

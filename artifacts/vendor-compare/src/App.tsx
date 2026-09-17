@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -54,10 +54,12 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
+  Moon,
   Plus,
   Search,
   ShieldCheck,
   Sparkles,
+  Sun,
   Target,
   Trash2,
   TrendingUp,
@@ -91,6 +93,29 @@ const clerkPublishableKey = publishableKeyFromHost(
   window.location.hostname,
   import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
 );
+
+type ColorMode = 'light' | 'dark';
+const ThemeContext = createContext<{ mode: ColorMode; toggle: () => void }>({ mode: 'light', toggle: () => undefined });
+
+function ThemeProvider({ children }: { children: ReactNode }) {
+  const [mode, setMode] = useState<ColorMode>(() => {
+    const saved = window.localStorage.getItem('vendor-compare-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', mode === 'dark');
+    document.documentElement.style.colorScheme = mode;
+    window.localStorage.setItem('vendor-compare-theme', mode);
+  }, [mode]);
+  return <ThemeContext.Provider value={{ mode, toggle: () => setMode((current) => current === 'dark' ? 'light' : 'dark') }}>{children}</ThemeContext.Provider>;
+}
+
+function ThemeToggle() {
+  const { mode, toggle } = useContext(ThemeContext);
+  const dark = mode === 'dark';
+  return <button type="button" onClick={toggle} className="theme-toggle focus-ring inline-flex size-10 items-center justify-center rounded-xl border border-[#c9c1ae] bg-[#f8f4e8] text-[#202840] shadow-sm transition-colors hover:border-[#0f766e] hover:text-[#0f766e]" aria-label={`Switch to ${dark ? 'light' : 'dark'} mode`} aria-pressed={dark} title={`Switch to ${dark ? 'light' : 'dark'} mode`} data-testid="button-theme-toggle">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>;
+}
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 
 async function downloadComparisonPdf(comparison: any) {
@@ -404,6 +429,7 @@ function PublicNav() {
         <Link className="focus-ring transition-colors hover:text-[#0f766e]" href="/api-docs" data-testid="link-api-docs">API</Link>
       </nav>
       <div className="flex items-center gap-2">
+        <ThemeToggle />
         <Link href="/sign-in" className="focus-ring hidden rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075] hover:text-[#0f766e] sm:inline-flex" data-testid="link-sign-in">Sign in</Link>
          <Link href="/guest" className="focus-ring hidden rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075] hover:text-[#0f766e] sm:inline-flex" data-testid="link-guest-compare">Try as guest</Link>
          <Link href="/sign-up" className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66] transition-transform hover:-translate-y-0.5" data-testid="link-sign-up">Start comparing <ArrowRight size={16} /></Link>
@@ -531,7 +557,8 @@ function ClerkAuthPage({ mode }: { mode: 'sign-in' | 'sign-up' }) {
     },
   };
   return (
-    <main className="grain grid min-h-[100dvh] bg-[#202840] lg:grid-cols-[1fr_1fr]">
+    <main className="grain relative grid min-h-[100dvh] bg-[#202840] lg:grid-cols-[1fr_1fr]">
+      <div className="absolute right-5 top-5 z-20"><ThemeToggle /></div>
       <section className="relative hidden overflow-hidden bg-[#0f766e] p-10 lg:flex lg:flex-col lg:justify-between">
         <Logo light />
         <div className="relative z-10 max-w-lg pb-12"><p className="mono text-xs uppercase tracking-[.2em] text-[#bde3d8]">A calmer way to compare</p><h1 className="display mt-5 text-6xl font-bold leading-[.92] tracking-[-.06em] text-[#f8f4e8]">Bring your question.<br /><span className="text-[#d9ef66]">Leave with a call.</span></h1><p className="mt-7 max-w-md text-base leading-7 text-[#d4ebe4]">A focused workspace for teams who want to understand the trade-offs before they make the bet.</p></div>
@@ -562,13 +589,13 @@ function AppShell({ children, guest = false }: { children: ReactNode; guest?: bo
         <div className="mt-auto space-y-4"><div className="rounded-2xl border border-[#3a4664] bg-[#29334e] p-4"><div className="flex items-center gap-2 text-[#d9ef66]"><ShieldCheck size={15} /><span className="mono text-[9px] uppercase tracking-[.13em]">Private workspace</span></div><p className="mt-3 text-xs leading-5 text-[#adb6c8]">Your comparisons stay close to your team.</p></div><button className="focus-ring flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-bold text-[#a8b0c2] hover:bg-[#2b344e] hover:text-[#f8f4e8]" onClick={handleSignOut} data-testid="button-sign-out"><LogOut size={17} /> Sign out</button><div className="flex items-center gap-3 border-t border-[#3a4664] pt-5"><span className="grid size-9 place-items-center rounded-full bg-[#d9ef66] text-xs font-bold text-[#202840]">{(user?.firstName?.[0] ?? user?.emailAddresses[0]?.emailAddress?.[0] ?? 'U').toUpperCase()}</span><div><p className="text-xs font-bold">{user?.firstName ?? user?.emailAddresses[0]?.emailAddress ?? 'Workspace member'}</p><p className="text-[10px] text-[#8791a8]">Research lead</p></div><ChevronDown className="ml-auto text-[#8791a8]" size={15} /></div></div>
       </aside>
       {mobileOpen && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-[#202840]/40 lg:hidden" onClick={() => setMobileOpen(false)} data-testid="button-overlay-menu" />}
-      <div className="lg:pl-64"><header className="sticky top-0 z-20 flex h-[76px] items-center justify-between border-b border-[#d9d1bf] bg-[#f2eee2]/90 px-5 backdrop-blur-md lg:px-10"><button className="focus-ring rounded-xl border border-[#d2cab8] p-2.5 text-[#202840] lg:hidden" onClick={() => setMobileOpen(true)} data-testid="button-open-menu"><Menu size={19} /></button><div className="hidden items-center gap-2 text-xs text-[#7f817e] sm:flex"><span className="mono text-[10px] uppercase tracking-[.15em]">Workspace</span><span>/</span><span className="font-bold text-[#202840]">{location === '/history' ? 'History' : location.startsWith('/comparisons') ? 'Analysis' : 'Overview'}</span></div><div className="ml-auto flex items-center gap-3"><span className="hidden text-xs font-semibold text-[#7f817e] sm:inline">Tuesday, June 18, 2025</span><button className="focus-ring grid size-9 place-items-center rounded-full border border-[#cfc7b6] bg-[#e7e2d4] text-xs font-bold text-[#202840]" data-testid="button-profile">AR</button></div></header><main>{children}</main></div>
+      <div className="lg:pl-64"><header className="sticky top-0 z-20 flex h-[76px] items-center justify-between border-b border-[#d9d1bf] bg-[#f2eee2]/90 px-5 backdrop-blur-md lg:px-10"><button className="focus-ring rounded-xl border border-[#d2cab8] p-2.5 text-[#202840] lg:hidden" onClick={() => setMobileOpen(true)} data-testid="button-open-menu"><Menu size={19} /></button><div className="hidden items-center gap-2 text-xs text-[#7f817e] sm:flex"><span className="mono text-[10px] uppercase tracking-[.15em]">Workspace</span><span>/</span><span className="font-bold text-[#202840]">{location === '/history' ? 'History' : location.startsWith('/comparisons') ? 'Analysis' : 'Overview'}</span></div><div className="ml-auto flex items-center gap-3"><ThemeToggle /><span className="hidden text-xs font-semibold text-[#7f817e] sm:inline">Tuesday, June 18, 2025</span><button className="focus-ring grid size-9 place-items-center rounded-full border border-[#cfc7b6] bg-[#e7e2d4] text-xs font-bold text-[#202840]" data-testid="button-profile">AR</button></div></header><main>{children}</main></div>
     </div>
   );
 }
 
 function GuestShell({ children }: { children: ReactNode }) {
-  return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex w-full max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex items-center gap-3"><Link href="/api-docs" className="focus-ring rounded-xl px-3 py-2 text-xs font-bold text-[#556075] hover:text-[#0f766e]">API docs</Link><span className="hidden text-xs font-semibold text-[#7f817e] sm:inline">Guest mode</span><Link href="/sign-in" className="focus-ring rounded-xl px-3 py-2 text-xs font-bold text-[#556075] hover:text-[#0f766e]" data-testid="link-guest-sign-in">Sign in</Link><Link href="/sign-up" className="focus-ring rounded-xl bg-[#202840] px-3 py-2 text-xs font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66]" data-testid="link-guest-sign-up">Save your workspace</Link></div></header><main>{children}</main></div>;
+  return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex w-full max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex items-center gap-3"><ThemeToggle /><Link href="/api-docs" className="focus-ring hidden rounded-xl px-3 py-2 text-xs font-bold text-[#556075] hover:text-[#0f766e] sm:inline-flex">API docs</Link><span className="hidden text-xs font-semibold text-[#7f817e] sm:inline">Guest mode</span><Link href="/sign-in" className="focus-ring rounded-xl px-3 py-2 text-xs font-bold text-[#556075] hover:text-[#0f766e]" data-testid="link-guest-sign-in">Sign in</Link><Link href="/sign-up" className="focus-ring hidden rounded-xl bg-[#202840] px-3 py-2 text-xs font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66] sm:inline-flex" data-testid="link-guest-sign-up">Save your workspace</Link></div></header><main>{children}</main></div>;
 }
 
 function LoadingPanel({ label = 'Loading your workspace' }: { label?: string }) {
@@ -915,7 +942,7 @@ function AnalysisPage() {
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-8 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]"><p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">Recommended</p><div className="mt-5 flex items-center justify-between gap-4"><div><p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{comparison.recommendation}</p><p className="mt-2 text-xs text-[#a8b0c2]">Best overall fit</p></div><ScoreRing score={Math.round(comparison.score)} /></div><div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{comparison.recommendationReason}</div></div></div>
        <ExecutiveDecisionBrief comparison={comparison} />
        <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
-        <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing C-suite report' : 'Download C-suite + extended PDF'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
+        <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
      <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor signal</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono text-xs font-bold text-[#0f766e]">{vendor.score}/100</span></div><p className="display mt-8 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${vendor.score}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
     <ScoreCharts vendorScores={comparison.vendorScores} />
      <HeadToHead comparison={comparison} />
@@ -1197,7 +1224,7 @@ function Router() {
 }
 
 function App() {
-  return <WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter>;
+  return <ThemeProvider><WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter></ThemeProvider>;
 }
 
 function ClerkProviderWithRoutes() {

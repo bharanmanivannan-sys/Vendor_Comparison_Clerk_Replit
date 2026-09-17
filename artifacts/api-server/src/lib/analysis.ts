@@ -206,12 +206,18 @@ export function parsePrompt(prompt: string) {
   const choicePair = normalized.match(
     /\b(?:(?:should\s+i\s+)(?:choose|pick|select|get|use|be\s+using|go\s+with)|(?:choose|pick|select|recommend))\s+(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
+  const whichIsBetterPair = normalized.match(
+    /\bwhich\s+(?:one\s+)?is\s+(?:better|best)\s*[:,-]?\s*(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|because|to)\b|[?.!,]|$)/i,
+  );
+  const directPair = normalized.match(
+    /^(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
+  );
   const genericPair = normalized.match(
     /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against)\s+(.+?)(?=\s+(?:for|in|within|among|across|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const pair = purchaseChannelPair
     ? [purchaseChannelPair[0], purchaseChannelPair[2], purchaseChannelPair[3]]
-    : migrationPair ?? betweenPair ?? withPair ?? genericPair ?? choicePair;
+    : migrationPair ?? betweenPair ?? withPair ?? genericPair ?? choicePair ?? whichIsBetterPair ?? directPair;
   const before = normalized.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? normalized;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];

@@ -79,6 +79,48 @@
   --destructive-foreground: 225 29% 14%;
 }
 
+/* The app predates semantic color utilities, so these mappings provide a
+   consistent high-contrast dark theme for its existing palette. */
+.dark [class~="bg-[#f2eee2]"],
+.dark [class~="bg-[#f8f4e8]"],
+.dark [class~="bg-white"] { background-color: #171d2e; }
+.dark [class~="bg-[#e7e2d4]"] { background-color: #252d43; }
+.dark [class~="bg-[#e8f2bd]"],
+.dark [class~="bg-[#eef4d8]"],
+.dark [class~="bg-[#dcefe9]"] { background-color: #263b39; }
+.dark [class~="text-[#202840]"],
+.dark [class~="text-[#39435a]"],
+.dark [class~="text-[#4f596d]"],
+.dark [class~="text-[#556075]"],
+.dark [class~="text-[#566074]"],
+.dark [class~="text-[#626b7b]"],
+.dark [class~="text-[#667083]"],
+.dark [class~="text-[#687083]"] { color: #f4f0e5; }
+.dark [class~="text-[#7f817e]"],
+.dark [class~="text-[#85877f]"],
+.dark [class~="text-[#8a8b83]"],
+.dark [class~="text-[#8b8b83]"],
+.dark [class~="text-[#888b82]"],
+.dark [class~="text-[#9a9a90]"] { color: #b8c1d3; }
+.dark [class~="border-[#d5cebd]"],
+.dark [class~="border-[#d0c8b7]"],
+.dark [class~="border-[#c9c1ae]"],
+.dark [class~="border-[#d9d1bf]"],
+.dark [class~="border-[#ddd5c5]"],
+.dark [class~="border-[#e7e2d4]"] { border-color: #414b65; }
+.dark .theme-toggle { background-color: #d9ef66; color: #202840; border-color: #d9ef66; }
+.dark [data-testid="button-generate-analysis"],
+.dark [data-testid="button-research-comparison"] {
+  background-color: #d9ef66;
+  color: #202840;
+  border: 2px solid #f8f4e8;
+  box-shadow: 3px 3px 0 #0f766e;
+}
+.dark body.comparison-research-pending [data-testid="comparison-composer"]::after {
+  background: rgba(23, 29, 46, .98);
+  color: #f4f0e5;
+}
+
 @layer base {
   * { @apply border-border; }
   html { scroll-behavior: smooth; }
@@ -114,6 +156,21 @@
 .display { font-family: 'Bricolage Grotesque', sans-serif; }
 .mono { font-family: var(--app-font-mono); }
 .focus-ring:focus-visible { outline: 3px solid hsl(var(--accent)); outline-offset: 3px; }
+
+[data-testid="button-generate-analysis"],
+[data-testid="button-research-comparison"],
+[data-testid="button-guest-research"] {
+  background-color: #d9ef66;
+  color: #202840;
+  border: 2px solid #202840;
+  box-shadow: 3px 3px 0 #0f766e;
+}
+[data-testid="button-generate-analysis"]:hover,
+[data-testid="button-research-comparison"]:hover,
+[data-testid="button-guest-research"]:hover { background-color: #e6f58e; }
+[data-testid="button-generate-analysis"]:disabled,
+[data-testid="button-research-comparison"]:disabled,
+[data-testid="button-guest-research"]:disabled { opacity: .72; }
 
 [data-testid="comparison-composer"] label[for$="comparison-prompt"]::after {
   content: "You can compare up to 5 products or vendors at a time.";
