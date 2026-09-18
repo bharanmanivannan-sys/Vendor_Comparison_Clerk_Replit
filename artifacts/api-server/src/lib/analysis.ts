@@ -328,11 +328,25 @@ export function selectRecommendationLabel(
   recommendedVendor: string,
   vendors: string[],
   preserveSpecificRecommendation = false,
+  topScoringVendors: string[] = [recommendedVendor],
 ): string {
+  const recommendationParts = (value: string) => value
+    .toLowerCase()
+    .split(/\s*(?:\+|&|,|\band\b)\s*/i)
+    .map((part) => part.replace(/[^\p{L}\p{N}]+/gu, " ").trim())
+    .filter(Boolean)
+    .sort();
+  const suppliedParts = recommendationParts(suppliedRecommendation);
+  const matchingTopVendor = topScoringVendors.find((vendor) => {
+    const vendorParts = recommendationParts(vendor);
+    return vendorParts.length === suppliedParts.length
+      && vendorParts.every((part, index) => part === suppliedParts[index]);
+  });
+  if (matchingTopVendor) return matchingTopVendor;
+  if (!preserveSpecificRecommendation) return recommendedVendor;
   const exactVendor = vendors.find(
     (vendor) => vendor.toLowerCase() === suppliedRecommendation.trim().toLowerCase(),
   );
-  if (!preserveSpecificRecommendation) return recommendedVendor;
   if (exactVendor) return exactVendor;
   return suppliedRecommendation.trim()
     && !isObjectivePhraseVendor(suppliedRecommendation)
@@ -1045,6 +1059,10 @@ function normalizeAnalysis(
     : [];
   const rankedScores = [...vendorScores].sort((a, b) => b.score - a.score);
   const recommendedVendor = rankedScores[0]?.vendor ?? fallback.recommendation;
+  const topScore = rankedScores[0]?.score;
+  const topScoringVendors = rankedScores
+    .filter((vendor) => vendor.score === topScore)
+    .map((vendor) => vendor.vendor);
   const suppliedRecommendation = typeof normalized.recommendation === "string"
     ? normalized.recommendation.trim()
     : "";
@@ -1073,6 +1091,7 @@ function normalizeAnalysis(
       recommendedVendor,
       vendors,
       preserveSpecificRecommendation,
+      topScoringVendors,
     ),
     score: rankedScores[0]?.score ?? fallback.score,
     status: "complete",

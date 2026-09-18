@@ -712,6 +712,37 @@ test("never preserves an objective phrase as the recommendation label", () => {
   );
 });
 
+test("uses the supplied option to break a top-score tie without allowing a lower-ranked override", () => {
+  assert.equal(
+    selectRecommendationLabel(
+      "AWS + Emergent",
+      "Replit",
+      ["Replit", "Emergent and AWS"],
+      false,
+      ["Replit", "Emergent and AWS"],
+    ),
+    "Emergent and AWS",
+  );
+  assert.equal(
+    selectRecommendationLabel(
+      "Emergent and AWS",
+      "Replit",
+      ["Replit", "Emergent and AWS"],
+      false,
+      ["Replit"],
+    ),
+    "Replit",
+  );
+});
+
+test("keeps Replit versus Emergent and AWS as the two requested options", () => {
+  const parsed = parsePrompt(
+    "Help me compare Replit with Emergent and AWS. If I have to choose a vibe coding tool supporting users which one I must pick?",
+  );
+
+  assert.deepEqual(parsed.vendors, ["Replit", "Emergent and AWS"]);
+});
+
 test("keeps explicit requested vendors and excludes alternatives from ranked options", () => {
   const resolved = resolveComparisonVendors(
     ["Salesforce", "Microsoft"],
