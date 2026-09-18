@@ -17,7 +17,14 @@ import {
   RecoverHistoryResponse,
 } from "@workspace/api-zod";
 import { comparisonsTable, db } from "@workspace/db";
-import { buildAnalysis, parsePrompt, parsePromptWithIntent, validateComparisonContext, type AnalysisPayload } from "../../lib/analysis";
+import {
+  buildAnalysis,
+  parsePrompt,
+  parsePromptWithIntent,
+  reconcileRecommendationWithNarrative,
+  validateComparisonContext,
+  type AnalysisPayload,
+} from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
 import { persistComparisonAtomically } from "../../services/comparisonPersistence";
@@ -195,12 +202,17 @@ export async function validateComparisonInput(
 }
 
 export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
+  const recommendation = reconcileRecommendationWithNarrative(
+    row.recommendation,
+    row.vendorScores,
+    `${row.executiveSummary} ${row.recommendationReason}`,
+  );
   return {
     id: row.id,
     prompt: row.prompt,
     vendors: row.vendors,
     category: row.category,
-    recommendation: row.recommendation,
+    recommendation,
     score: row.score,
     createdAt: row.createdAt,
     status: row.status as "complete" | "processing" | "failed",

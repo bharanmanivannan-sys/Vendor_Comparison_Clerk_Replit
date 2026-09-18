@@ -354,6 +354,41 @@ export function selectRecommendationLabel(
     : recommendedVendor;
 }
 
+function recommendationAliasPattern(vendor: string): string {
+  const parts = vendor
+    .split(/\s*(?:\+|&|,|\band\b)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (parts.length <= 1) return parts[0] ?? "";
+  return parts.join("(?:\\s+(?:and|with|combined\\s+with)\\s+|\\s*\\+\\s*)");
+}
+
+export function reconcileRecommendationWithNarrative(
+  storedRecommendation: string,
+  vendorScores: Array<{ vendor: string; score: number }>,
+  narrative: string,
+): string {
+  const ranked = [...vendorScores].sort((a, b) => b.score - a.score);
+  const topScore = ranked[0]?.score;
+  const tiedLeaders = ranked.filter((entry) => entry.score === topScore);
+  if (tiedLeaders.length <= 1) return tiedLeaders[0]?.vendor ?? storedRecommendation;
+
+  const explicitNarrativeWinners = tiedLeaders.filter(({ vendor }) => {
+    const alias = recommendationAliasPattern(vendor);
+    if (!alias) return false;
+    return new RegExp(
+      `(?:${alias}).{0,100}(?:offers?|provides?|is|are|stands?\\s+out).{0,60}(?:superior|stronger\\s+overall|best\\s+overall|preferred|recommended)`
+      + `|(?:recommend(?:ed|s|ation)?|choose|prefer(?:red)?).{0,50}(?:${alias})`,
+      "i",
+    ).test(narrative);
+  });
+  if (explicitNarrativeWinners.length === 1) return explicitNarrativeWinners[0].vendor;
+  return tiedLeaders.some(({ vendor }) => vendor === storedRecommendation)
+    ? storedRecommendation
+    : tiedLeaders[0].vendor;
+}
+
 export function resolveComparisonVendors(
   requestedVendors: string[],
   researchedVendorScores: Array<{ vendor?: unknown }> | undefined,

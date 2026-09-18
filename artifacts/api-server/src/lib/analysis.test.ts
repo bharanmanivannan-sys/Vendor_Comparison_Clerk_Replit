@@ -18,6 +18,7 @@ import {
   officialHomeLoanSourcesFor,
   parsePrompt,
   parsePromptWithIntent,
+  reconcileRecommendationWithNarrative,
   resolveComparisonVendors,
   selectRecommendationLabel,
   validateFinalEvidenceUrls,
@@ -730,6 +731,43 @@ test("uses the supplied option to break a top-score tie without allowing a lower
       ["Replit", "Emergent and AWS"],
       false,
       ["Replit"],
+    ),
+    "Replit",
+  );
+});
+
+test("reconciles a tied stored headline with an explicit narrative winner", () => {
+  const scores = [
+    { vendor: "Replit", score: 50 },
+    { vendor: "Emergent and AWS", score: 50 },
+  ];
+  assert.equal(
+    reconcileRecommendationWithNarrative(
+      "Replit",
+      scores,
+      "Emergent combined with AWS offers superior scalability and infrastructure flexibility compared with Replit.",
+    ),
+    "Emergent and AWS",
+  );
+  assert.equal(
+    reconcileRecommendationWithNarrative(
+      "Replit",
+      scores,
+      "Replit is better suited for smaller projects. Emergent and AWS remain credible alternatives.",
+    ),
+    "Replit",
+  );
+});
+
+test("does not let narrative wording override a unique score winner", () => {
+  assert.equal(
+    reconcileRecommendationWithNarrative(
+      "Replit",
+      [
+        { vendor: "Replit", score: 72 },
+        { vendor: "Emergent and AWS", score: 68 },
+      ],
+      "Emergent combined with AWS offers superior infrastructure flexibility.",
     ),
     "Replit",
   );
