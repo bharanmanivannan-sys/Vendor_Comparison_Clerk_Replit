@@ -473,6 +473,15 @@ export interface DashboardSummary {
   recentComparisons: ComparisonSummary[];
 }
 
+export interface HistoryRecoveryResult {
+  /** @minimum 0 */
+  recoveredComparisons: number;
+  /** @minimum 0 */
+  matchedLegacyAccounts: number;
+  /** @minimum 0 */
+  unavailableLegacyAccounts: number;
+}
+
 /**
  * Invalid request
  */

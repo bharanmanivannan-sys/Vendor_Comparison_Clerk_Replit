@@ -14,12 +14,14 @@ import {
   ParseComparisonPromptBody,
   ParseComparisonPromptResponse,
   ParseGuestComparisonPromptResponse,
+  RecoverHistoryResponse,
 } from "@workspace/api-zod";
 import { comparisonsTable, db } from "@workspace/db";
 import { buildAnalysis, parsePrompt, parsePromptWithIntent, validateComparisonContext, type AnalysisPayload } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
 import { persistComparisonAtomically } from "../../services/comparisonPersistence";
+import { recoverVerifiedHistory } from "../../services/historyRecovery";
 
 const router: IRouter = Router();
 
@@ -35,6 +37,8 @@ const comparisonJobs = new Map<string, {
 const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
 const JOB_TTL_MS = 15 * 60 * 1000;
+const HISTORY_RECOVERY_COOLDOWN_MS = 60 * 1000;
+const historyRecoveryAttempts = new Map<string, number>();
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: message, code, message });
@@ -264,6 +268,28 @@ router.get("/comparisons", requireAuth, async (req: AuthedRequest, res): Promise
     .where(and(eq(comparisonsTable.userId, userId), gte(comparisonsTable.createdAt, since)))
     .orderBy(desc(comparisonsTable.createdAt));
   res.json(ListComparisonsResponse.parse(rows.map(summaryFromRow)));
+});
+
+router.post("/history/recovery", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
+  const userId = req.userId as string;
+  const now = Date.now();
+  const lastAttempt = historyRecoveryAttempts.get(userId) ?? 0;
+  if (now - lastAttempt < HISTORY_RECOVERY_COOLDOWN_MS) {
+    res.setHeader("Retry-After", Math.ceil((HISTORY_RECOVERY_COOLDOWN_MS - (now - lastAttempt)) / 1000));
+    sendError(res, 429, "recovery_rate_limited", "History recovery was checked recently. Try again in a minute.");
+    return;
+  }
+  historyRecoveryAttempts.set(userId, now);
+  try {
+    const result = await recoverVerifiedHistory(userId);
+    res.json(RecoverHistoryResponse.parse(result));
+  } catch (error) {
+    if (error instanceof Error && error.message === "current_identity_unavailable") {
+      sendError(res, 503, "identity_unavailable", "Your account identity could not be verified. Try again shortly.");
+      return;
+    }
+    throw error;
+  }
 });
 
 router.post("/guest/comparisons/parse", async (req: Request, res): Promise<void> => {

@@ -112,6 +112,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /history/recovery:
+    post:
+      operationId: recoverHistory
+      tags: [comparisons]
+      summary: Recover comparison history from legacy accounts with the same verified email
+      responses:
+        "200":
+          description: Recovery attempt completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoryRecoveryResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "429":
+          description: Recovery was requested too recently
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "503":
+          description: The current account identity could not be verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
   /guest/comparisons:
     post:
       operationId: createGuestComparison
@@ -1214,4 +1248,17 @@ components:
           items:
             $ref: "#/components/schemas/ComparisonSummary"
       required: [totalComparisons, thisMonth, averageScore, topCategory, recentComparisons]
+    HistoryRecoveryResult:
+      type: object
+      properties:
+        recoveredComparisons:
+          type: integer
+          minimum: 0
+        matchedLegacyAccounts:
+          type: integer
+          minimum: 0
+        unavailableLegacyAccounts:
+          type: integer
+          minimum: 0
+      required: [recoveredComparisons, matchedLegacyAccounts, unavailableLegacyAccounts]
 

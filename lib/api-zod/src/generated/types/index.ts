@@ -49,6 +49,7 @@ export * from './guestComparison';
 export * from './guestComparisonStatus';
 export * from './guestComparisonSwot';
 export * from './healthStatus';
+export * from './historyRecoveryResult';
 export * from './idempotencyKeyParameter';
 export * from './legacyErrorResponse';
 export * from './limitParameter';

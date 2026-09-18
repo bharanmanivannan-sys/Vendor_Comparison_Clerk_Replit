@@ -239,6 +239,24 @@ export const CreateComparisonResponse = zod.object({
 
 
 /**
+ * @summary Recover comparison history from legacy accounts with the same verified email
+ */
+export const recoverHistoryResponseRecoveredComparisonsMin = 0;
+
+export const recoverHistoryResponseMatchedLegacyAccountsMin = 0;
+
+export const recoverHistoryResponseUnavailableLegacyAccountsMin = 0;
+
+
+
+export const RecoverHistoryResponse = zod.object({
+  "recoveredComparisons": zod.number().int().min(recoverHistoryResponseRecoveredComparisonsMin),
+  "matchedLegacyAccounts": zod.number().int().min(recoverHistoryResponseMatchedLegacyAccountsMin),
+  "unavailableLegacyAccounts": zod.number().int().min(recoverHistoryResponseUnavailableLegacyAccountsMin)
+})
+
+
+/**
  * @summary Create an unsaved guest vendor comparison
  */
 export const createGuestComparisonBodyPromptMin = 8;
