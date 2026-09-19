@@ -30,6 +30,7 @@ export * from './comparisonContext';
 export * from './comparisonInput';
 export * from './comparisonIntent';
 export * from './comparisonIntentDecisionType';
+export * from './comparisonIntentFreshness';
 export * from './comparisonPromptInput';
 export * from './comparisonSummary';
 export * from './comparisonSummaryStatus';

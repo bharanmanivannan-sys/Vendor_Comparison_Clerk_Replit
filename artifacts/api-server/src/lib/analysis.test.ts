@@ -10,6 +10,7 @@ import {
   enforceIndianMgBaasFact,
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
+  hasFiveYearMarketHistoryCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
   isElectricVehiclePrompt,
@@ -32,6 +33,7 @@ import {
   parsePromptWithIntent,
   reconcileRecommendationWithNarrative,
   resolveComparisonVendors,
+  requestsFiveYearHomeLoanTrend,
   selectRecommendationLabel,
   sourceMatchesResearchMarket,
   validateFinalEvidenceUrls,
@@ -41,7 +43,13 @@ import { flattenComparisonEvidence } from "../services/comparisonPersistence";
 import { checkEvidenceUrls, createPublicLookup, isSafeUserInput } from "./security";
 
 const extracted = (value: object) => async () => value;
-const intent = (value: object) => ({ subject: "", ...value });
+const intent = (value: object) => ({
+  subject: "",
+  qualifiers: [],
+  decisionCriterion: "best fit for the stated use case",
+  freshness: "stable",
+  ...value,
+});
 
 test("includes NPS in the 100-point weighted decision model", () => {
   assert.deepEqual(
@@ -354,6 +362,36 @@ test("parses comma-separated bank providers before a home-loan category", () => 
   assert.ok(parsed.criteria.includes("Fees and total borrowing cost"));
 });
 
+test("keeps Westpac when intent extraction omits the first bank in an against list", async () => {
+  const prompt = "Compare Westpac against ANZ, NAB and Comm Bank for Home loan products for Investment home loans. The loan amount is 1.3M and term be 30 years. Which bank is better to go with?";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["ANZ", "NAB", "Comm Bank"],
+      decisionType: "choice",
+      category: "Home loans",
+      useCase: "Investment home loan",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Home loans");
+});
+
+test("recognizes a requested bank-authored five-year home-loan trend", async () => {
+  const prompt = "Compare Westpac against ANZ, NAB and Comm Bank for investment home loans. Provide a 5-Year Summary for Home loans trend written by ANZ and the other banks.";
+  const parsed = await parsePromptWithIntent(prompt, async () => {
+    throw new Error("Intent model unavailable");
+  });
+
+  assert.equal(requestsFiveYearHomeLoanTrend(prompt), true);
+  assert.ok(parsed.criteria.includes("Five-year home-loan product and market trend"));
+  assert.ok(!parsed.criteria.includes("Five-year ownership cost"));
+});
+
 test("parses products joined by with before a use-case clause", () => {
   const parsed = parsePrompt("I want to compare Salesforce marketing cloud with Adobe experience manager for my CRM tool. Help me which of the tool is easy to integrate with my legacy tools.");
   assert.deepEqual(parsed.vendors, ["Salesforce marketing cloud", "Adobe experience manager"]);
@@ -370,6 +408,17 @@ test("accepts EV brand comparisons with long-term buy-versus-lease intent", () =
   assert.ok(parsed.criteria.includes("Long-term ownership cost"));
 });
 
+test("normalizes a descriptive BYD EV manufacturer label", async () => {
+  const prompt = "Compare current electric vehicle models from BYD EV car and Tesla available in the requested market. Select the best-matching current model from each manufacturer.";
+  const parsed = await parsePromptWithIntent(prompt, async () => {
+    throw new Error("Intent model unavailable");
+  });
+
+  assert.deepEqual(parsed.vendors, ["BYD", "Tesla"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Electric vehicles");
+});
+
 test("parses EV battery-service comparisons with trailing punctuation", () => {
   const parsed = parsePrompt('Compare Battery as service options, validity and price comparisons between MG and Mahindra Electric vehicles (4 wheeler)""');
   assert.deepEqual(parsed.vendors, ["MG", "Mahindra"]);
@@ -381,6 +430,38 @@ test("parses EV battery-service comparisons with trailing punctuation", () => {
   assert.equal(market.countryCode, "IN");
   assert.equal(market.currency, "INR");
   assert.ok(officialMarketSourcesFor(parsed.prompt, parsed.vendors, market).some((url) => url.includes("mgmotor.co.in") && url.includes("baas-faq")));
+});
+
+test("splits slash and ampersand separated EV manufacturers into distinct options", async () => {
+  const prompt = "Compare EV cars of MG/Tata & Mahindra in India";
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["MG or Tata", "Mahindra"],
+    decisionType: "comparison",
+    category: "Electric vehicles",
+    useCase: "India EV purchase",
+    confidence: 0.95,
+    clarification: "",
+  })));
+
+  assert.deepEqual(parsed.vendors, ["MG", "Tata", "Mahindra"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Electric vehicles");
+  assert.deepEqual(parsed.intent.qualifiers, ["India"]);
+  assert.equal(parsed.intent.decisionCriterion, "best fit for the stated use case");
+  assert.equal(parsed.intent.freshness, "current");
+});
+
+test("returns one-shot decision metadata for grounded comparison research", async () => {
+  const parsed = await parsePromptWithIntent(
+    "Compare Tesla and BYD current cars in Australia under $50,000 and recommend the best value.",
+    async () => {
+      throw new Error("Intent model unavailable");
+    },
+  );
+
+  assert.deepEqual(parsed.intent.qualifiers, ["Australia", "$50,000"]);
+  assert.equal(parsed.intent.decisionCriterion, "best value for money");
+  assert.equal(parsed.intent.freshness, "current");
 });
 
 test("fallback parsing treats BaaS as the subject and splits MG and Mahindra", async () => {
@@ -878,6 +959,76 @@ test("reconciles a tied stored headline with an explicit narrative winner", () =
       "Replit is better suited for smaller projects. Emergent and AWS remain credible alternatives.",
     ),
     "Replit",
+  );
+});
+
+test("uses the preferable vendor as the headline when tied scores conflict with the rationale", () => {
+  assert.equal(
+    reconcileRecommendationWithNarrative(
+      "Adobe Marketing Cloud",
+      [
+        { vendor: "Adobe Marketing Cloud", score: 50 },
+        { vendor: "Salesforce", score: 50 },
+      ],
+      "Salesforce CRM offers a comprehensive, customizable, and reliable CRM solution well-suited for Australian banking organizations transitioning from legacy systems like Siebel. Its strong integration capabilities and dedicated support for regulatory compliance make it preferable over Adobe Marketing Cloud.",
+    ),
+    "Salesforce",
+  );
+});
+
+test("uses the verified market-share leader to break an equal-score tie", () => {
+  assert.equal(
+    reconcileRecommendationWithNarrative(
+      "Adobe Marketing Cloud",
+      [
+        {
+          vendor: "Adobe Marketing Cloud",
+          score: 50,
+          marketPosition: {
+            marketShare: "18% market share",
+            evidence: "https://research.example.com/crm-market-share",
+          },
+        },
+        {
+          vendor: "Salesforce",
+          score: 50,
+          marketPosition: {
+            marketShare: "Market leader with 32% market share",
+            evidence: "https://research.example.com/crm-market-share",
+          },
+        },
+      ],
+      "Adobe Marketing Cloud is preferable for this specific use case.",
+    ),
+    "Salesforce",
+  );
+});
+
+test("does not use unsupported market-leadership claims to break a score tie", () => {
+  assert.equal(
+    reconcileRecommendationWithNarrative(
+      "Adobe Marketing Cloud",
+      [
+        {
+          vendor: "Adobe Marketing Cloud",
+          score: 50,
+          marketPosition: {
+            marketShare: "Market leader with 60% market share",
+            evidence: "No exact supporting URL was returned.",
+          },
+        },
+        {
+          vendor: "Salesforce",
+          score: 50,
+          marketPosition: {
+            marketShare: "32% market share",
+            evidence: "https://research.example.com/crm-market-share",
+          },
+        },
+      ],
+      "Salesforce is the recommended option.",
+    ),
+    "Salesforce",
   );
 });
 
@@ -1513,6 +1664,32 @@ test("neutralizes unsupported five-year summaries and transaction claims", () =>
   assert.match(result.trendSummary, /unavailable or not independently verified/i);
   assert.ok(result.yearlyTrends.every((entry) => entry.trendDirection === "unavailable"));
   assert.deepEqual(result.transactions, []);
+});
+
+test("requires five sourced home-loan trend years for every requested bank", () => {
+  const currentYear = new Date().getUTCFullYear();
+  const years = Array.from({ length: 5 }, (_, index) => ({
+    year: currentYear - 4 + index,
+    productPerformance: "Reported home-loan portfolio performance",
+    marketPosition: "Reported market position",
+    trendDirection: "stable" as const,
+    notableEvent: "Annual disclosure",
+    evidenceUrl: `https://example.com/report-${index}`,
+  }));
+  const analysis = {
+    vendorScores: ["Westpac", "ANZ"].map((vendor) => ({
+      vendor,
+      marketHistory: {
+        lookbackYears: 5,
+        trendSummary: "Five-year home-loan trend.",
+        yearlyTrends: years,
+      },
+    })),
+  } as Partial<AnalysisPayload>;
+
+  assert.equal(hasFiveYearMarketHistoryCoverage(analysis, ["Westpac", "ANZ"]), true);
+  analysis.vendorScores?.[1]?.marketHistory?.yearlyTrends.pop();
+  assert.equal(hasFiveYearMarketHistoryCoverage(analysis, ["Westpac", "ANZ"]), false);
 });
 
 test("removes numeric stock values for a verified private company", () => {

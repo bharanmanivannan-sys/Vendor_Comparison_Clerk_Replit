@@ -766,6 +766,10 @@ components:
       required: [prompt]
     ParsedComparison:
       type: object
+      description: |
+        One-shot parse result. Entity boundaries are resolved before source retrieval.
+        The response preserves user order and exposes the qualifiers, decision criterion,
+        and freshness requirements that downstream research must honor.
       properties:
         prompt:
           type: string
@@ -802,13 +806,26 @@ components:
           type: string
         useCase:
           type: string
+        qualifiers:
+          type: array
+          description: Explicit constraints such as market, budget, time period, purpose, or version.
+          maxItems: 8
+          items:
+            type: string
+        decisionCriterion:
+          type: string
+          description: The outcome against which the final recommendation must be judged.
+        freshness:
+          type: string
+          description: Whether research requires current, historical, or generally stable evidence.
+          enum: [current, historical, stable]
         confidence:
           type: number
           minimum: 0
           maximum: 1
         clarification:
           type: string
-      required: [options, subject, decisionType, category, useCase, confidence, clarification]
+      required: [options, subject, decisionType, category, useCase, qualifiers, decisionCriterion, freshness, confidence, clarification]
     ComparisonContext:
       type: object
       properties:

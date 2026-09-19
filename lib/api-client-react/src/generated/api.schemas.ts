@@ -157,12 +157,33 @@ export const ComparisonIntentDecisionType = {
   migration: 'migration',
 } as const;
 
+/**
+ * Whether research requires current, historical, or generally stable evidence.
+ */
+export type ComparisonIntentFreshness = typeof ComparisonIntentFreshness[keyof typeof ComparisonIntentFreshness];
+
+
+export const ComparisonIntentFreshness = {
+  current: 'current',
+  historical: 'historical',
+  stable: 'stable',
+} as const;
+
 export interface ComparisonIntent {
   options: string[];
   subject: string;
   decisionType: ComparisonIntentDecisionType;
   category: string;
   useCase: string;
+  /**
+     * Explicit constraints such as market, budget, time period, purpose, or version.
+     * @maxItems 8
+     */
+  qualifiers: string[];
+  /** The outcome against which the final recommendation must be judged. */
+  decisionCriterion: string;
+  /** Whether research requires current, historical, or generally stable evidence. */
+  freshness: ComparisonIntentFreshness;
   /**
      * @minimum 0
      * @maximum 1
@@ -171,6 +192,11 @@ export interface ComparisonIntent {
   clarification: string;
 }
 
+/**
+ * One-shot parse result. Entity boundaries are resolved before source retrieval.
+ * The response preserves user order and exposes the qualifiers, decision criterion,
+ * and freshness requirements that downstream research must honor.
+ */
 export interface ParsedComparison {
   prompt: string;
   vendors: string[];

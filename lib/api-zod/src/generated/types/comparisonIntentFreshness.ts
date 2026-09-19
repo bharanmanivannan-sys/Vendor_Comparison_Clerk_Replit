@@ -14,19 +14,15 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonContext } from './comparisonContext';
-import type { ComparisonIntent } from './comparisonIntent';
 
 /**
- * One-shot parse result. Entity boundaries are resolved before source retrieval.
- * The response preserves user order and exposes the qualifiers, decision criterion,
- * and freshness requirements that downstream research must honor.
+ * Whether research requires current, historical, or generally stable evidence.
  */
-export interface ParsedComparison {
-  prompt: string;
-  vendors: string[];
-  urls: string[];
-  criteria: string[];
-  context: ComparisonContext;
-  intent: ComparisonIntent;
-}
+export type ComparisonIntentFreshness = typeof ComparisonIntentFreshness[keyof typeof ComparisonIntentFreshness];
+
+
+export const ComparisonIntentFreshness = {
+  current: 'current',
+  historical: 'historical',
+  stable: 'stable',
+} as const;

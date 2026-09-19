@@ -511,6 +511,8 @@ export const ParseComparisonPromptBody = zod.object({
   "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax)
 })
 
+export const parseComparisonPromptResponseIntentQualifiersMax = 8;
+
 export const parseComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseComparisonPromptResponseIntentConfidenceMax = 1;
 
@@ -533,10 +535,13 @@ export const ParseComparisonPromptResponse = zod.object({
   "decisionType": zod.enum(['comparison', 'choice', 'purchase_channel', 'financing', 'migration']),
   "category": zod.string(),
   "useCase": zod.string(),
+  "qualifiers": zod.array(zod.string()).max(parseComparisonPromptResponseIntentQualifiersMax).describe('Explicit constraints such as market, budget, time period, purpose, or version.'),
+  "decisionCriterion": zod.string().describe('The outcome against which the final recommendation must be judged.'),
+  "freshness": zod.enum(['current', 'historical', 'stable']).describe('Whether research requires current, historical, or generally stable evidence.'),
   "confidence": zod.number().min(parseComparisonPromptResponseIntentConfidenceMin).max(parseComparisonPromptResponseIntentConfidenceMax),
   "clarification": zod.string()
 })
-})
+}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor.\n')
 
 
 /**
@@ -550,6 +555,8 @@ export const parseGuestComparisonPromptBodyPromptMax = 2000;
 export const ParseGuestComparisonPromptBody = zod.object({
   "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax)
 })
+
+export const parseGuestComparisonPromptResponseIntentQualifiersMax = 8;
 
 export const parseGuestComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseGuestComparisonPromptResponseIntentConfidenceMax = 1;
@@ -573,10 +580,13 @@ export const ParseGuestComparisonPromptResponse = zod.object({
   "decisionType": zod.enum(['comparison', 'choice', 'purchase_channel', 'financing', 'migration']),
   "category": zod.string(),
   "useCase": zod.string(),
+  "qualifiers": zod.array(zod.string()).max(parseGuestComparisonPromptResponseIntentQualifiersMax).describe('Explicit constraints such as market, budget, time period, purpose, or version.'),
+  "decisionCriterion": zod.string().describe('The outcome against which the final recommendation must be judged.'),
+  "freshness": zod.enum(['current', 'historical', 'stable']).describe('Whether research requires current, historical, or generally stable evidence.'),
   "confidence": zod.number().min(parseGuestComparisonPromptResponseIntentConfidenceMin).max(parseGuestComparisonPromptResponseIntentConfidenceMax),
   "clarification": zod.string()
 })
-})
+}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor.\n')
 
 
 /**

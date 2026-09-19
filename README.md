@@ -7,6 +7,7 @@ The repository also includes a free-beta, tenant-scoped API with usage controls.
 ## Features
 
 - Natural-language product and vendor comparison
+- Hybrid input parsing: model-assisted intent extraction plus deterministic entity-boundary validation
 - Brand-level product discovery, including recommendations across product catalogs
 - Current web research with cited sources
 - Weighted scoring, pricing, features, SWOT, PESTLE, SOAR, and VRIO analysis
@@ -109,6 +110,34 @@ The commercial API provides:
 - Usage reporting
 
 The API contract and generated clients are maintained from `lib/api-spec/openapi.yaml`.
+
+### Input parsing contract
+
+Both `POST /api/comparisons/parse` and `POST /api/guest/comparisons/parse` run the
+same one-shot parsing pipeline before research:
+
+1. Extract comparison intent, subjects, qualifiers, the decision criterion, and
+   freshness requirements.
+2. Resolve entity boundaries deterministically. Recognized options joined by
+   `/`, `&`, commas, `and`, `or`, `vs`, `versus`, or `against` are independent
+   entities unless an exact protected entity or product name takes precedence.
+3. Preserve user order, canonicalize and deduplicate options, then validate each
+   option's sources independently.
+4. Use user-provided URLs first during research and use open-web sources only
+   where needed. Recommendation-driving facts must come from an official source
+   or be corroborated by independent sources.
+
+The parsed response includes `intent.qualifiers`, `intent.decisionCriterion`,
+and `intent.freshness`. For example, `MG/Tata & Mahindra` resolves to `MG`,
+`Tata`, and `Mahindra`; source validation never receives `MG or Tata` as a
+single manufacturer.
+
+After editing the OpenAPI contract, regenerate the server schemas and React
+client:
+
+```bash
+pnpm --filter @workspace/api-spec run codegen
+```
 
 ## Beta access
 

@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ComparisonIntentDecisionType } from './comparisonIntentDecisionType';
+import type { ComparisonIntentFreshness } from './comparisonIntentFreshness';
 
 export interface ComparisonIntent {
   options: string[];
@@ -22,6 +23,15 @@ export interface ComparisonIntent {
   decisionType: ComparisonIntentDecisionType;
   category: string;
   useCase: string;
+  /**
+     * Explicit constraints such as market, budget, time period, purpose, or version.
+     * @maxItems 8
+     */
+  qualifiers: string[];
+  /** The outcome against which the final recommendation must be judged. */
+  decisionCriterion: string;
+  /** Whether research requires current, historical, or generally stable evidence. */
+  freshness: ComparisonIntentFreshness;
   /**
      * @minimum 0
      * @maximum 1
