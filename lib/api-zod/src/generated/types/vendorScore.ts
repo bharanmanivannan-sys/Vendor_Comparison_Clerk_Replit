@@ -14,6 +14,7 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { MarketHistory } from './marketHistory';
 import type { MarketPosition } from './marketPosition';
 import type { VendorScoreProviderRole } from './vendorScoreProviderRole';
 import type { VrioAssessment } from './vrioAssessment';
@@ -33,4 +34,5 @@ export interface VendorScore {
   switchConditions?: string[];
   vrio?: VrioAssessment;
   marketPosition?: MarketPosition;
+  marketHistory?: MarketHistory;
 }

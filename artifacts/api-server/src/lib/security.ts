@@ -34,12 +34,24 @@ export type EvidenceUrlResult = {
 
 type LookupAddress = { address: string; family: number };
 type EvidenceResponse = { status: number; location?: string };
+type EvidenceCacheEntry = {
+  result: EvidenceUrlResult;
+  expiresAt: number;
+};
 type EvidenceCheckOptions = {
   timeoutMs?: number;
   maxRedirects?: number;
+  successCacheMs?: number;
+  failureCacheMs?: number;
+  now?: () => number;
+  cache?: Map<string, EvidenceCacheEntry>;
   lookupHost?: (hostname: string) => Promise<LookupAddress[]>;
   request?: (url: URL, timeoutMs: number) => Promise<EvidenceResponse>;
 };
+
+const evidenceCheckCache = new Map<string, EvidenceCacheEntry>();
+const SUCCESS_CACHE_MS = 5 * 60_000;
+const FAILURE_CACHE_MS = 30_000;
 
 function isBlockedIpv4(address: string): boolean {
   const octets = address.split(".").map(Number);
@@ -101,6 +113,7 @@ function requestOnce(url: URL, timeoutMs: number, method: "HEAD" | "GET"): Promi
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, {
       method,
+      ...({ autoSelectFamily: false } as Record<string, unknown>),
       headers: {
         "user-agent": "VendorCompare-EvidenceCheck/1.0",
         accept: "*/*",
@@ -147,6 +160,10 @@ export async function checkEvidenceUrls(
 ): Promise<EvidenceUrlResult[]> {
   const timeoutMs = options.timeoutMs ?? 3_000;
   const maxRedirects = options.maxRedirects ?? 3;
+  const successCacheMs = options.successCacheMs ?? SUCCESS_CACHE_MS;
+  const failureCacheMs = options.failureCacheMs ?? FAILURE_CACHE_MS;
+  const now = options.now ?? Date.now;
+  const cache = options.cache ?? evidenceCheckCache;
   const lookupHost = options.lookupHost ?? defaultLookupHost;
   const request = options.request ?? defaultRequest;
 
@@ -157,28 +174,58 @@ export async function checkEvidenceUrls(
     } catch {
       return { url: originalUrl, available: false, reason: "unreachable" };
     }
+    try {
+      await assertPublicDestination(current, lookupHost);
+      const cached = cache.get(originalUrl);
+      if (cached && cached.expiresAt > now()) {
+        if (cached.result.finalUrl) {
+          await assertPublicDestination(new URL(cached.result.finalUrl), lookupHost);
+        }
+        return { ...cached.result };
+      }
+      if (cached) cache.delete(originalUrl);
+    } catch (error) {
+      return {
+        url: originalUrl,
+        available: false,
+        reason: error instanceof Error && error.message === "blocked_destination"
+          ? "blocked_destination"
+          : "unreachable",
+      };
+    }
+
+    const cacheResult = (result: EvidenceUrlResult): EvidenceUrlResult => {
+      if (result.reason !== "blocked_destination") {
+        const lifetime = result.available ? successCacheMs : failureCacheMs;
+        if (lifetime > 0) cache.set(originalUrl, { result: { ...result }, expiresAt: now() + lifetime });
+      }
+      return result;
+    };
+
     for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
       try {
-        await assertPublicDestination(current, lookupHost);
+        if (redirects > 0) await assertPublicDestination(current, lookupHost);
         const response = await request(current, timeoutMs);
         if (response.status >= 300 && response.status < 400) {
           if (!response.location) {
-            return { url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" };
+            return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" });
           }
-          if (redirects === maxRedirects) return { url: originalUrl, available: false, reason: "too_many_redirects" };
+          if (redirects === maxRedirects) {
+            return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "too_many_redirects" });
+          }
           current = new URL(response.location, current);
           continue;
         }
         if (response.status === 401 || response.status === 403 || response.status === 429) {
-          return { url: originalUrl, available: false, finalUrl: current.toString(), reason: "access_restricted" };
+          return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "access_restricted" });
         }
         if (response.status >= 200 && response.status < 400) {
-          return { url: originalUrl, available: true, finalUrl: current.toString() };
+          return cacheResult({ url: originalUrl, available: true, finalUrl: current.toString() });
         }
-        return { url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" };
+        return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" });
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
-        return {
+        return cacheResult({
           url: originalUrl,
           available: false,
           reason: message === "blocked_destination"
@@ -186,9 +233,9 @@ export async function checkEvidenceUrls(
             : /timeout|timed out|abort/i.test(message)
               ? "timeout"
               : "unreachable",
-        };
+        });
       }
     }
-    return { url: originalUrl, available: false, reason: "too_many_redirects" };
+    return cacheResult({ url: originalUrl, available: false, reason: "too_many_redirects" });
   }));
 }

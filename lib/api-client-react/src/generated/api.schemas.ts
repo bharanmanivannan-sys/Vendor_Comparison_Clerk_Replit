@@ -315,6 +315,110 @@ export interface MarketPosition {
   evidence: string;
 }
 
+export type MarketHistoryYearTrendDirection = typeof MarketHistoryYearTrendDirection[keyof typeof MarketHistoryYearTrendDirection];
+
+
+export const MarketHistoryYearTrendDirection = {
+  improving: 'improving',
+  stable: 'stable',
+  declining: 'declining',
+  mixed: 'mixed',
+  unavailable: 'unavailable',
+} as const;
+
+export interface MarketHistoryYear {
+  year: number;
+  productPerformance: string;
+  marketPosition: string;
+  trendDirection: MarketHistoryYearTrendDirection;
+  notableEvent: string;
+  evidenceUrl?: string;
+}
+
+export type OwnershipSnapshotStatus = typeof OwnershipSnapshotStatus[keyof typeof OwnershipSnapshotStatus];
+
+
+export const OwnershipSnapshotStatus = {
+  public: 'public',
+  private: 'private',
+  subsidiary: 'subsidiary',
+  government: 'government',
+  mutual: 'mutual',
+  unknown: 'unknown',
+} as const;
+
+export interface OwnershipSnapshot {
+  status: OwnershipSnapshotStatus;
+  ultimateParent: string;
+  majorShareholders: string[];
+  asOf: string;
+  evidenceUrl?: string;
+}
+
+export type CorporateTransactionType = typeof CorporateTransactionType[keyof typeof CorporateTransactionType];
+
+
+export const CorporateTransactionType = {
+  merger: 'merger',
+  acquisition: 'acquisition',
+  divestiture: 'divestiture',
+  investment: 'investment',
+  restructure: 'restructure',
+  none_found: 'none_found',
+} as const;
+
+export interface CorporateTransaction {
+  date: string;
+  type: CorporateTransactionType;
+  counterparty: string;
+  summary: string;
+  impact: string;
+  evidenceUrl?: string;
+}
+
+export type StockHistoryApplicability = typeof StockHistoryApplicability[keyof typeof StockHistoryApplicability];
+
+
+export const StockHistoryApplicability = {
+  listed: 'listed',
+  listed_parent: 'listed_parent',
+  private: 'private',
+  not_applicable: 'not_applicable',
+  unverified: 'unverified',
+} as const;
+
+export interface StockYearClose {
+  year: number;
+  /** @nullable */
+  price: number | null;
+}
+
+export interface StockHistory {
+  applicability: StockHistoryApplicability;
+  ticker: string;
+  exchange: string;
+  currency: string;
+  /** @nullable */
+  latestPrice: number | null;
+  latestPriceAsOf: string;
+  /** @nullable */
+  fiveYearChangePercent: number | null;
+  yearlyCloses: StockYearClose[];
+  evidenceUrl?: string;
+}
+
+/**
+ * Evidence-backed five-year performance, ownership, corporate-action, and listed-stock context for one compared option.
+ */
+export interface MarketHistory {
+  lookbackYears: 5;
+  trendSummary: string;
+  yearlyTrends: MarketHistoryYear[];
+  ownership: OwnershipSnapshot;
+  transactions: CorporateTransaction[];
+  stock: StockHistory;
+}
+
 export interface VendorScore {
   vendor: string;
   score: number;
@@ -329,6 +433,7 @@ export interface VendorScore {
   switchConditions?: string[];
   vrio?: VrioAssessment;
   marketPosition?: MarketPosition;
+  marketHistory?: MarketHistory;
 }
 
 export type AnalysisRowValues = {[key: string]: string};

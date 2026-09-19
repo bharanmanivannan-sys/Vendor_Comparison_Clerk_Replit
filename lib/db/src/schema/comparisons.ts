@@ -50,6 +50,44 @@ export const comparisonsTable = pgTable("comparisons", {
       applicability: string;
       evidence: string;
     };
+     marketHistory?: {
+       lookbackYears: number;
+       trendSummary: string;
+       yearlyTrends: Array<{
+         year: number;
+         productPerformance: string;
+         marketPosition: string;
+         trendDirection: "improving" | "stable" | "declining" | "mixed" | "unavailable";
+         notableEvent: string;
+         evidenceUrl?: string;
+       }>;
+       ownership: {
+         status: "public" | "private" | "subsidiary" | "government" | "mutual" | "unknown";
+         ultimateParent: string;
+         majorShareholders: string[];
+         asOf: string;
+         evidenceUrl?: string;
+       };
+       transactions: Array<{
+         date: string;
+         type: "merger" | "acquisition" | "divestiture" | "investment" | "restructure" | "none_found";
+         counterparty: string;
+         summary: string;
+         impact: string;
+         evidenceUrl?: string;
+       }>;
+       stock: {
+         applicability: "listed" | "listed_parent" | "private" | "not_applicable" | "unverified";
+         ticker: string;
+         exchange: string;
+         currency: string;
+         latestPrice: number | null;
+         latestPriceAsOf: string;
+         fiveYearChangePercent: number | null;
+         yearlyCloses: Array<{ year: number; price: number | null }>;
+         evidenceUrl?: string;
+       };
+     };
   }>>().notNull(),
   pricing: jsonb("pricing").$type<Array<{ dimension: string; values: Record<string, string>; winner: string }>>().notNull(),
   features: jsonb("features").$type<Array<{ dimension: string; values: Record<string, string>; winner: string }>>().notNull(),

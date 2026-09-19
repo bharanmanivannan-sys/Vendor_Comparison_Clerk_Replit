@@ -1,453 +1,3 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import {
-  WEIGHTED_CRITERIA,
-  dedupeReferenceUrls,
-  hasHomeLoanResearchCoverage,
-  inferResearchMarket,
-  isObjectivePhraseVendor,
-  missingCreditCardSourceVendors,
-  normalizeDecisionGovernance,
-  normalizeEvidenceRecords,
-  normalizeLensWinner,
-  normalizeMarketPositionEvidence,
-  normalizeProviderRole,
-  normalizeTextField,
-  normalizeVrioStatus,
-  officialMarketSourcesFor,
-  officialHomeLoanSourcesFor,
-  parsePrompt,
-  parsePromptWithIntent,
-  reconcileRecommendationWithNarrative,
-  resolveComparisonVendors,
-  selectRecommendationLabel,
-  validateFinalEvidenceUrls,
-  validateComparisonContext,
-} from "./analysis";
-import { flattenComparisonEvidence } from "../services/comparisonPersistence";
-import { checkEvidenceUrls } from "./security";
-
-const extracted = (value: object) => async () => value;
-const intent = (value: object) => ({ subject: "", ...value });
-
-test("includes NPS in the 100-point weighted decision model", () => {
-  assert.deepEqual(
-    WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Customer Advocacy / NPS"),
-    { criterion: "Customer Advocacy / NPS", weight: 10 },
-  );
-  assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
-});
-
-test("normalizes governance lists into the string response contract", () => {
-  const [governance] = normalizeDecisionGovernance([{
-    decision: "Approve product",
-    owner: "CIO",
-    approvers: ["CIO", "Risk Committee"],
-    evidenceRequired: ["Security review", "Commercial validation"],
-    decisionGate: "Executive approval",
-  }]);
-
-  assert.equal(governance.approvers, "CIO; Risk Committee");
-  assert.equal(governance.evidenceRequired, "Security review; Commercial validation");
-  assert.equal(typeof governance.approvers, "string");
-  assert.equal(typeof governance.evidenceRequired, "string");
-  assert.equal(normalizeTextField([], "Fallback evidence"), "Fallback evidence");
-});
-
-test("normalizes market-position evidence arrays into the string response contract", () => {
-  const evidence = normalizeMarketPositionEvidence([
-    "https://example.com/market-share",
-    "https://example.com/share-value",
-  ]);
-
-  assert.equal(
-    evidence,
-    "https://example.com/market-share; https://example.com/share-value",
-  );
-  assert.equal(typeof evidence, "string");
-});
-
-test("normalizes direct advocacy percentages into deterministic weighted evidence", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://research.example.com/advocacy",
-    exactClaim: "80% of surveyed users would advocate for Product A.",
-    rawMetricValue: 80,
-    rawMetricUnit: "percent",
-    sampleSize: 500,
-    evidenceKind: "quantitative",
-    supportDirection: "supports",
-    confidence: 90,
-    normalizedScore: 12,
-  }], "Customer Advocacy / NPS", 10, ["https://research.example.com/advocacy"]);
-
-  assert.equal(evidence.normalizedScore, 80);
-  assert.equal(evidence.weightedContribution, 8);
-  assert.equal(evidence.sampleSize, 500);
-  assert.equal(evidence.normalizationMethod, "direct_percentage");
-});
-
-test("inverts adverse percentage metrics instead of rewarding higher failure rates", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://research.example.com/reliability",
-    exactClaim: "The measured complaint rate was 20 percent.",
-    rawMetricValue: 20,
-    rawMetricUnit: "percent",
-    evidenceKind: "quantitative",
-    supportDirection: "contradicts",
-    confidence: 85,
-  }], "Quality & Reliability", 20, ["https://research.example.com/reliability"]);
-
-  assert.equal(evidence.normalizedScore, 80);
-  assert.equal(evidence.weightedContribution, 16);
-  assert.equal(evidence.normalizationMethod, "inverse_percentage");
-  assert.equal(evidence.criterionWeight, 20);
-});
-
-test("canonicalizes legacy against direction to contradicts", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://research.example.com/incidents",
-    exactClaim: "Service incidents affected 15 percent of surveyed customers.",
-    rawMetricValue: 15,
-    rawMetricUnit: "percent",
-    evidenceKind: "quantitative",
-    supportDirection: "against",
-    confidence: 80,
-  }], "Quality & Reliability", 20, ["https://research.example.com/incidents"]);
-
-  assert.equal(evidence.supportDirection, "contradicts");
-  assert.equal(evidence.normalizedScore, 85);
-  assert.equal(evidence.normalizationMethod, "inverse_percentage");
-});
-
-test("preserves sourced qualitative sustainability evidence and explicit normalization", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://company.example.com/sustainability-report",
-    sourcePublisher: "Product A",
-    exactClaim: "The audited report documents renewable material sourcing and measured emissions reductions.",
-    evidenceKind: "qualitative",
-    supportDirection: "supports",
-    confidence: 72,
-    normalizedScore: 60,
-    normalizationMethod: "documented_targets_and_measured_progress",
-  }], "Sustainability", 5, ["https://company.example.com/sustainability-report"]);
-
-  assert.equal(evidence.normalizedScore, 60);
-  assert.equal(evidence.weightedContribution, 3);
-  assert.equal(evidence.confidence, 72);
-  assert.equal(evidence.sourcePublisher, "Product A");
-});
-
-test("uses neutral low-confidence evidence when a criterion has no valid source", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://invented.example.com/review",
-    exactClaim: "Unsupported positive review claim.",
-    evidenceKind: "quantitative",
-    confidence: 99,
-    normalizedScore: 95,
-  }], "Quality & Reliability", 20, ["https://allowed.example.com/source"]);
-
-  assert.equal(evidence.evidenceKind, "unverified");
-  assert.equal(evidence.confidence, 0);
-  assert.equal(evidence.normalizedScore, 50);
-  assert.equal(evidence.weightedContribution, 10);
-});
-
-test("materializes normalized score evidence into repository rows", () => {
-  const rows = flattenComparisonEvidence(42, {
-    urls: ["https://research.example.com/advocacy"],
-    vendorScores: [{
-      vendor: "Product A",
-      score: 80,
-      color: "#000000",
-      verdict: "Strong",
-      weightedScores: [{
-        criterion: "Customer Advocacy / NPS",
-        weight: 10,
-        score: 80,
-        rationale: "Supported by the cited survey.",
-        evidence: [{
-          sourceUrl: "https://research.example.com/advocacy",
-          exactClaim: "80% of surveyed users would advocate for Product A.",
-          rawMetricValue: 80,
-          rawMetricUnit: "percent",
-          sampleSize: 500,
-          evidenceKind: "quantitative",
-          supportDirection: "supports",
-          confidence: 90,
-          normalizedScore: 80,
-          criterionWeight: 10,
-          weightedContribution: 8,
-          normalizationMethod: "direct_percentage",
-        }],
-      }],
-    }],
-  });
-
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.comparisonId, 42);
-  assert.equal(rows[0]?.vendor, "Product A");
-  assert.equal(rows[0]?.normalizedScore, 80);
-  assert.equal(rows[0]?.weightedContribution, "8.00");
-  assert.equal(rows[0]?.rawMetricValue, "80");
-});
-
-test("materialized evidence contributions reconcile exactly across multiple rows", () => {
-  const rows = flattenComparisonEvidence(43, {
-    urls: [],
-    vendorScores: [{
-      vendor: "Product A",
-      score: 50,
-      color: "#000000",
-      verdict: "Unverified",
-      weightedScores: [{
-        criterion: "Quality & Reliability",
-        weight: 20,
-        score: 50,
-        rationale: "No verified evidence.",
-        evidence: [
-          {
-            exactClaim: "First claim is unverified.",
-            retrievalDate: "2026-09-17",
-            evidenceKind: "unverified",
-            supportDirection: "neutral",
-            confidence: 0,
-            normalizedScore: 50,
-            criterionWeight: 20,
-            weightedContribution: 10,
-            normalizationMethod: "missing_evidence_neutral",
-          },
-          {
-            exactClaim: "Second claim is unverified.",
-            retrievalDate: "2026-09-17",
-            evidenceKind: "unverified",
-            supportDirection: "neutral",
-            confidence: 0,
-            normalizedScore: 50,
-            criterionWeight: 20,
-            weightedContribution: 10,
-            normalizationMethod: "missing_evidence_neutral",
-          },
-        ],
-      }],
-    }],
-  });
-
-  assert.equal(rows.length, 2);
-  assert.equal(rows.reduce((total, row) => total + Number(row.weightedContribution), 0), 10);
-});
-
-test("normalizes strategic provider classifications", () => {
-  assert.equal(normalizeProviderRole("Core Provider"), "core_provider");
-  assert.equal(normalizeProviderRole("specialist"), "expert");
-  assert.equal(normalizeProviderRole("accelerator"), "accelerator");
-  assert.equal(normalizeProviderRole("Leader"), "leader");
-});
-
-test("parses the Australian no-annual-fee credit-card request", () => {
-  const parsed = parsePrompt("I want to compare credit card products which offers no annual fees across the credit card providers in Australia. Choose Westpac, ANZ, CBA, NAB and any other relevant provider.");
-  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "CBA", "NAB", "Bankwest"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Credit cards");
-});
-
-test("rejects product-specific comparisons across unrelated brands", () => {
-  const parsed = parsePrompt("Compare Apple and Westpac for credit card product.");
-  assert.deepEqual(parsed.vendors, ["Apple", "Westpac"]);
-  assert.equal(parsed.context.valid, false);
-});
-
-test("allows a shared service criterion across different brand segments", () => {
-  const parsed = parsePrompt("Compare after sales support between Apple and Westpac.");
-  assert.deepEqual(parsed.vendors, ["Apple", "Westpac"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Customer support");
-});
-
-test("allows cross-sector market insight requests", () => {
-  const parsed = parsePrompt("Provide me recommendations and market insights across Westpac, Apple, Tesla, Vanguard ETF funds.");
-  assert.deepEqual(parsed.vendors, ["Westpac", "Apple", "Tesla", "Vanguard ETF funds"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Market insights");
-});
-
-test("parses a provider list introduced by from for product discovery", () => {
-  const prompt = "Compare credit cards from ANZ, Westpac, NAB, CBA. Provide me a product with best features and lowest rates across merchants and with great rewards. Why should I go with the product and the minimum limit I must go with";
-  const parsed = parsePrompt(prompt);
-
-  assert.deepEqual(parsed.vendors, ["ANZ", "Westpac", "NAB", "CBA"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Credit cards");
-  assert.ok(parsed.criteria.includes("Purchase rate and interest-free period"));
-  assert.ok(parsed.criteria.includes("Rewards value and redemption"));
-  assert.ok(parsed.criteria.includes("Minimum credit limit and eligibility"));
-});
-
-test("accepts bank brands as provider catalogs for credit card comparisons", () => {
-  const context = validateComparisonContext(
-    "Recommend the best rewards credit card from ANZ and Westpac",
-    ["ANZ", "Westpac"],
-  );
-
-  assert.equal(context.valid, true);
-  assert.equal(context.industry, "Australian retail banking");
-});
-
-test("normalizes WBC to Westpac in a provider list", () => {
-  const parsed = parsePrompt(
-    "Compare credit cards from ANZ, WBC, NAB and CBA. How does WBC position itself with others? What's the NPS score?",
-  );
-
-  assert.deepEqual(parsed.vendors, ["ANZ", "Westpac", "NAB", "CBA"]);
-  assert.ok(parsed.criteria.includes("Customer advocacy and NPS"));
-});
-
-test("parses comma-separated bank providers before a home-loan category", () => {
-  const parsed = parsePrompt(
-    "Can you compare Westpac, ANZ, NAB, CBA for Home loan for an Investment property for 1.3M? Please provide an alternative",
-  );
-
-  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "CBA"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Home loans");
-  assert.ok(parsed.criteria.includes("Variable rate, discounts and comparison rate"));
-  assert.ok(parsed.criteria.includes("Fixed-rate terms, revert rate and break costs"));
-  assert.ok(parsed.criteria.includes("Investor-loan eligibility and conditions"));
-  assert.ok(parsed.criteria.includes("Fees and total borrowing cost"));
-});
-
-test("parses products joined by with before a use-case clause", () => {
-  const parsed = parsePrompt("I want to compare Salesforce marketing cloud with Adobe experience manager for my CRM tool. Help me which of the tool is easy to integrate with my legacy tools.");
-  assert.deepEqual(parsed.vendors, ["Salesforce marketing cloud", "Adobe experience manager"]);
-  assert.equal(parsed.context.valid, true);
-  assert.ok(parsed.criteria.includes("Legacy-system integration"));
-});
-
-test("accepts EV brand comparisons with long-term buy-versus-lease intent", () => {
-  const parsed = parsePrompt("Compare BYD vs Tesla which I will use for 7 years. Should I go with Novated lease or buy outright?");
-  assert.deepEqual(parsed.vendors, ["BYD", "Tesla"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Electric vehicles");
-  assert.ok(parsed.criteria.includes("Buy, lease and financing comparison"));
-  assert.ok(parsed.criteria.includes("Long-term ownership cost"));
-});
-
-test("parses EV battery-service comparisons with trailing punctuation", () => {
-  const parsed = parsePrompt('Compare Battery as service options, validity and price comparisons between MG and Mahindra Electric vehicles (4 wheeler)""');
-  assert.deepEqual(parsed.vendors, ["MG", "Mahindra"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Electric vehicles");
-  assert.ok(parsed.criteria.includes("Range and charging"));
-  assert.ok(parsed.criteria.includes("Budget fit"));
-  const market = inferResearchMarket(parsed.prompt, parsed.vendors);
-  assert.equal(market.countryCode, "IN");
-  assert.equal(market.currency, "INR");
-  assert.ok(officialMarketSourcesFor(parsed.prompt, parsed.vendors, market).some((url) => url.includes("mgmotor.co.in") && url.includes("baas-faq")));
-});
-
-test("fallback parsing treats BaaS as the subject and splits MG and Mahindra", async () => {
-  const prompt = "Can you help me compare BaaS with MG & Mahindra. What exactly this means? Who are the players?";
-  const deterministic = parsePrompt(prompt);
-  const fallback = await parsePromptWithIntent(prompt, async () => {
-    throw new Error("Intent model unavailable");
-  });
-
-  assert.deepEqual(deterministic.vendors, ["MG", "Mahindra"]);
-  assert.equal(deterministic.context.segment, "Battery as a Service");
-  assert.deepEqual(fallback.vendors, ["MG", "Mahindra"]);
-  assert.equal(fallback.intent.subject, "Battery as a Service");
-  assert.equal(fallback.context.segment, "Battery as a Service");
-  assert.equal(fallback.context.valid, true);
-});
-
-test("uses the requested market currency for Australian and UK comparisons", () => {
-  assert.equal(inferResearchMarket("Compare EVs in Australia", ["BYD", "Tesla"]).currency, "AUD");
-  assert.equal(inferResearchMarket("Compare EVs in the UK", ["BYD", "Tesla"]).currency, "GBP");
-});
-
-test("parses should-I-get choice wording with novated lease and budget", () => {
-  const parsed = parsePrompt("Should I get a Tesla or BYD when I go for a Novated lease? Which one is value for money? I'm looking at $70,000.00");
-  assert.deepEqual(parsed.vendors, ["Tesla", "BYD"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Electric vehicles");
-  assert.ok(parsed.criteria.includes("Buy, lease and financing comparison"));
-  assert.ok(parsed.criteria.includes("Budget fit"));
-});
-
-test("parses a product purchase-channel comparison", () => {
-  const parsed = parsePrompt("Should I buy an HP laptop from JB Hi-Fi or the HP website itself?");
-  assert.deepEqual(parsed.vendors, ["JB Hi-Fi", "HP website itself"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Computers and laptops");
-  assert.ok(parsed.criteria.includes("Purchase channel, fulfilment and support"));
-});
-
-test("parses platform migration phrasing with from and to", () => {
-  const parsed = parsePrompt("We are moving our customer platform from Salesforce to Adobe Experience Manager for enterprise operations.");
-  assert.deepEqual(parsed.vendors, ["Salesforce", "Adobe Experience Manager"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.industry, "Business operations");
-});
-
-test("accepts unfamiliar products when two real options and comparison intent are clear", () => {
-  const parsed = parsePrompt("Compare Dyson vs Miele for a vacuum cleaner I will keep for 8 years.");
-  assert.deepEqual(parsed.vendors, ["Dyson", "Miele"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Product or service comparison");
-});
-
-test("accepts unfamiliar service brands with a clear decision use case", () => {
-  const parsed = parsePrompt("Should I choose DHL or FedEx for international business shipping?");
-  assert.deepEqual(parsed.vendors, ["DHL", "FedEx"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Product or service comparison");
-});
-
-test("parses should-I-be-using wording for team software", () => {
-  const parsed = parsePrompt("Should I be using JIRA or Asana for my team of 15 people to manage the tasks and the process flows?");
-  assert.deepEqual(parsed.vendors, ["JIRA", "Asana"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.industry, "Business operations");
-});
-
-test("interprets concise versus prompts without requiring extra wording", () => {
-  const parsed = parsePrompt("Slack vs Microsoft Teams");
-  assert.deepEqual(parsed.vendors, ["Slack", "Microsoft Teams"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Product or service comparison");
-});
-
-test("interprets vague which-is-better prompts as a comparison", () => {
-  const parsed = parsePrompt("Which is better: Slack or Microsoft Teams?");
-  assert.deepEqual(parsed.vendors, ["Slack", "Microsoft Teams"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Product or service comparison");
-});
-
-test("extracts unfamiliar consumer wording into the comparison brief", async () => {
-  const parsed = await parsePromptWithIntent(
-    "Help me decide whether the Breville Barista Touch or De'Longhi La Specialista suits a small apartment.",
-    extracted(intent({
-      options: ["Breville Barista Touch", "De'Longhi La Specialista"],
-      decisionType: "choice",
-      category: "Espresso machines",
-      useCase: "Small-apartment home coffee",
-      confidence: 0.94,
-      clarification: "",
-    })),
-  );
-  assert.deepEqual(parsed.vendors, ["Breville Barista Touch", "De'Longhi La Specialista"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Espresso machines");
-  assert.equal(parsed.intent.decisionType, "choice");
-});
-
-test("extracts developer and product-manager wording without phrase rules", async () => {
-  const corpus = [
-    {
-      prompt: "For our TypeScript SDK, weigh Kysely against Drizzle ORM under edge-runtime constraints.",
-      options: ["Kysely", "Drizzle ORM"],
-      decisionType: "comparison",
-      category: "Database libraries",
     },
     {
       prompt: "Our product team is torn between Productboard and airfocus for quarterly discovery planning.",
@@ -809,6 +359,176 @@ test("requires separate variable and fixed home-loan rates plus an alternative",
   }), true);
 });
 
+test("recognizes exact electric SUV model wording", () => {
+  assert.equal(isElectricVehiclePrompt("Compare Hyundai Creta EV with Mahindra electric SUV BE6"), true);
+  assert.equal(validateComparisonContext(
+    "Compare Hyundai Creta EV with Mahindra electric SUV BE6",
+    ["Hyundai Creta EV", "Mahindra BE 6"],
+  ).segment, "Electric vehicles");
+});
+
+test("does not route company or market comparisons through EV specialization", () => {
+  assert.equal(isElectricVehiclePrompt("Compare Tesla and BYD share prices and market performance"), false);
+  assert.equal(isElectricVehiclePrompt("Compare Tesla Powerwall and BYD Battery-Box for home storage"), false);
+  assert.equal(validateComparisonContext(
+    "Compare Tesla and BYD share prices and market performance",
+    ["Tesla", "BYD"],
+  ).segment, "Market insights");
+});
+
+test("requires a substantive EV price and feature matrix", () => {
+  const vendors = ["Hyundai Creta EV", "Mahindra BE 6"];
+  const values = (first: string, second: string) => ({
+    "Hyundai Creta EV": first,
+    "Mahindra BE 6": second,
+  });
+  assert.equal(hasElectricVehicleResearchCoverage({
+    pricing: [{ dimension: "Price", values: values("Validate with the vendor", "Validate with the vendor"), winner: "Not established" }],
+    features: [{ dimension: "Battery and range", values: values("42 kWh", "79 kWh"), winner: "Mahindra BE 6" }],
+  }, vendors), false);
+  assert.equal(hasElectricVehicleResearchCoverage({
+    pricing: [
+      { dimension: "Exact variant and ex-showroom price", values: values("Excellence LR 51.4 kWh — ₹18 lakh", "Pack Three 79 kWh — ₹20 lakh"), winner: "Hyundai Creta EV" },
+      { dimension: "Price range and on-road dependencies", values: values("₹18–24 lakh; tax and insurance vary", "₹20–27 lakh; tax and insurance vary"), winner: "Hyundai Creta EV" },
+      { dimension: "Vehicle warranty, battery warranty and roadside support", values: values("3-year vehicle; 8-year battery", "3-year vehicle; lifetime battery conditions"), winner: "Tie" },
+      { dimension: "Energy consumption and indicative running cost", values: values("12.8 kWh/100 km; tariff dependent", "14.5 kWh/100 km; tariff dependent"), winner: "Hyundai Creta EV" },
+    ],
+    features: [
+      { dimension: "Battery capacity and certified range", values: values("51.4 kWh; 473 km", "79 kWh; 683 km"), winner: "Mahindra BE 6" },
+      { dimension: "Motor power, torque and acceleration", values: values("126 kW; 255 Nm; 0–100 in 7.9 s", "210 kW; 380 Nm; 0–100 in 6.7 s"), winner: "Mahindra BE 6" },
+      { dimension: "AC and DC charging", values: values("11 kW AC; 50 kW DC", "11 kW AC; 175 kW DC"), winner: "Mahindra BE 6" },
+      { dimension: "Dimensions, wheelbase, ground clearance and boot space", values: values("4,340 mm; 2,610 mm; 200 mm; 433 L", "4,371 mm; 2,775 mm; 207 mm; 455 L"), winner: "Mahindra BE 6" },
+      { dimension: "Passive safety, airbags and crash-test rating", values: values("6 airbags; Bharat NCAP rating", "7 airbags; Bharat NCAP rating"), winner: "Mahindra BE 6" },
+      { dimension: "ADAS and active safety", values: values("Level 2 ADAS", "Level 2 ADAS"), winner: "Tie" },
+      { dimension: "Infotainment, connectivity and software", values: values("Dual displays; connected car", "Dual displays; connected car"), winner: "Tie" },
+      { dimension: "Comfort, convenience and cabin equipment", values: values("Ventilated seats; panoramic roof", "Powered seats; panoramic roof"), winner: "Tie" },
+      { dimension: "Warranty, service and reliability evidence", values: values("Battery warranty; national service network", "Battery warranty; early ownership evidence"), winner: "Hyundai Creta EV" },
+    ],
+  }, vendors), true);
+});
+
+test("derives EV score evidence from displayed matrix winners", () => {
+  const analysis = {
+    pricing: [
+      { dimension: "Exact variant and ex-showroom price", values: { "Hyundai Creta Electric": "Executive ₹18 lakh", "Mahindra BE 6": "Pack One ₹19 lakh" }, winner: "Hyundai Creta Electric" },
+    ],
+    features: [
+      { dimension: "Battery and range", values: { "Hyundai Creta Electric": "51.4 kWh, 510 km", "Mahindra BE 6": "79 kWh, 683 km" }, winner: "Mahindra BE 6" },
+      { dimension: "Charging", values: { "Hyundai Creta Electric": "50 kW", "Mahindra BE 6": "175 kW" }, winner: "Mahindra BE 6" },
+    ],
+    vendorScores: [
+      { vendor: "Hyundai Creta Electric", score: 50, weightedScores: [] },
+      { vendor: "Mahindra BE 6", score: 50, weightedScores: [] },
+    ],
+  } as unknown as Partial<AnalysisPayload>;
+  addElectricVehicleMatrixEvidence(
+    analysis,
+    ["Hyundai Creta Electric", "Mahindra BE 6"],
+    [
+      "https://www.hyundai.com/in/en/find-a-car/creta-electric/specification",
+      "https://www.mahindraelectricsuv.com/esuv/be-6/MBE6.html",
+    ],
+  );
+  const hyundai = analysis.vendorScores?.[0]?.weightedScores ?? [];
+  const mahindra = analysis.vendorScores?.[1]?.weightedScores ?? [];
+  assert.ok((mahindra.find((row) => row.criterion === "Meets Needs / Features")?.score ?? 0)
+    > (hyundai.find((row) => row.criterion === "Meets Needs / Features")?.score ?? 0));
+  assert.match(
+    hyundai.find((row) => row.criterion === "Quality & Reliability")?.evidence?.[0]?.exactClaim ?? "",
+    /No reliability evidence/,
+  );
+});
+
+test("merges missing EV matrix rows and cells from the initial research pass", () => {
+  const merged = mergeElectricVehicleResearch({
+    pricing: [{
+      dimension: "Exact variant and ex-showroom price",
+      values: { "Hyundai Creta Electric": "Executive ₹18 lakh", "Mahindra BE 6": "Pack One ₹19 lakh" },
+      winner: "Hyundai Creta Electric",
+    }],
+    features: [{
+      dimension: "Charging",
+      values: { "Hyundai Creta Electric": "50 kW", "Mahindra BE 6": "175 kW" },
+      winner: "Mahindra BE 6",
+    }],
+    sources: ["https://example.com/initial"],
+  }, {
+    pricing: [{
+      dimension: "Exact variant and ex-showroom price",
+      values: { "Hyundai Creta Electric": "", "Mahindra BE 6": "Pack One ₹19 lakh" },
+      winner: "",
+    }],
+    features: [{
+      dimension: "Battery and range",
+      values: { "Hyundai Creta Electric": "51.4 kWh, 510 km", "Mahindra BE 6": "79 kWh, 683 km" },
+      winner: "Mahindra BE 6",
+    }],
+    sources: ["https://example.com/completion"],
+  }, ["Hyundai Creta Electric", "Mahindra BE 6"]);
+  assert.equal(merged.pricing?.[0]?.values["Hyundai Creta Electric"], "Executive ₹18 lakh");
+  assert.equal(merged.pricing?.[0]?.winner, "Hyundai Creta Electric");
+  assert.equal(merged.features?.length, 2);
+  assert.deepEqual(merged.sources, ["https://example.com/initial", "https://example.com/completion"]);
+});
+
+test("requires official EV product sources for recognized manufacturers", () => {
+  assert.deepEqual(missingElectricVehicleSourceVendors(
+    ["Hyundai Creta EV", "Mahindra BE 6"],
+    ["https://www.hyundai.com/in/en/find-a-car/creta-electric/highlights"],
+  ), ["Mahindra BE 6"]);
+});
+
+test("rejects an EV report with arbitrary equal scores and no reachable score evidence", () => {
+  const vendors = ["Hyundai Creta EV", "Mahindra BE 6"];
+  const values = {
+    "Hyundai Creta EV": "Product-specific value",
+    "Mahindra BE 6": "Different product-specific value",
+  };
+  const analysis = {
+    recommendation: "Hyundai Creta EV",
+    recommendationReason: "Choose it for price and service coverage.",
+    pricing: [
+      { dimension: "Exact variant and ex-showroom price", values, winner: "Hyundai Creta EV" },
+      { dimension: "Price range and on-road cost", values, winner: "Hyundai Creta EV" },
+      { dimension: "Vehicle warranty, battery warranty and roadside support", values, winner: "Tie" },
+      { dimension: "Energy consumption and running cost", values, winner: "Hyundai Creta EV" },
+    ],
+    features: [
+      { dimension: "Battery and range", values, winner: "Mahindra BE 6" },
+      { dimension: "Motor power, torque and acceleration", values, winner: "Mahindra BE 6" },
+      { dimension: "Charging", values, winner: "Mahindra BE 6" },
+      { dimension: "Dimensions, wheelbase, ground clearance and boot", values, winner: "Tie" },
+      { dimension: "Passive safety, airbags and crash rating", values, winner: "Tie" },
+      { dimension: "ADAS", values, winner: "Tie" },
+      { dimension: "Infotainment, connectivity and software", values, winner: "Tie" },
+      { dimension: "Comfort, convenience and cabin", values, winner: "Tie" },
+      { dimension: "Warranty, service and reliability", values, winner: "Hyundai Creta EV" },
+    ],
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 50,
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => ({
+        criterion,
+        score: 50,
+        rationale: "Generic rationale",
+        evidence: [],
+      })),
+    })),
+  };
+  const issues = electricVehicleFinalQualityIssues(
+    analysis as never,
+    vendors,
+    [
+      "https://www.hyundai.com/in/en/find-a-car/creta-electric/highlights",
+      "https://auto.mahindra.com/suv/be6",
+    ],
+    [],
+  );
+  assert.ok(issues.some((issue) => /same overall score/i.test(issue)));
+  assert.ok(issues.some((issue) => /independently reachable scored criteria/i.test(issue)));
+  assert.ok(issues.some((issue) => /reliability evidence/i.test(issue)));
+});
+
 test("normalizes model VRIO spelling variants before response validation", () => {
   assert.equal(normalizeVrioStatus("partitional"), "partial");
   assert.equal(normalizeVrioStatus("not applicable"), "not_applicable");
@@ -826,6 +546,37 @@ test("keeps every distinct reference while removing tracking duplicates", () => 
     "https://example.com/rates?term=2-years",
     "https://other.example/products",
   ]);
+});
+
+test("removes credential-like query parameters from citations", () => {
+  assert.deepEqual(dedupeReferenceUrls([
+    "https://example.com/specs?variant=long-range&token=secret&X-Amz-Signature=signed",
+  ]), [
+    "https://example.com/specs?variant=long-range",
+  ]);
+});
+
+test("extracts the first complete JSON object when research adds trailing text", () => {
+  assert.deepEqual(parseJsonObject(
+    '{"category":"Electric vehicles","recommendation":"Mahindra BE 6"} trailing analysis {"ignored":true}',
+  ), {
+    category: "Electric vehicles",
+    recommendation: "Mahindra BE 6",
+  });
+});
+
+test("selects the complete analysis when research returns multiple JSON objects", () => {
+  assert.deepEqual(parseJsonObject(
+    '{"category":"Electric vehicles"}\\n{"category":"Electric vehicles","recommendation":"Mahindra BE 6","recommendationReason":"Longer range and faster charging","vendorScores":[],"pricing":[],"features":[],"sources":["https://example.com/spec"]}',
+  ), {
+    category: "Electric vehicles",
+    recommendation: "Mahindra BE 6",
+    recommendationReason: "Longer range and faster charging",
+    vendorScores: [],
+    pricing: [],
+    features: [],
+    sources: ["https://example.com/spec"],
+  });
 });
 
 test("rejects explanatory text disguised as an evidence URL", () => {
@@ -874,6 +625,72 @@ test("marks timed-out evidence unavailable", async () => {
   assert.equal(result.reason, "timeout");
 });
 
+test("caches successful evidence longer than failed evidence and expires each result", async () => {
+  let currentTime = 1_000;
+  let successRequests = 0;
+  let failureRequests = 0;
+  const cache = new Map();
+  const options = {
+    cache,
+    now: () => currentTime,
+    successCacheMs: 1_000,
+    failureCacheMs: 100,
+    lookupHost: publicLookup,
+    request: async (url: URL) => {
+      if (url.pathname === "/available") {
+        successRequests += 1;
+        return { status: 200 };
+      }
+      failureRequests += 1;
+      throw new Error("timeout");
+    },
+  };
+
+  const urls = ["https://cache.example/available", "https://cache.example/slow"];
+  const first = await checkEvidenceUrls(urls, options);
+  const cached = await checkEvidenceUrls(urls, options);
+  assert.deepEqual(cached, first);
+  assert.equal(successRequests, 1);
+  assert.equal(failureRequests, 1);
+  assert.equal(cached[1].reason, "timeout");
+
+  currentTime += 101;
+  await checkEvidenceUrls(urls, options);
+  assert.equal(successRequests, 1);
+  assert.equal(failureRequests, 2);
+
+  currentTime += 900;
+  await checkEvidenceUrls(urls, options);
+  assert.equal(successRequests, 2);
+  assert.equal(failureRequests, 3);
+});
+
+test("revalidates cached redirect targets before returning evidence", async () => {
+  let requests = 0;
+  let redirectIsPrivate = false;
+  const cache = new Map();
+  const options = {
+    cache,
+    lookupHost: async (hostname: string) => redirectIsPrivate && hostname === "cdn.example"
+      ? [{ address: "10.0.0.8", family: 4 }]
+      : publicLookup(),
+    request: async (url: URL) => {
+      requests += 1;
+      return url.hostname === "source.example"
+        ? { status: 302, location: "https://cdn.example/report" }
+        : { status: 200 };
+    },
+  };
+
+  const [first] = await checkEvidenceUrls(["https://source.example/report"], options);
+  assert.equal(first.finalUrl, "https://cdn.example/report");
+  redirectIsPrivate = true;
+  const [second] = await checkEvidenceUrls(["https://source.example/report"], options);
+  assert.equal(second.available, false);
+  assert.equal(second.reason, "blocked_destination");
+  assert.equal(requests, 2);
+});
+
 test("blocks private and loopback destinations before requesting them", async () => {
   let requested = false;
   const results = await checkEvidenceUrls([
@@ -893,7 +710,7 @@ test("blocks private and loopback destinations before requesting them", async ()
   assert.ok(results.every((result) => result.reason === "blocked_destination"));
 });
 
-test("keeps reachable evidence and clearly marks unavailable sources", async () => {
+test("keeps public citations for direct review while excluding blocked destinations from references", async () => {
   const result = await validateFinalEvidenceUrls([
     "https://example.com/available",
     "https://example.com/restricted",
@@ -906,8 +723,13 @@ test("keeps reachable evidence and clearly marks unavailable sources", async () 
         reason: url.endsWith("/restricted") ? "access_restricted" : "unreachable",
       }));
   assert.deepEqual(result.reachable, ["https://example.com/available"]);
+  assert.deepEqual(result.referenceable, [
+    "https://example.com/available",
+    "https://example.com/restricted",
+    "https://example.com/missing",
+  ]);
   assert.equal(result.unavailableInsights.length, 2);
-  assert.match(result.unavailableInsights[0], /Evidence unavailable.*requires authentication.*unverified/);
+  assert.match(result.unavailableInsights[0], /Source availability check restricted.*preserved.*verified directly/);
   assert.match(result.unavailableInsights[1], /Evidence unavailable.*could not be reached.*unverified/);
 });
 
@@ -964,4 +786,109 @@ test("calculates lower numeric rates and fees as better", () => {
     ),
     "Tie: CBA, NAB, Westpac",
   );
+});
+
+test("normalizes five-year market history without inventing private-company stock values", () => {
+  const currentYear = new Date().getUTCFullYear();
+  const result = normalizeMarketHistory({
+    lookbackYears: 12,
+    trendSummary: "Improved relative product position across the researched period.",
+    yearlyTrends: [
+      { year: currentYear - 5, productPerformance: "Too old", marketPosition: "Too old", trendDirection: "improving", notableEvent: "Old" },
+      { year: currentYear - 1, productPerformance: "Share gains", marketPosition: "Second", trendDirection: "IMPROVING", notableEvent: "Launch", evidenceUrl: "https://example.com/history" },
+      { year: currentYear, productPerformance: "Stable demand", marketPosition: "Second", trendDirection: "speculative", notableEvent: "None" },
+    ],
+    ownership: {
+      status: "private",
+      ultimateParent: "Independent",
+      majorShareholders: ["Founder trust"],
+      asOf: `${currentYear}-06-30`,
+      evidenceUrl: "javascript:alert(1)",
+    },
+    transactions: [{
+      date: `${currentYear}-03-01`,
+      type: "acquisition",
+      counterparty: "Example Labs",
+      summary: "Acquired a specialist capability.",
+      impact: "Expanded the product range.",
+      evidenceUrl: "https://example.com/transaction",
+    }],
+    stock: {
+      applicability: "private",
+      ticker: "",
+      exchange: "",
+      currency: "",
+      latestPrice: "42",
+      latestPriceAsOf: "",
+      fiveYearChangePercent: Number.NaN,
+      yearlyCloses: [{ year: currentYear, price: "50" }],
+    },
+  }, undefined, [
+    "https://example.com/history",
+    "https://example.com/transaction",
+    "https://example.com/stock",
+  ], [
+    "https://example.com/history",
+    "https://example.com/transaction",
+    "https://example.com/stock",
+  ]);
+
+  assert.equal(result.lookbackYears, 5);
+  assert.equal(result.yearlyTrends.length, 5);
+  assert.equal(result.yearlyTrends[3].trendDirection, "improving");
+  assert.equal(result.yearlyTrends[4].trendDirection, "unavailable");
+  assert.equal(result.trendSummary, "Improved relative product position across the researched period.");
+  assert.equal(result.ownership.status, "unknown");
+  assert.equal(result.ownership.evidenceUrl, undefined);
+  assert.equal(result.stock.applicability, "unverified");
+  assert.equal(result.stock.latestPrice, null);
+  assert.equal(result.stock.fiveYearChangePercent, null);
+  assert.deepEqual(result.stock.yearlyCloses, []);
+});
+
+test("neutralizes unsupported five-year summaries and transaction claims", () => {
+  const result = normalizeMarketHistory({
+    trendSummary: "Unsupported claim of market dominance.",
+    yearlyTrends: [{
+      year: new Date().getUTCFullYear(),
+      productPerformance: "Unsupported growth",
+      marketPosition: "First",
+      trendDirection: "improving",
+      notableEvent: "Unsupported event",
+      evidenceUrl: "https://example.com/unreachable",
+    }],
+    transactions: [{
+      date: "2026",
+      type: "none_found",
+      counterparty: "None",
+      summary: "No transactions occurred",
+      impact: "None",
+      evidenceUrl: "https://example.com/unreachable",
+    }],
+  }, undefined, ["https://example.com/unreachable"], []);
+  assert.match(result.trendSummary, /unavailable or not independently verified/i);
+  assert.ok(result.yearlyTrends.every((entry) => entry.trendDirection === "unavailable"));
+  assert.deepEqual(result.transactions, []);
+});
+
+test("removes numeric stock values for a verified private company", () => {
+  const source = "https://example.com/private-company";
+  const result = normalizeMarketHistory({
+    ownership: { status: "private", ultimateParent: "Independent", majorShareholders: [], asOf: "2026", evidenceUrl: source },
+    stock: {
+      applicability: "private",
+      ticker: "FAKE",
+      exchange: "FAKE",
+      currency: "USD",
+      latestPrice: 42,
+      latestPriceAsOf: "2026-09-19",
+      fiveYearChangePercent: 88,
+      yearlyCloses: [{ year: new Date().getUTCFullYear(), price: 42 }],
+      evidenceUrl: source,
+    },
+  }, undefined, [source], [source]);
+  assert.equal(result.stock.applicability, "private");
+  assert.equal(result.stock.latestPrice, null);
+  assert.equal(result.stock.fiveYearChangePercent, null);
+  assert.deepEqual(result.stock.yearlyCloses, []);
 });

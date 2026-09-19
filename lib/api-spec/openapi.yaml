@@ -1,398 +1,3 @@
-openapi: 3.1.0
-info:
-  # Do not change the title, if the title changes, the import paths will be broken
-  title: Api
-  version: 0.1.0
-  description: |
-    API-only white-label service for researched, metered product comparisons.
-
-    Customer applications authenticate `/v1` operations with a tenant-scoped API key:
-    `Authorization: Bearer vc_beta_...`. Calls are designed for a customer's backend,
-    workflow runner, or agent service; API keys must never be exposed in a branded
-    browser or mobile client. Responses are presentation-neutral structured JSON so
-    customers can apply their own brand, terminology, interaction design, and reports.
-    Account and API-key management operations use a signed-in Clerk session and, where
-    documented, `X-Tenant-Id`.
-servers:
-  - url: /api
-    description: Base API path
-tags:
-  - name: health
-    description: Health operations
-  - name: comparisons
-    description: Vendor and product comparison operations
-  - name: analytics
-    description: Privacy-preserving traction analytics
-paths:
-  /healthz:
-    get:
-      operationId: healthCheck
-      tags: [health]
-      summary: Health check
-      description: Returns server health status
-      responses:
-        "200":
-          description: Healthy
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthStatus"
-  /dashboard/summary:
-    get:
-      operationId: getDashboardSummary
-      tags: [comparisons]
-      summary: Get comparison workspace summary
-      responses:
-        "200":
-          description: Dashboard summary
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DashboardSummary"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-  /visitor-session:
-    post:
-      operationId: recordVisitorSession
-      tags: [analytics]
-      summary: Record one pseudonymized browser session for traction analytics
-      responses:
-        "204":
-          description: Session recorded
-  /comparisons:
-    get:
-      operationId: listComparisons
-      tags: [comparisons]
-      summary: List the signed-in user's comparison history
-      responses:
-        "200":
-          description: Comparisons from the last 30 days
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ComparisonSummary"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-    post:
-      operationId: createComparison
-      tags: [comparisons]
-      summary: Create and analyze a new vendor comparison
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ComparisonInput"
-      responses:
-        "201":
-          description: Comparison analysis
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Comparison"
-        "400":
-          description: Invalid comparison input
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-  /history/recovery:
-    post:
-      operationId: recoverHistory
-      tags: [comparisons]
-      summary: Recover comparison history from legacy accounts with the same verified email
-      responses:
-        "200":
-          description: Recovery attempt completed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HistoryRecoveryResult"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "429":
-          description: Recovery was requested too recently
-          headers:
-            Retry-After:
-              schema:
-                type: integer
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "503":
-          description: The current account identity could not be verified
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-  /guest/comparisons:
-    post:
-      operationId: createGuestComparison
-      tags: [comparisons]
-      summary: Create an unsaved guest vendor comparison
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ComparisonInput"
-      responses:
-        "200":
-          description: Unsaved comparison analysis
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GuestComparison"
-        "400":
-          description: Invalid comparison input
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "429":
-          description: Guest usage limit reached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-  /comparisons/parse:
-    post:
-      operationId: parseComparisonPrompt
-      tags: [comparisons]
-      summary: Parse a natural language comparison request
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ComparisonPromptInput"
-      responses:
-        "200":
-          description: Parsed comparison request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ParsedComparison"
-        "400":
-          description: Invalid prompt
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-  /guest/comparisons/parse:
-    post:
-      operationId: parseGuestComparisonPrompt
-      tags: [comparisons]
-      summary: Parse a guest comparison prompt
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ComparisonPromptInput"
-      responses:
-        "200":
-          description: Parsed comparison request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ParsedComparison"
-        "400":
-          description: Invalid prompt
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "429":
-          description: Guest usage limit reached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-  /comparisons/{id}:
-    get:
-      operationId: getComparison
-      tags: [comparisons]
-      summary: Get a comparison analysis
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Comparison analysis
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Comparison"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "404":
-          description: Comparison not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-    delete:
-      operationId: deleteComparison
-      tags: [comparisons]
-      summary: Delete a comparison from history
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        "204":
-          description: Comparison deleted
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-        "404":
-          description: Comparison not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LegacyErrorResponse"
-  /v1/comparisons:
-    get:
-      operationId: externalListComparisons
-      tags: [commercial]
-      summary: List tenant comparisons
-      description: Requires an API key with the comparisons:read scope.
-      security: [{ ApiKeyAuth: [] }]
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
-      responses:
-        "200":
-          description: Tenant comparisons
-          headers:
-            RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
-            RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
-            RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
-            X-Quota-Included: { $ref: "#/components/headers/QuotaIncluded" }
-            X-Quota-Used: { $ref: "#/components/headers/QuotaUsed" }
-            X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/ComparisonSummary" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "429": { $ref: "#/components/responses/RateLimited" }
-    post:
-      operationId: externalCreateComparison
-      tags: [commercial]
-      summary: Create a metered tenant comparison
-      description: Requires an API key with the comparisons:write scope and an Idempotency-Key. Only successful completed comparisons consume usage; retries with the same request are replayed.
-      security: [{ ApiKeyAuth: [] }]
-      parameters:
-        - name: Idempotency-Key
-          in: header
-          required: true
-          description: Unique key for this request; reusing it with a changed body returns 409.
-          schema: { type: string, minLength: 8, maxLength: 255 }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ComparisonInput" }
-            example:
-              prompt: Compare Tesla Model 3 and BYD Seal for an Australian buyer with a A$50,000 budget.
-              vendors: [Tesla Model 3, BYD Seal]
-              criteria: [Purchase price, Driving range, Warranty, Running costs]
-              urls: []
-      responses:
-        "201":
-          description: Completed comparison
-          headers:
-            RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
-            RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
-            RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
-            X-Quota-Included: { $ref: "#/components/headers/QuotaIncluded" }
-            X-Quota-Used: { $ref: "#/components/headers/QuotaUsed" }
-            X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Comparison" }
-              example:
-                id: 142
-                status: complete
-                category: Electric vehicles
-                recommendation: BYD Seal
-                score: 84
-                executiveSummary: BYD Seal provides the stronger budget fit.
-                recommendationReason: It remains within budget while preserving range and warranty value.
-                vendors: [Tesla Model 3, BYD Seal]
-                vendorScores:
-                  - { vendor: Tesla Model 3, score: 77, verdict: Strong technology, above budget }
-                  - { vendor: BYD Seal, score: 84, verdict: Best overall fit }
-                nextSteps: [Confirm drive-away pricing, Book both test drives]
-                urls: [https://www.tesla.com/en_au/model3, https://www.bydautomotive.com.au/seal]
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "402": { $ref: "#/components/responses/QuotaExceeded" }
-        "429": { $ref: "#/components/responses/RateLimited" }
-        "502": { $ref: "#/components/responses/BadGateway" }
-    parameters: []
-  /v1/comparisons/{id}:
-    get:
-      operationId: externalGetComparison
-      tags: [commercial]
-      summary: Get a tenant comparison
-      description: Requires an API key with the comparisons:read scope.
-      security: [{ ApiKeyAuth: [] }]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: integer }
-      responses:
-        "200":
-          description: Comparison
-          headers:
             RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
             RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
             RateLimit-Reset: { $ref: "#/components/headers/RateLimitReset" }
@@ -1064,6 +669,8 @@ components:
           $ref: "#/components/schemas/VrioAssessment"
         marketPosition:
           $ref: "#/components/schemas/MarketPosition"
+        marketHistory:
+          $ref: "#/components/schemas/MarketHistory"
       required: [vendor, score, color, verdict]
     VrioDimension:
       type: object
@@ -1108,6 +715,89 @@ components:
         evidence:
           type: string
       required: [marketShare, marketSharePeriod, market, shareValue, shareValueAsOf, applicability, evidence]
+    MarketHistory:
+      type: object
+      description: Evidence-backed five-year performance, ownership, corporate-action, and listed-stock context for one compared option.
+      properties:
+        lookbackYears:
+          type: integer
+          const: 5
+        trendSummary:
+          type: string
+        yearlyTrends:
+          type: array
+          items: { $ref: "#/components/schemas/MarketHistoryYear" }
+        ownership:
+          $ref: "#/components/schemas/OwnershipSnapshot"
+        transactions:
+          type: array
+          items: { $ref: "#/components/schemas/CorporateTransaction" }
+        stock:
+          $ref: "#/components/schemas/StockHistory"
+      required: [lookbackYears, trendSummary, yearlyTrends, ownership, transactions, stock]
+    MarketHistoryYear:
+      type: object
+      properties:
+        year: { type: integer }
+        productPerformance: { type: string }
+        marketPosition: { type: string }
+        trendDirection:
+          type: string
+          enum: [improving, stable, declining, mixed, unavailable]
+        notableEvent: { type: string }
+        evidenceUrl: { type: string, format: uri }
+      required: [year, productPerformance, marketPosition, trendDirection, notableEvent]
+    OwnershipSnapshot:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [public, private, subsidiary, government, mutual, unknown]
+        ultimateParent: { type: string }
+        majorShareholders:
+          type: array
+          items: { type: string }
+        asOf: { type: string }
+        evidenceUrl: { type: string, format: uri }
+      required: [status, ultimateParent, majorShareholders, asOf]
+    CorporateTransaction:
+      type: object
+      properties:
+        date: { type: string }
+        type:
+          type: string
+          enum: [merger, acquisition, divestiture, investment, restructure, none_found]
+        counterparty: { type: string }
+        summary: { type: string }
+        impact: { type: string }
+        evidenceUrl: { type: string, format: uri }
+      required: [date, type, counterparty, summary, impact]
+    StockHistory:
+      type: object
+      properties:
+        applicability:
+          type: string
+          enum: [listed, listed_parent, private, not_applicable, unverified]
+        ticker: { type: string }
+        exchange: { type: string }
+        currency: { type: string }
+        latestPrice:
+          type: [number, "null"]
+        latestPriceAsOf: { type: string }
+        fiveYearChangePercent:
+          type: [number, "null"]
+        yearlyCloses:
+          type: array
+          items: { $ref: "#/components/schemas/StockYearClose" }
+        evidenceUrl: { type: string, format: uri }
+      required: [applicability, ticker, exchange, currency, latestPrice, latestPriceAsOf, fiveYearChangePercent, yearlyCloses]
+    StockYearClose:
+      type: object
+      properties:
+        year: { type: integer }
+        price:
+          type: [number, "null"]
+      required: [year, price]
     WeightedCriterionScore:
       type: object
       properties:
