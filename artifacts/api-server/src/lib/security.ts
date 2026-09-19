@@ -2,12 +2,12 @@ import { lookup } from "node:dns/promises";
 import { lookup as lookupCallback } from "node:dns";
 import http from "node:http";
 import https from "node:https";
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 
 const promptInjectionPattern =
   /(?:ignore|disregard|forget)\s+(?:all\s+)?(?:previous|prior|above|system|developer)|(?:system|developer)\s*(?:message|prompt)|jailbreak|do\s+anything\s+now/i;
 const sqlPattern =
-  /\b(?:select|insert|update|delete|drop|alter|truncate|union)\b[\s\S]{0,80}\b(?:from|into|table|where|values|set)\b/i;
+  /\b(?:select\s+(?:\*|[a-z_][\w.]*(?:\s*,\s*[a-z_][\w.]*)*)\s+from\s+[a-z_][\w.]*|insert\s+into\s+[a-z_][\w.]*|update\s+[a-z_][\w.]*\s+set\s+[a-z_][\w.]*\s*=|delete\s+from\s+[a-z_][\w.]*|(?:drop|alter|truncate)\s+table\s+[a-z_][\w.]*)\b/i;
 const xmlPattern = /<\s*\/?\s*[a-z][^>]*>/i;
 
 export function isSafeUserInput(value: string): boolean {
@@ -34,6 +34,12 @@ export type EvidenceUrlResult = {
 
 type LookupAddress = { address: string; family: number };
 type EvidenceResponse = { status: number; location?: string };
+type LookupCallback = (error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void;
+type LookupResolver = (
+  hostname: string,
+  options: { all: true; family?: number; hints?: number; verbatim?: boolean },
+  callback: LookupCallback,
+) => void;
 type EvidenceCacheEntry = {
   result: EvidenceUrlResult;
   expiresAt: number;
@@ -108,6 +114,29 @@ async function assertPublicDestination(
   if (!addresses.length || addresses.some(({ address }) => isBlockedIp(address))) throw new Error("blocked_destination");
 }
 
+export function createPublicLookup(
+  resolver: LookupResolver = lookupCallback as unknown as LookupResolver,
+): LookupFunction {
+  return ((hostname: string, options: { all?: boolean }, callback: (...args: unknown[]) => void) => {
+    resolver(hostname, { ...options, all: true }, (error, addresses) => {
+      if (error) {
+        callback(error);
+        return;
+      }
+      const publicAddresses = addresses.filter(({ address }) => !isBlockedIp(address));
+      if (!publicAddresses.length || publicAddresses.length !== addresses.length) {
+        callback(new Error("blocked_destination"));
+        return;
+      }
+      if (options.all) {
+        callback(null, publicAddresses);
+        return;
+      }
+      callback(null, publicAddresses[0].address, publicAddresses[0].family);
+    });
+  }) as LookupFunction;
+}
+
 function requestOnce(url: URL, timeoutMs: number, method: "HEAD" | "GET"): Promise<EvidenceResponse> {
   return new Promise((resolve, reject) => {
     const transport = url.protocol === "https:" ? https : http;
@@ -119,21 +148,7 @@ function requestOnce(url: URL, timeoutMs: number, method: "HEAD" | "GET"): Promi
         accept: "*/*",
         ...(method === "GET" ? { range: "bytes=0-0" } : {}),
       },
-      lookup: (hostname, options, callback) => {
-        lookupCallback(hostname, { ...options, all: true }, (error, addresses) => {
-          if (error) {
-            callback(error, "", 0);
-            return;
-          }
-          const results = Array.isArray(addresses) ? addresses : [addresses];
-          const publicAddresses = results.filter(({ address }) => !isBlockedIp(address));
-          if (!publicAddresses.length || publicAddresses.length !== results.length) {
-            callback(new Error("blocked_destination"), "", 0);
-            return;
-          }
-          callback(null, publicAddresses[0].address, publicAddresses[0].family);
-        });
-      },
+      lookup: createPublicLookup(),
     }, (response) => {
       response.resume();
       resolve({

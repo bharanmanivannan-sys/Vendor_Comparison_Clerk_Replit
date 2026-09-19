@@ -48,7 +48,6 @@ import type {
   GetTenantUsageHeaders,
   GuestComparison,
   HealthStatus,
-  HistoryRecoveryResult,
   LegacyErrorResponse,
   ListTenantApiKeysHeaders,
   ListTenantAuditHeaders,
@@ -483,80 +482,6 @@ export const useCreateComparison = <TError = ErrorType<LegacyErrorResponse>,
         TContext
       > => {
       return useMutation(getCreateComparisonMutationOptions(options));
-    }
-
-export const getRecoverHistoryUrl = () => {
-
-
-
-
-  return `/api/history/recovery`
-}
-
-/**
- * @summary Recover comparison history from legacy accounts with the same verified email
- */
-export const recoverHistory = async ( options?: Parameters<typeof customFetch>[1]): Promise<HistoryRecoveryResult> => {
-
-  return customFetch<HistoryRecoveryResult>(getRecoverHistoryUrl(),
-  {
-    ...options,
-    method: 'POST'
-
-
-  }
-);}
-
-
-
-
-
-export const getRecoverHistoryMutationKey = () => ['recoverHistory'] as const;
-
-export const getRecoverHistoryMutationOptions = <TError = ErrorType<LegacyErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recoverHistory>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof recoverHistory>>, TError,void, TContext> => {
-
-const mutationKey = getRecoverHistoryMutationKey();
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recoverHistory>>, void> = () => {
-
-
-          return  recoverHistory(requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type RecoverHistoryMutationResult = NonNullable<Awaited<ReturnType<typeof recoverHistory>>>
-
-    export type RecoverHistoryMutationError = ErrorType<LegacyErrorResponse>
-
-
-    /**
- * @summary Recover comparison history from legacy accounts with the same verified email
- */
-export const useRecoverHistory = <TError = ErrorType<LegacyErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recoverHistory>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
- ): UseMutationResult<
-        Awaited<ReturnType<typeof recoverHistory>>,
-        TError,
-        void,
-        TContext
-      > => {
-      return useMutation(getRecoverHistoryMutationOptions(options));
     }
 
 export const getCreateGuestComparisonUrl = () => {

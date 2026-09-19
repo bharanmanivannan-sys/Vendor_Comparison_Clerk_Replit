@@ -14,12 +14,11 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { ReportSourceStatus } from './reportSourceStatus';
 
-export interface HistoryRecoveryResult {
-  /** @minimum 0 */
-  recoveredComparisons: number;
-  /** @minimum 0 */
-  matchedLegacyAccounts: number;
-  /** @minimum 0 */
-  unavailableLegacyAccounts: number;
+export interface ReportSource {
+  url: string;
+  status: ReportSourceStatus;
+  reason: string;
+  replacementUrl?: string;
 }

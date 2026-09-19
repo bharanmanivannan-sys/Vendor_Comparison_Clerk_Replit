@@ -116,10 +116,6 @@
   border: 2px solid #f8f4e8;
   box-shadow: 3px 3px 0 #0f766e;
 }
-.dark body.comparison-research-pending [data-testid="comparison-composer"]::after {
-  background: rgba(23, 29, 46, .98);
-  color: #f4f0e5;
-}
 
 @layer base {
   * { @apply border-border; }
@@ -186,44 +182,4 @@
 
 [data-testid="comparison-composer"] label[for="comparison-composer-prompt"]::after {
   color: #687083;
-}
-
-body.comparison-research-pending [data-testid="comparison-composer"] {
-  position: relative;
-  isolation: isolate;
-}
-
-body.comparison-research-pending [data-testid="comparison-composer"]::before {
-  content: "";
-  position: absolute;
-  z-index: 32;
-  top: 2rem;
-  left: 50%;
-  width: 2rem;
-  height: 2rem;
-  margin-left: -1rem;
-  border: 3px solid #d9d1bf;
-  border-top-color: #0f766e;
-  border-radius: 999px;
-  animation: research-spin .8s linear infinite;
-}
-
-body.comparison-research-pending [data-testid="comparison-composer"]::after {
-  content: "Researching and building your comparison\A\A Please keep this page open. This can take up to two minutes while we:\A 1. Identify the products, market and constraints\A 2. Research current official and independent sources\A 3. Score each option using the weighted criteria\A 4. Check for credible alternatives and trade-offs\A\A While you wait\A • A lower headline rate can cost more after fees and conditions.\A • We separate verified facts from estimates and assumptions.\A • Outside alternatives are explained separately, not silently added to the ranking.";
-  white-space: pre-line;
-  position: absolute;
-  z-index: 31;
-  inset: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 5rem 2rem 2rem;
-  border-radius: inherit;
-  background: rgba(248, 244, 232, .98);
-  color: #39435a;
-  font-size: .8rem;
-  font-weight: 600;
-  line-height: 1.55rem;
-  text-align: left;
-  box-shadow: 0 22px 55px rgba(32, 40, 64, .18);
 }

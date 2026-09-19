@@ -10,6 +10,12 @@ export const comparisonsTable = pgTable("comparisons", {
   prompt: text("prompt").notNull(),
   vendors: text("vendors").array().notNull(),
   urls: text("urls").array().notNull().default([]),
+  sourceAvailability: jsonb("source_availability").$type<Array<{
+    url: string;
+    status: "reachable" | "restricted" | "timed_out" | "unavailable" | "superseded";
+    reason: string;
+    replacementUrl?: string;
+  }>>().notNull().default([]),
   criteria: text("criteria").array().notNull().default([]),
   category: text("category").notNull(),
   recommendation: text("recommendation").notNull(),

@@ -14,13 +14,14 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { CorporateTransactionType } from './corporateTransactionType';
 
-export interface CorporateTransaction {
-  date: string;
-  type: CorporateTransactionType;
-  counterparty: string;
-  summary: string;
-  impact: string;
-  evidenceUrl?: string;
-}
+export type ReportSourceStatus = typeof ReportSourceStatus[keyof typeof ReportSourceStatus];
+
+
+export const ReportSourceStatus = {
+  reachable: 'reachable',
+  restricted: 'restricted',
+  timed_out: 'timed_out',
+  unavailable: 'unavailable',
+  superseded: 'superseded',
+} as const;

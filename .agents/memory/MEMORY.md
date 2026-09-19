@@ -13,4 +13,6 @@
 - [GitHub connector blob uploads](github-connector-blob-uploads.md) — upload Git Data blobs serially with base64; concurrent raw text can trigger proxy filtering.
 - [Intent extraction safety](intent-extraction-safety.md) — model-extracted options must be verbatim prompt content and still pass deterministic comparison validation.
 - [Evidence-backed scoring](evidence-backed-scoring.md) — score evidence must be validated before ranking, use canonical weights, and reconcile exactly with persisted contributions.
-- [History identity recovery](history-identity-recovery.md) — recover split Clerk history only through bounded server-verified identity matching; never broaden ownership by guessed IDs.
+- [Node evidence-check DNS](node-evidence-dns.md) — pinned DNS callbacks must handle Node’s all-address lookup contract or disable automatic family selection.
+- [Additive schema recovery](additive-schema-recovery.md) — when schema push proposes unrelated data loss, apply only the missing additive change and leave retained tables untouched.
+- [Actionable comparison recovery](actionable-comparison-recovery.md) — when parsing or evidence shape fails, offer a rewritten prompt that preserves the user’s options and criteria.

@@ -21,6 +21,7 @@ import type { GuestComparisonStatus } from './guestComparisonStatus';
 import type { GuestComparisonSwot } from './guestComparisonSwot';
 import type { MigrationPhase } from './migrationPhase';
 import type { ProductEquivalencyItem } from './productEquivalencyItem';
+import type { ReportSource } from './reportSource';
 import type { ServiceProductMapItem } from './serviceProductMapItem';
 import type { VendorScore } from './vendorScore';
 
@@ -33,6 +34,7 @@ export interface GuestComparison {
   status: GuestComparisonStatus;
   createdAt: Date;
   urls: string[];
+  sourceAvailability: ReportSource[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;

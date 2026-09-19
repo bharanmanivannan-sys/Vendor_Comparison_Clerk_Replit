@@ -21,11 +21,14 @@ import type { DecisionGovernanceItem } from './decisionGovernanceItem';
 import type { FunctionalGapItem } from './functionalGapItem';
 import type { MigrationPhase } from './migrationPhase';
 import type { ProductEquivalencyItem } from './productEquivalencyItem';
+import type { ReportSource } from './reportSource';
 import type { ServiceProductMapItem } from './serviceProductMapItem';
 import type { VendorScore } from './vendorScore';
 
 export type Comparison = ComparisonSummary & {
   urls: string[];
+  /** Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls. */
+  sourceAvailability: ReportSource[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;

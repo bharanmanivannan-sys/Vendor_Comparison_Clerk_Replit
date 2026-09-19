@@ -14,7 +14,6 @@ import {
   ParseComparisonPromptBody,
   ParseComparisonPromptResponse,
   ParseGuestComparisonPromptResponse,
-  RecoverHistoryResponse,
 } from "@workspace/api-zod";
 import { comparisonsTable, db } from "@workspace/db";
 import {
@@ -28,7 +27,6 @@ import {
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
 import { persistComparisonAtomically } from "../../services/comparisonPersistence";
-import { recoverVerifiedHistory } from "../../services/historyRecovery";
 
 const router: IRouter = Router();
 
@@ -44,11 +42,22 @@ const comparisonJobs = new Map<string, {
 const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
 const JOB_TTL_MS = 15 * 60 * 1000;
-const HISTORY_RECOVERY_COOLDOWN_MS = 60 * 1000;
-const historyRecoveryAttempts = new Map<string, number>();
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: message, code, message });
+}
+
+function reportSources(
+  sources: typeof comparisonsTable.$inferSelect.sourceAvailability | undefined,
+  urls: string[],
+) {
+  return sources?.length
+    ? sources
+    : urls.map((url) => ({
+        url,
+        status: "reachable" as const,
+        reason: "Legacy report: availability was not recorded when this report was generated.",
+      }));
 }
 
 router.post("/visitor-session", async (req: Request, res: Response): Promise<void> => {
@@ -66,6 +75,52 @@ function pruneComparisonJobs(): void {
   for (const [id, job] of comparisonJobs) {
     if (job.createdAt < cutoff) comparisonJobs.delete(id);
   }
+}
+
+function comparisonOptionNames(vendors: string[]): string[] {
+  return Array.from(new Set(
+    vendors
+      .flatMap((vendor) => vendor.split(/\s+(?:vs\.?|versus|and)\s+|[,;&]/i))
+      .map((vendor) => vendor.trim())
+      .filter(Boolean),
+  ));
+}
+
+function joinComparisonOptions(options: string[]): string {
+  if (options.length < 2) return options[0] ?? "the named options";
+  if (options.length === 2) return `${options[0]} and ${options[1]}`;
+  return `${options.slice(0, -1).join(", ")}, and ${options.at(-1)}`;
+}
+
+export function comparisonWorkaroundPrompt(prompt: string, vendors: string[]): string {
+  const options = comparisonOptionNames(vendors);
+  const optionList = joinComparisonOptions(options);
+  const budget = prompt.match(/\b(?:under|below|up to|within)\s+(?:a\s+budget\s+(?:of\s+)?)?((?:A(?:UD)?\s*)?\$\s?[\d,.]+(?:\s*[kK])?)/i)?.[1]
+    ?.replace(/\s+/g, " ")
+    .replace(/[.,;:!?]+$/, "")
+    .trim();
+  if (/\b(?:car|cars|vehicle|vehicles|ev|electric|ancap)\b/i.test(prompt)) {
+    const market = /\bANCAP\b/i.test(prompt) ? "Australia" : "the requested market";
+    return `Compare current electric vehicle models from ${optionList} available in ${market}${budget ? ` for ${budget} or less` : ""}. Select the best-matching current model from each manufacturer. Compare official safety ratings, pricing, features, range, charging, warranty, and value for money.`;
+  }
+  return `Compare ${optionList}. Select one exact current product or service from each named provider, then compare pricing, features, evidence, and value for money.`;
+}
+
+function comparisonFailureMessage(error: unknown, prompt: string, vendors: string[]): string {
+  const message = error instanceof Error ? error.message : "";
+  if (/timed? out|timeout|did not finish/i.test(message)) {
+    return "The research service took too long to respond. Your request is safe to retry.";
+  }
+  if (/insufficient source coverage|fewer than three independently reachable/i.test(message)) {
+    return `Oops. Sorry, I might have missed that. Can you try this phrase instead: “${comparisonWorkaroundPrompt(prompt, vendors)}”`;
+  }
+  if (/failed query|column .* does not exist|relation .* does not exist/i.test(message)) {
+    return "The analysis finished, but the report could not be saved. Please try again shortly.";
+  }
+  if (/fetch failed|econnreset|enotfound|network/i.test(message)) {
+    return "A research source or API was temporarily unavailable. Please try again.";
+  }
+  return "Product research could not be completed. Please try again.";
 }
 
 function startComparisonJob(options: {
@@ -119,10 +174,15 @@ function startComparisonJob(options: {
         });
       }
     } catch (error) {
+      console.error("Comparison job failed", {
+        jobId: id,
+        ownerType: options.userId ? "authenticated" : "guest",
+        error,
+      });
       comparisonJobs.set(id, {
         owner: options.owner,
         status: "failed",
-        message: error instanceof Error ? error.message : "Product research could not be completed.",
+        message: comparisonFailureMessage(error, options.input.prompt, options.vendors),
         createdAt: Date.now(),
       });
     }
@@ -197,7 +257,11 @@ export async function validateComparisonInput(
   const context = hasProvidedVendors
     ? validateComparisonContext(input.prompt, vendors)
     : parsedPrompt.context;
-  if (!context.valid) return { error: context.message } as const;
+  if (!context.valid) {
+    return {
+      error: `${context.message} Oops. Sorry, I might have missed that. Can you try this phrase instead: “${comparisonWorkaroundPrompt(input.prompt, vendors)}”`,
+    } as const;
+  }
   return { input, vendors, criteria, context } as const;
 }
 
@@ -223,6 +287,7 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
   return {
     ...summaryFromRow(row),
     urls: row.urls,
+    sourceAvailability: reportSources(row.sourceAvailability, row.urls),
     criteria: row.criteria,
     executiveSummary: row.executiveSummary,
     recommendationReason: row.recommendationReason,
@@ -280,28 +345,6 @@ router.get("/comparisons", requireAuth, async (req: AuthedRequest, res): Promise
     .where(and(eq(comparisonsTable.userId, userId), gte(comparisonsTable.createdAt, since)))
     .orderBy(desc(comparisonsTable.createdAt));
   res.json(ListComparisonsResponse.parse(rows.map(summaryFromRow)));
-});
-
-router.post("/history/recovery", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
-  const userId = req.userId as string;
-  const now = Date.now();
-  const lastAttempt = historyRecoveryAttempts.get(userId) ?? 0;
-  if (now - lastAttempt < HISTORY_RECOVERY_COOLDOWN_MS) {
-    res.setHeader("Retry-After", Math.ceil((HISTORY_RECOVERY_COOLDOWN_MS - (now - lastAttempt)) / 1000));
-    sendError(res, 429, "recovery_rate_limited", "History recovery was checked recently. Try again in a minute.");
-    return;
-  }
-  historyRecoveryAttempts.set(userId, now);
-  try {
-    const result = await recoverVerifiedHistory(userId);
-    res.json(RecoverHistoryResponse.parse(result));
-  } catch (error) {
-    if (error instanceof Error && error.message === "current_identity_unavailable") {
-      sendError(res, 503, "identity_unavailable", "Your account identity could not be verified. Try again shortly.");
-      return;
-    }
-    throw error;
-  }
 });
 
 router.post("/guest/comparisons/parse", async (req: Request, res): Promise<void> => {

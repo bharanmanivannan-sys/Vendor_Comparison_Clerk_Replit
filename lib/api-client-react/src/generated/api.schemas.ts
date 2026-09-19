@@ -202,6 +202,24 @@ export interface ComparisonSummary {
 
 export type ComparisonSwot = {[key: string]: string[]};
 
+export type ReportSourceStatus = typeof ReportSourceStatus[keyof typeof ReportSourceStatus];
+
+
+export const ReportSourceStatus = {
+  reachable: 'reachable',
+  restricted: 'restricted',
+  timed_out: 'timed_out',
+  unavailable: 'unavailable',
+  superseded: 'superseded',
+} as const;
+
+export interface ReportSource {
+  url: string;
+  status: ReportSourceStatus;
+  reason: string;
+  replacementUrl?: string;
+}
+
 /**
  * Strategic market role of the product, service, or brand in this decision context.
  */
@@ -508,6 +526,8 @@ export interface DecisionGovernanceItem {
 
 export type Comparison = ComparisonSummary & {
   urls: string[];
+  /** Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls. */
+  sourceAvailability: ReportSource[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
@@ -552,6 +572,7 @@ export interface GuestComparison {
   status: GuestComparisonStatus;
   createdAt: string;
   urls: string[];
+  sourceAvailability: ReportSource[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
@@ -576,15 +597,6 @@ export interface DashboardSummary {
   averageScore: number;
   topCategory: string;
   recentComparisons: ComparisonSummary[];
-}
-
-export interface HistoryRecoveryResult {
-  /** @minimum 0 */
-  recoveredComparisons: number;
-  /** @minimum 0 */
-  matchedLegacyAccounts: number;
-  /** @minimum 0 */
-  unavailableLegacyAccounts: number;
 }
 
 /**
