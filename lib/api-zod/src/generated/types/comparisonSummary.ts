@@ -26,6 +26,14 @@ export interface ComparisonSummary {
   category: string;
   recommendation: string;
   score: number;
+  /** Weighted score before the strategic provider-role tie-break. */
+  baseScore?: number;
+  /**
+     * Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.
+     * @minimum 0
+     * @maximum 2
+     */
+  providerRoleTieBreakBonus?: number;
   createdAt: Date;
   status: ComparisonSummaryStatus;
 }

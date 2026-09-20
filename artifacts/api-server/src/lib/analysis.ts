@@ -277,7 +277,8 @@ export const WEIGHTED_CRITERIA = [
   { criterion: "Value for Money", weight: 20 },
   { criterion: "Brand Reputation", weight: 7 },
   { criterion: "Customer Advocacy / NPS", weight: 10 },
-  { criterion: "Innovation / Differentiation", weight: 10 },
+  { criterion: "Innovation / Differentiation", weight: 8 },
+  { criterion: "Strategic Provider Role", weight: 2 },
   { criterion: "Sustainability", weight: 5 },
   { criterion: "Regulatory Compliance", weight: 3 },
 ] as const;
@@ -316,6 +317,9 @@ function normalizedWeightMap(weights: ComparisonWeight[]): Map<string, number> {
   }
   const total = Array.from(normalized.values()).reduce((sum, weight) => sum + weight, 0);
   if (total !== 100) throw new Error(`Criterion weights must total 100%. Current total: ${total}%.`);
+  if (normalized.get("Strategic Provider Role") !== 2) {
+    throw new Error("Strategic Provider Role weight is fixed at 2% for deterministic tie-breaking.");
+  }
   return normalized;
 }
 
@@ -362,6 +366,7 @@ export function reweightAnalysis(
       weightedScores,
     };
   });
+  applyProviderRoleTieBreak(vendorScores);
   const ranked = [...vendorScores].sort((a, b) => b.score - a.score);
   const topScore = ranked[0]?.score ?? 0;
   const tiedLeaders = ranked.filter((vendor) => vendor.score === topScore);
@@ -1816,6 +1821,88 @@ export function normalizeProviderRole(value: unknown): "accelerator" | "leader" 
   if (normalized === "core_provider" || normalized === "core") return "core_provider";
   if (normalized === "expert" || normalized === "specialist") return "expert";
   return "leader";
+}
+
+const PROVIDER_ROLE_TIE_BREAK_PRIORITY = {
+  core_provider: 1,
+  accelerator: 2,
+  expert: 3,
+  leader: 4,
+} as const;
+
+export function applyProviderRoleTieBreak(
+  vendorScores: Array<{
+    vendor: string;
+    score: number;
+    baseScore?: number;
+    providerRole?: "accelerator" | "leader" | "core_provider" | "expert";
+    providerRoleTieBreakBonus?: number;
+    weightedScores?: Array<{
+      criterion: string;
+      weight: number;
+      score: number;
+      rationale: string;
+      evidence?: EvidenceRecord[];
+    }>;
+  }>,
+): void {
+  for (const vendor of vendorScores) {
+    const roleCriterion = vendor.weightedScores?.find(
+      (criterion) => criterion.criterion === "Strategic Provider Role",
+    );
+    if (roleCriterion) {
+      roleCriterion.score = 0;
+      roleCriterion.rationale = "The 2% strategic-provider allocation is reserved for resolving a top-score tie.";
+      roleCriterion.evidence = [{
+        exactClaim: "No provider-role tie-break bonus was applied.",
+        retrievalDate: new Date().toISOString().slice(0, 10),
+        evidenceKind: "analyst_judgment",
+        supportDirection: "neutral",
+        confidence: 25,
+        normalizedScore: 0,
+        criterionWeight: roleCriterion.weight,
+        weightedContribution: 0,
+        normalizationMethod: "provider_role_tie_break",
+      }];
+    }
+    const baseScore = Math.round((vendor.weightedScores ?? [])
+      .filter((criterion) => criterion.criterion !== "Strategic Provider Role")
+      .reduce((total, criterion) => total + criterion.score * criterion.weight, 0) / 100);
+    vendor.baseScore = baseScore;
+    vendor.providerRoleTieBreakBonus = 0;
+    vendor.score = baseScore;
+  }
+  const topBaseScore = Math.max(...vendorScores.map((vendor) => vendor.baseScore ?? vendor.score), 0);
+  const tied = vendorScores.filter((vendor) => (vendor.baseScore ?? vendor.score) === topBaseScore);
+  if (tied.length < 2) return;
+  const highestPriority = Math.max(...tied.map(
+    (vendor) => PROVIDER_ROLE_TIE_BREAK_PRIORITY[normalizeProviderRole(vendor.providerRole)],
+  ));
+  const preferred = tied.filter(
+    (vendor) => PROVIDER_ROLE_TIE_BREAK_PRIORITY[normalizeProviderRole(vendor.providerRole)] === highestPriority,
+  );
+  if (preferred.length !== 1) return;
+  const winner = preferred[0]!;
+  winner.providerRoleTieBreakBonus = 2;
+  winner.score = Math.min(100, (winner.baseScore ?? winner.score) + 2);
+  const roleCriterion = winner.weightedScores?.find(
+    (criterion) => criterion.criterion === "Strategic Provider Role",
+  );
+  if (roleCriterion) {
+    roleCriterion.score = 100;
+    roleCriterion.rationale = `${winner.vendor} receives the 2% tie-break allocation because its ${normalizeProviderRole(winner.providerRole).replace("_", " ")} role has precedence among the tied leaders.`;
+    roleCriterion.evidence = [{
+      exactClaim: `${winner.vendor} won the top-score tie under the strategic provider-role precedence: Leader, Expert, Accelerator, Core Provider.`,
+      retrievalDate: new Date().toISOString().slice(0, 10),
+      evidenceKind: "analyst_judgment",
+      supportDirection: "supports",
+      confidence: 25,
+      normalizedScore: 100,
+      criterionWeight: roleCriterion.weight,
+      weightedContribution: 2,
+      normalizationMethod: "provider_role_tie_break",
+    }];
+  }
 }
 
 export function normalizeTextField(value: unknown, fallback = ""): string {
@@ -3416,7 +3503,7 @@ export function addVerifiedElectricVehicleMatrixMetrics(
           ? [{ name: "Value for Money", weight: 20 }]
           : [
               { name: "Meets Needs / Features", weight: 25 },
-              { name: "Innovation / Differentiation", weight: 10 },
+              { name: "Innovation / Differentiation", weight: 8 },
             ];
         for (const criterion of criteria) {
           const criterionRow = ensureCriterion(vendor, criterion.name, criterion.weight);
@@ -3587,7 +3674,7 @@ export function addVerifiedElectricVehicleOfficialSpecs(
           ? [{ name: "Value for Money", weight: 20 }]
           : [
               { name: "Meets Needs / Features", weight: 25 },
-              { name: "Innovation / Differentiation", weight: 10 },
+              { name: "Innovation / Differentiation", weight: 8 },
             ];
         for (const criterion of criteria) {
           const criterionRow = ensureCriterion(vendor, criterion.name, criterion.weight);
@@ -5024,6 +5111,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       );
     }
     const deterministicWeight = applyDeterministicQuantitativeScores(normalized);
+    applyProviderRoleTieBreak(normalized.vendorScores);
     if (isElectricVehicleComparison) {
       for (const vendorScore of normalized.vendorScores) {
         const reliability = vendorScore.weightedScores?.find((criterion) => criterion.criterion === "Quality & Reliability");

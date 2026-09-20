@@ -26,6 +26,8 @@ export const comparisonsTable = pgTable("comparisons", {
   vendorScores: jsonb("vendor_scores").$type<Array<{
     vendor: string;
     score: number;
+    baseScore?: number;
+    providerRoleTieBreakBonus?: number;
     color: string;
     verdict: string;
     providerRole?: "accelerator" | "leader" | "core_provider" | "expert";

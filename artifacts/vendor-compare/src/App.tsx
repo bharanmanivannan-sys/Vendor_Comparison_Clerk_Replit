@@ -714,7 +714,7 @@ function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
   const scoredVendors = vendorScores.filter((vendor) => Array.isArray(vendor.weightedScores) && vendor.weightedScores.length);
   if (!scoredVendors.length) return null;
   const radarData = scoredVendors[0].weightedScores.map((entry: any) => ({
-    criterion: entry.criterion.replace('Innovation / Differentiation', 'Innovation').replace('Meets Needs / Features', 'Needs / Features'),
+    criterion: entry.criterion.replace('Innovation / Differentiation', 'Innovation').replace('Meets Needs / Features', 'Needs / Features').replace('Strategic Provider Role', 'Provider Role'),
     weight: entry.weight,
     ...Object.fromEntries(scoredVendors.map((vendor) => [
       vendor.vendor,
@@ -723,7 +723,7 @@ function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
   }));
   const overallData = scoredVendors.map((vendor) => ({ vendor: vendor.vendor, score: vendor.score }));
   const colors = ['#0f766e', '#6b61c9', '#b94d45', '#9a6b20', '#2563a8', '#8b5a83'];
-  return <section className="mt-14" data-testid="section-score-charts"><div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Weighted decision model</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">How the options score against your needs</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Scores combine feature fit, reliability, value, reputation, service, differentiation, sustainability, and regulatory compliance using the agreed weights.</p></div><div className="grid gap-5 xl:grid-cols-[1.35fr_.65fr]"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-4 sm:p-6"><div className="h-[390px] w-full"><ResponsiveContainer width="100%" height="100%" debounce={0}><RadarChart data={radarData} outerRadius="72%"><PolarGrid stroke="#d9d1bf" /><PolarAngleAxis dataKey="criterion" tick={{ fill: '#687083', fontSize: 10 }} /><PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: '#8a8b83', fontSize: 9 }} axisLine={false} /><Tooltip isAnimationActive={false} contentStyle={{ backgroundColor: '#fff', border: '1px solid #d5cebd', borderRadius: 10, fontSize: 12 }} /><Legend />{scoredVendors.map((vendor, index) => <Radar key={vendor.vendor} name={vendor.vendor} dataKey={vendor.vendor} stroke={colors[index] ?? colors[0]} fill={colors[index] ?? colors[0]} fillOpacity={0.16} strokeWidth={2} isAnimationActive={false} />)}</RadarChart></ResponsiveContainer></div></div><div className="rounded-2xl border border-[#d5cebd] bg-[#202840] p-4 text-[#f8f4e8] sm:p-6"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#bde3d8]">Weighted total / 100</p><div className="mt-5 h-[250px]"><ResponsiveContainer width="100%" height="100%" debounce={0}><BarChart data={overallData} layout="vertical" margin={{ left: 6, right: 18 }}><CartesianGrid stroke="#3a4664" horizontal={false} /><XAxis type="number" domain={[0, 100]} tick={{ fill: '#a8b0c2', fontSize: 10 }} /><YAxis type="category" dataKey="vendor" width={72} tick={{ fill: '#f8f4e8', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} /><Tooltip isAnimationActive={false} cursor={false} contentStyle={{ backgroundColor: '#fff', border: 0, borderRadius: 10, color: '#202840', fontSize: 12 }} /><Bar dataKey="score" name="Score" fill="#d9ef66" radius={[0, 5, 5, 0]} isAnimationActive={false} /></BarChart></ResponsiveContainer></div><div className="mt-4 flex flex-wrap gap-2">{scoredVendors[0].weightedScores.map((entry: any) => <span key={entry.criterion} className="rounded-md border border-[#3a4664] px-2 py-1 text-[9px] text-[#c9cfdb]">{entry.criterion} · {entry.weight}%</span>)}</div></div></div></section>;
+  return <section className="mt-14" data-testid="section-score-charts"><div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Weighted decision model</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">How the options score against your needs</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Scores combine feature fit, reliability, value, reputation, service, differentiation, provider role, sustainability, and regulatory compliance. A unique higher-precedence provider role receives the reserved 2% only when top scores tie.</p></div><div className="grid gap-5 xl:grid-cols-[1.35fr_.65fr]"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-4 sm:p-6"><div className="h-[390px] w-full"><ResponsiveContainer width="100%" height="100%" debounce={0}><RadarChart data={radarData} outerRadius="72%"><PolarGrid stroke="#d9d1bf" /><PolarAngleAxis dataKey="criterion" tick={{ fill: '#687083', fontSize: 10 }} /><PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: '#8a8b83', fontSize: 9 }} axisLine={false} /><Tooltip isAnimationActive={false} contentStyle={{ backgroundColor: '#fff', border: '1px solid #d5cebd', borderRadius: 10, fontSize: 12 }} /><Legend />{scoredVendors.map((vendor, index) => <Radar key={vendor.vendor} name={vendor.vendor} dataKey={vendor.vendor} stroke={colors[index] ?? colors[0]} fill={colors[index] ?? colors[0]} fillOpacity={0.16} strokeWidth={2} isAnimationActive={false} />)}</RadarChart></ResponsiveContainer></div></div><div className="rounded-2xl border border-[#d5cebd] bg-[#202840] p-4 text-[#f8f4e8] sm:p-6"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#bde3d8]">Weighted total / 100</p><div className="mt-5 h-[250px]"><ResponsiveContainer width="100%" height="100%" debounce={0}><BarChart data={overallData} layout="vertical" margin={{ left: 6, right: 18 }}><CartesianGrid stroke="#3a4664" horizontal={false} /><XAxis type="number" domain={[0, 100]} tick={{ fill: '#a8b0c2', fontSize: 10 }} /><YAxis type="category" dataKey="vendor" width={72} tick={{ fill: '#f8f4e8', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} /><Tooltip isAnimationActive={false} cursor={false} contentStyle={{ backgroundColor: '#fff', border: 0, borderRadius: 10, color: '#202840', fontSize: 12 }} /><Bar dataKey="score" name="Score" fill="#d9ef66" radius={[0, 5, 5, 0]} isAnimationActive={false} /></BarChart></ResponsiveContainer></div><div className="mt-4 flex flex-wrap gap-2">{scoredVendors[0].weightedScores.map((entry: any) => <span key={entry.criterion} className="rounded-md border border-[#3a4664] px-2 py-1 text-[9px] text-[#c9cfdb]">{entry.criterion} · {entry.weight}%</span>)}</div></div></div></section>;
 }
 
 function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
@@ -750,6 +750,7 @@ const WEIGHTED_CRITERIA = [
   'Brand Reputation',
   'Customer Advocacy / NPS',
   'Innovation / Differentiation',
+  'Strategic Provider Role',
   'Sustainability',
   'Regulatory Compliance',
 ] as const;
@@ -788,6 +789,28 @@ function reweightGuestComparison(comparison: any, weights: Record<string, number
       score: Math.round(weightedScores.reduce((total, entry) => total + (entry.score ?? 50) * entry.weight, 0) / 100),
     };
   });
+  const rolePriority: Record<string, number> = { core_provider: 1, accelerator: 2, expert: 3, leader: 4 };
+  for (const vendor of vendorScores) {
+    const roleCriterion = vendor.weightedScores.find((entry: any) => entry.criterion === 'Strategic Provider Role');
+    if (roleCriterion) roleCriterion.score = 0;
+    vendor.baseScore = Math.round(vendor.weightedScores
+      .filter((entry: any) => entry.criterion !== 'Strategic Provider Role')
+      .reduce((total: number, entry: any) => total + (entry.score ?? 50) * entry.weight, 0) / 100);
+    vendor.providerRoleTieBreakBonus = 0;
+    vendor.score = vendor.baseScore;
+  }
+  const baseTopScore = Math.max(...vendorScores.map((vendor: any) => vendor.baseScore), 0);
+  const baseTied = vendorScores.filter((vendor: any) => vendor.baseScore === baseTopScore);
+  if (baseTied.length > 1) {
+    const highestRole = Math.max(...baseTied.map((vendor: any) => rolePriority[vendor.providerRole] ?? rolePriority.leader));
+    const preferred = baseTied.filter((vendor: any) => (rolePriority[vendor.providerRole] ?? rolePriority.leader) === highestRole);
+    if (preferred.length === 1) {
+      preferred[0].providerRoleTieBreakBonus = 2;
+      preferred[0].score = Math.min(100, preferred[0].baseScore + 2);
+      const roleCriterion = preferred[0].weightedScores.find((entry: any) => entry.criterion === 'Strategic Provider Role');
+      if (roleCriterion) roleCriterion.score = 100;
+    }
+  }
   const ranked = [...vendorScores].sort((a: any, b: any) => b.score - a.score);
   const topScore = ranked[0]?.score ?? comparison.score;
   const tied = ranked.filter((vendor: any) => vendor.score === topScore);
@@ -856,7 +879,7 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
     </div>
     {weightValidationMessage && <p className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7dfdc] px-3 py-2 text-xs font-bold text-[#9a3e38]" role="alert" data-testid="status-weight-total">{weightValidationMessage}</p>}
     <div className="mt-6 grid gap-x-6 gap-y-5 md:grid-cols-2">
-      {WEIGHTED_CRITERIA.map((criterion) => <label className="block" key={criterion}><div className="flex items-center justify-between gap-3 text-xs font-bold text-[#202840]"><span>{criterion}</span><div className="flex items-center gap-1"><input type="number" min={0} max={100} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`${criterion} weight`} /><span>%</span></div></div><input type="range" min={0} max={100} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="mt-2 w-full accent-[#0f766e]" aria-label={`${criterion} weight slider`} /></label>)}
+      {WEIGHTED_CRITERIA.map((criterion) => { const fixed = criterion === 'Strategic Provider Role'; return <label className="block" key={criterion}><div className="flex items-center justify-between gap-3 text-xs font-bold text-[#202840]"><span>{criterion}{fixed ? ' (fixed)' : ''}</span><div className="flex items-center gap-1"><input type="number" min={fixed ? 2 : 0} max={fixed ? 2 : 100} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-2 py-1.5 text-right text-xs font-bold text-[#202840] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight`} /><span>%</span></div></div><input type="range" min={fixed ? 2 : 0} max={fixed ? 2 : 100} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="mt-2 w-full accent-[#0f766e] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight slider`} /></label>; })}
     </div>
     <div className="mt-6 flex flex-col gap-3 border-t border-[#c8d99a] pt-5 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-[11px] leading-5 text-[#566074]">Current winner: <strong>{comparison.recommendation}</strong>. {guest ? 'A regenerated report will update this result for the current session.' : 'A regenerated report will replace this saved result for your workspace.'}</p>

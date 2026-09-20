@@ -32,3 +32,9 @@ Deterministic official-document recovery must run against canonical normalized o
 **Why:** Repaired model drafts can rename or omit score rows, and official pages can intermittently reject preliminary probes while remaining safely retrievable; either case can silently reduce all-option metric coverage.
 
 **How to apply:** Keep the normal availability gate for discovered or user-supplied URLs. For a bounded server-owned source set, retain full retrieval's SSRF, redirect, timeout, and size checks, then attach recovered metrics after option and criterion normalization before deterministic scoring.
+
+Strategic provider role has a fixed 2% allocation removed from Innovation, and it applies only to a top-score tie with precedence Leader, Expert, Accelerator, Core Provider.
+
+**Why:** Equal evidence scores need a transparent, contract-visible decision rule rather than a hidden recommendation-only tie break.
+
+**How to apply:** Calculate and retain the 98-point base score first. Award the full two-point role criterion only when one tied leader has uniquely higher role precedence; expose both base score and bonus, and do not choose arbitrarily between equal roles.

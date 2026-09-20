@@ -1140,6 +1140,14 @@ components:
           type: string
         score:
           type: integer
+        baseScore:
+          type: integer
+          description: Weighted score before the strategic provider-role tie-break.
+        providerRoleTieBreakBonus:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.
         createdAt:
           type: string
           format: date-time

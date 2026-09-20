@@ -7,6 +7,7 @@ import {
   addVerifiedBaasOfferEvidence,
   addVerifiedHomeLoanRateEvidence,
   applyDeterministicQuantitativeScores,
+  applyProviderRoleTieBreak,
   assertCanonicalComparisonConsistency,
   assertSufficientComparisonEvidence,
   type AnalysisPayload,
@@ -1366,6 +1367,71 @@ test("normalizes strategic provider classifications", () => {
   assert.equal(normalizeProviderRole("Leader"), "leader");
 });
 
+test("reserves two percent from innovation for the strategic provider-role tie-break", () => {
+  assert.deepEqual(
+    WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Innovation / Differentiation"),
+    { criterion: "Innovation / Differentiation", weight: 8 },
+  );
+  assert.deepEqual(
+    WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Strategic Provider Role"),
+    { criterion: "Strategic Provider Role", weight: 2 },
+  );
+  assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("breaks top-score ties using leader, expert, accelerator, then core-provider precedence", () => {
+  const scenarios = [
+    { roles: ["leader", "expert"], winner: "Option A" },
+    { roles: ["expert", "accelerator"], winner: "Option A" },
+    { roles: ["expert", "core_provider"], winner: "Option A" },
+    { roles: ["accelerator", "core_provider"], winner: "Option A" },
+  ] as const;
+  for (const scenario of scenarios) {
+    const rows: Parameters<typeof applyProviderRoleTieBreak>[0] = scenario.roles.map((providerRole, index) => ({
+      vendor: `Option ${String.fromCharCode(65 + index)}`,
+      score: 50,
+      providerRole,
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion,
+        weight,
+        score: criterion === "Strategic Provider Role" ? 50 : 50,
+        rationale: "Test score.",
+        evidence: [],
+      })),
+    }));
+    applyProviderRoleTieBreak(rows);
+    const winner = rows.find((row) => row.vendor === scenario.winner)!;
+    const runnerUp = rows.find((row) => row.vendor !== scenario.winner)!;
+    assert.equal(winner.baseScore, 49);
+    assert.equal(winner.providerRoleTieBreakBonus, 2);
+    assert.equal(winner.score, 51);
+    assert.equal(runnerUp.providerRoleTieBreakBonus, 0);
+    assert.equal(runnerUp.score, 49);
+    assert.equal(
+      winner.weightedScores?.find((entry) => entry.criterion === "Strategic Provider Role")?.score,
+      100,
+    );
+  }
+});
+
+test("does not arbitrarily break a tie between providers with the same strategic role", () => {
+  const rows: Parameters<typeof applyProviderRoleTieBreak>[0] = ["Option A", "Option B"].map((vendor) => ({
+    vendor,
+    score: 50,
+    providerRole: "expert" as const,
+    weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+      criterion,
+      weight,
+      score: 50,
+      rationale: "Test score.",
+      evidence: [],
+    })),
+  }));
+  applyProviderRoleTieBreak(rows);
+  assert.deepEqual(rows.map((row) => row.score), [49, 49]);
+  assert.deepEqual(rows.map((row) => row.providerRoleTieBreakBonus), [0, 0]);
+});
+
 test("parses the Australian no-annual-fee credit-card request", () => {
   const parsed = parsePrompt("I want to compare credit card products which offers no annual fees across the credit card providers in Australia. Choose Westpac, ANZ, CBA, NAB and any other relevant provider.");
   assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "CBA", "NAB", "Bankwest"]);
@@ -2609,7 +2675,7 @@ test("verifies EV matrix metrics against exact official product documents before
   ];
 
   assert.equal(addVerifiedElectricVehicleMatrixMetrics(analysis, documents), 6);
-  assert.equal(applyDeterministicQuantitativeScores(analysis), 55);
+  assert.equal(applyDeterministicQuantitativeScores(analysis), 53);
   assert.ok(analysis.vendorScores.every((vendor) => vendor.score !== 50));
 });
 
@@ -2653,7 +2719,7 @@ test("extracts controlled EV specs from exact official model pages with separate
     analysis.vendorScores.map((vendor) => vendor.vendor),
     ["MG ZS EV", "Mahindra XUV400 EV"],
   );
-  assert.equal(applyDeterministicQuantitativeScores(analysis), 35);
+  assert.equal(applyDeterministicQuantitativeScores(analysis), 33);
   assert.ok(analysis.vendorScores.every((vendor) => vendor.score !== 50));
 });
 
@@ -3060,12 +3126,13 @@ test("reweights an existing evidence-backed report without changing criterion sc
     { criterion: "Value for Money", weight: 10 },
     { criterion: "Brand Reputation", weight: 5 },
     { criterion: "Customer Advocacy / NPS", weight: 5 },
-    { criterion: "Innovation / Differentiation", weight: 30 },
+    { criterion: "Innovation / Differentiation", weight: 28 },
+    { criterion: "Strategic Provider Role", weight: 2 },
     { criterion: "Sustainability", weight: 3 },
     { criterion: "Regulatory Compliance", weight: 2 },
   ]);
   assert.equal(result.recommendation, "MG");
-  assert.equal(result.score, 76);
+  assert.equal(result.score, 74);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score, 90);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 35);
 });

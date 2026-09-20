@@ -37,6 +37,9 @@ export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityE
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMin = 2;
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMax = 6;
 
+export const getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMin = 0;
+export const getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMax = 2;
+
 
 
 export const GetDashboardSummaryResponse = zod.object({
@@ -63,6 +66,8 @@ export const GetDashboardSummaryResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMin).max(getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }))
@@ -86,6 +91,9 @@ export const listComparisonsResponseComparisonIdentityEntitiesMax = 6;
 export const listComparisonsResponseComparisonIdentityEntityCountMin = 2;
 export const listComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
+export const listComparisonsResponseProviderRoleTieBreakBonusMin = 0;
+export const listComparisonsResponseProviderRoleTieBreakBonusMax = 2;
+
 
 
 export const ListComparisonsResponseItem = zod.object({
@@ -107,6 +115,8 @@ export const ListComparisonsResponseItem = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(listComparisonsResponseProviderRoleTieBreakBonusMin).max(listComparisonsResponseProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 })
@@ -154,6 +164,9 @@ export const createComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 export const createComparisonResponseOneComparisonIdentityEntityCountMin = 2;
 export const createComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
+export const createComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
+export const createComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -193,6 +206,8 @@ export const CreateComparisonResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(createComparisonResponseOneProviderRoleTieBreakBonusMin).max(createComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }).and(zod.object({
@@ -831,6 +846,9 @@ export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax =
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
+export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
+export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
+
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -905,6 +923,8 @@ export const GetComparisonJobResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin).max(getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }).and(zod.object({
@@ -1304,6 +1324,9 @@ export const regenerateComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 export const regenerateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
 export const regenerateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
+export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
+export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -1343,6 +1366,8 @@ export const RegenerateComparisonResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(regenerateComparisonResponseOneProviderRoleTieBreakBonusMin).max(regenerateComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }).and(zod.object({
@@ -1591,6 +1616,9 @@ export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntities
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
+export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
+export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
+
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -1665,6 +1693,8 @@ export const GetGuestComparisonJobResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin).max(getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }).and(zod.object({
@@ -2049,6 +2079,9 @@ export const getComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 export const getComparisonResponseOneComparisonIdentityEntityCountMin = 2;
 export const getComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
+export const getComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
+export const getComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -2088,6 +2121,8 @@ export const GetComparisonResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(getComparisonResponseOneProviderRoleTieBreakBonusMin).max(getComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }).and(zod.object({
@@ -2296,6 +2331,9 @@ export const externalListComparisonsResponseComparisonIdentityEntitiesMax = 6;
 export const externalListComparisonsResponseComparisonIdentityEntityCountMin = 2;
 export const externalListComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
+export const externalListComparisonsResponseProviderRoleTieBreakBonusMin = 0;
+export const externalListComparisonsResponseProviderRoleTieBreakBonusMax = 2;
+
 
 
 export const ExternalListComparisonsResponseItem = zod.object({
@@ -2317,6 +2355,8 @@ export const ExternalListComparisonsResponseItem = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(externalListComparisonsResponseProviderRoleTieBreakBonusMin).max(externalListComparisonsResponseProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 })
@@ -2374,6 +2414,9 @@ export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMax = 
 export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
 export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
+export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
+export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -2413,6 +2456,8 @@ export const ExternalCreateComparisonResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin).max(externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }).and(zod.object({
@@ -2605,6 +2650,9 @@ export const externalGetComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 export const externalGetComparisonResponseOneComparisonIdentityEntityCountMin = 2;
 export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
+export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
+export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -2644,6 +2692,8 @@ export const ExternalGetComparisonResponse = zod.object({
   "category": zod.string(),
   "recommendation": zod.string(),
   "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(externalGetComparisonResponseOneProviderRoleTieBreakBonusMin).max(externalGetComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
   "status": zod.enum(['complete', 'processing', 'failed'])
 }).and(zod.object({
