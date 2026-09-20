@@ -337,7 +337,10 @@ async function downloadComparisonPdf(comparison: any) {
     }),
     [['Vendor', 'vendor'], ['5-year summary', 'trendSummary'], ['Ownership', 'ownership'], ['Ownership source', 'ownershipSource'], ['Listed stock', 'stock'], ['Transactions', 'transactions'], ['Yearly performance', 'yearlyTrends']],
   );
-  drawListSection('Key insights', comparison.insights || []);
+  drawListSection(
+    'Key insights',
+    (comparison.insights || []).filter((insight: string) => !/^Evidence unavailable\b/i.test(insight.trim())),
+  );
   drawListSection('Opportunities', comparison.opportunities || []);
   drawListSection('Recommended next steps', comparison.nextSteps || []);
   drawSection('Context assumptions', (comparison.contextAssumptions || []).map((assumption: string) => ({ assumption })), [['Assumption', 'assumption']]);
@@ -896,7 +899,7 @@ function HeadToHead({ comparison }: { comparison: any }) {
 function VrioSection({ vendorScores = [] }: { vendorScores?: any[] }) {
   const dimensions = [['value', 'Value'], ['rarity', 'Rarity'], ['imitability', 'Imitability'], ['organization', 'Organization']];
   if (!vendorScores.some((vendor) => vendor.vrio)) return null;
-  return <section className="mt-14" data-testid="section-vrio"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Strategic advantage</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">VRIO framework across the shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">VRIO tests whether each option creates value, is rare, is difficult to imitate, and is organized to capture that advantage.</p><div className="mt-5 grid gap-4 lg:grid-cols-2">{vendorScores.map((vendor) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor}><div className="flex items-center justify-between"><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3><span className="mono text-[10px] font-bold text-[#0f766e]">{vendor.score}/100</span></div><div className="mt-5 grid gap-3 sm:grid-cols-2">{dimensions.map(([key, label]) => { const item = vendor.vrio?.[key]; return <div className="rounded-xl bg-[#e7e2d4] p-3" key={key}><div className="flex items-center justify-between"><p className="text-xs font-bold text-[#202840]">{label}</p><span className="rounded-full bg-[#f8f4e8] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(item?.status || 'not available').replace('_', ' ')}</span></div><p className="mt-2 text-[11px] leading-5 text-[#687083]">{item?.rationale || 'Evidence unavailable.'}</p></div>; })}</div><p className="mt-4 border-t border-[#e3ddcf] pt-4 text-xs leading-5 text-[#556075]"><strong>Implication:</strong> {vendor.vrio?.implication || 'No implication available.'}</p></article>)}</div></section>;
+  return <section className="mt-14" data-testid="section-vrio"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Strategic advantage</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">VRIO framework across the shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">VRIO tests whether each option creates value, is rare, is difficult to imitate, and is organized to capture that advantage.</p><div className="mt-5 grid gap-4 lg:grid-cols-2">{vendorScores.map((vendor) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor}><div className="flex items-center justify-between"><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3><span className="mono text-[10px] font-bold text-[#0f766e]">{vendor.score}/100</span></div><div className="mt-5 grid gap-3 sm:grid-cols-2">{dimensions.map(([key, label]) => { const item = vendor.vrio?.[key]; return <div className="rounded-xl bg-[#e7e2d4] p-3" key={key}><div className="flex items-center justify-between"><p className="text-xs font-bold text-[#202840]">{label}</p><span className="rounded-full bg-[#f8f4e8] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(item?.status || 'not available').replace('_', ' ')}</span></div>{item?.rationale && <p className="mt-2 text-[11px] leading-5 text-[#687083]">{item.rationale}</p>}</div>; })}</div><p className="mt-4 border-t border-[#e3ddcf] pt-4 text-xs leading-5 text-[#556075]"><strong>Implication:</strong> {vendor.vrio?.implication || 'No implication available.'}</p></article>)}</div></section>;
 }
 
 function MarketPositionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
@@ -1613,8 +1616,11 @@ function AnalysisPage() {
   const swotEntries = strategicEntries.filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —'));
   const pestleEntries = strategicEntries.filter(([key]) => key.startsWith('PESTLE —')).map(([key, values]) => [key.replace('PESTLE — ', ''), values] as [string, string[]]);
   const soarEntries = strategicEntries.filter(([key]) => key.startsWith('SOAR —')).map(([key, values]) => [key.replace('SOAR — ', ''), values] as [string, string[]]);
-  const alternativeInsights = (comparison.insights || []).filter((item: string) => item.startsWith('Alternative outside comparison —'));
-  const coreInsights = (comparison.insights || []).filter((item: string) => !item.startsWith('Alternative outside comparison —'));
+  const visibleInsights = (comparison.insights || []).filter(
+    (item: string) => !/^Evidence unavailable\b/i.test(item.trim()),
+  );
+  const alternativeInsights = visibleInsights.filter((item: string) => item.startsWith('Alternative outside comparison —'));
+  const coreInsights = visibleInsights.filter((item: string) => !item.startsWith('Alternative outside comparison —'));
   const compareAlternative = (insight: string) => {
     const alternative = insight.replace('Alternative outside comparison — ', '').split(':')[0]?.trim();
     if (!alternative) return;

@@ -3134,9 +3134,6 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
-    for (const insight of evidenceAvailability.unavailableInsights) {
-      if (!normalized.insights.includes(insight)) normalized.insights.push(insight);
-    }
     if (!requiresVendorDiscovery) {
       input.onProgress?.("validating_comparison");
       assertCanonicalComparisonConsistency(resolvedVendors, normalized);
