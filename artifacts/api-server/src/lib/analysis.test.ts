@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addElectricVehicleMatrixEvidence,
+  addVerifiedBaasOfferEvidence,
   applyDeterministicQuantitativeScores,
   assertCanonicalComparisonConsistency,
   assertSufficientComparisonEvidence,
@@ -194,6 +195,108 @@ test("verifies model-proposed metrics only when retrieved text contains value, u
   assert.equal(evidence.normalizationMethod, "retrieved_document_metric");
 });
 
+test("verifies BaaS per-kilometre cost, entry price, and ground clearance from retrieved text", () => {
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra BE 6 SPORTEQ",
+      weightedScores: [{
+        criterion: "Value for Money",
+        evidence: [
+          {
+            sourceUrl: "https://example.com/baas",
+            metricKey: "baas_upfront_price",
+            rawMetricValue: 11.45,
+            rawMetricUnit: "INR lakh",
+            evidenceKind: "quantitative",
+            confidence: 95,
+          },
+          {
+            sourceUrl: "https://example.com/baas",
+            metricKey: "usage_cost_per_km",
+            rawMetricValue: 3.75,
+            rawMetricUnit: "INR/km",
+            evidenceKind: "quantitative",
+            confidence: 95,
+          },
+          {
+            sourceUrl: "https://example.com/baas",
+            metricKey: "ground_clearance",
+            rawMetricValue: 207,
+            rawMetricUnit: "mm",
+            evidenceKind: "quantitative",
+            confidence: 95,
+          },
+        ],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://example.com/baas",
+    finalUrl: "https://example.com/baas",
+    contentType: "text/html",
+    text: [
+      "Mahindra BE 6 SPORTEQ BaaS price starts at ₹11.45 lakh.",
+      "Mahindra BE 6 SPORTEQ battery financing has an effective usage cost of ₹3.75/km.",
+      "Mahindra BE 6 SPORTEQ ground clearance is 207 mm.",
+    ].join("\n"),
+    sha256: "f".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, documents), 3);
+  const evidence = parsed.vendorScores[0].weightedScores[0].evidence as Array<Record<string, unknown>>;
+  assert.deepEqual(
+    evidence.map((entry) => entry.rawMetricUnit),
+    ["inr_lakh", "inr_per_km", "mm"],
+  );
+  assert.deepEqual(
+    evidence.map((entry) => entry.normalizationDirection),
+    ["lower_is_better", "lower_is_better", "higher_is_better"],
+  );
+});
+
+test("extracts official BaaS offer metrics without relying on model candidate fields", () => {
+  const parsed = {
+    vendorScores: ["Mahindra", "MG"].map((vendor) => ({
+      vendor,
+      weightedScores: [{ criterion: "Value for Money", evidence: [] }],
+    })),
+  };
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: "https://www.mahindraelectricsuv.com/be-6-sporteq/baas-faq.html",
+      finalUrl: "https://www.mahindraelectricsuv.com/be-6-sporteq/baas-faq.html",
+      contentType: "text/html",
+      text: "BE 6 SPORTEQ now starts at ₹11.45 Lakh with battery financing at an effective usage cost of ₹3.75/km",
+      sha256: "a".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+      finalUrl: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+      contentType: "text/html",
+      text: "starting at 13 LAKH + ₹ 4.50/km\nMG ZS EV",
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+
+  assert.equal(addVerifiedBaasOfferEvidence(parsed, documents), 4);
+  const evidence = parsed.vendorScores.flatMap(
+    (vendor) => vendor.weightedScores[0].evidence,
+  ) as Array<Record<string, unknown>>;
+  assert.deepEqual(evidence.map((row) => row.metricKey), [
+    "baas_upfront_price",
+    "usage_cost_per_km",
+    "baas_upfront_price",
+    "usage_cost_per_km",
+  ]);
+  assert.ok(evidence.every((row) => row.normalizationMethod === "retrieved_document_metric"));
+});
+
 test("rejects aspirational or context-mismatched quantitative candidates", () => {
   const parsed: Record<string, unknown> = {
     vendorScores: [{
@@ -368,6 +471,56 @@ test("rejects an all-neutral report without comparable verified evidence", () =>
     () => assertSufficientComparisonEvidence(analysis),
     /not enough comparable verified evidence/i,
   );
+});
+
+test("allows a BaaS comparison to rank on a fully verified offer-cost criterion", () => {
+  const analysis = {
+    vendorScores: [
+      {
+        vendor: "Mahindra",
+        score: 70,
+        weightedScores: [
+          {
+            criterion: "Meets Needs / Features",
+            weight: 25,
+            score: 80,
+            rationale: "Verified ground clearance",
+            evidence: [{ sourceUrl: "https://example.com/mahindra", evidenceKind: "quantitative", normalizedScore: 80 }],
+          },
+          {
+            criterion: "Value for Money",
+            weight: 20,
+            score: 90,
+            rationale: "Verified BaaS cost",
+            evidence: [{ sourceUrl: "https://example.com/mahindra", evidenceKind: "quantitative", normalizedScore: 90 }],
+          },
+        ],
+      },
+      {
+        vendor: "MG",
+        score: 55,
+        weightedScores: [
+          {
+            criterion: "Meets Needs / Features",
+            weight: 25,
+            score: 60,
+            rationale: "Verified ground clearance",
+            evidence: [{ sourceUrl: "https://example.com/mg", evidenceKind: "quantitative", normalizedScore: 60 }],
+          },
+          {
+            criterion: "Value for Money",
+            weight: 20,
+            score: 50,
+            rationale: "Verified BaaS cost",
+            evidence: [{ sourceUrl: "https://example.com/mg", evidenceKind: "quantitative", normalizedScore: 50 }],
+          },
+        ],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.doesNotThrow(() => assertSufficientComparisonEvidence(analysis, 20, 20));
+  assert.throws(() => assertSufficientComparisonEvidence(analysis, 45), /Insufficient quantitative evidence/);
 });
 
 test("allows ordinary comparison instructions containing select and from", () => {
@@ -1053,6 +1206,23 @@ test("excludes clearly mismatched regional sources from India research", () => {
     "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india",
     "https://www.mahindraelectricsuv.com/esuv/be-6/MBE6.html",
   ]);
+});
+
+test("seeds current official MG and Mahindra BaaS sources for India", () => {
+  const india = inferResearchMarket(
+    "Compare Mahindra vs MG for Battery as a Service",
+    ["Mahindra", "MG"],
+    "IN",
+  );
+  const sources = officialMarketSourcesFor(
+    "Compare Mahindra vs MG for Battery as a Service",
+    ["Mahindra", "MG"],
+    india,
+  );
+
+  assert.ok(sources.some((url) => url.includes("mahindraelectricsuv.com/be-6-sporteq/baas-faq")));
+  assert.ok(sources.some((url) => url.includes("mgmotor.co.in/vehicles/mgzsev-electric-car-in-india")));
+  assert.ok(sources.some((url) => url.includes("mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq")));
 });
 
 test("enforces the verified MG India BaaS fact in the final report", () => {

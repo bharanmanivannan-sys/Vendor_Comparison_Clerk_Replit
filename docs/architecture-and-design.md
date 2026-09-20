@@ -22,6 +22,7 @@ The implementation is designed around these goals:
 6. **Use contract-first API development.** OpenAPI is the source of truth for generated runtime schemas and frontend clients.
 7. **Enforce ownership at every boundary.** Authenticated data is scoped by Clerk user identity; commercial API data is scoped by tenant and API key.
 8. **Keep scoring reproducible.** Weighted evidence contributions are normalized and reconciled with persisted totals.
+9. **Bound launch-market claims.** MVP research is limited to India, Australia, the United States, and the United Kingdom rather than implying reliable worldwide local coverage.
 
 ## 3. System Context
 
@@ -379,6 +380,8 @@ The generic comparison pipeline has focused extensions for cases requiring addit
 - Strategic provider roles and enterprise migration considerations.
 
 These controls add quality requirements without allowing a domain-specific repair pass to replace the canonical entity set.
+
+Battery-as-a-Service and other usage-priced comparisons resolve exact current products and can verify entry price, usage cost per kilometre, ground clearance, range, charging, and warranty. The report must also disclose usage assumptions, contract term, battery ownership, charger inclusion, termination, and transfer conditions. Scenario totals are calculated only when the user supplies distance and ownership period; otherwise the report compares documented rates and explicitly leaves total cost conditional.
 
 ## 9. Persistence and Data Ownership
 

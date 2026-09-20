@@ -110,7 +110,7 @@ export interface HealthStatus {
 }
 
 /**
- * User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.
+ * Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.
  */
 export type ComparisonInputMarket = typeof ComparisonInputMarket[keyof typeof ComparisonInputMarket];
 
@@ -128,7 +128,7 @@ export interface ComparisonInput {
      * @maxLength 2000
      */
   prompt: string;
-  /** User-selected research market. When provided, it takes precedence over location cues inferred from the prompt. */
+  /** Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt. */
   market?: ComparisonInputMarket;
   /**
      * @minItems 2
@@ -423,7 +423,7 @@ export interface ScoreEvidence {
   sourceDate?: string;
   retrievalDate: string;
   exactClaim: string;
-  /** Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee. */
+  /** Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee. */
   metricKey?: string;
   rawMetricValue?: number;
   rawMetricUnit?: string;

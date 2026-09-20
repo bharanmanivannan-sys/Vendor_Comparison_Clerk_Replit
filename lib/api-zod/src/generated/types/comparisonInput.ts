@@ -22,7 +22,7 @@ export interface ComparisonInput {
      * @maxLength 2000
      */
   prompt: string;
-  /** User-selected research market. When provided, it takes precedence over location cues inferred from the prompt. */
+  /** Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt. */
   market?: ComparisonInputMarket;
   /**
      * @minItems 2

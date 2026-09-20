@@ -1265,7 +1265,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
             02 / Set your research market
           </label>
           <p className={`mt-1 text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
-            Required. We’ll use this market’s rates, currency, regulations, availability, and official sources instead of guessing from your query.
+            Required. MVP coverage currently supports India, Australia, the United States, and the United Kingdom so local rates, currency, regulations, availability, and official sources can be verified.
           </p>
           <select
             id={guest ? 'guest-research-market' : 'research-market'}

@@ -25,7 +25,7 @@ export interface ScoreEvidence {
   sourceDate?: Date;
   retrievalDate: Date;
   exactClaim: string;
-  /** Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee. */
+  /** Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee. */
   metricKey?: string;
   rawMetricValue?: number;
   rawMetricUnit?: string;

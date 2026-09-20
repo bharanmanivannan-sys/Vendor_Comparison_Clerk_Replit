@@ -132,7 +132,7 @@ export const createComparisonBodyCriteriaMax = 8;
 
 export const CreateComparisonBody = zod.object({
   "prompt": zod.string().min(createComparisonBodyPromptMin).max(createComparisonBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonBodyVendorsItemMax)).min(createComparisonBodyVendorsMin).max(createComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonBodyCriteriaItemMax)).max(createComparisonBodyCriteriaMax).optional()
@@ -217,7 +217,7 @@ export const CreateComparisonResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -380,7 +380,7 @@ export const createGuestComparisonBodyCriteriaMax = 8;
 
 export const CreateGuestComparisonBody = zod.object({
   "prompt": zod.string().min(createGuestComparisonBodyPromptMin).max(createGuestComparisonBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonBodyVendorsItemMax)).min(createGuestComparisonBodyVendorsMin).max(createGuestComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonBodyCriteriaItemMax)).max(createGuestComparisonBodyCriteriaMax).optional()
@@ -463,7 +463,7 @@ export const CreateGuestComparisonResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -762,7 +762,7 @@ export const createComparisonJobBodyCriteriaMax = 8;
 
 export const CreateComparisonJobBody = zod.object({
   "prompt": zod.string().min(createComparisonJobBodyPromptMin).max(createComparisonJobBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonJobBodyVendorsItemMax)).min(createComparisonJobBodyVendorsMin).max(createComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonJobBodyCriteriaItemMax)).max(createComparisonJobBodyCriteriaMax).optional()
@@ -906,7 +906,7 @@ export const GetComparisonJobResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -1096,7 +1096,7 @@ export const GetComparisonJobResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -1344,7 +1344,7 @@ export const RegenerateComparisonResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -1507,7 +1507,7 @@ export const createGuestComparisonJobBodyCriteriaMax = 8;
 
 export const CreateGuestComparisonJobBody = zod.object({
   "prompt": zod.string().min(createGuestComparisonJobBodyPromptMin).max(createGuestComparisonJobBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyVendorsItemMax)).min(createGuestComparisonJobBodyVendorsMin).max(createGuestComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyCriteriaItemMax)).max(createGuestComparisonJobBodyCriteriaMax).optional()
@@ -1651,7 +1651,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -1841,7 +1841,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -2074,7 +2074,7 @@ export const GetComparisonResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -2306,7 +2306,7 @@ export const externalCreateComparisonBodyCriteriaMax = 8;
 
 export const ExternalCreateComparisonBody = zod.object({
   "prompt": zod.string().min(externalCreateComparisonBodyPromptMin).max(externalCreateComparisonBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(externalCreateComparisonBodyVendorsItemMax)).min(externalCreateComparisonBodyVendorsMin).max(externalCreateComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(externalCreateComparisonBodyCriteriaItemMax)).max(externalCreateComparisonBodyCriteriaMax).optional()
@@ -2391,7 +2391,7 @@ export const ExternalCreateComparisonResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
@@ -2622,7 +2622,7 @@ export const ExternalGetComparisonResponse = zod.object({
   "sourceDate": zod.coerce.date().optional(),
   "retrievalDate": zod.coerce.date(),
   "exactClaim": zod.string(),
-  "metricKey": zod.string().optional().describe('Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.'),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),

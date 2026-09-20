@@ -890,8 +890,8 @@ components:
           maxLength: 2000
         market:
           type: string
+          description: Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.
           enum: [IN, AU, US, GB]
-          description: User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.
         vendors:
           type: array
           minItems: 2
@@ -1500,7 +1500,7 @@ components:
           type: string
         metricKey:
           type: string
-          description: Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.
+          description: Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.
         rawMetricValue:
           type: number
         rawMetricUnit:

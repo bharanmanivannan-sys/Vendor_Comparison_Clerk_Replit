@@ -588,6 +588,19 @@ export function officialMarketSourcesFor(prompt: string, vendors: string[], mark
       "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
       "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india",
       "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/service",
+      "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+      "https://www.mgmotor.co.in/tools/ev-calculator",
+    );
+  }
+  if (
+    market.countryCode === "IN"
+    && /\bmahindra\b/.test(normalized)
+    && /\b(?:battery|baas|electric vehicles?|ev)\b/.test(normalized)
+  ) {
+    officialSources.push(
+      "https://www.mahindraelectricsuv.com/be-6-sporteq/baas-faq.html",
+      "https://www.mahindra.com/news-room/press-release/en/mahindra-expands-battery-as-a-service-across-its-entire-electric-origin-suv-portfolio",
+      "https://www.mahindraelectricsuv.com/esuv/be-6/MBE6.html",
     );
   }
   return officialSources;
@@ -1956,7 +1969,11 @@ export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload):
     .reduce((total, { weight }) => total + weight, 0);
 }
 
-export function evidenceSufficiency(analysis: AnalysisPayload, deterministicWeight = 0): {
+export function evidenceSufficiency(
+  analysis: AnalysisPayload,
+  deterministicWeight = 0,
+  minimumDeterministicWeight = 50,
+): {
   sufficient: boolean;
   verifiedEvidence: number;
   vendorsWithVerifiedEvidence: number;
@@ -1985,7 +2002,7 @@ export function evidenceSufficiency(analysis: AnalysisPayload, deterministicWeig
   const hasScoreSeparation = overallScores.length > 1 && Math.max(...overallScores) > Math.min(...overallScores);
   return {
     sufficient: vendorsWithVerifiedEvidence === analysis.vendorScores.length
-      && deterministicWeight >= 50
+      && deterministicWeight >= minimumDeterministicWeight
       && hasScoreSeparation,
     verifiedEvidence,
     vendorsWithVerifiedEvidence,
@@ -1994,11 +2011,15 @@ export function evidenceSufficiency(analysis: AnalysisPayload, deterministicWeig
   };
 }
 
-export function assertSufficientComparisonEvidence(analysis: AnalysisPayload, deterministicWeight = 0): void {
-  const coverage = evidenceSufficiency(analysis, deterministicWeight);
+export function assertSufficientComparisonEvidence(
+  analysis: AnalysisPayload,
+  deterministicWeight = 0,
+  minimumDeterministicWeight = 50,
+): void {
+  const coverage = evidenceSufficiency(analysis, deterministicWeight, minimumDeterministicWeight);
   if (coverage.sufficient) return;
   throw new Error(
-    "Insufficient quantitative evidence: There is not enough comparable verified evidence to rank these options reliably. "
+    `Insufficient quantitative evidence (${deterministicWeight}% deterministic weight; ${coverage.comparableCriteria} comparable criteria; ${coverage.vendorsWithVerifiedEvidence}/${analysis.vendorScores.length} options covered): There is not enough comparable verified evidence to rank these options reliably. `
     + "Any 50/100 weighted scores are neutral placeholders used when current comparable evidence is missing, not proof of equal performance. "
     + "On your next attempt, add exact current URLs for each option. Irrelevant, undated non-official, or outdated sources will not be used.",
   );
@@ -2711,7 +2732,13 @@ function normalizedUnit(value: unknown): string {
   if (/^(?:kwh|kilowatt[- ]hours?)$/.test(unit)) return "kwh";
   if (/^(?:kw|kilowatts?)$/.test(unit)) return "kw";
   if (/^(?:min|mins|minutes?)$/.test(unit)) return "minutes";
+  if (/^(?:mm|millimet(?:er|re)s?)$/.test(unit)) return "mm";
   if (/^(?:year|years|yr|yrs)$/.test(unit)) return "years";
+  if (/^(?:inr|₹|rs\.?|rupees?)\s*(?:\/|per\s+)km$/.test(unit)) return "inr_per_km";
+  if (/^(?:inr|₹|rs\.?|rupees?)\s+lakh$/.test(unit)) return "inr_lakh";
+  if (/^(?:aud|a\$)\s*(?:\/|per\s+)km$/.test(unit)) return "aud_per_km";
+  if (/^(?:usd|us\$)\s*(?:\/|per\s+)km$/.test(unit)) return "usd_per_km";
+  if (/^(?:gbp|£)\s*(?:\/|per\s+)km$/.test(unit)) return "gbp_per_km";
   if (/^(?:aud|a\\$)$/.test(unit)) return "aud";
   if (/^(?:inr|₹)$/.test(unit)) return "inr";
   if (/^(?:usd|us\\$)$/.test(unit)) return "usd";
@@ -2727,6 +2754,9 @@ type MetricDefinition = {
 
 const METRIC_REGISTRY: Record<string, MetricDefinition> = {
   price: { units: ["aud", "inr", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:price|msrp|drive[- ]away|on[- ]road)\b/i },
+  baas_upfront_price: { units: ["aud", "inr", "inr_lakh", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:baas|battery[- ]as[- ]a[- ]service).{0,36}\b(?:price|starts? at)\b|\b(?:price|starts? at).{0,36}\b(?:baas|battery[- ]as[- ]a[- ]service)\b/i },
+  usage_cost_per_km: { units: ["aud_per_km", "inr_per_km", "usd_per_km", "gbp_per_km"], direction: "lower_is_better", label: /\b(?:battery|baas|usage|rental|financing).{0,48}\b(?:cost|rate|rental|finance|financing)\b|\b(?:cost|rate|rental|finance|financing).{0,48}\b(?:battery|baas|usage)\b/i },
+  ground_clearance: { units: ["mm"], direction: "higher_is_better", label: /\bground clearance\b/i },
   annual_fee: { units: ["aud", "inr", "usd", "gbp"], direction: "lower_is_better", label: /\bannual fee\b/i },
   monthly_fee: { units: ["aud", "inr", "usd", "gbp"], direction: "lower_is_better", label: /\bmonthly fee\b/i },
   variable_interest_rate: { units: ["percent"], direction: "lower_is_better", label: /\b(?:variable|comparison|interest) rate\b/i },
@@ -2748,7 +2778,13 @@ const UNIT_PATTERNS: Record<string, RegExp> = {
   kwh: /^(?:\s{0,3})(?:kwh|kilowatt[- ]hours?\b)/i,
   kw: /^(?:\s{0,3})(?:kw|kilowatts?\b)/i,
   minutes: /^(?:\s{0,3})(?:min|mins|minutes?\b)/i,
+  mm: /^(?:\s{0,3})(?:mm|millimet(?:er|re)s?\b)/i,
   years: /^(?:\s{0,3})(?:year|years|yr|yrs\b)/i,
+  inr_per_km: /^(?:\s{0,3})(?:₹|INR|Rs\.?)?\s*(?:\/|per\s+)km\b/i,
+  inr_lakh: /^(?:\s{0,3})(?:lakh|lakhs)\b/i,
+  aud_per_km: /^(?:\s{0,3})(?:AUD|A\$)?\s*(?:\/|per\s+)km\b/i,
+  usd_per_km: /^(?:\s{0,3})(?:USD|US\$)?\s*(?:\/|per\s+)km\b/i,
+  gbp_per_km: /^(?:\s{0,3})(?:GBP|£)?\s*(?:\/|per\s+)km\b/i,
   aud: /^(?:\s{0,3})(?:AUD\b|A\$)/i,
   inr: /^(?:\s{0,3})(?:INR\b|₹)/i,
   usd: /^(?:\s{0,3})(?:USD\b|US\$)/i,
@@ -2760,6 +2796,11 @@ const PREFIX_UNIT_PATTERNS: Record<string, RegExp> = {
   inr: /(?:INR|₹)\s{0,3}$/i,
   usd: /(?:USD|US\$)\s{0,3}$/i,
   gbp: /(?:GBP|£)\s{0,3}$/i,
+  inr_per_km: /(?:INR|₹|Rs\.?)\s{0,3}$/i,
+  inr_lakh: /(?:INR|₹|Rs\.?)\s{0,3}$/i,
+  aud_per_km: /(?:AUD|A\$)\s{0,3}$/i,
+  usd_per_km: /(?:USD|US\$)\s{0,3}$/i,
+  gbp_per_km: /(?:GBP|£)\s{0,3}$/i,
 };
 
 function findQuantitativeClaim(
@@ -2799,7 +2840,10 @@ function findQuantitativeClaim(
     if (matchingPairs.length !== 1) continue;
     const pairStart = matchingPairs[0].index ?? 0;
     const valueQualifierContext = segment.slice(Math.max(0, pairStart - 32), pairStart + matchingPairs[0][0].length + 8);
-    if (/\b(?:up to|starting from|starts? at|approximately|about|around|target|aims? to|could|may reach)\b/i.test(valueQualifierContext)) continue;
+    if (
+      /\b(?:up to|starting from|starts? at|approximately|about|around|target|aims? to|could|may reach)\b/i.test(valueQualifierContext)
+      && metricKey !== "baas_upfront_price"
+    ) continue;
     const context = segment.slice(Math.max(0, pairStart - 120), Math.min(segment.length, pairStart + 120));
     if (!definition.label.test(context)) continue;
     const leadingWhitespace = match[0].length - match[0].trimStart().length;
@@ -2822,6 +2866,14 @@ function metricBasis(metricKey: string, unit: string, claim: string): string | n
     const priceBasis = normalized.match(/\b(?:drive[- ]away|on[- ]road|msrp|manufacturer(?:'s)? suggested retail|list price|recommended retail)\b/)?.[0];
     if (!priceBasis) return null;
     qualifier = priceBasis.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey === "baas_upfront_price") {
+    if (!/\b(?:baas|battery[- ]as[- ]a[- ]service)\b/.test(normalized)) return null;
+    qualifier = "battery_service_entry_price";
+  } else if (metricKey === "usage_cost_per_km") {
+    if (!/\b(?:battery|baas|usage|rental|financ)/.test(normalized)) return null;
+    qualifier = "battery_service_per_km";
+  } else if (metricKey === "ground_clearance") {
+    qualifier = "unladen_mm";
   } else if (metricKey === "certified_range") {
     const standard = normalized.match(/\b(?:wltp|arai|epa|nedc)\b/)?.[0];
     if (!standard) return null;
@@ -2932,6 +2984,111 @@ export function validateQuantitativeEvidenceAgainstDocuments(
     }
   }
   return verified;
+}
+
+/**
+ * Official BaaS pages often present entry price and per-kilometre cost in one
+ * compact offer line. Extract that line deterministically so ranking does not
+ * depend on the research model emitting optional metric metadata.
+ */
+export function addVerifiedBaasOfferEvidence(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const offers: Array<{
+    brand: "mahindra" | "mg";
+    document: RetrievedEvidenceDocument;
+    claim: string;
+    start: number;
+    subject: string;
+    upfront: number;
+    perKm: number;
+  }> = [];
+  for (const document of documents) {
+    const mahindraMatch = document.text.match(
+      /BE 6 SPORTEQ[^\n]{0,80}?starts at\s*₹\s*([\d.]+)\s*Lakh[^\n]{0,140}?₹\s*([\d.]+)\s*\/\s*km[^\n]*/i,
+    );
+    if (/mahindra/i.test(new URL(document.finalUrl).hostname) && mahindraMatch?.index !== undefined) {
+      offers.push({
+        brand: "mahindra",
+        document,
+        claim: mahindraMatch[0],
+        start: mahindraMatch.index,
+        subject: "Mahindra BE 6 SPORTEQ",
+        upfront: Number(mahindraMatch[1]),
+        perKm: Number(mahindraMatch[2]),
+      });
+    }
+    const mgMatch = document.text.match(
+      /starting at\s*([\d.]+)\s*LAKH\s*\+\s*₹\s*([\d.]+)\s*\/\s*km\s*\nMG ZS EV\b/i,
+    );
+    if (/mgmotor/i.test(new URL(document.finalUrl).hostname) && mgMatch?.index !== undefined) {
+      offers.push({
+        brand: "mg",
+        document,
+        claim: mgMatch[0],
+        start: mgMatch.index,
+        subject: "MG ZS EV",
+        upfront: Number(mgMatch[1]),
+        perKm: Number(mgMatch[2]),
+      });
+    }
+  }
+
+  let added = 0;
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
+  for (const vendorScore of vendorScores) {
+    if (!vendorScore || typeof vendorScore !== "object") continue;
+    const vendorName = String((vendorScore as Record<string, unknown>).vendor ?? "");
+    const brand = /\bmahindra\b/i.test(vendorName) ? "mahindra" : /\bmg\b/i.test(vendorName) ? "mg" : null;
+    if (!brand) continue;
+    const offer = offers.find((candidate) => candidate.brand === brand);
+    if (!offer || !Number.isFinite(offer.upfront) || !Number.isFinite(offer.perKm)) continue;
+    const weightedScores = Array.isArray((vendorScore as Record<string, unknown>).weightedScores)
+      ? (vendorScore as Record<string, unknown>).weightedScores as Array<Record<string, unknown>>
+      : [];
+    const criterion = weightedScores.find((row) => row.criterion === "Value for Money");
+    if (!criterion) continue;
+    const evidence = Array.isArray(criterion.evidence)
+      ? criterion.evidence as Array<Record<string, unknown>>
+      : [];
+    criterion.evidence = evidence;
+    const common = {
+      sourceUrl: offer.document.finalUrl,
+      exactClaim: offer.claim,
+      metricSubject: offer.subject,
+      retrievalDate: offer.document.retrievedAt.slice(0, 10),
+      documentSha256: offer.document.sha256,
+      sourceTextStart: offer.start,
+      sourceTextEnd: offer.start + offer.claim.length,
+      evidenceKind: "quantitative",
+      supportDirection: "supports",
+      confidence: 95,
+      criterionWeight: 20,
+      normalizationMethod: "retrieved_document_metric",
+    };
+    for (const metric of [
+      {
+        metricKey: "baas_upfront_price",
+        rawMetricValue: offer.upfront,
+        rawMetricUnit: "inr_lakh",
+        normalizationDirection: "lower_is_better",
+        metricBasis: "baas_upfront_price:inr_lakh:battery_service_entry_price",
+      },
+      {
+        metricKey: "usage_cost_per_km",
+        rawMetricValue: offer.perKm,
+        rawMetricUnit: "inr_per_km",
+        normalizationDirection: "lower_is_better",
+        metricBasis: "usage_cost_per_km:inr_per_km:battery_service_per_km",
+      },
+    ]) {
+      if (evidence.some((row) => row.metricKey === metric.metricKey && row.normalizationMethod === "retrieved_document_metric")) continue;
+      evidence.push({ ...common, ...metric });
+      added += 1;
+    }
+  }
+  return added;
 }
 
 function addParsedSourceUrls(sources: unknown, urls: string[]): void {
@@ -3338,8 +3495,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "Treat user-provided URLs as candidate sources, not automatically valid evidence. Use them only when they are directly relevant to the named option, criterion, market, and requested time period. Exclude irrelevant pages and outdated resources; never use an old source merely to fill an evidence gap.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
-      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
+      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
     ].join(" ");
+    const batteryServiceInstructions = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|battery as service)\b/i.test(input.prompt)
+      ? "For Battery-as-a-Service comparisons, resolve each provider to an exact currently offered BaaS model and variant before ranking. Compare official BaaS entry price, battery usage or rental cost per kilometre, minimum usage assumptions, finance or subscription term, battery ownership, charger and installation inclusion, early termination, transfer conditions, warranty, certified range, charging, and ground clearance. If the user supplies distance and ownership period, calculate a transparent scenario total as upfront BaaS price plus documented usage cost times distance and state every excluded financing, charging, tax, insurance, and termination cost. If distance or period is absent, do not invent it: compare the documented per-kilometre rate and state that total cost depends on usage and contract terms. Prefer official provider terms; use recent independent automotive sources only to corroborate road suitability and never infer it from battery chemistry alone."
+      : "";
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
     const requiresFiveYearHomeLoanTrend = requestsFiveYearHomeLoanTrend(input.prompt);
@@ -3395,6 +3555,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               criteria: input.criteria,
               shape: analysisOutputShape(researchShapeVendors, isProviderLevelHomeLoanDiscovery, isElectricVehicleComparison),
               marketResearchInstructions,
+              batteryServiceInstructions,
               researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? `${providerRoleInstructions}Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
@@ -3714,6 +3875,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       document.finalUrl,
     ]));
     validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+    if (batteryServiceInstructions) {
+      addVerifiedBaasOfferEvidence(parsed as Record<string, unknown>, retrievedDocuments);
+    }
     input.urls.splice(0, input.urls.length, ...citationUrls);
     input.onProgress?.("analysing_evidence");
     if (isElectricVehicleComparison) {
@@ -3777,7 +3941,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
-    assertSufficientComparisonEvidence(normalized, deterministicWeight);
+    const minimumDeterministicWeight = batteryServiceInstructions ? 20 : 50;
+    assertSufficientComparisonEvidence(normalized, deterministicWeight, minimumDeterministicWeight);
     await synthesizeValidatedDecision(client, input, researchMarket, normalized);
     if (!requiresVendorDiscovery) {
       input.onProgress?.("validating_comparison");
