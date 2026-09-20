@@ -16,3 +16,6 @@
 - [Node evidence-check DNS](node-evidence-dns.md) — pinned DNS callbacks must handle Node’s all-address lookup contract or disable automatic family selection.
 - [Additive schema recovery](additive-schema-recovery.md) — when schema push proposes unrelated data loss, apply only the missing additive change and leave retained tables untouched.
 - [Actionable comparison recovery](actionable-comparison-recovery.md) — when parsing or evidence shape fails, offer a rewritten prompt that preserves the user’s options and criteria.
+- [Recommendation consistency](recommendation-consistency.md) — tied-score headlines must follow an explicit narrative winner, with preference phrases matched directionally.
+- [Canonical comparison identity](canonical-comparison-identity.md) — freeze the ordered entity set before research; model rows and recommendations cannot redefine it.
+- [Runtime error logging](runtime-error-logging.md) — serialize caught errors to primitive fields before logging; Node 24 inspection can crash on complex error objects.

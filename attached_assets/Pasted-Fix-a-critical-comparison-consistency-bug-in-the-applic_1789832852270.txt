@@ -1,0 +1,562 @@
+Fix a critical comparison-consistency bug in the application.
+
+DO NOT redesign the UI.
+DO NOT change the visual styling, typography, spacing, colours, cards, or layout.
+DO NOT solve this with hardcoded string replacements.
+Fix the underlying data flow and NLP/comparison parsing.
+
+==================================================
+BUG
+==================================================
+
+When the user enters:
+
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+the application correctly understands the overall comparison in some sections, but the Executive Decision incorrectly changes the comparison to:
+
+"Tata vs MG"
+
+For example, the current output can contain:
+
+MAIN PAGE HEADING:
+"Compare Mahindra vs Tata vs MG for EV vehicles"       ← CORRECT
+
+BUSINESS RATIONALE:
+Discusses Mahindra, Tata and MG                          ← CORRECT
+
+IMMEDIATE ACTION:
+References Mahindra, Tata and MG                         ← CORRECT
+
+EXECUTIVE DECISION:
+"Tata vs MG"                                             ← WRONG
+
+RECOMMENDATION:
+"Tata vs MG"                                             ← WRONG
+
+This indicates that different parts of the application are independently
+interpreting or regenerating the original user query.
+
+==================================================
+CORE REQUIREMENT
+==================================================
+
+The user's comparison entities must be parsed ONCE and then treated as
+the SINGLE SOURCE OF TRUTH for the entire analysis.
+
+For:
+
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+the canonical comparison must be:
+
+entities = [
+  "Mahindra",
+  "Tata",
+  "MG"
+]
+
+The system must never silently reduce this to:
+
+[
+  "Tata",
+  "MG"
+]
+
+or any other subset.
+
+==================================================
+IMPORTANT DISTINCTION
+==================================================
+
+Separate:
+
+1. THE COMPARISON SET
+2. THE RECOMMENDATION
+
+Example:
+
+comparison.entities:
+[
+  "Mahindra",
+  "Tata",
+  "MG"
+]
+
+recommendation.recommendedEntity:
+"Mahindra"
+
+The recommendation may select ONE entity from the comparison.
+
+It must NOT redefine the comparison.
+
+Therefore:
+
+VALID:
+
+Comparison:
+"Mahindra vs Tata vs MG"
+
+Decision:
+"Mahindra"
+
+INVALID:
+
+Comparison:
+"Tata vs MG"
+
+Decision:
+"Mahindra"
+
+or:
+
+Decision:
+"Tata vs MG"
+
+because "Tata vs MG" is not the recommendation; it is an
+incorrectly reduced comparison.
+
+==================================================
+STEP 1 — INSPECT THE EXISTING IMPLEMENTATION
+==================================================
+
+Before making changes, inspect the existing codebase and identify:
+
+1. Where the user's natural-language query is parsed.
+2. Where comparison entities are extracted.
+3. Where the main page headline is generated.
+4. Where the Executive Decision heading is generated.
+5. Where the recommendation is generated.
+6. Where the business rationale is generated.
+7. Where immediate actions are generated.
+8. Whether multiple LLM calls independently receive and interpret
+   the original user query.
+9. The existing analysis/result TypeScript interfaces or schemas.
+10. Existing NLP/parser tests.
+11. Existing regression tests.
+
+Do not make assumptions about the architecture.
+
+Find the actual source of the inconsistency first.
+
+==================================================
+STEP 2 — CREATE/USE A CANONICAL COMPARISON CONTEXT
+==================================================
+
+Create or reuse a single structured comparison object.
+
+Conceptually it should contain:
+
+comparisonContext = {
+  originalQuery: "...",
+  category: "...",
+  entities: [
+    {
+      id: "...",
+      name: "..."
+    }
+  ],
+  entityCount: 3,
+  comparisonType: "multi_entity",
+  displayName: "Mahindra vs Tata vs MG"
+}
+
+The exact implementation should follow the application's existing
+architecture and naming conventions.
+
+The critical requirement is:
+
+comparisonContext.entities = SINGLE SOURCE OF TRUTH.
+
+Every downstream component must consume this object.
+
+==================================================
+STEP 3 — PARSE ONCE
+==================================================
+
+The application must NOT do this:
+
+User query
+  → LLM parses headline
+  → LLM parses recommendation
+  → LLM parses executive summary
+  → LLM parses rationale
+  → LLM parses actions
+
+That creates inconsistent interpretations.
+
+Instead:
+
+User query
+  ↓
+Canonical comparison parser
+  ↓
+comparisonContext
+  ↓
+all analysis/UI sections
+
+The parser should run once per user query.
+
+Downstream LLM calls may analyse the entities, but they must not
+redefine the comparison entity set.
+
+==================================================
+STEP 4 — HEADLINE MUST BE DETERMINISTIC
+==================================================
+
+The comparison headline must be derived from the canonical entities.
+
+Do NOT allow an LLM to invent or rewrite the comparison title.
+
+Examples:
+
+["Tata", "MG"]
+→ "Tata vs MG"
+
+["Mahindra", "Tata", "MG"]
+→ "Mahindra vs Tata vs MG"
+
+["A", "B", "C", "D"]
+→ "A vs B vs C vs D"
+
+The exact category wording may follow the existing application,
+but the entity list must come directly from comparisonContext.entities.
+
+The LLM must never decide that a three-way comparison should become
+a two-way comparison.
+
+==================================================
+STEP 5 — EXECUTIVE DECISION MUST NOT REDEFINE THE COMPARISON
+==================================================
+
+The Executive Decision section must distinguish between:
+
+"what is being compared"
+
+and
+
+"what is recommended."
+
+For example:
+
+DECISION
+Mahindra
+
+not:
+
+DECISION
+Tata vs MG
+
+if the original comparison is:
+
+Mahindra vs Tata vs MG
+
+If the application wants to display the comparison context in the
+Executive Decision card, it must use the canonical comparison:
+
+Mahindra vs Tata vs MG
+
+It must never independently generate:
+
+Tata vs MG
+
+==================================================
+STEP 6 — VALIDATE GENERATED OUTPUT
+==================================================
+
+Add a validation layer before rendering the analysis.
+
+Required invariants:
+
+1. Every comparison entity must exist in comparisonContext.entities.
+
+2. No comparison entity may disappear from a comparison title.
+
+3. No new comparison entity may appear.
+
+4. A recommendation must be one of the canonical comparison entities.
+
+5. A recommendation must not modify the comparison entity set.
+
+6. If the canonical comparison contains 3 entities, no generated
+   comparison label may contain only 2 entities.
+
+7. All comparison-related UI sections must reference the same
+   comparisonContext.
+
+8. If an LLM returns a comparison set that conflicts with
+   comparisonContext, ignore the LLM's entity set and use the
+   canonical comparisonContext.
+
+9. Never silently render inconsistent comparison metadata.
+
+Prefer deterministic fallback to the canonical parsed data.
+
+==================================================
+STEP 7 — NLP PARSING REQUIREMENTS
+==================================================
+
+The parser must correctly handle common comparison syntax.
+
+These should all resolve to three entities:
+
+"Compare Mahindra vs Tata vs MG"
+
+"Compare Mahindra, Tata and MG"
+
+"Compare Mahindra, Tata & MG"
+
+"Mahindra vs Tata vs MG"
+
+"Mahindra or Tata or MG"
+
+"Compare Mahindra versus Tata versus MG"
+
+Expected canonical entities:
+
+[
+  "Mahindra",
+  "Tata",
+  "MG"
+]
+
+The parser must NOT interpret:
+
+"Mahindra vs Tata vs MG"
+
+as:
+
+[
+  "Mahindra",
+  "Tata vs MG"
+]
+
+or:
+
+[
+  "Mahindra",
+  "Tata"
+]
+
+or:
+
+[
+  "Tata",
+  "MG"
+]
+
+Preserve the existing entity-normalisation rules in the application,
+but ensure separators such as:
+
+vs
+versus
+or
+and
+&
+comma
+
+are handled correctly when they represent comparison entities.
+
+==================================================
+STEP 8 — DO NOT USE FRAGILE UI PATCHES
+==================================================
+
+DO NOT implement:
+
+replace("Tata vs MG", "...")
+
+DO NOT implement:
+
+if query.includes("Mahindra") ...
+
+DO NOT hardcode this particular example.
+
+DO NOT create separate parsing logic for the Executive Decision.
+
+DO NOT create separate parsing logic for the sidebar.
+
+DO NOT create separate parsing logic for the headline.
+
+Fix the canonical data flow so the solution works for arbitrary
+brands/products/services and any number of comparison entities.
+
+==================================================
+STEP 9 — REGRESSION TESTS
+==================================================
+
+Add regression tests for these exact cases.
+
+TEST 1
+
+Input:
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+Expected entities:
+Mahindra
+Tata
+MG
+
+Expected comparison:
+"Mahindra vs Tata vs MG"
+
+The output MUST NOT contain a comparison title:
+"Tata vs MG"
+
+
+TEST 2
+
+Input:
+"Compare Tata vs MG for EV vehicles"
+
+Expected entities:
+Tata
+MG
+
+Expected comparison:
+"Tata vs MG"
+
+
+TEST 3
+
+Input:
+"Compare Mahindra, Tata and MG EVs"
+
+Expected entities:
+Mahindra
+Tata
+MG
+
+
+TEST 4
+
+Input:
+"Compare MG, Tata & Mahindra"
+
+Expected entities:
+MG
+Tata
+Mahindra
+
+
+TEST 5
+
+Input:
+"Mahindra or Tata or MG for an EV?"
+
+Expected entities:
+Mahindra
+Tata
+MG
+
+
+TEST 6
+
+Input:
+"Compare Mahindra versus Tata versus MG"
+
+Expected entities:
+Mahindra
+Tata
+MG
+
+
+TEST 7
+
+Input:
+"Compare Tata and MG"
+
+Expected entities:
+Tata
+MG
+
+This must NOT accidentally produce a third entity.
+
+==================================================
+STEP 10 — END-TO-END CONSISTENCY TEST
+==================================================
+
+Add an end-to-end regression test for:
+
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+Verify that all comparison-related sections use the same canonical
+entity set:
+
+MAIN HEADING
+→ Mahindra, Tata, MG
+
+COMPARISON METADATA
+→ Mahindra, Tata, MG
+
+EXECUTIVE SUMMARY
+→ must not reduce the comparison
+
+RECOMMENDATION
+→ must be one of Mahindra, Tata, MG if a recommendation exists
+
+BUSINESS RATIONALE
+→ may discuss Mahindra, Tata and MG
+
+IMMEDIATE ACTIONS
+→ may reference any of the canonical entities
+
+The specific recommendation itself is NOT the issue being tested.
+The entity consistency is.
+
+==================================================
+STEP 11 — PRESERVE EXISTING BEHAVIOUR
+==================================================
+
+Do not change the application's existing scoring, ranking,
+recommendation logic, research logic, or visual design unless
+absolutely necessary to fix this bug.
+
+This task is about:
+
+NLP parsing
++
+canonical comparison state
++
+cross-section consistency.
+
+Keep the existing analysis behaviour intact.
+
+==================================================
+STEP 12 — FINAL VERIFICATION
+==================================================
+
+After implementing the fix:
+
+1. Run the existing test suite.
+2. Run the new comparison parser tests.
+3. Run the end-to-end regression test.
+4. Test the exact query:
+
+   "Compare Mahindra vs Tata vs MG for EV vehicles"
+
+5. Confirm that no section displays "Tata vs MG" as the comparison.
+6. Confirm that the main heading remains:
+   "Compare Mahindra vs Tata vs MG for EV vehicles"
+7. Confirm that any recommendation is represented separately from
+   the comparison set.
+
+Report:
+
+- Root cause found
+- Files/components changed
+- Tests added
+- Existing tests passed
+- New tests passed
+- Exact behaviour verified
+
+IMPORTANT:
+Do not stop after changing the headline.
+
+The objective is to eliminate the underlying inconsistency so that
+future queries such as:
+
+"A vs B vs C"
+"X, Y and Z"
+"Product A versus Product B versus Product C"
+
+cannot produce a partially reduced comparison in any section.

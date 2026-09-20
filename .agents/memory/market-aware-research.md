@@ -7,8 +7,10 @@ Research must use product, service, pricing, warranty, and support evidence appl
 
 All comparable monetary values must be presented in the inferred local currency and originate from evidence applicable to that market. Do not convert another market's prices into local currency as a substitute for unavailable local pricing.
 
+When a user requests a multi-year product or market trend, research that domain-specific trend directly from official provider disclosures and regulator data. Do not substitute stock-price, ownership, or generic corporate history for product performance.
+
 Non-official fallback evidence must be reputable, searched newest-first from the current month and year, and published or materially updated within the trailing 12 months. Undated or older fallback claims are unavailable for current comparisons.
 
-**Why:** Global brands publish materially different products, subscriptions, prices, warranties, and offers by market. Generic/global evidence produced wrong local comparisons and omitted official India BaaS information.
+**Why:** Global brands publish materially different products, subscriptions, prices, warranties, and offers by market. Generic/global evidence produced wrong local comparisons, omitted official India BaaS information, and treated a requested home-loan trend as generic company history.
 
 **How to apply:** Apply this rule to every researched comparison. Filter clearly mismatched regional domains before evidence validation, and require local official coverage for market-specific claims. Official current product pages may be undated, but time-sensitive facts need an as-of date. Reject malformed URLs containing explanatory prose.

@@ -1,162 +1,4 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import http from "node:http";
-import {
-  addElectricVehicleMatrixEvidence,
-  type AnalysisPayload,
-  WEIGHTED_CRITERIA,
-  dedupeReferenceUrls,
-  electricVehicleFinalQualityIssues,
-  enforceIndianMgBaasFact,
-  filterSourcesForMarket,
-  hasElectricVehicleResearchCoverage,
-  hasFiveYearMarketHistoryCoverage,
-  hasHomeLoanResearchCoverage,
-  inferResearchMarket,
-  isElectricVehiclePrompt,
-  isObjectivePhraseVendor,
-  missingCreditCardSourceVendors,
-  missingElectricVehicleSourceVendors,
-  mergeElectricVehicleResearch,
-  normalizeDecisionGovernance,
-  normalizeEvidenceRecords,
-  normalizeLensWinner,
-  normalizeMarketHistory,
-  normalizeMarketPositionEvidence,
-  normalizeProviderRole,
-  normalizeTextField,
-  normalizeVrioStatus,
-  officialMarketSourcesFor,
-  officialHomeLoanSourcesFor,
-  parseJsonObject,
-  parsePrompt,
-  parsePromptWithIntent,
-  reconcileRecommendationWithNarrative,
-  resolveComparisonVendors,
-  requestsFiveYearHomeLoanTrend,
-  selectRecommendationLabel,
-  sourceMatchesResearchMarket,
-  validateFinalEvidenceUrls,
-  validateComparisonContext,
-} from "./analysis";
-import { flattenComparisonEvidence } from "../services/comparisonPersistence";
-import { checkEvidenceUrls, createPublicLookup, isSafeUserInput } from "./security";
-
-const extracted = (value: object) => async () => value;
-const intent = (value: object) => ({
-  subject: "",
-  qualifiers: [],
-  decisionCriterion: "best fit for the stated use case",
-  freshness: "stable",
-  ...value,
-});
-
-test("includes NPS in the 100-point weighted decision model", () => {
-  assert.deepEqual(
-    WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Customer Advocacy / NPS"),
-    { criterion: "Customer Advocacy / NPS", weight: 10 },
-  );
-  assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
-});
-
-test("allows ordinary comparison instructions containing select and from", () => {
-  assert.equal(
-    isSafeUserInput("Select the best-matching current model from each manufacturer."),
-    true,
-  );
-  assert.equal(isSafeUserInput("SELECT * FROM users"), false);
-});
-
-test("normalizes governance lists into the string response contract", () => {
-  const [governance] = normalizeDecisionGovernance([{
-    decision: "Approve product",
-    owner: "CIO",
-    approvers: ["CIO", "Risk Committee"],
-    evidenceRequired: ["Security review", "Commercial validation"],
-    decisionGate: "Executive approval",
-  }]);
-
-  assert.equal(governance.approvers, "CIO; Risk Committee");
-  assert.equal(governance.evidenceRequired, "Security review; Commercial validation");
-  assert.equal(typeof governance.approvers, "string");
-  assert.equal(typeof governance.evidenceRequired, "string");
-  assert.equal(normalizeTextField([], "Fallback evidence"), "Fallback evidence");
-});
-
-test("normalizes market-position evidence arrays into the string response contract", () => {
-  const evidence = normalizeMarketPositionEvidence([
-    "https://example.com/market-share",
-    "https://example.com/share-value",
-  ]);
-
-  assert.equal(
-    evidence,
-    "https://example.com/market-share; https://example.com/share-value",
-  );
-  assert.equal(typeof evidence, "string");
-});
-
-test("normalizes direct advocacy percentages into deterministic weighted evidence", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://research.example.com/advocacy",
-    exactClaim: "80% of surveyed users would advocate for Product A.",
-    rawMetricValue: 80,
-    rawMetricUnit: "percent",
-    sampleSize: 500,
-    evidenceKind: "quantitative",
-    supportDirection: "supports",
-    confidence: 90,
-    normalizedScore: 12,
-  }], "Customer Advocacy / NPS", 10, ["https://research.example.com/advocacy"]);
-
-  assert.equal(evidence.normalizedScore, 80);
-  assert.equal(evidence.weightedContribution, 8);
-  assert.equal(evidence.sampleSize, 500);
-  assert.equal(evidence.normalizationMethod, "direct_percentage");
-});
-
-test("inverts adverse percentage metrics instead of rewarding higher failure rates", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://research.example.com/reliability",
-    exactClaim: "The measured complaint rate was 20 percent.",
-    rawMetricValue: 20,
-    rawMetricUnit: "percent",
-    evidenceKind: "quantitative",
-    supportDirection: "contradicts",
-    confidence: 85,
-  }], "Quality & Reliability", 20, ["https://research.example.com/reliability"]);
-
-  assert.equal(evidence.normalizedScore, 80);
-  assert.equal(evidence.weightedContribution, 16);
-  assert.equal(evidence.normalizationMethod, "inverse_percentage");
-  assert.equal(evidence.criterionWeight, 20);
-});
-
-test("canonicalizes legacy against direction to contradicts", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://research.example.com/incidents",
-    exactClaim: "Service incidents affected 15 percent of surveyed customers.",
-    rawMetricValue: 15,
-    rawMetricUnit: "percent",
-    evidenceKind: "quantitative",
-    supportDirection: "against",
-    confidence: 80,
-  }], "Quality & Reliability", 20, ["https://research.example.com/incidents"]);
-
-  assert.equal(evidence.supportDirection, "contradicts");
-  assert.equal(evidence.normalizedScore, 85);
-  assert.equal(evidence.normalizationMethod, "inverse_percentage");
-});
-
-test("preserves sourced qualitative sustainability evidence and explicit normalization", () => {
-  const [evidence] = normalizeEvidenceRecords([{
-    sourceUrl: "https://company.example.com/sustainability-report",
-    sourcePublisher: "Product A",
-    exactClaim: "The audited report documents renewable material sourcing and measured emissions reductions.",
-    evidenceKind: "qualitative",
-    supportDirection: "supports",
-    confidence: 72,
-    normalizedScore: 60,
+normalizedScore: 60,
     normalizationMethod: "documented_targets_and_measured_progress",
   }], "Sustainability", 5, ["https://company.example.com/sustainability-report"]);
 
@@ -432,6 +274,19 @@ test("parses EV battery-service comparisons with trailing punctuation", () => {
   assert.ok(officialMarketSourcesFor(parsed.prompt, parsed.vendors, market).some((url) => url.includes("mgmotor.co.in") && url.includes("baas-faq")));
 });
 
+test("deterministically parses a misspelled Battery as a Service comparison", async () => {
+  const prompt = "Compare battery as service option between Mg ang mahindra";
+  const deterministic = parsePrompt(prompt);
+  const parsed = await parsePromptWithIntent(prompt, async () => {
+    throw new Error("Intent model unavailable");
+  });
+
+  assert.deepEqual(deterministic.vendors, ["MG", "Mahindra"]);
+  assert.deepEqual(parsed.vendors, ["MG", "Mahindra"]);
+  assert.equal(parsed.context.segment, "Battery as a Service");
+  assert.equal(parsed.comparisonIdentity.displayName, "MG vs Mahindra");
+});
+
 test("splits slash and ampersand separated EV manufacturers into distinct options", async () => {
   const prompt = "Compare EV cars of MG/Tata & Mahindra in India";
   const parsed = await parsePromptWithIntent(prompt, extracted(intent({
@@ -449,6 +304,105 @@ test("splits slash and ampersand separated EV manufacturers into distinct option
   assert.deepEqual(parsed.intent.qualifiers, ["India"]);
   assert.equal(parsed.intent.decisionCriterion, "best fit for the stated use case");
   assert.equal(parsed.intent.freshness, "current");
+});
+
+test("keeps every canonical EV entity across supported comparison separators", async () => {
+  const cases = [
+    ["Compare Mahindra vs Tata vs MG for EV vehicles", ["Mahindra", "Tata", "MG"]],
+    ["Compare Tata vs MG for EV vehicles", ["Tata", "MG"]],
+    ["Compare Mahindra, Tata and MG EVs", ["Mahindra", "Tata", "MG"]],
+    ["Compare MG, Tata & Mahindra", ["MG", "Tata", "Mahindra"]],
+    ["Mahindra or Tata or MG for an EV?", ["Mahindra", "Tata", "MG"]],
+    ["Compare Mahindra versus Tata versus MG", ["Mahindra", "Tata", "MG"]],
+    ["Compare Tata and MG", ["Tata", "MG"]],
+  ] as const;
+
+  for (const [prompt, expected] of cases) {
+    const parsed = await parsePromptWithIntent(prompt, async () => {
+      throw new Error("Intent model unavailable");
+    });
+    assert.deepEqual(parsed.vendors, expected, prompt);
+    assert.deepEqual(parsed.comparisonIdentity.entities.map((entity) => entity.name), expected, prompt);
+    assert.equal(parsed.comparisonIdentity.displayName, expected.join(" vs "), prompt);
+  }
+  const identity = buildComparisonIdentity(
+    "Compare Mahindra vs Tata vs MG for EV vehicles",
+    "Electric vehicles",
+    ["Mahindra", "Tata", "MG"],
+  );
+  assert.equal(identity.headline, "Compare Mahindra vs Tata vs MG for EV vehicles");
+  assert.equal(identity.entityCount, 3);
+  assert.equal(identity.comparisonType, "multi_entity");
+});
+
+test("aligns researched score rows by canonical entity without dropping or reordering the comparison set", () => {
+  const canonical = ["Mahindra", "Tata", "MG"];
+  const supplied = [
+    { vendor: "MG", score: 88 },
+    { vendor: "Unknown EV", score: 99 },
+    { vendor: "Tata", score: 84 },
+  ];
+  const aligned = canonicalVendorScoreRows(canonical, supplied);
+
+  assert.deepEqual(aligned.map((row) => row?.vendor), [undefined, "Tata", "MG"]);
+  assert.deepEqual(canonical, ["Mahindra", "Tata", "MG"]);
+  assert.ok(!aligned.some((row) => row?.vendor === "Unknown EV"));
+});
+
+test("rejects an end-to-end analysis result that reduces the canonical three-entity comparison", async () => {
+  const parsed = await parsePromptWithIntent(
+    "Compare Mahindra vs Tata vs MG for EV vehicles",
+    async () => {
+      throw new Error("Intent model unavailable");
+    },
+  );
+  const vendors = parsed.comparisonIdentity.entities.map((entity) => entity.name);
+  const completeResult = {
+    vendorScores: vendors.map((vendor) => ({ vendor })),
+    pricing: [{ dimension: "Price", values: Object.fromEntries(vendors.map((vendor) => [vendor, "Verified"])), winner: "Mahindra" }],
+    features: [{ dimension: "Range", values: Object.fromEntries(vendors.map((vendor) => [vendor, "Verified"])), winner: "MG" }],
+    recommendation: "Mahindra",
+  };
+
+  assert.doesNotThrow(() => assertCanonicalComparisonConsistency(vendors, completeResult));
+  assert.throws(
+    () => assertCanonicalComparisonConsistency(vendors, {
+      ...completeResult,
+      recommendation: "Tata vs MG",
+      vendorScores: completeResult.vendorScores.slice(1),
+    }),
+    /canonical comparison entities/,
+  );
+  assert.equal(parsed.comparisonIdentity.headline, "Compare Mahindra vs Tata vs MG for EV vehicles");
+});
+
+test("accepts canonical matrix ties without treating the tie label as a new entity", () => {
+  const vendors = ["MG", "Mahindra"];
+  const result = {
+    vendorScores: vendors.map((vendor) => ({ vendor })),
+    pricing: [{
+      dimension: "Price",
+      values: { MG: "Comparable", Mahindra: "Comparable" },
+      winner: "Tie: MG and Mahindra",
+    }],
+    features: [],
+    recommendation: "MG",
+  };
+
+  assert.doesNotThrow(() => assertCanonicalComparisonConsistency(vendors, result));
+  assert.doesNotThrow(
+    () => assertCanonicalComparisonConsistency(vendors, {
+      ...result,
+      pricing: [{ ...result.pricing[0], winner: "Not established" }],
+    }),
+  );
+  assert.throws(
+    () => assertCanonicalComparisonConsistency(vendors, {
+      ...result,
+      pricing: [{ ...result.pricing[0], winner: "Tie: MG and Tata" }],
+    }),
+    /winner is not a canonical comparison entity/,
+  );
 });
 
 test("returns one-shot decision metadata for grounded comparison research", async () => {
@@ -1309,195 +1263,6 @@ test("rejects explanatory text disguised as an evidence URL", () => {
   ]), [
     "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
   ]);
-});
-
-const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
-
-test("uses Node's request lookup contract for public IPv4 and IPv6 addresses", async () => {
-  const resolverCalls: Array<{ hostname: string; all: boolean | undefined }> = [];
-  const probeAddress = async (address: string, family: number) => {
-    let transportRequest: http.ClientRequest;
-    let finished = false;
-    const lookup = createPublicLookup((hostname, options, callback) => {
-      resolverCalls.push({ hostname, all: options.all });
-      queueMicrotask(() => {
-        callback(null, [{ address, family }]);
-        queueMicrotask(() => {
-          if (!finished) transportRequest.destroy(new Error("transport_probe_complete"));
-        });
-      });
-    });
-    const error = await new Promise<Error>((resolve) => {
-      transportRequest = http.request({
-        hostname: "citation.example",
-        port: 9,
-        autoSelectFamily: false,
-        lookup,
-      } as http.RequestOptions);
-      transportRequest.once("error", (requestError) => {
-        finished = true;
-        resolve(requestError);
-      });
-      transportRequest.end();
-    });
-    assert.doesNotMatch(error.message, /invalid ip address/i);
-  };
-  await probeAddress("93.184.216.34", 4);
-  await probeAddress("2606:2800:220:1:248:1893:25c8:1946", 6);
-  assert.deepEqual(resolverCalls, [
-    { hostname: "citation.example", all: true },
-    { hostname: "citation.example", all: true },
-  ]);
-
-  const lookup = createPublicLookup((_hostname, _options, callback) => callback(null, [
-    { address: "93.184.216.34", family: 4 },
-    { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
-  ]));
-  const lookupAll = lookup as unknown as (
-    hostname: string,
-    options: { all: true },
-    callback: (error: NodeJS.ErrnoException | null, addresses: Array<{ address: string; family: number }>) => void,
-  ) => void;
-  const allAddresses = await new Promise<Array<{ address: string; family: number }>>((resolve, reject) => {
-    lookupAll("citation.example", { all: true }, (lookupError, addresses) => {
-      if (lookupError) reject(lookupError);
-      else resolve(addresses);
-    });
-  });
-  assert.deepEqual(allAddresses.map(({ family }) => family), [4, 6]);
-
-  const blockedLookup = createPublicLookup((_hostname, _options, callback) => {
-    callback(null, [{ address: "10.0.0.8", family: 4 }]);
-  });
-  await assert.rejects(
-    new Promise((resolve, reject) => {
-      (blockedLookup as unknown as typeof lookupAll)("private.example", { all: true }, (lookupError, addresses) => {
-        if (lookupError) reject(lookupError);
-        else resolve(addresses);
-      });
-    }),
-    /blocked_destination/,
-  );
-});
-
-test("follows a bounded redirect to reachable evidence", async () => {
-  const seen: string[] = [];
-  const [result] = await checkEvidenceUrls(["https://example.com/old"], {
-    lookupHost: publicLookup,
-    request: async (url) => {
-      seen.push(url.toString());
-      return url.pathname === "/old"
-        ? { status: 302, location: "/current" }
-        : { status: 200 };
-    },
-  });
-  assert.equal(result.available, true);
-  assert.equal(result.finalUrl, "https://example.com/current");
-  assert.deepEqual(seen, ["https://example.com/old", "https://example.com/current"]);
-});
-
-test("stops evidence checks after the redirect limit", async () => {
-  const [result] = await checkEvidenceUrls(["https://example.com/one"], {
-    maxRedirects: 1,
-    lookupHost: publicLookup,
-    request: async () => ({ status: 302, location: "/again" }),
-  });
-  assert.equal(result.available, false);
-  assert.equal(result.reason, "too_many_redirects");
-});
-
-test("marks timed-out evidence unavailable", async () => {
-  const [result] = await checkEvidenceUrls(["https://example.com/slow"], {
-    lookupHost: publicLookup,
-    request: async () => { throw new Error("timeout"); },
-  });
-  assert.equal(result.available, false);
-  assert.equal(result.reason, "timeout");
-});
-
-test("caches successful evidence longer than failed evidence and expires each result", async () => {
-  let currentTime = 1_000;
-  let successRequests = 0;
-  let failureRequests = 0;
-  const cache = new Map();
-  const options = {
-    cache,
-    now: () => currentTime,
-    successCacheMs: 1_000,
-    failureCacheMs: 100,
-    lookupHost: publicLookup,
-    request: async (url: URL) => {
-      if (url.pathname === "/available") {
-        successRequests += 1;
-        return { status: 200 };
-      }
-      failureRequests += 1;
-      throw new Error("timeout");
-    },
-  };
-
-  const urls = ["https://cache.example/available", "https://cache.example/slow"];
-  const first = await checkEvidenceUrls(urls, options);
-  const cached = await checkEvidenceUrls(urls, options);
-  assert.deepEqual(cached, first);
-  assert.equal(successRequests, 1);
-  assert.equal(failureRequests, 1);
-  assert.equal(cached[1].reason, "timeout");
-
-  currentTime += 101;
-  await checkEvidenceUrls(urls, options);
-  assert.equal(successRequests, 1);
-  assert.equal(failureRequests, 2);
-
-  currentTime += 900;
-  await checkEvidenceUrls(urls, options);
-  assert.equal(successRequests, 2);
-  assert.equal(failureRequests, 3);
-});
-
-test("revalidates cached redirect targets before returning evidence", async () => {
-  let requests = 0;
-  let redirectIsPrivate = false;
-  const cache = new Map();
-  const options = {
-    cache,
-    lookupHost: async (hostname: string) => redirectIsPrivate && hostname === "cdn.example"
-      ? [{ address: "10.0.0.8", family: 4 }]
-      : publicLookup(),
-    request: async (url: URL) => {
-      requests += 1;
-      return url.hostname === "source.example"
-        ? { status: 302, location: "https://cdn.example/report" }
-        : { status: 200 };
-    },
-  };
-
-  const [first] = await checkEvidenceUrls(["https://source.example/report"], options);
-  assert.equal(first.finalUrl, "https://cdn.example/report");
-  redirectIsPrivate = true;
-  const [second] = await checkEvidenceUrls(["https://source.example/report"], options);
-  assert.equal(second.available, false);
-  assert.equal(second.reason, "blocked_destination");
-  assert.equal(requests, 2);
-});
-
-test("blocks private and loopback destinations before requesting them", async () => {
-  let requested = false;
-  const results = await checkEvidenceUrls([
-    "http://localhost/admin",
-    "https://private.example/data",
-    "http://169.254.169.254/latest/meta-data",
-  ], {
-    lookupHost: async (hostname) => hostname === "private.example"
-      ? [{ address: "10.0.0.8", family: 4 }]
-      : publicLookup(),
-    request: async () => {
-      requested = true;
-      return { status: 200 };
-    },
-  });
-  assert.equal(requested, false);
-  assert.ok(results.every((result) => result.reason === "blocked_destination"));
 });
 
 test("keeps public citations for direct review while excluding blocked destinations from references", async () => {

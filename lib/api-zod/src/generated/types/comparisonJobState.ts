@@ -14,17 +14,19 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonIdentity } from './comparisonIdentity';
-import type { ComparisonSummaryStatus } from './comparisonSummaryStatus';
+import type { Comparison } from './comparison';
+import type { ComparisonJobStage } from './comparisonJobStage';
+import type { ComparisonJobStateErrorCode } from './comparisonJobStateErrorCode';
+import type { ComparisonJobStateStatus } from './comparisonJobStateStatus';
+import type { GuestComparison } from './guestComparison';
 
-export interface ComparisonSummary {
-  id: number;
-  prompt: string;
-  vendors: string[];
-  comparisonIdentity: ComparisonIdentity;
-  category: string;
-  recommendation: string;
-  score: number;
-  createdAt: Date;
-  status: ComparisonSummaryStatus;
+/**
+ * Pollable state for asynchronous comparison research.
+ */
+export interface ComparisonJobState {
+  status: ComparisonJobStateStatus;
+  stage: ComparisonJobStage;
+  result?: Comparison | GuestComparison;
+  message?: string;
+  errorCode?: ComparisonJobStateErrorCode;
 }

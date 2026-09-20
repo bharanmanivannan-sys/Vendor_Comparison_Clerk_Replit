@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parsePromptWithIntent } from "../lib/analysis";
-import { comparisonWorkaroundPrompt, validateComparisonInput } from "./comparisons";
+import { comparisonFailureMessage, comparisonWorkaroundPrompt, validateComparisonInput } from "./comparisons";
 
 test("submission uses resolved comparison players instead of the subject as a heading", async () => {
   const prompt = "Can you help me compare BaaS with MG & Mahindra. What exactly this means? Who are the players?";
@@ -47,4 +47,18 @@ test("offers an actionable workaround when a multi-brand EV request is mis-group
     comparisonWorkaroundPrompt(prompt, ["BYD", "Tesla and MG"]),
     "Compare current electric vehicle models from BYD, Tesla, and MG available in Australia for $80,000 or less. Select the best-matching current model from each manufacturer. Compare official safety ratings, pricing, features, range, charging, warranty, and value for money.",
   );
+});
+
+test("reports missing official product evidence instead of blaming a valid refined prompt", () => {
+  const prompt = "Compare current electric vehicle models from BYD EV car and Tesla available in the requested market.";
+  const message = comparisonFailureMessage(
+    new Error("Insufficient source coverage: no official product source was found for BYD."),
+    prompt,
+    ["BYD", "Tesla"],
+  );
+
+  assert.match(message, /comparison options were understood/i);
+  assert.match(message, /exact official product source/i);
+  assert.match(message, /BYD/);
+  assert.doesNotMatch(message, /try this phrase instead/i);
 });

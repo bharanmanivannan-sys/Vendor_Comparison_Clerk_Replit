@@ -192,6 +192,40 @@ export interface ComparisonIntent {
   clarification: string;
 }
 
+export type ComparisonIdentityComparisonType = typeof ComparisonIdentityComparisonType[keyof typeof ComparisonIdentityComparisonType];
+
+
+export const ComparisonIdentityComparisonType = {
+  pair: 'pair',
+  multi_entity: 'multi_entity',
+} as const;
+
+export type ComparisonIdentityEntitiesItem = {
+  id: string;
+  name: string;
+};
+
+/**
+ * Canonical comparison set used by every downstream label and recommendation.
+ */
+export interface ComparisonIdentity {
+  originalQuery: string;
+  category: string;
+  /**
+     * @minItems 2
+     * @maxItems 5
+     */
+  entities: ComparisonIdentityEntitiesItem[];
+  /**
+     * @minimum 2
+     * @maximum 5
+     */
+  entityCount: number;
+  comparisonType: ComparisonIdentityComparisonType;
+  displayName: string;
+  headline: string;
+}
+
 /**
  * One-shot parse result. Entity boundaries are resolved before source retrieval.
  * The response preserves user order and exposes the qualifiers, decision criterion,
@@ -204,7 +238,47 @@ export interface ParsedComparison {
   criteria: string[];
   context: ComparisonContext;
   intent: ComparisonIntent;
+  comparisonIdentity: ComparisonIdentity;
 }
+
+export type ComparisonJobAcceptedStatus = typeof ComparisonJobAcceptedStatus[keyof typeof ComparisonJobAcceptedStatus];
+
+
+export const ComparisonJobAcceptedStatus = {
+  processing: 'processing',
+} as const;
+
+export type ComparisonJobStage = typeof ComparisonJobStage[keyof typeof ComparisonJobStage];
+
+
+export const ComparisonJobStage = {
+  researching: 'researching',
+  validating: 'validating',
+  completed: 'completed',
+} as const;
+
+export interface ComparisonJobAccepted {
+  jobId: string;
+  status: ComparisonJobAcceptedStatus;
+  stage: ComparisonJobStage;
+}
+
+export type ComparisonJobStateStatus = typeof ComparisonJobStateStatus[keyof typeof ComparisonJobStateStatus];
+
+
+export const ComparisonJobStateStatus = {
+  processing: 'processing',
+  complete: 'complete',
+  failed: 'failed',
+} as const;
+
+export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[keyof typeof ComparisonJobStateErrorCode];
+
+
+export const ComparisonJobStateErrorCode = {
+  research_failed: 'research_failed',
+  validation_failed: 'validation_failed',
+} as const;
 
 export type ComparisonSummaryStatus = typeof ComparisonSummaryStatus[keyof typeof ComparisonSummaryStatus];
 
@@ -219,14 +293,13 @@ export interface ComparisonSummary {
   id: number;
   prompt: string;
   vendors: string[];
+  comparisonIdentity: ComparisonIdentity;
   category: string;
   recommendation: string;
   score: number;
   createdAt: string;
   status: ComparisonSummaryStatus;
 }
-
-export type ComparisonSwot = {[key: string]: string[]};
 
 export type ReportSourceStatus = typeof ReportSourceStatus[keyof typeof ReportSourceStatus];
 
@@ -550,6 +623,8 @@ export interface DecisionGovernanceItem {
   decisionGate: string;
 }
 
+export type ComparisonSwot = {[key: string]: string[]};
+
 export type Comparison = ComparisonSummary & {
   urls: string[];
   /** Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls. */
@@ -592,6 +667,7 @@ export type GuestComparisonSwot = {[key: string]: string[]};
 export interface GuestComparison {
   prompt: string;
   vendors: string[];
+  comparisonIdentity: ComparisonIdentity;
   category: string;
   recommendation: string;
   score: number;
@@ -615,6 +691,17 @@ export interface GuestComparison {
   serviceProductMap: ServiceProductMapItem[];
   migrationSequence: MigrationPhase[];
   decisionGovernance: DecisionGovernanceItem[];
+}
+
+/**
+ * Pollable state for asynchronous comparison research.
+ */
+export interface ComparisonJobState {
+  status: ComparisonJobStateStatus;
+  stage: ComparisonJobStage;
+  result?: Comparison | GuestComparison;
+  message?: string;
+  errorCode?: ComparisonJobStateErrorCode;
 }
 
 export interface DashboardSummary {

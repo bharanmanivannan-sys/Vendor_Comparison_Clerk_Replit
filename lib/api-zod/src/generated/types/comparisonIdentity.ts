@@ -14,17 +14,26 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonIdentity } from './comparisonIdentity';
-import type { ComparisonSummaryStatus } from './comparisonSummaryStatus';
+import type { ComparisonIdentityComparisonType } from './comparisonIdentityComparisonType';
+import type { ComparisonIdentityEntitiesItem } from './comparisonIdentityEntitiesItem';
 
-export interface ComparisonSummary {
-  id: number;
-  prompt: string;
-  vendors: string[];
-  comparisonIdentity: ComparisonIdentity;
+/**
+ * Canonical comparison set used by every downstream label and recommendation.
+ */
+export interface ComparisonIdentity {
+  originalQuery: string;
   category: string;
-  recommendation: string;
-  score: number;
-  createdAt: Date;
-  status: ComparisonSummaryStatus;
+  /**
+     * @minItems 2
+     * @maxItems 5
+     */
+  entities: ComparisonIdentityEntitiesItem[];
+  /**
+     * @minimum 2
+     * @maximum 5
+     */
+  entityCount: number;
+  comparisonType: ComparisonIdentityComparisonType;
+  displayName: string;
+  headline: string;
 }

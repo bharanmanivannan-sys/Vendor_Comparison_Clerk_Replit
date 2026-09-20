@@ -1,0 +1,421 @@
+CRITICAL BUG: COMPARISON ENTITY CONSISTENCY
+
+We have a serious data-consistency bug in the analysis/executive-summary generation.
+
+USER INPUT:
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+CURRENT BAD OUTPUT:
+- Main page heading correctly says:
+  "Compare Mahindra vs Tata vs MG for EV vehicles"
+- But Executive Decision incorrectly says:
+  "Tata vs MG"
+- Recommendation incorrectly says:
+  "Tata vs MG"
+- Business rationale discusses Mahindra, Tata and MG.
+- Immediate actions discuss Mahindra, Tata and MG.
+
+ROOT CAUSE TO FIX:
+Different parts of the UI are independently generating/interpreting the comparison entities.
+
+DO NOT PATCH THIS BY SIMPLY CHANGING THE TEXT.
+Fix the underlying data flow so that ALL sections derive their comparison identity from ONE canonical comparison object.
+
+==================================================
+1. CREATE ONE CANONICAL COMPARISON OBJECT
+==================================================
+
+After parsing the user's request, create/use a single canonical object such as:
+
+comparisonContext = {
+  originalQuery: "Compare Mahindra vs Tata vs MG for EV vehicles",
+
+  category: "EV vehicles",
+
+  entities: [
+    {
+      id: "mahindra",
+      name: "Mahindra"
+    },
+    {
+      id: "tata",
+      name: "Tata"
+    },
+    {
+      id: "mg",
+      name: "MG"
+    }
+  ],
+
+  entityCount: 3,
+
+  comparisonType: "multi_entity",
+
+  displayName:
+    "Mahindra vs Tata vs MG"
+}
+
+IMPORTANT:
+The entities array is the source of truth.
+
+No downstream LLM-generated section is allowed to redefine, remove,
+reorder, or replace these entities unless the user explicitly changes
+the comparison.
+
+==================================================
+2. NEVER RE-PARSE THE QUERY FOR INDIVIDUAL UI SECTIONS
+==================================================
+
+Once the query has been parsed:
+
+DO NOT independently ask an LLM to determine:
+
+- headline entities
+- recommendation entities
+- executive decision entities
+- business rationale entities
+- action entities
+- sidebar entities
+
+All of these must receive the same comparisonContext.
+
+BAD:
+
+generateExecutiveSummary(query)
+generateRecommendation(query)
+generateHeadline(query)
+
+GOOD:
+
+parsedComparison = parseComparison(query)
+
+generateHeadline(parsedComparison, analysis)
+generateExecutiveSummary(parsedComparison, analysis)
+generateRecommendation(parsedComparison, analysis)
+
+The parser runs ONCE.
+
+==================================================
+3. SEPARATE "COMPARISON SET" FROM "RECOMMENDATION"
+==================================================
+
+This is critical.
+
+A comparison can contain:
+
+entities:
+["Mahindra", "Tata", "MG"]
+
+while the recommendation can identify ONE entity:
+
+recommendedEntity:
+"Mahindra"
+
+These are NOT the same field.
+
+Use a structure similar to:
+
+{
+  comparison: {
+    entities: ["Mahindra", "Tata", "MG"],
+    displayName: "Mahindra vs Tata vs MG"
+  },
+
+  recommendation: {
+    recommendedEntity: "Mahindra",
+    rationale: "..."
+  }
+}
+
+Therefore:
+
+COMPARISON TITLE:
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+RECOMMENDATION:
+"Mahindra"
+
+EXECUTIVE DECISION:
+"Recommended: Mahindra"
+
+DO NOT produce:
+
+"Tata vs MG"
+
+unless the original comparison actually contains only Tata and MG.
+
+==================================================
+4. HARD RULE FOR HEADLINES
+==================================================
+
+The headline MUST be generated deterministically from
+comparisonContext.entities.
+
+For 2 entities:
+
+["Tata", "MG"]
+=> "Compare Tata vs MG for EV vehicles"
+
+For 3 entities:
+
+["Mahindra", "Tata", "MG"]
+=> "Compare Mahindra vs Tata vs MG for EV vehicles"
+
+For 4 entities:
+
+["A", "B", "C", "D"]
+=> "Compare A vs B vs C vs D for EV vehicles"
+
+The LLM must NOT generate or modify this string.
+
+Use a formatter function such as:
+
+formatComparisonName(entities)
+
+and derive all comparison labels from it.
+
+==================================================
+5. EXECUTIVE SUMMARY MUST FOLLOW THE SAME RULE
+==================================================
+
+The Executive Decision card currently says:
+
+"Tata vs MG"
+
+This is invalid because the comparison contains:
+
+Mahindra + Tata + MG
+
+The Executive Decision heading should instead be something like:
+
+"Recommended: Mahindra"
+
+or:
+
+"Mahindra"
+
+The recommendation may identify the selected/recommended entity,
+but it must NEVER silently convert a 3-way comparison into a 2-way
+comparison.
+
+==================================================
+6. VALIDATION / INVARIANTS
+==================================================
+
+Before rendering the page, validate:
+
+A. Every comparison entity exists in comparisonContext.entities.
+
+B. No comparison entity disappears from the comparison title.
+
+C. No new comparison entity can appear in any generated comparison
+   label.
+
+D. If entityCount === 3, no section may render a comparison title
+   containing only 2 entities.
+
+E. recommendation.recommendedEntity must be one of
+   comparisonContext.entities.
+
+F. The recommendation is NOT allowed to redefine the comparison set.
+
+G. The main page heading, executive summary, sidebar and comparison
+   metadata must all reference the same comparisonContext.
+
+If validation fails, log a structured error and fall back to the
+canonical comparisonContext rather than displaying the LLM output.
+
+==================================================
+7. ADD AUTOMATED REGRESSION TESTS
+==================================================
+
+Add tests for at least these inputs:
+
+TEST 1
+Input:
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+Expected entities:
+["Mahindra", "Tata", "MG"]
+
+Expected comparison:
+"Mahindra vs Tata vs MG"
+
+Expected headline:
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+If recommendation is Mahindra:
+
+Expected executive decision:
+"Mahindra"
+
+NEVER:
+"Tata vs MG"
+
+
+TEST 2
+Input:
+"Compare Tata vs MG for EV vehicles"
+
+Expected entities:
+["Tata", "MG"]
+
+Expected comparison:
+"Tata vs MG"
+
+
+TEST 3
+Input:
+"Compare MG, Tata and Mahindra EVs"
+
+Expected entities:
+["MG", "Tata", "Mahindra"]
+
+Expected comparison:
+"MG vs Tata vs Mahindra"
+
+
+TEST 4
+Input:
+"Mahindra or Tata or MG for an EV?"
+
+Expected entities:
+["Mahindra", "Tata", "MG"]
+
+
+TEST 5
+Input:
+"Compare Mahindra, Tata & MG"
+
+Expected entities:
+["Mahindra", "Tata", "MG"]
+
+
+TEST 6
+Input:
+"Compare Tata and MG"
+
+Expected entities:
+["Tata", "MG"]
+
+==================================================
+8. IMPORTANT NLP RULE
+==================================================
+
+Treat:
+
+"vs"
+"versus"
+"or"
+","
+"and"
+"&"
+
+as possible separators between comparison entities.
+
+For example:
+
+"Mahindra vs Tata vs MG"
+
+MUST resolve to:
+
+[
+  "Mahindra",
+  "Tata",
+  "MG"
+]
+
+It MUST NOT resolve to:
+
+[
+  "Mahindra",
+  "Tata vs MG"
+]
+
+or:
+
+[
+  "Mahindra",
+  "Tata"
+]
+
+with MG lost.
+
+==================================================
+9. DO NOT FIX THIS WITH UI STRING REPLACEMENTS
+==================================================
+
+Do NOT implement hacks such as:
+
+replace("Tata vs MG", comparisonName)
+
+Do NOT hardcode:
+
+if query.includes("Mahindra") ...
+
+Do NOT create separate entity parsing logic for each component.
+
+The fix must happen at the canonical data/model layer.
+
+==================================================
+10. ACCEPTANCE CRITERIA
+==================================================
+
+For:
+
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+ALL of the following must agree:
+
+Page heading:
+"Compare Mahindra vs Tata vs MG for EV vehicles"
+
+Comparison metadata:
+Mahindra | Tata | MG
+
+Executive Decision:
+Recommended: <one of Mahindra/Tata/MG>
+
+Recommendation:
+<one of Mahindra/Tata/MG>
+
+Business rationale:
+May discuss Mahindra, Tata and MG.
+
+Immediate actions:
+May reference Mahindra, Tata and MG.
+
+But NO component may display:
+
+"Tata vs MG"
+
+unless the original canonical comparison entities are exactly:
+
+["Tata", "MG"].
+
+==================================================
+11. BEFORE MODIFYING CODE
+==================================================
+
+First inspect the existing codebase and identify:
+
+1. Where the user query is parsed.
+2. Where comparison entities are extracted.
+3. Where the main page title is generated.
+4. Where the Executive Decision title is generated.
+5. Where the recommendation is generated.
+6. Whether multiple LLM calls independently interpret the original query.
+7. The TypeScript/interface/schema used for analysis results.
+8. Existing tests.
+
+Then implement the smallest architectural fix that establishes
+comparisonContext as the single source of truth.
+
+Do not redesign the UI.
+
+Do not change typography, spacing, colours or layout.
+
+Do not change the analysis logic unless required for this bug.
+
+After implementation, run the full existing test suite plus the new
+comparison-consistency tests and report exactly which tests passed.

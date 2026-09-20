@@ -14,17 +14,11 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonIdentity } from './comparisonIdentity';
-import type { ComparisonSummaryStatus } from './comparisonSummaryStatus';
+import type { ComparisonJobAcceptedStatus } from './comparisonJobAcceptedStatus';
+import type { ComparisonJobStage } from './comparisonJobStage';
 
-export interface ComparisonSummary {
-  id: number;
-  prompt: string;
-  vendors: string[];
-  comparisonIdentity: ComparisonIdentity;
-  category: string;
-  recommendation: string;
-  score: number;
-  createdAt: Date;
-  status: ComparisonSummaryStatus;
+export interface ComparisonJobAccepted {
+  jobId: string;
+  status: ComparisonJobAcceptedStatus;
+  stage: ComparisonJobStage;
 }

@@ -202,6 +202,118 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparison-jobs:
+    post:
+      operationId: createComparisonJob
+      tags: [comparisons]
+      summary: Start an authenticated comparison research job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonInput"
+      responses:
+        "202":
+          description: Comparison research job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonJobAccepted"
+        "400":
+          description: Invalid comparison input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparison-jobs/{id}:
+    get:
+      operationId: getComparisonJob
+      tags: [comparisons]
+      summary: Get an authenticated comparison research job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Current comparison research job state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonJobState"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Job not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /guest/comparison-jobs:
+    post:
+      operationId: createGuestComparisonJob
+      tags: [comparisons]
+      summary: Start a guest comparison research job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonInput"
+      responses:
+        "202":
+          description: Comparison research job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonJobAccepted"
+        "400":
+          description: Invalid comparison input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "429":
+          description: Guest usage limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /guest/comparison-jobs/{id}:
+    get:
+      operationId: getGuestComparisonJob
+      tags: [comparisons]
+      summary: Get a guest comparison research job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Current comparison research job state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonJobState"
+        "404":
+          description: Job not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
   /comparisons/{id}:
     get:
       operationId: getComparison
@@ -789,7 +901,66 @@ components:
           $ref: "#/components/schemas/ComparisonContext"
         intent:
           $ref: "#/components/schemas/ComparisonIntent"
-      required: [prompt, vendors, urls, criteria, context, intent]
+        comparisonIdentity:
+          $ref: "#/components/schemas/ComparisonIdentity"
+      required: [prompt, vendors, urls, criteria, context, intent, comparisonIdentity]
+    ComparisonJobAccepted:
+      type: object
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [processing]
+        stage:
+          $ref: "#/components/schemas/ComparisonJobStage"
+      required: [jobId, status, stage]
+    ComparisonJobStage:
+      type: string
+      enum: [researching, validating, completed]
+    ComparisonJobState:
+      type: object
+      description: Pollable state for asynchronous comparison research.
+      properties:
+        status:
+          type: string
+          enum: [processing, complete, failed]
+        stage:
+          $ref: "#/components/schemas/ComparisonJobStage"
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/Comparison"
+            - $ref: "#/components/schemas/GuestComparison"
+        message:
+          type: string
+        errorCode:
+          type: string
+          enum: [research_failed, validation_failed]
+      required: [status, stage]
+    ComparisonIdentity:
+      type: object
+      description: Canonical comparison set used by every downstream label and recommendation.
+      properties:
+        originalQuery: { type: string }
+        category: { type: string }
+        entities:
+          type: array
+          minItems: 2
+          maxItems: 5
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+            required: [id, name]
+        entityCount: { type: integer, minimum: 2, maximum: 5 }
+        comparisonType:
+          type: string
+          enum: [pair, multi_entity]
+        displayName: { type: string }
+        headline: { type: string }
+      required: [originalQuery, category, entities, entityCount, comparisonType, displayName, headline]
     ComparisonIntent:
       type: object
       properties:
@@ -849,6 +1020,8 @@ components:
           type: array
           items:
             type: string
+        comparisonIdentity:
+          $ref: "#/components/schemas/ComparisonIdentity"
         category:
           type: string
         recommendation:
@@ -861,7 +1034,7 @@ components:
         status:
           type: string
           enum: [complete, processing, failed]
-      required: [id, prompt, vendors, category, recommendation, score, createdAt, status]
+      required: [id, prompt, vendors, comparisonIdentity, category, recommendation, score, createdAt, status]
     Comparison:
       allOf:
         - $ref: "#/components/schemas/ComparisonSummary"
@@ -948,6 +1121,8 @@ components:
           type: array
           items:
             type: string
+        comparisonIdentity:
+          $ref: "#/components/schemas/ComparisonIdentity"
         category:
           type: string
         recommendation:
@@ -1024,7 +1199,7 @@ components:
         decisionGovernance:
           type: array
           items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
-      required: [prompt, vendors, category, recommendation, score, status, createdAt, urls, sourceAvailability, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
+      required: [prompt, vendors, comparisonIdentity, category, recommendation, score, status, createdAt, urls, sourceAvailability, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
     ReportSource:
       type: object
       properties:

@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AnalysisRow } from './analysisRow';
+import type { ComparisonIdentity } from './comparisonIdentity';
 import type { DecisionGovernanceItem } from './decisionGovernanceItem';
 import type { FunctionalGapItem } from './functionalGapItem';
 import type { GuestComparisonStatus } from './guestComparisonStatus';
@@ -28,6 +29,7 @@ import type { VendorScore } from './vendorScore';
 export interface GuestComparison {
   prompt: string;
   vendors: string[];
+  comparisonIdentity: ComparisonIdentity;
   category: string;
   recommendation: string;
   score: number;

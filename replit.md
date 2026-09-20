@@ -14,6 +14,7 @@ Vendor Compare helps teams turn open-ended buying questions into structured, evi
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
+- `.replit`'s `SUPPORTED_NODE_MAJORS` is the source of truth for supported Node releases. The citation transport matrix tests every listed major and fails before testing if the configured deployment Node major is not listed.
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
 - Validation: Zod (`zod/v4`), `drizzle-zod`

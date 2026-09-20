@@ -4,11 +4,15 @@ import { and, desc, eq, gte } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import {
   CreateComparisonBody,
+  CreateComparisonJobResponse,
   CreateComparisonResponse,
+  CreateGuestComparisonJobResponse,
   CreateGuestComparisonResponse,
   DeleteComparisonParams,
   GetComparisonParams,
+  GetComparisonJobResponse,
   GetComparisonResponse,
+  GetGuestComparisonJobResponse,
   GetDashboardSummaryResponse,
   ListComparisonsResponse,
   ParseComparisonPromptBody,
@@ -18,6 +22,7 @@ import {
 import { comparisonsTable, db } from "@workspace/db";
 import {
   buildAnalysis,
+  buildComparisonIdentity,
   parsePrompt,
   parsePromptWithIntent,
   reconcileRecommendationWithNarrative,
@@ -35,8 +40,10 @@ const guestWindows = new Map<string, { count: number; resetAt: number }>();
 const comparisonJobs = new Map<string, {
   owner: string;
   status: "processing" | "complete" | "failed";
+  stage: "researching" | "validating" | "completed";
   result?: unknown;
   message?: string;
+  errorCode?: "research_failed" | "validation_failed";
   createdAt: number;
 }>();
 const GUEST_LIMIT = 12;
@@ -106,13 +113,16 @@ export function comparisonWorkaroundPrompt(prompt: string, vendors: string[]): s
   return `Compare ${optionList}. Select one exact current product or service from each named provider, then compare pricing, features, evidence, and value for money.`;
 }
 
-function comparisonFailureMessage(error: unknown, prompt: string, vendors: string[]): string {
+export function comparisonFailureMessage(error: unknown, prompt: string, vendors: string[]): string {
   const message = error instanceof Error ? error.message : "";
   if (/timed? out|timeout|did not finish/i.test(message)) {
     return "The research service took too long to respond. Your request is safe to retry.";
   }
   if (/insufficient source coverage|fewer than three independently reachable/i.test(message)) {
-    return `Oops. Sorry, I might have missed that. Can you try this phrase instead: “${comparisonWorkaroundPrompt(prompt, vendors)}”`;
+    const missingVendor = message.match(/no official product source was found for (.+?)(?:\.|$)/i)?.[1];
+    return missingVendor
+      ? `The comparison options were understood, but an exact official product source could not be verified for ${missingVendor}. Remove general brand-homepage URLs and retry so research can find the current product page, or add an exact model page for that manufacturer.`
+      : "The comparison options were understood, but there was not enough independently reachable product evidence to complete a reliable result. Remove general brand-homepage URLs and retry, or add exact current product pages.";
   }
   if (/failed query|column .* does not exist|relation .* does not exist/i.test(message)) {
     return "The analysis finished, but the report could not be saved. Please try again shortly.";
@@ -132,7 +142,12 @@ function startComparisonJob(options: {
 }): string {
   pruneComparisonJobs();
   const id = randomUUID();
-  comparisonJobs.set(id, { owner: options.owner, status: "processing", createdAt: Date.now() });
+  comparisonJobs.set(id, {
+    owner: options.owner,
+    status: "processing",
+    stage: "researching",
+    createdAt: Date.now(),
+  });
   void (async () => {
     const urls = [...(options.input.urls ?? [])];
     try {
@@ -145,6 +160,11 @@ function startComparisonJob(options: {
       const payload = {
         prompt: options.input.prompt,
         vendors: options.vendors,
+        comparisonIdentity: buildComparisonIdentity(
+          options.input.prompt,
+          analysis.category,
+          options.vendors,
+        ),
         urls,
         criteria: options.criteria,
         createdAt: new Date(),
@@ -162,6 +182,7 @@ function startComparisonJob(options: {
         comparisonJobs.set(id, {
           owner: options.owner,
           status: "complete",
+          stage: "completed",
           result: CreateComparisonResponse.parse(detailFromRow(created)),
           createdAt: Date.now(),
         });
@@ -169,6 +190,7 @@ function startComparisonJob(options: {
         comparisonJobs.set(id, {
           owner: options.owner,
           status: "complete",
+          stage: "completed",
           result: CreateGuestComparisonResponse.parse(payload),
           createdAt: Date.now(),
         });
@@ -177,11 +199,19 @@ function startComparisonJob(options: {
       console.error("Comparison job failed", {
         jobId: id,
         ownerType: options.userId ? "authenticated" : "guest",
-        error,
+        error: error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack }
+          : { message: String(error) },
       });
       comparisonJobs.set(id, {
         owner: options.owner,
         status: "failed",
+        stage: error instanceof Error && /canonical comparison entity|comparison matrix/i.test(error.message)
+          ? "validating"
+          : "researching",
+        errorCode: error instanceof Error && /canonical comparison entity|comparison matrix/i.test(error.message)
+          ? "validation_failed"
+          : "research_failed",
         message: comparisonFailureMessage(error, options.input.prompt, options.vendors),
         createdAt: Date.now(),
       });
@@ -196,7 +226,18 @@ function sendComparisonJob(req: Request, res: Response, owner: string): void {
     sendError(res, 404, "job_not_found", "Comparison job was not found or has expired.");
     return;
   }
-  res.json({ status: job.status, result: job.result, message: job.message });
+  const payload = {
+    status: job.status,
+    stage: job.stage,
+    result: job.result,
+    message: job.message,
+    errorCode: job.errorCode,
+  };
+  res.json(
+    owner.startsWith("guest:")
+      ? GetGuestComparisonJobResponse.parse(payload)
+      : GetComparisonJobResponse.parse(payload),
+  );
 }
 
 function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
@@ -275,6 +316,7 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
     id: row.id,
     prompt: row.prompt,
     vendors: row.vendors,
+    comparisonIdentity: buildComparisonIdentity(row.prompt, row.category, row.vendors),
     category: row.category,
     recommendation,
     score: row.score,
@@ -371,7 +413,11 @@ router.post("/guest/comparison-jobs", async (req: Request, res): Promise<void> =
     vendors: validated.vendors,
     criteria: validated.criteria,
   });
-  res.status(202).json({ jobId, status: "processing" });
+  res.status(202).json(CreateGuestComparisonJobResponse.parse({
+    jobId,
+    status: "processing",
+    stage: "researching",
+  }));
 });
 
 router.get("/guest/comparison-jobs/:id", (req: Request, res): void => {
@@ -401,6 +447,11 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   res.json(CreateGuestComparisonResponse.parse({
     prompt: validated.input.prompt,
     vendors: validated.vendors,
+    comparisonIdentity: buildComparisonIdentity(
+      validated.input.prompt,
+      analysis.category,
+      validated.vendors,
+    ),
     urls,
     criteria: validated.criteria,
     createdAt: new Date(),
@@ -431,7 +482,11 @@ router.post("/comparison-jobs", requireAuth, async (req: AuthedRequest, res): Pr
     vendors: validated.vendors,
     criteria: validated.criteria,
   });
-  res.status(202).json({ jobId, status: "processing" });
+  res.status(202).json(CreateComparisonJobResponse.parse({
+    jobId,
+    status: "processing",
+    stage: "researching",
+  }));
 });
 
 router.get("/comparison-jobs/:id", requireAuth, (req: AuthedRequest, res): void => {

@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ComparisonContext } from './comparisonContext';
+import type { ComparisonIdentity } from './comparisonIdentity';
 import type { ComparisonIntent } from './comparisonIntent';
 
 /**
@@ -29,4 +30,5 @@ export interface ParsedComparison {
   criteria: string[];
   context: ComparisonContext;
   intent: ComparisonIntent;
+  comparisonIdentity: ComparisonIdentity;
 }
