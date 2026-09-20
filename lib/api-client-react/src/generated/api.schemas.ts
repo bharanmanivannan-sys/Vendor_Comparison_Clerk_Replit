@@ -425,6 +425,14 @@ export interface ScoreEvidence {
   rawMetricValue?: number;
   rawMetricUnit?: string;
   normalizationDirection?: ScoreEvidenceNormalizationDirection;
+  /** @pattern ^[a-f0-9]{64}$ */
+  documentSha256?: string;
+  /** @minimum 0 */
+  sourceTextStart?: number;
+  /** @minimum 1 */
+  sourceTextEnd?: number;
+  metricSubject?: string;
+  metricBasis?: string;
   /** @minimum 0 */
   sampleSize?: number;
   evidenceKind: ScoreEvidenceEvidenceKind;

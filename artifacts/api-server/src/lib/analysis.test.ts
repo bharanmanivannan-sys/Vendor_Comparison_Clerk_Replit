@@ -45,8 +45,10 @@ import {
   selectRecommendationLabel,
   sourceMatchesResearchMarket,
   validateFinalEvidenceUrls,
+  validateQuantitativeEvidenceAgainstDocuments,
   validateComparisonContext,
 } from "./analysis";
+import type { RetrievedEvidenceDocument } from "./security";
 import { flattenComparisonEvidence } from "../services/comparisonPersistence";
 import { isSafeUserInput } from "./security";
 
@@ -98,13 +100,18 @@ test("calculates comparable raw metrics deterministically instead of trusting mo
             rawMetricValue: 6,
             rawMetricUnit: "percent",
             normalizationDirection: "lower_is_better",
+            documentSha256: "a".repeat(64),
+            sourceTextStart: 0,
+            sourceTextEnd: 40,
+            metricSubject: "Bank A",
+            metricBasis: "variable_interest_rate:percent:variable_interest_rate",
             evidenceKind: "percentage",
             supportDirection: "supports",
             confidence: 90,
             normalizedScore: 94,
             criterionWeight: 15,
             weightedContribution: 14.1,
-            normalizationMethod: "inverse_percentage",
+            normalizationMethod: "retrieved_document_metric",
           }],
         }],
       },
@@ -123,13 +130,18 @@ test("calculates comparable raw metrics deterministically instead of trusting mo
             rawMetricValue: 7,
             rawMetricUnit: "percent",
             normalizationDirection: "lower_is_better",
+            documentSha256: "b".repeat(64),
+            sourceTextStart: 0,
+            sourceTextEnd: 40,
+            metricSubject: "Bank B",
+            metricBasis: "variable_interest_rate:percent:variable_interest_rate",
             evidenceKind: "percentage",
             supportDirection: "supports",
             confidence: 90,
             normalizedScore: 93,
             criterionWeight: 15,
             weightedContribution: 13.95,
-            normalizationMethod: "inverse_percentage",
+            normalizationMethod: "retrieved_document_metric",
           }],
         }],
       },
@@ -144,6 +156,187 @@ test("calculates comparable raw metrics deterministically instead of trusting mo
     0,
   ), 20);
   assert.match(analysis.vendorScores[0].weightedScores?.[0].rationale ?? "", /comparable verified/);
+});
+
+test("verifies model-proposed metrics only when retrieved text contains value, unit, and context", () => {
+  const parsed = {
+    vendorScores: [{
+      vendor: "Model Alpha",
+      weightedScores: [{
+        criterion: "Meets Needs",
+        evidence: [{
+          sourceUrl: "https://example.com/alpha",
+          exactClaim: "The model has a 45 kWh battery.",
+          metricKey: "battery_capacity",
+          rawMetricValue: 45,
+          rawMetricUnit: "kWh",
+          normalizationDirection: "higher_is_better",
+          evidenceKind: "quantitative",
+          confidence: 90,
+          normalizationMethod: "model_candidate",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://example.com/alpha",
+    finalUrl: "https://example.com/alpha",
+    contentType: "text/html",
+    text: "Model Alpha specifications\nUsable battery capacity is 45 kWh for the tested long-range variant.",
+    sha256: "a".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, documents), 1);
+  const evidence = parsed.vendorScores[0].weightedScores[0].evidence[0];
+  assert.equal(evidence.exactClaim, "Usable battery capacity is 45 kWh for the tested long-range variant.");
+  assert.equal(evidence.rawMetricUnit, "kwh");
+  assert.equal(evidence.normalizationMethod, "retrieved_document_metric");
+});
+
+test("rejects aspirational or context-mismatched quantitative candidates", () => {
+  const parsed: Record<string, unknown> = {
+    vendorScores: [{
+      vendor: "Model Beta",
+      weightedScores: [{
+        criterion: "Meets Needs",
+        evidence: [{
+          sourceUrl: "https://example.com/beta",
+          exactClaim: "Range is 500 km.",
+          metricKey: "certified_range",
+          rawMetricValue: 500,
+          rawMetricUnit: "km",
+          normalizationDirection: "higher_is_better",
+          evidenceKind: "quantitative",
+          confidence: 95,
+          normalizationMethod: "model_candidate",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://example.com/beta",
+    finalUrl: "https://example.com/beta",
+    contentType: "text/html",
+    text: "The company aims to deliver up to 500 km in a future vehicle. Current charging power is 50 kW.",
+    sha256: "b".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, documents), 0);
+  const vendor = (parsed.vendorScores as Array<Record<string, unknown>>)[0];
+  const criterion = (vendor.weightedScores as Array<Record<string, unknown>>)[0];
+  const evidence = (criterion.evidence as Array<Record<string, unknown>>)[0];
+  assert.equal(evidence.evidenceKind, "unverified");
+  assert.equal(evidence.rawMetricValue, undefined);
+  assert.equal(evidence.normalizationMethod, "document_claim_not_verified");
+});
+
+test("rejects number-unit collisions and unknown metric identities", () => {
+  const makeParsed = (metricKey: string) => ({
+    vendorScores: [{
+      vendor: "Model Gamma",
+      weightedScores: [{
+        criterion: "Meets Needs",
+        evidence: [{
+          sourceUrl: "https://example.com/gamma",
+          exactClaim: "Battery capacity is 45 kWh.",
+          metricKey,
+          rawMetricValue: 45,
+          rawMetricUnit: "kWh",
+          normalizationDirection: "higher_is_better",
+          evidenceKind: "quantitative",
+          confidence: 90,
+          normalizationMethod: "model_candidate",
+        }],
+      }],
+    }],
+  });
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://example.com/gamma",
+    finalUrl: "https://example.com/gamma",
+    contentType: "text/html",
+    text: "Model Gamma battery price is 45; usable battery capacity is 70 kWh.",
+    sha256: "c".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(makeParsed("battery_capacity"), documents), 0);
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(makeParsed("invented_efficiency"), documents), 0);
+});
+
+test("uses server-owned metric direction and records document provenance", () => {
+  const parsed = {
+    vendorScores: [{
+      vendor: "Bank A",
+      weightedScores: [{
+        criterion: "Value for Money",
+        evidence: [{
+          sourceUrl: "https://example.com/rate",
+          exactClaim: "Variable interest rate is 6 percent.",
+          metricKey: "variable_interest_rate",
+          rawMetricValue: 6,
+          rawMetricUnit: "percent",
+          normalizationDirection: "higher_is_better",
+          evidenceKind: "percentage",
+          confidence: 90,
+          normalizationMethod: "model_candidate",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://example.com/rate",
+    finalUrl: "https://example.com/rate",
+    contentType: "text/html",
+    text: "Bank A owner-occupier principal and interest variable interest rate is 6 percent at up to 80% LVR.",
+    sha256: "d".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, documents), 1);
+  const evidence = parsed.vendorScores[0].weightedScores[0].evidence[0] as typeof parsed.vendorScores[0]["weightedScores"][0]["evidence"][0] & {
+    documentSha256?: string;
+    sourceTextStart?: number;
+    sourceTextEnd?: number;
+  };
+  assert.equal(evidence.normalizationDirection, "lower_is_better");
+  assert.equal(evidence.documentSha256, "d".repeat(64));
+  assert.equal(evidence.sourceTextStart, 0);
+  assert.equal(evidence.sourceTextEnd, documents[0].text.length);
+});
+
+test("does not cross-attribute a shared-brand metric between Model 3 and Model Y", () => {
+  const parsed = {
+    vendorScores: [{
+      vendor: "Tesla Model Y",
+      weightedScores: [{
+        criterion: "Meets Needs",
+        evidence: [{
+          sourceUrl: "https://example.com/wrong-product",
+          exactClaim: "Battery capacity is 45 kWh.",
+          metricKey: "battery_capacity",
+          rawMetricValue: 45,
+          rawMetricUnit: "kWh",
+          normalizationDirection: "higher_is_better",
+          evidenceKind: "quantitative",
+          confidence: 90,
+          normalizationMethod: "model_candidate",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://example.com/wrong-product",
+    finalUrl: "https://example.com/wrong-product",
+    contentType: "text/html",
+    text: `Tesla Model Y overview.\n${"x".repeat(250)}\nTesla Model 3 usable battery capacity is 45 kWh.`,
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, documents), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
 });
 
 test("rejects an all-neutral report without comparable verified evidence", () => {

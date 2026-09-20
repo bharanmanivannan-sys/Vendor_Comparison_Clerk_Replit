@@ -1,6 +1,12 @@
 import OpenAI from "openai";
 import type { InsertComparison } from "@workspace/db";
-import { checkEvidenceUrls, type EvidenceUrlResult } from "./security";
+import {
+  checkEvidenceUrls,
+  isSafeUserInput,
+  retrieveEvidenceDocuments,
+  type EvidenceUrlResult,
+  type RetrievedEvidenceDocument,
+} from "./security";
 
 export type AnalysisPayload = Omit<
   InsertComparison,
@@ -113,6 +119,17 @@ export function normalizeEvidenceRecords(
       rawMetricValue: rawMetric,
       rawMetricUnit: unit,
       normalizationDirection,
+      documentSha256: typeof row.documentSha256 === "string" && /^[a-f0-9]{64}$/.test(row.documentSha256)
+        ? row.documentSha256
+        : undefined,
+      sourceTextStart: typeof row.sourceTextStart === "number" && Number.isInteger(row.sourceTextStart) && row.sourceTextStart >= 0
+        ? row.sourceTextStart
+        : undefined,
+      sourceTextEnd: typeof row.sourceTextEnd === "number" && Number.isInteger(row.sourceTextEnd) && row.sourceTextEnd > 0
+        ? row.sourceTextEnd
+        : undefined,
+      metricSubject: typeof row.metricSubject === "string" ? row.metricSubject.trim() : undefined,
+      metricBasis: typeof row.metricBasis === "string" ? row.metricBasis.trim() : undefined,
       sampleSize: typeof row.sampleSize === "number" && Number.isInteger(row.sampleSize) && row.sampleSize >= 0 ? row.sampleSize : undefined,
       evidenceKind,
       supportDirection,
@@ -1829,6 +1846,7 @@ function normalizeAnalysis(
 
 function comparableMetric(entry: EvidenceRecord): {
   key: string;
+  basis: string;
   value: number;
   unit: string;
   lowerIsBetter: boolean;
@@ -1838,11 +1856,19 @@ function comparableMetric(entry: EvidenceRecord): {
     || !entry.normalizationDirection
     || entry.rawMetricValue === undefined
     || !entry.sourceUrl
+    || entry.normalizationMethod !== "retrieved_document_metric"
+    || !entry.documentSha256
+    || entry.sourceTextStart === undefined
+    || entry.sourceTextEnd === undefined
+    || entry.sourceTextEnd <= entry.sourceTextStart
+    || !entry.metricSubject
+    || !entry.metricBasis
     || entry.evidenceKind === "unverified"
     || entry.evidenceKind === "analyst_judgment"
   ) return null;
   return {
     key: entry.metricKey,
+    basis: entry.metricBasis,
     value: entry.rawMetricValue,
     unit: (entry.rawMetricUnit || "number").trim().toLowerCase().replace(/\s+/g, " "),
     lowerIsBetter: entry.normalizationDirection === "lower_is_better",
@@ -1866,15 +1892,15 @@ export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload):
     });
     if (comparableByVendor.some((entry) => !entry.criterionScore || !entry.metrics.length)) continue;
     const commonKeys = comparableByVendor[0].metrics
-      .map(({ metric }) => `${metric.key}:${metric.unit}:${metric.lowerIsBetter}`)
+      .map(({ metric }) => `${metric.key}:${metric.unit}:${metric.basis}:${metric.lowerIsBetter}`)
       .filter((key) => comparableByVendor.every((entry) => entry.metrics.some(({ metric }) => (
-        `${metric.key}:${metric.unit}:${metric.lowerIsBetter}` === key
+        `${metric.key}:${metric.unit}:${metric.basis}:${metric.lowerIsBetter}` === key
       ))));
     const canonicalKey = commonKeys[0];
     if (!canonicalKey) continue;
     const canonical = comparableByVendor.map((entry) => {
       const selected = entry.metrics
-        .filter(({ metric }) => `${metric.key}:${metric.unit}:${metric.lowerIsBetter}` === canonicalKey)
+        .filter(({ metric }) => `${metric.key}:${metric.unit}:${metric.basis}:${metric.lowerIsBetter}` === canonicalKey)
         .sort((a, b) => b.confidence - a.confidence)[0];
       return { ...entry, selected };
     });
@@ -1999,8 +2025,8 @@ async function synthesizeValidatedDecision(
           sourceUrl: evidence.sourceUrl,
           sourcePublisher: evidence.sourcePublisher,
           sourceDate: evidence.sourceDate,
-          exactClaim: evidence.exactClaim,
           metricKey: evidence.metricKey,
+          metricBasis: evidence.metricBasis,
           rawMetricValue: evidence.rawMetricValue,
           rawMetricUnit: evidence.rawMetricUnit,
           confidence: evidence.confidence,
@@ -2314,8 +2340,8 @@ export function addElectricVehicleMatrixEvidence(
   };
   const evidenceSourceFor = (vendor: string) => {
     const expected = ELECTRIC_VEHICLE_SOURCE_DOMAINS.find((entry) => entry.vendor.test(vendor));
-    const vendorTokens: string[] = (vendor.toLowerCase().match(/[a-z0-9]+/g) ?? [])
-      .filter((token) => token.length >= 4 && !["electric", "vehicle"].includes(token));
+    const vendorTokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((token: string) => token.length >= 4 && !["electric", "vehicle"].includes(token));
     const matchesVendor = (source: string) => {
       try {
         const url = new URL(source);
@@ -2659,6 +2685,251 @@ function collectHttpUrls(value: unknown, found = new Set<string>()): string[] {
   return [...found];
 }
 
+function canonicalDocumentKey(value: string): string {
+  return dedupeReferenceUrls([value])[0] ?? value;
+}
+
+function numericTokens(value: string): number[] {
+  return Array.from(value.matchAll(/[−-]?\d[\d\s,.]*(?:\d)?/g), (match) => {
+    let token = match[0].replace(/\s+/g, "").replace("−", "-");
+    if (token.includes(",") && token.includes(".")) token = token.replace(/,/g, "");
+    else if (/^-?\d+,\d{1,2}$/.test(token)) token = token.replace(",", ".");
+    else token = token.replace(/,/g, "");
+    return Number(token);
+  }).filter(Number.isFinite);
+}
+
+function normalizedUnit(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const unit = value.normalize("NFKC").trim().toLowerCase();
+  if (/^(?:%|percent|percentage)$/.test(unit)) return "percent";
+  if (/^(?:km|kilomet(?:er|re)s?)$/.test(unit)) return "km";
+  if (/^(?:kwh|kilowatt[- ]hours?)$/.test(unit)) return "kwh";
+  if (/^(?:kw|kilowatts?)$/.test(unit)) return "kw";
+  if (/^(?:min|mins|minutes?)$/.test(unit)) return "minutes";
+  if (/^(?:year|years|yr|yrs)$/.test(unit)) return "years";
+  if (/^(?:aud|a\\$)$/.test(unit)) return "aud";
+  if (/^(?:inr|₹)$/.test(unit)) return "inr";
+  if (/^(?:usd|us\\$)$/.test(unit)) return "usd";
+  if (/^(?:gbp|£)$/.test(unit)) return "gbp";
+  return unit.replace(/\s+/g, " ");
+}
+
+type MetricDefinition = {
+  units: string[];
+  direction: "higher_is_better" | "lower_is_better";
+  label: RegExp;
+};
+
+const METRIC_REGISTRY: Record<string, MetricDefinition> = {
+  price: { units: ["aud", "inr", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:price|msrp|drive[- ]away|on[- ]road)\b/i },
+  annual_fee: { units: ["aud", "inr", "usd", "gbp"], direction: "lower_is_better", label: /\bannual fee\b/i },
+  monthly_fee: { units: ["aud", "inr", "usd", "gbp"], direction: "lower_is_better", label: /\bmonthly fee\b/i },
+  variable_interest_rate: { units: ["percent"], direction: "lower_is_better", label: /\b(?:variable|comparison|interest) rate\b/i },
+  comparison_rate: { units: ["percent"], direction: "lower_is_better", label: /\bcomparison rate\b/i },
+  certified_range: { units: ["km"], direction: "higher_is_better", label: /\b(?:certified|claimed|driving|electric)?\s*range\b/i },
+  battery_capacity: { units: ["kwh"], direction: "higher_is_better", label: /\bbattery capacity\b/i },
+  charging_power: { units: ["kw"], direction: "higher_is_better", label: /\b(?:charging|charger|dc charge|ac charge).{0,24}\b(?:power|capacity|rate)?\b/i },
+  charging_time: { units: ["minutes"], direction: "lower_is_better", label: /\bcharg(?:e|ing).{0,24}\btime\b/i },
+  warranty_years: { units: ["years"], direction: "higher_is_better", label: /\b(?:vehicle|battery|product)?\s*warranty\b/i },
+  market_share: { units: ["percent"], direction: "higher_is_better", label: /\bmarket share\b/i },
+  customer_satisfaction_rate: { units: ["percent"], direction: "higher_is_better", label: /\b(?:customer )?satisfaction\b/i },
+  complaint_rate: { units: ["percent"], direction: "lower_is_better", label: /\bcomplaint rate\b/i },
+  failure_rate: { units: ["percent"], direction: "lower_is_better", label: /\bfailure rate\b/i },
+};
+
+const UNIT_PATTERNS: Record<string, RegExp> = {
+  percent: /^(?:\s{0,3})(?:%|percent(?:age)?\b)/i,
+  km: /^(?:\s{0,3})(?:km|kilomet(?:er|re)s?\b)/i,
+  kwh: /^(?:\s{0,3})(?:kwh|kilowatt[- ]hours?\b)/i,
+  kw: /^(?:\s{0,3})(?:kw|kilowatts?\b)/i,
+  minutes: /^(?:\s{0,3})(?:min|mins|minutes?\b)/i,
+  years: /^(?:\s{0,3})(?:year|years|yr|yrs\b)/i,
+  aud: /^(?:\s{0,3})(?:AUD\b|A\$)/i,
+  inr: /^(?:\s{0,3})(?:INR\b|₹)/i,
+  usd: /^(?:\s{0,3})(?:USD\b|US\$)/i,
+  gbp: /^(?:\s{0,3})(?:GBP\b|£)/i,
+};
+
+const PREFIX_UNIT_PATTERNS: Record<string, RegExp> = {
+  aud: /(?:AUD|A\$)\s{0,3}$/i,
+  inr: /(?:INR|₹)\s{0,3}$/i,
+  usd: /(?:USD|US\$)\s{0,3}$/i,
+  gbp: /(?:GBP|£)\s{0,3}$/i,
+};
+
+function findQuantitativeClaim(
+  document: RetrievedEvidenceDocument,
+  vendor: string,
+  metricKey: string,
+  rawValue: number,
+  rawUnit: string,
+): { text: string; start: number; end: number; definition: MetricDefinition; subject: string } | null {
+  const definition = METRIC_REGISTRY[metricKey];
+  if (!definition || !definition.units.includes(rawUnit)) return null;
+  const vendorTokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  if (!vendorTokens.length) return null;
+  const vendorIdentityPattern = new RegExp(
+    `\\b${vendorTokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]{0,6}")}\\b`,
+    "i",
+  );
+  const segmentPattern = /[^\n]+/g;
+  for (const match of document.text.matchAll(segmentPattern)) {
+    const segment = match[0].trim();
+    if (segment.length < 8 || segment.length > 800) continue;
+    if (!isSafeUserInput(segment)) continue;
+    if (/\d\s*[-–—]\s*\d/.test(segment)) continue;
+    const numericMatches = Array.from(segment.matchAll(/[−-]?\d[\d,.]*(?:\d)?/g));
+    const adjacentPairs = numericMatches.filter((numericMatch) => {
+      const start = numericMatch.index ?? 0;
+      const end = start + numericMatch[0].length;
+      const after = segment.slice(end, end + 24);
+      const before = segment.slice(Math.max(0, start - 12), start);
+      return Boolean(UNIT_PATTERNS[rawUnit]?.test(after) || PREFIX_UNIT_PATTERNS[rawUnit]?.test(before));
+    });
+    const matchingPairs = adjacentPairs.filter((pair) => {
+      const parsedValue = numericTokens(pair[0])[0];
+      return parsedValue !== undefined
+        && Math.abs(parsedValue - rawValue) <= Math.max(1e-9, Math.abs(rawValue) * 1e-9);
+    });
+    if (matchingPairs.length !== 1) continue;
+    const pairStart = matchingPairs[0].index ?? 0;
+    const valueQualifierContext = segment.slice(Math.max(0, pairStart - 32), pairStart + matchingPairs[0][0].length + 8);
+    if (/\b(?:up to|starting from|starts? at|approximately|about|around|target|aims? to|could|may reach)\b/i.test(valueQualifierContext)) continue;
+    const context = segment.slice(Math.max(0, pairStart - 120), Math.min(segment.length, pairStart + 120));
+    if (!definition.label.test(context)) continue;
+    const leadingWhitespace = match[0].length - match[0].trimStart().length;
+    const start = (match.index ?? 0) + leadingWhitespace;
+    const identityContextStart = Math.max(0, start - 180);
+    const identityContextEnd = Math.min(document.text.length, start + segment.length + 80);
+    const identityContext = document.text.slice(identityContextStart, identityContextEnd);
+    const identityMatch = identityContext.match(vendorIdentityPattern);
+    if (!identityMatch) continue;
+    const subject = identityMatch[0];
+    return { text: segment, start, end: start + segment.length, definition, subject };
+  }
+  return null;
+}
+
+function metricBasis(metricKey: string, unit: string, claim: string): string | null {
+  const normalized = claim.toLowerCase();
+  let qualifier = "standard";
+  if (metricKey === "price") {
+    const priceBasis = normalized.match(/\b(?:drive[- ]away|on[- ]road|msrp|manufacturer(?:'s)? suggested retail|list price|recommended retail)\b/)?.[0];
+    if (!priceBasis) return null;
+    qualifier = priceBasis.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey === "certified_range") {
+    const standard = normalized.match(/\b(?:wltp|arai|epa|nedc)\b/)?.[0];
+    if (!standard) return null;
+    qualifier = standard;
+  } else if (metricKey === "battery_capacity") {
+    const capacityBasis = normalized.match(/\b(?:usable|gross|nominal)\b/)?.[0];
+    if (!capacityBasis) return null;
+    qualifier = capacityBasis;
+  } else if (metricKey === "charging_power") {
+    const chargingBasis = normalized.match(/\b(?:dc|ac)\b/)?.[0];
+    if (!chargingBasis) return null;
+    qualifier = chargingBasis;
+  } else if (metricKey === "charging_time") {
+    const window = normalized.match(/\b\d{1,3}\s*%\s*(?:to|-|–|—)\s*\d{1,3}\s*%\b/)?.[0];
+    if (!window) return null;
+    qualifier = window.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey === "variable_interest_rate" || metricKey === "comparison_rate") {
+    const lvr = normalized.match(/\b(?:up to |maximum )?\d{1,3}\s*%\s*lvr\b/)?.[0];
+    const borrower = normalized.match(/\b(?:owner[- ]occupier|investor)\b/)?.[0];
+    const repayment = normalized.match(/\b(?:principal and interest|interest[- ]only)\b/)?.[0];
+    if (!lvr || !borrower || !repayment) return null;
+    qualifier = `${lvr}:${borrower}:${repayment}`.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey.endsWith("_fee")) {
+    qualifier = metricKey.startsWith("annual") ? "per_year" : "per_month";
+  } else if (metricKey === "market_share") {
+    const period = normalized.match(/\b20\d{2}\b/)?.[0];
+    const market = normalized.match(/\b(?:australia|india|united states|united kingdom|global)\b/)?.[0];
+    if (!period || !market) return null;
+    qualifier = `${market}:${period}`.replace(/[^a-z0-9]+/g, "_");
+  } else if (["customer_satisfaction_rate", "complaint_rate", "failure_rate"].includes(metricKey)) {
+    const period = normalized.match(/\b20\d{2}\b/)?.[0];
+    const population = normalized.match(/\b(?:customers?|respondents?|vehicles?|products?|accounts?|loans?)\b/)?.[0];
+    if (!period || !population) return null;
+    qualifier = `${population}:${period}`.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey === "warranty_years") {
+    const coverage = normalized.match(/\b(?:battery|vehicle|product)\s+warranty\b/)?.[0];
+    if (!coverage) return null;
+    qualifier = coverage.replace(/[^a-z0-9]+/g, "_");
+  }
+  return `${metricKey}:${unit}:${qualifier}`;
+}
+
+/** Treat model-proposed metrics as candidates; only retrieved source text can verify them. */
+export function validateQuantitativeEvidenceAgainstDocuments(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const byUrl = new Map<string, RetrievedEvidenceDocument>();
+  for (const document of documents) {
+    byUrl.set(canonicalDocumentKey(document.url), document);
+    byUrl.set(canonicalDocumentKey(document.finalUrl), document);
+  }
+  let verified = 0;
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
+  for (const vendor of vendorScores) {
+    if (!vendor || typeof vendor !== "object") continue;
+    const vendorName = typeof (vendor as Record<string, unknown>).vendor === "string"
+      ? String((vendor as Record<string, unknown>).vendor).trim()
+      : "";
+    const weightedScores = Array.isArray((vendor as Record<string, unknown>).weightedScores)
+      ? (vendor as Record<string, unknown>).weightedScores as unknown[]
+      : [];
+    for (const criterion of weightedScores) {
+      if (!criterion || typeof criterion !== "object") continue;
+      const evidenceRows = Array.isArray((criterion as Record<string, unknown>).evidence)
+        ? (criterion as Record<string, unknown>).evidence as unknown[]
+        : [];
+      for (const item of evidenceRows) {
+        if (!item || typeof item !== "object") continue;
+        const row = item as Record<string, unknown>;
+        if (typeof row.rawMetricValue !== "number" || !Number.isFinite(row.rawMetricValue)) continue;
+        const sourceUrl = typeof row.sourceUrl === "string" ? canonicalDocumentKey(row.sourceUrl) : "";
+        const document = byUrl.get(sourceUrl);
+        const metricKey = typeof row.metricKey === "string"
+          ? row.metricKey.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
+          : "";
+        const unit = normalizedUnit(row.rawMetricUnit);
+        const match = document && metricKey && unit
+          ? findQuantitativeClaim(document, vendorName, metricKey, row.rawMetricValue, unit)
+          : null;
+        const basis = match ? metricBasis(metricKey, unit, match.text) : null;
+        if (!match || !document || !basis) {
+          row.evidenceKind = "unverified";
+          row.confidence = Math.min(typeof row.confidence === "number" ? row.confidence : 0, 10);
+          delete row.metricKey;
+          delete row.rawMetricValue;
+          delete row.rawMetricUnit;
+          delete row.normalizationDirection;
+          delete row.metricSubject;
+          delete row.metricBasis;
+          row.normalizationMethod = "document_claim_not_verified";
+          continue;
+        }
+        row.exactClaim = match.text;
+        row.metricKey = metricKey;
+        row.rawMetricUnit = unit;
+        row.normalizationDirection = match.definition.direction;
+        row.metricSubject = match.subject;
+        row.metricBasis = basis;
+        row.retrievalDate = document.retrievedAt.slice(0, 10);
+        row.documentSha256 = document.sha256;
+        row.sourceTextStart = match.start;
+        row.sourceTextEnd = match.end;
+        row.evidenceKind = unit === "percent" ? "percentage" : "quantitative";
+        row.normalizationMethod = "retrieved_document_metric";
+        verified += 1;
+      }
+    }
+  }
+  return verified;
+}
+
 function addParsedSourceUrls(sources: unknown, urls: string[]): void {
   if (!Array.isArray(sources)) return;
   for (const source of sources) {
@@ -2697,8 +2968,8 @@ export function dedupeReferenceUrls(urls: string[]): string[] {
 function sourceVendorMatchScore(url: URL, vendors: string[]): number {
   const searchable = `${url.hostname} ${url.pathname}`.toLowerCase();
   return vendors.some((vendor) => {
-    const tokens = vendor.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-    return tokens.filter((token) => token.length >= 3).some((token) => searchable.includes(token));
+    const tokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+    return tokens.filter((token: string) => token.length >= 3).some((token) => searchable.includes(token));
   }) ? 30 : 0;
 }
 
@@ -3062,7 +3333,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "Never treat search-result snippets, AI summaries, affiliate pages, anonymous posts, forums, or user-generated reviews as authoritative evidence.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
-      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. For every raw metric, provide a stable snake_case metricKey shared only by genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
+      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
     ].join(" ");
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
@@ -3430,7 +3701,14 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     input.urls.splice(0, input.urls.length, ...rankedUrls);
     const evidenceAvailability = await validateFinalEvidenceUrls(input.urls);
     const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
-    const scoreVerifiedUrls = dedupeReferenceUrls(evidenceAvailability.reachable);
+    input.onProgress?.("building_evidence");
+    const retrievedResults = await retrieveEvidenceDocuments(evidenceAvailability.reachable);
+    const retrievedDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
+    const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
+      document.url,
+      document.finalUrl,
+    ]));
+    validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
     input.urls.splice(0, input.urls.length, ...citationUrls);
     input.onProgress?.("analysing_evidence");
     if (isElectricVehicleComparison) {

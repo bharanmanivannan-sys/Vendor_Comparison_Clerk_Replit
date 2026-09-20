@@ -149,6 +149,10 @@ export const createComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -217,6 +221,11 @@ export const CreateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -388,6 +397,10 @@ export const createGuestComparisonResponseComparisonIdentityEntityCountMax = 6;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -454,6 +467,11 @@ export const CreateGuestComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -787,6 +805,10 @@ export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMa
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -808,6 +830,10 @@ export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMax =
 
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
 
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
@@ -884,6 +910,11 @@ export const GetComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1069,6 +1100,11 @@ export const GetComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1240,6 +1276,10 @@ export const regenerateComparisonResponseOneComparisonIdentityEntityCountMax = 6
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -1308,6 +1348,11 @@ export const RegenerateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1505,6 +1550,10 @@ export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCo
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -1526,6 +1575,10 @@ export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCount
 
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
 
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
@@ -1602,6 +1655,11 @@ export const GetGuestComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1787,6 +1845,11 @@ export const GetGuestComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1943,6 +2006,10 @@ export const getComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -2011,6 +2078,11 @@ export const GetComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -2251,6 +2323,10 @@ export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -2319,6 +2395,11 @@ export const ExternalCreateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -2473,6 +2554,10 @@ export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
@@ -2541,6 +2626,11 @@ export const ExternalGetComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
+  "sourceTextStart": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
+  "sourceTextEnd": zod.number().int().min(1).optional(),
+  "metricSubject": zod.string().optional(),
+  "metricBasis": zod.string().optional(),
   "sampleSize": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),

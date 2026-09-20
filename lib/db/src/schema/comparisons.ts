@@ -36,6 +36,8 @@ export const comparisonsTable = pgTable("comparisons", {
          sourceUrl?: string; sourceTitle?: string; sourcePublisher?: string; sourceDate?: string;
           retrievalDate?: string; exactClaim: string; metricKey?: string; rawMetricValue?: number; rawMetricUnit?: string;
           normalizationDirection?: "higher_is_better" | "lower_is_better";
+           documentSha256?: string; sourceTextStart?: number; sourceTextEnd?: number;
+           metricSubject?: string; metricBasis?: string;
          sampleSize?: number; evidenceKind: string; supportDirection: string; confidence: number;
          normalizedScore: number; criterionWeight: number; weightedContribution: number; normalizationMethod: string;
        }>;
