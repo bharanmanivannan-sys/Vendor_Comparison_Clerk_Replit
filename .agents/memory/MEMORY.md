@@ -24,3 +24,4 @@
 - [PostgreSQL idle-client errors](postgres-idle-client-errors.md) — handle pool error events so transient connection termination cannot kill active comparison jobs.
 - [Compact official offer evidence](compact-offer-evidence.md) — deterministically extract verified offer metrics when official pages compress price and usage rate into one line.
 - [Portfolio-first product selection](portfolio-first-product-selection.md) — broad brand requests need portfolio screening, minimum comparability, holistic fit, and evidence readiness before ranking.
+- [Retrieved metric provenance](retrieved-metric-provenance.md) — evidence normalization must preserve verified document provenance so deterministic scoring can recognize recovered metrics.

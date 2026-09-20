@@ -5,6 +5,7 @@ import {
   comparisonFailureMessage,
   comparisonJobElapsedMs,
   comparisonWorkaroundPrompt,
+  OUTSIDE_RESEARCH_SCOPE_MESSAGE,
   validateComparisonInput,
 } from "./comparisons";
 
@@ -102,6 +103,16 @@ test("submission preserves the user-selected research market while URLs remain o
   if ("error" in validated) return;
   assert.equal(validated.input.market, "IN");
   assert.deepEqual(validated.input.urls ?? [], []);
+});
+
+test("rejects cross-market research involving unsupported Gulf countries before analysis", async () => {
+  const validated = await validateComparisonInput({
+    prompt: "Compare pre-used car market in India against Gulf countries.",
+    market: "IN",
+    urls: [],
+  });
+
+  assert.deepEqual(validated, { error: OUTSIDE_RESEARCH_SCOPE_MESSAGE });
 });
 
 test("submission rejects a seventh comparison option", async () => {

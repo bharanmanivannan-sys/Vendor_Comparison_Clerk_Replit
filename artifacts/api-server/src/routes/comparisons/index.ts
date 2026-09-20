@@ -57,6 +57,8 @@ const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
 const JOB_TTL_MS = 15 * 60 * 1000;
 const COMPARISON_TARGET_SECONDS = 120;
+export const OUTSIDE_RESEARCH_SCOPE_MESSAGE = "This query is outside of the research scope, please provide a query to compare brand, product or services within the demographics of India, Australia, US and UK";
+const UNSUPPORTED_GULF_MARKET = /\b(?:gulf countries|gulf states|gulf region|gcc countries|gcc|uae|united arab emirates|saudi arabia|qatar|kuwait|bahrain|oman)\b/i;
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: message, code, message });
@@ -318,6 +320,9 @@ export async function validateComparisonInput(
     return { error: "Comparison input contains invalid or unsafe content." } as const;
   }
   const input = parsed.data;
+  if (UNSUPPORTED_GULF_MARKET.test(input.prompt)) {
+    return { error: OUTSIDE_RESEARCH_SCOPE_MESSAGE } as const;
+  }
   const urls = input.urls ?? [];
   if (!validateHttpUrls(urls) || (input.vendors ?? []).some((vendor) => !isSafeUserInput(vendor))) {
     return { error: "Use valid HTTPS or HTTP URLs and plain vendor names." } as const;

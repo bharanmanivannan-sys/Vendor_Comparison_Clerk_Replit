@@ -141,6 +141,11 @@ export function normalizeEvidenceRecords(
         ? "missing_evidence_neutral"
         : evidenceKind === "analyst_judgment" && rawUrl && !independentlyVerified.has(rawUrl)
           ? "restricted_source_analyst_judgment"
+        : normalizationHint === "retrieved_document_metric"
+          && typeof row.documentSha256 === "string"
+          && typeof row.sourceTextStart === "number"
+          && typeof row.sourceTextEnd === "number"
+          ? "retrieved_document_metric"
         : isPercentage
           ? isAdversePercentage ? "inverse_percentage" : "direct_percentage"
           : (typeof row.normalizationMethod === "string" ? row.normalizationMethod.trim() : "analyst_or_qualitative"),
@@ -463,6 +468,15 @@ export function requestsFiveYearHomeLoanTrend(prompt: string): boolean {
 
 function criteriaFor(prompt: string): string[] {
   const normalized = prompt.toLowerCase();
+  if (/\bquick[ -]?commerce\b/.test(normalized)) {
+    const quickCommerceCriteria = [
+      { label: "Product range and variety", pattern: /\b(?:variety|product range|range of products|catalog(?:ue)?)\b/ },
+      { label: "Price and value", pattern: /\b(?:price|pricing|cost|value)\b/ },
+      { label: "Delivery time and reliability", pattern: /\b(?:time to delivery|delivery time|delivery speed|speed of delivery|fast delivery)\b/ },
+      { label: "Product quality", pattern: /\b(?:quality|freshness|condition)\b/ },
+    ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
+    if (quickCommerceCriteria.length) return quickCommerceCriteria;
+  }
   const criteria = [
     { label: "Premium, excess and total insurance cost", pattern: /\b(?:insurance premium|premium|excess|deductible|insurance cost|quote)\b/ },
     { label: "Coverage, exclusions and claim limits", pattern: /\b(?:coverage|cover|exclusions?|claim limits?|sum insured)\b/ },
@@ -526,6 +540,8 @@ function cleanVendorName(value: string): string {
     .replace(/\s+/g, " ")
     .trim();
   const knownProviders: Record<string, string> = {
+    zepto: "Zepto",
+    blinkit: "Blinkit",
     youi: "Youi",
     allianz: "Allianz",
     aami: "AAMI",
@@ -612,6 +628,20 @@ export function inferResearchMarket(
 export function officialMarketSourcesFor(prompt: string, vendors: string[], market: ResearchMarket): string[] {
   const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
   const officialSources: string[] = [];
+  if (
+    market.countryCode === "IN"
+    && /\bquick[ -]?commerce\b/.test(normalized)
+    && /\bzepto\b/.test(normalized)
+    && /\bblinkit\b/.test(normalized)
+  ) {
+    officialSources.push(
+      "https://www.zepto.com/",
+      "https://blinkit.com/",
+      "https://www.moneycontrol.com/news/business/startup/zepto-ahead-of-instamart-on-dark-stores-maus-and-orders-trails-blinkit-as-quick-commerce-race-intensifies-bernstein-13919325.html",
+      "https://www.indiatoday.in/business/story/zepto-free-delivery-minimum-order-value-raised-rs-199-blinkit-instamart-2974607-2026-08-19",
+      "https://www.hindustantimes.com/india-news/why-govt-asked-blinkit-zepto-other-quick-commerce-platforms-to-step-back-from-10-minut-delivery-race-101768542451404.html",
+    );
+  }
   if (market.countryCode === "IN" && /\bcreta\s+(?:electric|ev)\b/.test(normalized)) {
     officialSources.push(
       "https://www.hyundai.com/in/en/find-a-car/creta-electric/highlights",
@@ -684,6 +714,20 @@ export function sourceMatchesResearchMarket(source: string, market: ResearchMark
 
 export function filterSourcesForMarket(sources: string[], market: ResearchMarket): string[] {
   return dedupeReferenceUrls(sources).filter((source) => sourceMatchesResearchMarket(source, market));
+}
+
+export function userSuppliedSourceInstructions(prompt: string, urls: string[]): string {
+  if (!urls.length) return "";
+  const isPreOwnedVehicleComparison = /\b(?:pre[- ]?(?:owned|used)|used|second[- ]hand)\s+(?:cars?|vehicles?|autos?)\b/i.test(prompt);
+  return [
+    "Open and extract every reachable user-provided URL before performing open-web research.",
+    "Treat relevant user-provided pages as the primary knowledge source for the query context, named options, editions or listings, criteria, and claims.",
+    "Cite each relevant supplied URL in the resulting evidence and use open-web research only to corroborate those pages or fill material gaps.",
+    "A supplied URL is not automatically valid evidence: exclude it when it is unrelated, stale for a time-sensitive claim, unsafe, inaccessible, or for the wrong market, and state that limitation instead of inventing facts.",
+    isPreOwnedVehicleComparison
+      ? "This is a pre-owned vehicle comparison. Compare the specific listings or models supported by the supplied pages, including model year, variant, odometer or mileage, asking price, condition, service and accident history, number of owners, inspection or certification, warranty transfer or dealer warranty, registration location, seller type, availability, and expected resale or ownership risks. Do not replace the supplied used vehicles with current new-car models."
+      : "",
+  ].filter(Boolean).join(" ");
 }
 
 function removeIncorrectMgBaasDenial(value: string): string {
@@ -1188,7 +1232,7 @@ export function parsePrompt(prompt: string) {
     /\b(?:choose|include|use|shortlist)\s+(.+?)(?=\.\s|\?|;\s|$)/i,
   );
   const againstList = normalized.match(
-    /\bcompare\s+(.+?)\s+against\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
+    /\bcompare\s+(.+?)\s+(?:against|againt)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why|the\s+key\s+factors?)\b|$)/i,
   );
   const manufacturerList = normalized.match(
     /\b(?:models?|vehicles?|cars?)\s+from\s+(.+?)(?=\s+available\b|\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
@@ -1250,12 +1294,12 @@ export function parsePrompt(prompt: string) {
     /^(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const genericPair = normalized.match(
-    /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against)\s+(.+?)(?=\s+(?:for|in|within|among|across|when|which|because|to)\b|[?.!,]|$)/i,
+    /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against|againt)\s+(.+?)(?=\s+(?:for|in|within|among|across|when|which|because|to|the\s+key\s+factors?)\b|[?.!,]|$)/i,
   );
   const pair = purchaseChannelPair
     ? [purchaseChannelPair[0], purchaseChannelPair[2], purchaseChannelPair[3]]
     : migrationPair ?? betweenPair ?? subjectWithPair ?? withPair ?? genericPair ?? choicePair ?? whichIsBetterPair ?? directPair;
-  const before = normalized.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? normalized;
+  const before = normalized.split(/\b(?:vs\.?|versus|or|and|against|againt)\b/i)[0] ?? normalized;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];
   const hasExplicitVendorList = listedVendors.length >= 2
@@ -1532,14 +1576,18 @@ export async function parsePromptWithIntent(
   const industry = context.industry === "General market" && intent.useCase
     ? intent.useCase
     : context.industry;
+  const hasExplicitCriteria = parsed.criteria.length > 0
+    && /\b(?:criteria|criterion|key factors?|factors? for comparison|based on|must be)\b/i.test(parsed.prompt);
   return {
     ...parsed,
     vendors,
     comparisonIdentity: buildComparisonIdentity(parsed.prompt, segment, vendors),
-    criteria: Array.from(new Set([
-      ...parsed.criteria,
-      ...criteriaFor(`${intent.subject} ${intent.category} ${intent.useCase}`),
-    ])),
+    criteria: hasExplicitCriteria
+      ? parsed.criteria
+      : Array.from(new Set([
+        ...parsed.criteria,
+        ...criteriaFor(`${intent.subject} ${intent.category} ${intent.useCase}`),
+      ])),
     intent: { ...intent, options: vendors, clarification: "" },
     context: {
       ...context,
@@ -3168,6 +3216,7 @@ function normalizedUnit(value: unknown): string {
   if (typeof value !== "string") return "";
   const unit = value.normalize("NFKC").trim().toLowerCase();
   if (/^(?:%|percent|percentage)$/.test(unit)) return "percent";
+  if (/^(?:products?|items?|skus?)$/.test(unit)) return "products";
   if (/^(?:km|kilomet(?:er|re)s?)$/.test(unit)) return "km";
   if (/^(?:kwh|kilowatt[- ]hours?)$/.test(unit)) return "kwh";
   if (/^(?:kw|kilowatts?)$/.test(unit)) return "kw";
@@ -3194,6 +3243,10 @@ type MetricDefinition = {
 
 const METRIC_REGISTRY: Record<string, MetricDefinition> = {
   price: { units: ["aud", "inr", "inr_lakh", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:price|msrp|drive[- ]away|on[- ]road|ex[- ]showroom)\b/i },
+  product_count: { units: ["products"], direction: "higher_is_better", label: /\b(?:products?|items?|skus?|assortment|catalog(?:ue)?)\b/i },
+  delivery_time: { units: ["minutes"], direction: "lower_is_better", label: /\b(?:deliver(?:y|ed)|promised delivery|delivery time)\b/i },
+  delivery_within_target_rate: { units: ["percent"], direction: "higher_is_better", label: /\b(?:delivery|delivered|promised delivery|delivery timelines?).{0,48}\b(?:under|within|in)\b/i },
+  delivery_fee: { units: ["inr"], direction: "lower_is_better", label: /\bdelivery fee\b/i },
   baas_upfront_price: { units: ["aud", "inr", "inr_lakh", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:baas|battery[- ]as[- ]a[- ]service).{0,36}\b(?:price|starts? at)\b|\b(?:price|starts? at).{0,36}\b(?:baas|battery[- ]as[- ]a[- ]service)\b/i },
   usage_cost_per_km: { units: ["aud_per_km", "inr_per_km", "usd_per_km", "gbp_per_km"], direction: "lower_is_better", label: /\b(?:battery|baas|usage|rental|financing).{0,48}\b(?:cost|rate|rental|finance|financing)\b|\b(?:cost|rate|rental|finance|financing).{0,48}\b(?:battery|baas|usage)\b/i },
   ground_clearance: { units: ["mm"], direction: "higher_is_better", label: /\bground clearance\b/i },
@@ -3214,6 +3267,7 @@ const METRIC_REGISTRY: Record<string, MetricDefinition> = {
 
 const UNIT_PATTERNS: Record<string, RegExp> = {
   percent: /^(?:\s{0,3})(?:%|percent(?:age)?\b)/i,
+  products: /^(?:\s{0,3})(?:products?|items?|skus?)\b/i,
   km: /^(?:\s{0,3})(?:km|kilomet(?:er|re)s?\b)/i,
   kwh: /^(?:\s{0,3})(?:kwh|kilowatt[- ]hours?\b)/i,
   kw: /^(?:\s{0,3})(?:kw|kilowatts?\b)/i,
@@ -4007,6 +4061,85 @@ export function addVerifiedHomeLoanRateEvidence(
   return added;
 }
 
+/**
+ * Recover a like-for-like quick-commerce delivery metric from a named
+ * methodology report when the model omits structured metric fields.
+ */
+export function addVerifiedQuickCommerceDeliveryEvidence(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const report = documents.find((document) => {
+    try {
+      return new URL(document.finalUrl).hostname.replace(/^www\./, "") === "moneycontrol.com";
+    } catch {
+      return false;
+    }
+  });
+  if (!report) return 0;
+  const match = report.text.match(
+    /(\d+(?:\.\d+)?)\s*(?:percent|%)\s+of\s+Zepto(?:'s|’s)\s+serviceable grid points showed promised delivery timelines of under\s+(\d+(?:\.\d+)?)\s*minutes?,\s*compared to\s+(\d+(?:\.\d+)?)\s*(?:percent|%)\s+for\s+Blinkit/i,
+  );
+  if (!match || match.index === undefined || Number(match[2]) !== 10) return 0;
+  const values = new Map([
+    ["zepto", Number(match[1])],
+    ["blinkit", Number(match[3])],
+  ]);
+  let added = 0;
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
+  for (const vendorScore of vendorScores) {
+    if (!vendorScore || typeof vendorScore !== "object") continue;
+    const vendorName = String((vendorScore as Record<string, unknown>).vendor ?? "");
+    const value = values.get(vendorName.trim().toLowerCase());
+    if (!Number.isFinite(value)) continue;
+    const weightedScores = Array.isArray((vendorScore as Record<string, unknown>).weightedScores)
+      ? (vendorScore as Record<string, unknown>).weightedScores as Array<Record<string, unknown>>
+      : [];
+    let criterion = weightedScores.find((row) => row.criterion === "Meets Needs / Features");
+    if (!criterion) {
+      criterion = {
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        score: 50,
+        rationale: "Named-methodology comparison of promised delivery performance.",
+        evidence: [],
+      };
+      weightedScores.push(criterion);
+      (vendorScore as Record<string, unknown>).weightedScores = weightedScores;
+    }
+    const evidence = Array.isArray(criterion.evidence)
+      ? criterion.evidence as Array<Record<string, unknown>>
+      : [];
+    criterion.evidence = evidence;
+    if (evidence.some((row) => row.metricBasis === "delivery_within_target_rate:percent:bengaluru_serviceable_grid_under_10_minutes")) {
+      continue;
+    }
+    evidence.push({
+      sourceUrl: report.finalUrl,
+      sourceTitle: "Bernstein quick-commerce delivery comparison reported by Moneycontrol",
+      sourcePublisher: "Moneycontrol",
+      exactClaim: match[0],
+      metricKey: "delivery_within_target_rate",
+      rawMetricValue: value,
+      rawMetricUnit: "percent",
+      normalizationDirection: "higher_is_better",
+      metricSubject: vendorName,
+      metricBasis: "delivery_within_target_rate:percent:bengaluru_serviceable_grid_under_10_minutes",
+      retrievalDate: report.retrievedAt.slice(0, 10),
+      documentSha256: report.sha256,
+      sourceTextStart: match.index,
+      sourceTextEnd: match.index + match[0].length,
+      evidenceKind: "percentage",
+      supportDirection: "supports",
+      confidence: 90,
+      criterionWeight: 25,
+      normalizationMethod: "retrieved_document_metric",
+    });
+    added += 1;
+  }
+  return added;
+}
+
 function addParsedSourceUrls(sources: unknown, urls: string[]): void {
   if (!Array.isArray(sources)) return;
   for (const source of sources) {
@@ -4647,6 +4780,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     }
     const context = validateComparisonContext(input.prompt, input.vendors);
     const researchMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
+    const isPreOwnedVehicleComparison = /\b(?:pre[- ]?(?:owned|used)|used|second[- ]hand)\s+(?:cars?|vehicles?|autos?)\b/i.test(input.prompt);
+    const isQuickCommerceComparison = researchMarket.countryCode === "IN"
+      && /\bquick[ -]?commerce\b/i.test(input.prompt)
+      && input.vendors.some((vendor) => /^Zepto$/i.test(vendor))
+      && input.vendors.some((vendor) => /^Blinkit$/i.test(vendor));
     const requiresVendorDiscovery = vendorDiscoveryWasRequired;
     const isElectricVehicleComparison = context.segment === "Electric vehicles"
       || isElectricVehicleModelSelection;
@@ -4663,14 +4801,17 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
     }
     const marketResearchInstructions = [
+      userSuppliedSourceInstructions(input.prompt, userSuppliedUrls),
       `Treat ${researchMarket.country} as the user's market and present all comparable monetary values in ${researchMarket.currency}.`,
-      "Search official local product, service, brand, pricing, warranty, finance, subscription, and support pages first.",
+      userSuppliedUrls.length
+        ? "After evaluating the supplied pages, search official local product, service, brand, pricing, warranty, finance, subscription, and support pages only to verify claims or fill evidence gaps."
+        : "Search official local product, service, brand, pricing, warranty, finance, subscription, and support pages first.",
       `Use only evidence applicable to ${researchMarket.country}. Do not use another country's brand site, pricing, warranty, specification, subscription, or support page as evidence for this comparison.`,
       `If an official ${researchMarket.country} page is unavailable, use a reputable independent ${researchMarket.country} source or mark the claim unavailable. Never substitute another geography's product terms or convert another market's price into ${researchMarket.currency}.`,
       `For non-official fallback evidence, search newest-first beginning with ${currentDate.slice(0, 7)} and use only reputable sources published or materially updated on or after ${oldestFallbackDateText}. Include the publication/update date and URL. Undated or older fallback sources must be treated as unavailable, not used as current evidence.`,
       "Official current product pages may be used when they are undated, but time-sensitive claims such as prices and offers must be marked with the retrieval/as-of date.",
       "Never treat search-result snippets, AI summaries, affiliate pages, anonymous posts, forums, or user-generated reviews as authoritative evidence.",
-      "Treat user-provided URLs as candidate sources, not automatically valid evidence. Use them only when they are directly relevant to the named option, criterion, market, and requested time period. Exclude irrelevant pages and outdated resources; never use an old source merely to fill an evidence gap.",
+      "Treat user-provided URLs as primary context sources, but not automatically valid evidence. Use them only when they are directly relevant to the named option, criterion, market, and requested time period. Exclude irrelevant pages and outdated resources; never use an old source merely to fill an evidence gap.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
@@ -4680,6 +4821,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       : "";
     const batteryServiceInstructions = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|battery as service)\b/i.test(input.prompt)
       ? `For Battery-as-a-Service comparisons, resolve each provider to an exact currently offered BaaS model and variant before ranking. Compare official BaaS entry price, battery usage or rental cost per kilometre, minimum usage assumptions, finance or subscription term, battery ownership, charger and installation inclusion, early termination, transfer conditions, warranty, certified range, charging, and ground clearance. ${explicitBaasScenario}If the user supplies distance and ownership period, calculate a transparent scenario total as upfront BaaS price plus documented usage cost times distance and state every excluded financing, charging, tax, insurance, maintenance, and termination cost. If distance or period is absent, do not invent it: compare the documented per-kilometre rate and state that total cost depends on usage and contract terms. Prefer official provider terms; use recent independent automotive sources only to corroborate road suitability and never infer it from battery chemistry alone.`
+      : "";
+    const quickCommerceInstructions = isQuickCommerceComparison
+      ? "For this Zepto and Blinkit quick-commerce comparison, preserve the exact provider names. Compare product assortment, item and delivery pricing, promised or observed delivery time, and product quality or freshness. Use the supplied current India sources before searching for more. Record numeric evidence as product_count (products), delivery_time (minutes), delivery_within_target_rate (percent), delivery_fee (INR), or price (INR) only when the source states the exact value and basis. Do not compare unlike baskets, cities, time periods, or thresholds as equivalent. Keep quality neutral when no comparable named-methodology measure exists. "
       : "";
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
@@ -4737,7 +4881,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               shape: analysisOutputShape(researchShapeVendors, isProviderLevelHomeLoanDiscovery, isElectricVehicleComparison),
               marketResearchInstructions,
               batteryServiceInstructions,
-              researchScope: "First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.",
+              researchScope: `${quickCommerceInstructions}First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.`,
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? `${providerRoleInstructions}Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
                 : isProviderLevelHomeLoanDiscovery
@@ -5086,6 +5230,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (isProviderLevelHomeLoanDiscovery) {
       addVerifiedHomeLoanRateEvidence(parsed as Record<string, unknown>, retrievedDocuments);
     }
+    if (isQuickCommerceComparison) {
+      addVerifiedQuickCommerceDeliveryEvidence(parsed as Record<string, unknown>, retrievedDocuments);
+    }
     input.urls.splice(0, input.urls.length, ...citationUrls);
     input.onProgress?.("analysing_evidence");
     if (isElectricVehicleComparison) {
@@ -5180,6 +5327,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     }
     const minimumDeterministicWeight = batteryServiceInstructions || isProviderLevelHomeLoanDiscovery
       ? 20
+      : isPreOwnedVehicleComparison && userSuppliedUrls.length
+        ? 20
+      : isQuickCommerceComparison
+        ? 20
       : isElectricVehicleModelSelection
         ? 35
         : 50;

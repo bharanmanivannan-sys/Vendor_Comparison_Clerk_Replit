@@ -735,6 +735,49 @@ function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
   return <section className="mt-14" data-testid="section-score-charts"><div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Weighted decision model</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">How the options score against your needs</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Scores combine feature fit, reliability, value, reputation, service, differentiation, provider role, sustainability, and regulatory compliance. A unique higher-precedence provider role receives the reserved 2% only when top scores tie.</p></div><div className="grid gap-5 xl:grid-cols-[1.35fr_.65fr]"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-4 sm:p-6"><div className="h-[390px] w-full"><ResponsiveContainer width="100%" height="100%" debounce={0}><RadarChart data={radarData} outerRadius="72%"><PolarGrid stroke="#d9d1bf" /><PolarAngleAxis dataKey="criterion" tick={{ fill: '#687083', fontSize: 10 }} /><PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: '#8a8b83', fontSize: 9 }} axisLine={false} /><Tooltip isAnimationActive={false} contentStyle={{ backgroundColor: '#fff', border: '1px solid #d5cebd', borderRadius: 10, fontSize: 12 }} /><Legend />{scoredVendors.map((vendor, index) => <Radar key={vendor.vendor} name={vendor.vendor} dataKey={vendor.vendor} stroke={colors[index] ?? colors[0]} fill={colors[index] ?? colors[0]} fillOpacity={0.16} strokeWidth={2} isAnimationActive={false} />)}</RadarChart></ResponsiveContainer></div></div><div className="rounded-2xl border border-[#d5cebd] bg-[#202840] p-4 text-[#f8f4e8] sm:p-6"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#bde3d8]">Weighted total / 100</p><div className="mt-5 h-[250px]"><ResponsiveContainer width="100%" height="100%" debounce={0}><BarChart data={overallData} layout="vertical" margin={{ left: 6, right: 18 }}><CartesianGrid stroke="#3a4664" horizontal={false} /><XAxis type="number" domain={[0, 100]} tick={{ fill: '#a8b0c2', fontSize: 10 }} /><YAxis type="category" dataKey="vendor" width={72} tick={{ fill: '#f8f4e8', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} /><Tooltip isAnimationActive={false} cursor={false} contentStyle={{ backgroundColor: '#fff', border: 0, borderRadius: 10, color: '#202840', fontSize: 12 }} /><Bar dataKey="score" name="Score" fill="#d9ef66" radius={[0, 5, 5, 0]} isAnimationActive={false} /></BarChart></ResponsiveContainer></div><div className="mt-4 flex flex-wrap gap-2">{scoredVendors[0].weightedScores.map((entry: any) => <span key={entry.criterion} className="rounded-md border border-[#3a4664] px-2 py-1 text-[9px] text-[#c9cfdb]">{entry.criterion} · {entry.weight}%</span>)}</div></div></div></section>;
 }
 
+const defaultCriterionMatches = (criterion: string) => {
+  const normalized = criterion.toLowerCase();
+  if (/(?:price|pricing|cost|value|budget)/.test(normalized)) return ['Value for Money'];
+  if (/(?:quality|freshness|condition|reliab)/.test(normalized)) return ['Quality & Reliability'];
+  if (/(?:delivery|fulfil|speed|time)/.test(normalized)) return ['Meets Needs / Features', 'Quality & Reliability'];
+  if (/(?:range|variety|catalog|feature|selection|availability)/.test(normalized)) return ['Meets Needs / Features'];
+  if (/(?:reputation|brand)/.test(normalized)) return ['Brand Reputation'];
+  if (/(?:customer|advocacy|nps|service)/.test(normalized)) return ['Customer Advocacy / NPS'];
+  if (/(?:innovation|different)/.test(normalized)) return ['Innovation / Differentiation'];
+  if (/(?:sustainab|environment)/.test(normalized)) return ['Sustainability'];
+  if (/(?:regulat|compliance|privacy|security)/.test(normalized)) return ['Regulatory Compliance'];
+  return ['Meets Needs / Features'];
+};
+
+function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?: string[]; vendorScores?: any[] }) {
+  if (!criteria.length || !vendorScores.length) return null;
+  const rows = criteria.map((criterion) => {
+    const mappedCriteria = defaultCriterionMatches(criterion);
+    const scores = vendorScores.map((vendor) => {
+      const matched = mappedCriteria
+        .map((name) => vendor.weightedScores?.find((entry: any) => entry.criterion === name))
+        .filter(Boolean);
+      const score = matched.length
+        ? Math.round(matched.reduce((sum: number, entry: any) => sum + Number(entry.score ?? 50), 0) / matched.length)
+        : 50;
+      const verifiedClaims = matched.flatMap((entry: any) => entry.evidence || [])
+        .filter((evidence: any) => evidence.evidenceKind !== 'unverified' && evidence.sourceUrl).length;
+      return { vendor: vendor.vendor, score, verifiedClaims };
+    });
+    return { criterion, mappedCriteria, scores };
+  });
+  const colors = ['#0f766e', '#6b61c9', '#b94d45', '#9a6b20', '#2563a8', '#8b5a83'];
+  return <section className="mt-14" data-testid="section-user-criteria-dashboard">
+    <div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">02A / Your criteria</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">How the options perform on the factors you named</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">This dashboard is separate from the default weighted decision model. It translates each requested factor to the closest evidence-backed model dimensions; missing evidence remains neutral rather than being estimated.</p></div>
+    <div className="grid gap-4 lg:grid-cols-2">
+      {rows.map((row) => <article key={row.criterion} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid={`card-user-criterion-${row.criterion.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>
+        <div className="flex items-start justify-between gap-4"><div><h3 className="display text-lg font-bold text-[#202840]">{row.criterion}</h3><p className="mt-1 text-[10px] text-[#7b817e]">Based on {row.mappedCriteria.join(' + ')}</p></div><span className="rounded-full bg-[#f0e5df] px-2.5 py-1 text-[9px] font-bold uppercase text-[#9a4c43]">User factor</span></div>
+        <div className="mt-5 space-y-4">{row.scores.map((entry, index) => <div key={entry.vendor}><div className="flex items-center justify-between gap-3 text-xs"><span className="font-bold text-[#202840]">{entry.vendor}</span><span className="mono font-bold text-[#0f766e]">{entry.score}/100</span></div><div className="mt-2 h-2 rounded-full bg-[#e0dacd]"><div className="h-2 rounded-full" style={{ width: `${entry.score}%`, backgroundColor: colors[index] ?? colors[0] }} /></div><p className="mt-1.5 text-[9px] text-[#85877f]">{entry.verifiedClaims ? `${entry.verifiedClaims} verified supporting claim${entry.verifiedClaims === 1 ? '' : 's'}` : 'No verified supporting claim; neutral evidence handling applies'}</p></div>)}</div>
+      </article>)}
+    </div>
+  </section>;
+}
+
 function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
   const runnerUp = [...(comparison.vendorScores || [])]
     .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
@@ -1185,6 +1228,51 @@ type ComparisonRequest = {
   ownershipPeriodYears?: number;
 };
 
+type PromptTypoReview = {
+  original: string;
+  revised: string;
+  corrections: string[];
+};
+
+const PROMPT_TYPO_CORRECTIONS: Array<[RegExp, string]> = [
+  [/\bagaint\b/gi, 'against'],
+  [/\bcomparision\b/gi, 'comparison'],
+  [/\bcomparisions\b/gi, 'comparisons'],
+  [/\bcompareing\b/gi, 'comparing'],
+  [/\bproducst\b/gi, 'products'],
+  [/\bproduts\b/gi, 'products'],
+  [/\bdelievery\b/gi, 'delivery'],
+  [/\bdeliverly\b/gi, 'delivery'],
+  [/\bquailty\b/gi, 'quality'],
+  [/\bvarity\b/gi, 'variety'],
+  [/\bvaritey\b/gi, 'variety'],
+  [/\bprcie\b/gi, 'price'],
+  [/\breccomend\b/gi, 'recommend'],
+  [/\breccomendation\b/gi, 'recommendation'],
+];
+
+function preserveWordCase(source: string, replacement: string): string {
+  if (source === source.toUpperCase()) return replacement.toUpperCase();
+  if (source[0] === source[0]?.toUpperCase()) {
+    return replacement[0]?.toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
+}
+
+function reviewPromptTypos(prompt: string): PromptTypoReview | null {
+  let revised = prompt;
+  const corrections: string[] = [];
+  for (const [pattern, replacement] of PROMPT_TYPO_CORRECTIONS) {
+    revised = revised.replace(pattern, (match) => {
+      const corrected = preserveWordCase(match, replacement);
+      corrections.push(`${match} → ${corrected}`);
+      return corrected;
+    });
+  }
+  if (revised === prompt) return null;
+  return { original: prompt, revised, corrections };
+}
+
 async function runComparisonJob(
   guest: boolean,
   data: ComparisonRequest,
@@ -1225,6 +1313,7 @@ function useComparisonJob(guest: boolean) {
 
 function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: ComparisonRequest) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
+  const [typoReview, setTypoReview] = useState<PromptTypoReview | null>(null);
   const [market, setMarket] = useState<ResearchMarketCode | ''>('');
   const [urls, setUrls] = useState<string[]>([]);
   const [urlDraft, setUrlDraft] = useState('');
@@ -1248,10 +1337,9 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     }
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (pending || prompt.trim().length < 8 || !market) return;
-    const listedOptions = prompt.match(
+  const startResearch = (confirmedPrompt: string) => {
+    if (pending || confirmedPrompt.length < 8 || !market) return;
+    const listedOptions = confirmedPrompt.match(
       /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
     )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
     if (listedOptions.length > 6) {
@@ -1260,12 +1348,41 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     }
     setUrlError('');
     onSubmit({
-      prompt: prompt.trim(),
+      prompt: confirmedPrompt,
       market,
       urls,
       ...(isVehicleComparison && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
       ...(isVehicleComparison && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
     });
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const trimmedPrompt = prompt.trim();
+    if (pending || trimmedPrompt.length < 8 || !market) return;
+    const review = reviewPromptTypos(trimmedPrompt);
+    if (review) {
+      setTypoReview(review);
+      return;
+    }
+    startResearch(trimmedPrompt);
+  };
+
+  const acceptTypoCorrection = () => {
+    if (!typoReview) return;
+    const revised = typoReview.revised;
+    setPrompt(revised);
+    setTypoReview(null);
+    startResearch(revised);
+  };
+
+  const editTypoCorrection = () => {
+    if (!typoReview) return;
+    setPrompt(typoReview.revised);
+    setTypoReview(null);
+    window.setTimeout(() => {
+      document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus();
+    }, 0);
   };
 
   const researchStages: Array<{ stage: ComparisonJobState['stage']; label: string }> = [
@@ -1305,9 +1422,27 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           className={`focus-ring mt-4 min-h-[170px] w-full resize-y rounded-xl border p-4 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#2b344e] text-[#f8f4e8] placeholder:text-[#8d98ae]' : 'border-[#d0c8b7] bg-white text-[#202840] placeholder:text-[#9a9a90]'}`}
           placeholder="Example: Compare BYD vs Tesla for an electric car I’ll own for five years in Australia. My budget is A$50,000 and I care about maintenance, features, range, and resale value."
           value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
+          onChange={(event) => {
+            setPrompt(event.target.value);
+            setTypoReview(null);
+          }}
           data-testid={guest ? 'input-guest-prompt' : 'input-portal-prompt'}
         />
+
+        {typoReview && (
+          <div className={`mt-4 rounded-xl border p-4 ${guest ? 'border-[#d9ef66] bg-[#29334e]' : 'border-[#d3a83d] bg-[#fff8df]'}`} role="alert" data-testid="prompt-typo-review">
+            <p className={`text-xs font-bold ${guest ? 'text-[#d9ef66]' : 'text-[#7a5712]'}`}>Typo found. Please confirm the revised prompt before research starts.</p>
+            <p className={`mt-2 text-[10px] uppercase tracking-[.12em] ${guest ? 'text-[#a8b0c2]' : 'text-[#8a7956]'}`}>{typoReview.corrections.join(' · ')}</p>
+            <div className={`mt-3 rounded-lg border px-3 py-3 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#e4d49c] bg-white text-[#202840]'}`} data-testid="text-revised-prompt">
+              {typoReview.revised}
+            </div>
+            <p className={`mt-3 text-xs ${guest ? 'text-[#c9cfdb]' : 'text-[#687083]'}`}>Do you want to continue with this revised prompt?</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={acceptTypoCorrection} className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white" data-testid="button-accept-typo-correction">Yes, continue</button>
+              <button type="button" onClick={editTypoCorrection} className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`} data-testid="button-edit-typo-correction">No, edit prompt</button>
+            </div>
+          </div>
+        )}
 
         <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
           <label htmlFor={guest ? 'guest-research-market' : 'research-market'} className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
@@ -1771,6 +1906,7 @@ function AnalysisPage() {
         <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
      <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor signal</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{overallVendorScore(vendor)}/100</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${overallVendorScore(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
          <ScoreCharts vendorScores={comparison.vendorScores} />
+         <UserCriteriaDashboard criteria={comparison.criteria} vendorScores={comparison.vendorScores} />
          <WeightEditor
            comparison={comparison}
            guest={guest}

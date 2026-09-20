@@ -6,6 +6,7 @@ import {
   addVerifiedElectricVehicleOfficialSpecs,
   addVerifiedBaasOfferEvidence,
   addVerifiedHomeLoanRateEvidence,
+  addVerifiedQuickCommerceDeliveryEvidence,
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
   assertCanonicalComparisonConsistency,
@@ -55,6 +56,7 @@ import {
   requestsCurrentModelSelection,
   selectRecommendationLabel,
   sourceMatchesResearchMarket,
+  userSuppliedSourceInstructions,
   validateFinalEvidenceUrls,
   validateQuantitativeEvidenceAgainstDocuments,
   validateComparisonContext,
@@ -91,6 +93,36 @@ test("ranks authoritative local and product-specific sources before generic or s
 
   assert.equal(ranked[0], "https://www.anz.com.au/personal/home-loans/interest-rates");
   assert.ok(ranked.indexOf("https://www.apra.gov.au/mortgage-lending-statistics") < ranked.indexOf("https://example.com/archive/2021/general"));
+});
+
+test("uses supplied pre-owned vehicle URLs as the primary research context", () => {
+  const suppliedUrl = "https://example.com/used-cars/tata-nexon";
+  const instructions = userSuppliedSourceInstructions(
+    "Compare pre-owned cars from Tata against Mahindra in India.",
+    [suppliedUrl],
+  );
+
+  assert.match(instructions, /before performing open-web research/i);
+  assert.match(instructions, /primary knowledge source/i);
+  assert.match(instructions, /model year, variant, odometer or mileage, asking price/i);
+  assert.match(instructions, /Do not replace the supplied used vehicles with current new-car models/i);
+
+  const market = inferResearchMarket("Compare pre-owned Tata and Mahindra cars in India", ["Tata", "Mahindra"], "IN");
+  const ranked = rankEvidenceSources([
+    "https://www.tatamotors.com/cars/",
+    suppliedUrl,
+    "https://www.mahindra.com/",
+  ], ["Tata", "Mahindra"], market, [suppliedUrl]);
+  assert.equal(ranked[0], suppliedUrl);
+});
+
+test("recognizes pre-used vehicle wording in supplied-source research guidance", () => {
+  const instructions = userSuppliedSourceInstructions(
+    "Compare pre-used cars for Tata against Mahindra.",
+    ["https://example.com/tata", "https://example.com/mahindra"],
+  );
+
+  assert.match(instructions, /This is a pre-owned vehicle comparison/i);
 });
 
 test("reserves retrieval coverage for every vendor and a shared authority while bounding duplicate hosts", () => {
@@ -450,6 +482,35 @@ test("verifies BaaS per-kilometre cost, entry price, and ground clearance from r
     evidence.map((entry) => entry.normalizationDirection),
     ["lower_is_better", "lower_is_better", "higher_is_better"],
   );
+});
+
+test("extracts comparable quick-commerce delivery coverage from a named methodology report", () => {
+  const parsed = {
+    vendorScores: ["Zepto", "Blinkit"].map((vendor) => ({
+      vendor,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        score: 50,
+        evidence: [],
+      }],
+    })),
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://www.moneycontrol.com/news/business/quick-commerce-report.html",
+    finalUrl: "https://www.moneycontrol.com/news/business/quick-commerce-report.html",
+    contentType: "text/html",
+    text: "In a Bengaluru comparison, Bernstein found that 76 percent of Zepto’s serviceable grid points showed promised delivery timelines of under 10 minutes, compared to 21 percent for Blinkit.",
+    sha256: "c".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(addVerifiedQuickCommerceDeliveryEvidence(parsed, documents), 2);
+  const rows = parsed.vendorScores.map((vendor) => vendor.weightedScores[0].evidence[0] as Record<string, unknown>);
+  assert.deepEqual(rows.map((row) => row.rawMetricValue), [76, 21]);
+  assert.ok(rows.every((row) => row.metricKey === "delivery_within_target_rate"));
+  assert.ok(rows.every((row) => row.documentSha256 === "c".repeat(64)));
 });
 
 test("extracts official BaaS offer metrics without relying on model candidate fields", () => {
@@ -1560,6 +1621,48 @@ test("does not let intent extraction shrink a later authoritative decision-conte
   assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank"]);
   assert.equal(parsed.comparisonIdentity.entityCount, 4);
   assert.equal(parsed.context.valid, true);
+});
+
+test("parses a misspelled quick-commerce comparison and preserves its requested criteria", () => {
+  const prompt = "Compare Zepto quick commerce products againt Blinkit quick commerce. The key factors for comparison must be variety of product range, price, time to delivery and quality";
+  const parsed = parsePrompt(prompt);
+
+  assert.deepEqual(parsed.vendors, ["Zepto", "Blinkit"]);
+  assert.deepEqual(parsed.criteria, [
+    "Product range and variety",
+    "Price and value",
+    "Delivery time and reliability",
+    "Product quality",
+  ]);
+  assert.equal(parsed.context.valid, true);
+
+  const sources = officialMarketSourcesFor(prompt, parsed.vendors, inferResearchMarket(prompt, parsed.vendors, "IN"));
+  assert.ok(sources.some((source) => source.includes("zepto.com")));
+  assert.ok(sources.some((source) => source.includes("blinkit.com")));
+  assert.ok(sources.some((source) => source.includes("moneycontrol.com")));
+  assert.ok(sources.every((source) => source.startsWith("https://")));
+});
+
+test("does not append model-inferred factors when the user explicitly names comparison criteria", async () => {
+  const prompt = "Compare Zepto quick commerce products againt Blinkit quick commerce. The key factors for comparison must be variety of product range, price, time to delivery and quality";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Zepto", "Blinkit"],
+      subject: "Quick commerce grocery delivery",
+      category: "E-commerce delivery services",
+      useCase: "Purchase channel, fulfilment and support",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.criteria, [
+    "Product range and variety",
+    "Price and value",
+    "Delivery time and reliability",
+    "Product quality",
+  ]);
 });
 
 test("preserves all six providers in a supported comparison", async () => {
