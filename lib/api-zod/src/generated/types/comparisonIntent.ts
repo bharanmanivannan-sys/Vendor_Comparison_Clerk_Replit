@@ -18,6 +18,7 @@ import type { ComparisonIntentDecisionType } from './comparisonIntentDecisionTyp
 import type { ComparisonIntentFreshness } from './comparisonIntentFreshness';
 
 export interface ComparisonIntent {
+  /** @maxItems 6 */
   options: string[];
   subject: string;
   decisionType: ComparisonIntentDecisionType;

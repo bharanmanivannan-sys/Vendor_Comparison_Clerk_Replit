@@ -29,11 +29,13 @@ export const HealthCheckResponse = zod.object({
 /**
  * @summary Get comparison workspace summary
  */
+export const getDashboardSummaryResponseRecentComparisonsItemVendorsMax = 6;
+
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMin = 2;
-export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMax = 5;
+export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMax = 6;
 
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMin = 2;
-export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMax = 5;
+export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMax = 6;
 
 
 
@@ -45,7 +47,7 @@ export const GetDashboardSummaryResponse = zod.object({
   "recentComparisons": zod.array(zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(getDashboardSummaryResponseRecentComparisonsItemVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -76,18 +78,20 @@ export const RecordVisitorSessionResponse = zod.void()
 /**
  * @summary List the signed-in user's comparison history
  */
+export const listComparisonsResponseVendorsMax = 6;
+
 export const listComparisonsResponseComparisonIdentityEntitiesMin = 2;
-export const listComparisonsResponseComparisonIdentityEntitiesMax = 5;
+export const listComparisonsResponseComparisonIdentityEntitiesMax = 6;
 
 export const listComparisonsResponseComparisonIdentityEntityCountMin = 2;
-export const listComparisonsResponseComparisonIdentityEntityCountMax = 5;
+export const listComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
 
 
 export const ListComparisonsResponseItem = zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(listComparisonsResponseVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -118,7 +122,7 @@ export const createComparisonBodyPromptMax = 2000;
 export const createComparisonBodyVendorsItemMax = 120;
 
 export const createComparisonBodyVendorsMin = 2;
-export const createComparisonBodyVendorsMax = 5;
+export const createComparisonBodyVendorsMax = 6;
 
 export const createComparisonBodyCriteriaItemMax = 100;
 
@@ -133,11 +137,13 @@ export const CreateComparisonBody = zod.object({
   "criteria": zod.array(zod.string().min(1).max(createComparisonBodyCriteriaItemMax)).max(createComparisonBodyCriteriaMax).optional()
 })
 
+export const createComparisonResponseOneVendorsMax = 6;
+
 export const createComparisonResponseOneComparisonIdentityEntitiesMin = 2;
-export const createComparisonResponseOneComparisonIdentityEntitiesMax = 5;
+export const createComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
 export const createComparisonResponseOneComparisonIdentityEntityCountMin = 2;
-export const createComparisonResponseOneComparisonIdentityEntityCountMax = 5;
+export const createComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -158,7 +164,7 @@ export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEviden
 export const CreateComparisonResponse = zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(createComparisonResponseOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -352,7 +358,7 @@ export const createGuestComparisonBodyPromptMax = 2000;
 export const createGuestComparisonBodyVendorsItemMax = 120;
 
 export const createGuestComparisonBodyVendorsMin = 2;
-export const createGuestComparisonBodyVendorsMax = 5;
+export const createGuestComparisonBodyVendorsMax = 6;
 
 export const createGuestComparisonBodyCriteriaItemMax = 100;
 
@@ -367,11 +373,13 @@ export const CreateGuestComparisonBody = zod.object({
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonBodyCriteriaItemMax)).max(createGuestComparisonBodyCriteriaMax).optional()
 })
 
+export const createGuestComparisonResponseVendorsMax = 6;
+
 export const createGuestComparisonResponseComparisonIdentityEntitiesMin = 2;
-export const createGuestComparisonResponseComparisonIdentityEntitiesMax = 5;
+export const createGuestComparisonResponseComparisonIdentityEntitiesMax = 6;
 
 export const createGuestComparisonResponseComparisonIdentityEntityCountMin = 2;
-export const createGuestComparisonResponseComparisonIdentityEntityCountMax = 5;
+export const createGuestComparisonResponseComparisonIdentityEntityCountMax = 6;
 
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -391,7 +399,7 @@ export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvid
 
 export const CreateGuestComparisonResponse = zod.object({
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(createGuestComparisonResponseVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -587,22 +595,27 @@ export const ParseComparisonPromptBody = zod.object({
   "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax)
 })
 
+export const parseComparisonPromptResponseVendorsMin = 2;
+export const parseComparisonPromptResponseVendorsMax = 6;
+
+export const parseComparisonPromptResponseIntentOptionsMax = 6;
+
 export const parseComparisonPromptResponseIntentQualifiersMax = 8;
 
 export const parseComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseComparisonPromptResponseIntentConfidenceMax = 1;
 
 export const parseComparisonPromptResponseComparisonIdentityEntitiesMin = 2;
-export const parseComparisonPromptResponseComparisonIdentityEntitiesMax = 5;
+export const parseComparisonPromptResponseComparisonIdentityEntitiesMax = 6;
 
 export const parseComparisonPromptResponseComparisonIdentityEntityCountMin = 2;
-export const parseComparisonPromptResponseComparisonIdentityEntityCountMax = 5;
+export const parseComparisonPromptResponseComparisonIdentityEntityCountMax = 6;
 
 
 
 export const ParseComparisonPromptResponse = zod.object({
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).min(parseComparisonPromptResponseVendorsMin).max(parseComparisonPromptResponseVendorsMax),
   "urls": zod.array(zod.string()),
   "criteria": zod.array(zod.string()),
   "context": zod.object({
@@ -612,7 +625,7 @@ export const ParseComparisonPromptResponse = zod.object({
   "message": zod.string()
 }),
   "intent": zod.object({
-  "options": zod.array(zod.string()),
+  "options": zod.array(zod.string()).max(parseComparisonPromptResponseIntentOptionsMax),
   "subject": zod.string(),
   "decisionType": zod.enum(['comparison', 'choice', 'purchase_channel', 'financing', 'migration']),
   "category": zod.string(),
@@ -650,22 +663,27 @@ export const ParseGuestComparisonPromptBody = zod.object({
   "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax)
 })
 
+export const parseGuestComparisonPromptResponseVendorsMin = 2;
+export const parseGuestComparisonPromptResponseVendorsMax = 6;
+
+export const parseGuestComparisonPromptResponseIntentOptionsMax = 6;
+
 export const parseGuestComparisonPromptResponseIntentQualifiersMax = 8;
 
 export const parseGuestComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseGuestComparisonPromptResponseIntentConfidenceMax = 1;
 
 export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMin = 2;
-export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMax = 5;
+export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMax = 6;
 
 export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMin = 2;
-export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMax = 5;
+export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMax = 6;
 
 
 
 export const ParseGuestComparisonPromptResponse = zod.object({
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).min(parseGuestComparisonPromptResponseVendorsMin).max(parseGuestComparisonPromptResponseVendorsMax),
   "urls": zod.array(zod.string()),
   "criteria": zod.array(zod.string()),
   "context": zod.object({
@@ -675,7 +693,7 @@ export const ParseGuestComparisonPromptResponse = zod.object({
   "message": zod.string()
 }),
   "intent": zod.object({
-  "options": zod.array(zod.string()),
+  "options": zod.array(zod.string()).max(parseGuestComparisonPromptResponseIntentOptionsMax),
   "subject": zod.string(),
   "decisionType": zod.enum(['comparison', 'choice', 'purchase_channel', 'financing', 'migration']),
   "category": zod.string(),
@@ -710,7 +728,7 @@ export const createComparisonJobBodyPromptMax = 2000;
 export const createComparisonJobBodyVendorsItemMax = 120;
 
 export const createComparisonJobBodyVendorsMin = 2;
-export const createComparisonJobBodyVendorsMax = 5;
+export const createComparisonJobBodyVendorsMax = 6;
 
 export const createComparisonJobBodyCriteriaItemMax = 100;
 
@@ -726,7 +744,7 @@ export const CreateComparisonJobBody = zod.object({
 })
 
 export const createComparisonJobResponseProgressEntitiesMin = 2;
-export const createComparisonJobResponseProgressEntitiesMax = 5;
+export const createComparisonJobResponseProgressEntitiesMax = 6;
 
 
 
@@ -749,13 +767,15 @@ export const GetComparisonJobParams = zod.object({
 })
 
 export const getComparisonJobResponseProgressEntitiesMin = 2;
-export const getComparisonJobResponseProgressEntitiesMax = 5;
+export const getComparisonJobResponseProgressEntitiesMax = 6;
+
+export const getComparisonJobResponseResultOneOneVendorsMax = 6;
 
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
-export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 5;
+export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 6;
 
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
-export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 5;
+export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -771,11 +791,13 @@ export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresI
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
 
+export const getComparisonJobResponseResultTwoVendorsMax = 6;
+
 export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
-export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 5;
+export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 6;
 
 export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
-export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 5;
+export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
 
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -803,7 +825,7 @@ export const GetComparisonJobResponse = zod.object({
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(getComparisonJobResponseResultOneOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -987,7 +1009,7 @@ export const GetComparisonJobResponse = zod.object({
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
 })),zod.object({
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(getComparisonJobResponseResultTwoVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -1175,6 +1197,240 @@ export const GetComparisonJobResponse = zod.object({
 
 
 /**
+ * @summary Recalculate a saved comparison with adjusted criterion weights
+ */
+export const RegenerateComparisonParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const regenerateComparisonBodyWeightsItemWeightMin = 0;
+export const regenerateComparisonBodyWeightsItemWeightMax = 100;
+
+export const regenerateComparisonBodyWeightsMin = 8;
+export const regenerateComparisonBodyWeightsMax = 8;
+
+
+
+export const RegenerateComparisonBody = zod.object({
+  "weights": zod.array(zod.object({
+  "criterion": zod.string(),
+  "weight": zod.number().int().min(regenerateComparisonBodyWeightsItemWeightMin).max(regenerateComparisonBodyWeightsItemWeightMax)
+})).min(regenerateComparisonBodyWeightsMin).max(regenerateComparisonBodyWeightsMax)
+})
+
+export const regenerateComparisonResponseOneVendorsMax = 6;
+
+export const regenerateComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const regenerateComparisonResponseOneComparisonIdentityEntitiesMax = 6;
+
+export const regenerateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const regenerateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
+
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+
+
+export const RegenerateComparisonResponse = zod.object({
+  "id": zod.number().int(),
+  "prompt": zod.string(),
+  "vendors": zod.array(zod.string()).max(regenerateComparisonResponseOneVendorsMax),
+  "comparisonIdentity": zod.object({
+  "originalQuery": zod.string(),
+  "category": zod.string(),
+  "entities": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string()
+})).min(regenerateComparisonResponseOneComparisonIdentityEntitiesMin).max(regenerateComparisonResponseOneComparisonIdentityEntitiesMax),
+  "entityCount": zod.number().int().min(regenerateComparisonResponseOneComparisonIdentityEntityCountMin).max(regenerateComparisonResponseOneComparisonIdentityEntityCountMax),
+  "comparisonType": zod.enum(['pair', 'multi_entity']),
+  "displayName": zod.string(),
+  "headline": zod.string()
+}).describe('Canonical comparison set used by every downstream label and recommendation.'),
+  "category": zod.string(),
+  "recommendation": zod.string(),
+  "score": zod.number().int(),
+  "createdAt": zod.coerce.date(),
+  "status": zod.enum(['complete', 'processing', 'failed'])
+}).and(zod.object({
+  "urls": zod.array(zod.string()),
+  "sourceAvailability": zod.array(zod.object({
+  "url": zod.string().url(),
+  "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "criteria": zod.array(zod.string()),
+  "executiveSummary": zod.string(),
+  "recommendationReason": zod.string(),
+  "vendorScores": zod.array(zod.object({
+  "vendor": zod.string(),
+  "score": zod.number().int(),
+  "color": zod.string(),
+  "verdict": zod.string(),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
+  "weightedScores": zod.array(zod.object({
+  "criterion": zod.string(),
+  "weight": zod.number().int(),
+  "score": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "sampleSize": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string()
+})).optional()
+})).optional(),
+  "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
+  "vrio": zod.object({
+  "value": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "rarity": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "imitability": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "organization": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "implication": zod.string()
+}).optional(),
+  "marketPosition": zod.object({
+  "marketShare": zod.string().describe('Latest credible market-share figure or an explicit unavailable statement.'),
+  "marketSharePeriod": zod.string(),
+  "market": zod.string(),
+  "shareValue": zod.string().describe('Public parent-company share price/value when applicable, otherwise Not applicable.'),
+  "shareValueAsOf": zod.string(),
+  "applicability": zod.string(),
+  "evidence": zod.string()
+}).optional(),
+  "marketHistory": zod.object({
+  "lookbackYears": zod.literal(5),
+  "trendSummary": zod.string(),
+  "yearlyTrends": zod.array(zod.object({
+  "year": zod.number().int(),
+  "productPerformance": zod.string(),
+  "marketPosition": zod.string(),
+  "trendDirection": zod.enum(['improving', 'stable', 'declining', 'mixed', 'unavailable']),
+  "notableEvent": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+})),
+  "ownership": zod.object({
+  "status": zod.enum(['public', 'private', 'subsidiary', 'government', 'mutual', 'unknown']),
+  "ultimateParent": zod.string(),
+  "majorShareholders": zod.array(zod.string()),
+  "asOf": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+}),
+  "transactions": zod.array(zod.object({
+  "date": zod.string(),
+  "type": zod.enum(['merger', 'acquisition', 'divestiture', 'investment', 'restructure', 'none_found']),
+  "counterparty": zod.string(),
+  "summary": zod.string(),
+  "impact": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+})),
+  "stock": zod.object({
+  "applicability": zod.enum(['listed', 'listed_parent', 'private', 'not_applicable', 'unverified']),
+  "ticker": zod.string(),
+  "exchange": zod.string(),
+  "currency": zod.string(),
+  "latestPrice": zod.number().nullable(),
+  "latestPriceAsOf": zod.string(),
+  "fiveYearChangePercent": zod.number().nullable(),
+  "yearlyCloses": zod.array(zod.object({
+  "year": zod.number().int(),
+  "price": zod.number().nullable()
+})),
+  "evidenceUrl": zod.string().url().optional()
+})
+}).optional().describe('Evidence-backed five-year performance, ownership, corporate-action, and listed-stock context for one compared option.')
+})),
+  "pricing": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "features": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "swot": zod.record(zod.string(), zod.array(zod.string())),
+  "opportunities": zod.array(zod.string()),
+  "insights": zod.array(zod.string()),
+  "nextSteps": zod.array(zod.string()),
+  "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "productEquivalency": zod.array(zod.object({
+  "capability": zod.string(),
+  "currentArrangement": zod.string(),
+  "targetArrangement": zod.string(),
+  "equivalency": zod.string().describe('Full'),
+  "gap": zod.string()
+})).describe('Like-for-like mapping of current and target products or services, including partial equivalence and uncovered scope.'),
+  "functionalGaps": zod.array(zod.object({
+  "capability": zod.string(),
+  "currentState": zod.string(),
+  "targetState": zod.string(),
+  "gap": zod.string(),
+  "mitigation": zod.string(),
+  "severity": zod.enum(['low', 'medium', 'high', 'critical'])
+})).describe('Required capabilities that are absent, partial, changed, or unverified in the target arrangement.'),
+  "serviceProductMap": zod.array(zod.object({
+  "businessService": zod.string(),
+  "currentProduct": zod.string(),
+  "targetProduct": zod.string(),
+  "dependencies": zod.string(),
+  "owner": zod.string()
+})).describe('Mapping between business services and the products, dependencies, and owners that enable them.'),
+  "migrationSequence": zod.array(zod.object({
+  "phase": zod.string(),
+  "objective": zod.string(),
+  "dependencies": zod.string(),
+  "exitCriteria": zod.string(),
+  "risk": zod.enum(['low', 'medium', 'high', 'critical'])
+})).describe('Ordered migration phases with dependencies, exit criteria, and risk.'),
+  "decisionGovernance": zod.array(zod.object({
+  "decision": zod.string(),
+  "owner": zod.string(),
+  "approvers": zod.string(),
+  "evidenceRequired": zod.string(),
+  "decisionGate": zod.string()
+})).describe('Decision rights, evidence requirements, approvers, and approval gates.')
+}))
+
+
+/**
  * @summary Start a guest comparison research job
  */
 export const createGuestComparisonJobBodyPromptMin = 8;
@@ -1183,7 +1439,7 @@ export const createGuestComparisonJobBodyPromptMax = 2000;
 export const createGuestComparisonJobBodyVendorsItemMax = 120;
 
 export const createGuestComparisonJobBodyVendorsMin = 2;
-export const createGuestComparisonJobBodyVendorsMax = 5;
+export const createGuestComparisonJobBodyVendorsMax = 6;
 
 export const createGuestComparisonJobBodyCriteriaItemMax = 100;
 
@@ -1199,7 +1455,7 @@ export const CreateGuestComparisonJobBody = zod.object({
 })
 
 export const createGuestComparisonJobResponseProgressEntitiesMin = 2;
-export const createGuestComparisonJobResponseProgressEntitiesMax = 5;
+export const createGuestComparisonJobResponseProgressEntitiesMax = 6;
 
 
 
@@ -1222,13 +1478,15 @@ export const GetGuestComparisonJobParams = zod.object({
 })
 
 export const getGuestComparisonJobResponseProgressEntitiesMin = 2;
-export const getGuestComparisonJobResponseProgressEntitiesMax = 5;
+export const getGuestComparisonJobResponseProgressEntitiesMax = 6;
+
+export const getGuestComparisonJobResponseResultOneOneVendorsMax = 6;
 
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
-export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 5;
+export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 6;
 
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
-export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 5;
+export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1244,11 +1502,13 @@ export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedSc
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
 
+export const getGuestComparisonJobResponseResultTwoVendorsMax = 6;
+
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
-export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 5;
+export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 6;
 
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
-export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 5;
+export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
 
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1276,7 +1536,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(getGuestComparisonJobResponseResultOneOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -1460,7 +1720,7 @@ export const GetGuestComparisonJobResponse = zod.object({
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
 })),zod.object({
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(getGuestComparisonJobResponseResultTwoVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -1654,11 +1914,13 @@ export const GetComparisonParams = zod.object({
   "id": zod.coerce.number().int()
 })
 
+export const getComparisonResponseOneVendorsMax = 6;
+
 export const getComparisonResponseOneComparisonIdentityEntitiesMin = 2;
-export const getComparisonResponseOneComparisonIdentityEntitiesMax = 5;
+export const getComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
 export const getComparisonResponseOneComparisonIdentityEntityCountMin = 2;
-export const getComparisonResponseOneComparisonIdentityEntityCountMax = 5;
+export const getComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1679,7 +1941,7 @@ export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceI
 export const GetComparisonResponse = zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(getComparisonResponseOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -1888,18 +2150,20 @@ export const ExternalListComparisonsQueryParams = zod.object({
   "cursor": zod.coerce.string().optional()
 })
 
+export const externalListComparisonsResponseVendorsMax = 6;
+
 export const externalListComparisonsResponseComparisonIdentityEntitiesMin = 2;
-export const externalListComparisonsResponseComparisonIdentityEntitiesMax = 5;
+export const externalListComparisonsResponseComparisonIdentityEntitiesMax = 6;
 
 export const externalListComparisonsResponseComparisonIdentityEntityCountMin = 2;
-export const externalListComparisonsResponseComparisonIdentityEntityCountMax = 5;
+export const externalListComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
 
 
 export const ExternalListComparisonsResponseItem = zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(externalListComparisonsResponseVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -1940,7 +2204,7 @@ export const externalCreateComparisonBodyPromptMax = 2000;
 export const externalCreateComparisonBodyVendorsItemMax = 120;
 
 export const externalCreateComparisonBodyVendorsMin = 2;
-export const externalCreateComparisonBodyVendorsMax = 5;
+export const externalCreateComparisonBodyVendorsMax = 6;
 
 export const externalCreateComparisonBodyCriteriaItemMax = 100;
 
@@ -1955,11 +2219,13 @@ export const ExternalCreateComparisonBody = zod.object({
   "criteria": zod.array(zod.string().min(1).max(externalCreateComparisonBodyCriteriaItemMax)).max(externalCreateComparisonBodyCriteriaMax).optional()
 })
 
+export const externalCreateComparisonResponseOneVendorsMax = 6;
+
 export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMin = 2;
-export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMax = 5;
+export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
 export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
-export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax = 5;
+export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1980,7 +2246,7 @@ export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresIt
 export const ExternalCreateComparisonResponse = zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(externalCreateComparisonResponseOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
@@ -2173,11 +2439,13 @@ export const ExternalGetComparisonParams = zod.object({
   "id": zod.coerce.number().int()
 })
 
+export const externalGetComparisonResponseOneVendorsMax = 6;
+
 export const externalGetComparisonResponseOneComparisonIdentityEntitiesMin = 2;
-export const externalGetComparisonResponseOneComparisonIdentityEntitiesMax = 5;
+export const externalGetComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
 export const externalGetComparisonResponseOneComparisonIdentityEntityCountMin = 2;
-export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 5;
+export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -2198,7 +2466,7 @@ export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemE
 export const ExternalGetComparisonResponse = zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()),
+  "vendors": zod.array(zod.string()).max(externalGetComparisonResponseOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),

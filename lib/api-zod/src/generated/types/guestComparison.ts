@@ -28,6 +28,7 @@ import type { VendorScore } from './vendorScore';
 
 export interface GuestComparison {
   prompt: string;
+  /** @maxItems 6 */
   vendors: string[];
   comparisonIdentity: ComparisonIdentity;
   category: string;

@@ -33,6 +33,7 @@ import {
   parseJsonObject,
   parsePrompt,
   parsePromptWithIntent,
+  reweightAnalysis,
   reconcileRecommendationWithNarrative,
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
@@ -362,6 +363,53 @@ test("parses comma-separated bank providers before a home-loan category", () => 
   assert.ok(parsed.criteria.includes("Fixed-rate terms, revert rate and break costs"));
   assert.ok(parsed.criteria.includes("Investor-loan eligibility and conditions"));
   assert.ok(parsed.criteria.includes("Fees and total borrowing cost"));
+});
+
+test("parses every provider in a chained vs comparison before the home-loan qualifier", () => {
+  const parsed = parsePrompt(
+    "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank for Investment Home Loans",
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Home loans");
+  assert.ok(parsed.criteria.includes("Investor-loan eligibility and conditions"));
+});
+
+test("keeps the complete deterministic vs chain when intent extraction returns a subset", async () => {
+  const prompt = "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank for Investment Home Loans";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Westpac", "Commonwealth Bank"],
+      decisionType: "comparison",
+      category: "Home loans",
+      useCase: "Investment home loans",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank"]);
+  assert.equal(parsed.context.valid, true);
+});
+
+test("preserves all six providers in a supported comparison", async () => {
+  const prompt = "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank vs Macquarie vs Bankwest for home loans";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest"],
+      decisionType: "comparison",
+      category: "Home loans",
+      useCase: "Home loans",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest"]);
+  assert.equal(parsed.comparisonIdentity.entityCount, 6);
 });
 
 test("keeps Westpac when intent extraction omits the first bank in an against list", async () => {
@@ -1637,4 +1685,68 @@ test("removes numeric stock values for a verified private company", () => {
   assert.equal(result.stock.latestPrice, null);
   assert.equal(result.stock.fiveYearChangePercent, null);
   assert.deepEqual(result.stock.yearlyCloses, []);
+});
+
+test("reweights an existing evidence-backed report without changing criterion scores", () => {
+  const analysis = {
+    recommendation: "Mahindra",
+    score: 60,
+    recommendationReason: "Original recommendation.",
+    vendorScores: [
+      {
+        vendor: "MG",
+        score: 65,
+        color: "#1c7c78",
+        verdict: "Strong alternative",
+        weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => ({
+          criterion,
+          weight: 12.5,
+          score: criterion === "Meets Needs / Features" || criterion === "Innovation / Differentiation" ? 90 : 50,
+          rationale: "Evidence-backed score.",
+          evidence: [],
+        })),
+      },
+      {
+        vendor: "Mahindra",
+        score: 60,
+        color: "#df7b48",
+        verdict: "Best overall fit",
+        weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => ({
+          criterion,
+          weight: 12.5,
+          score: criterion === "Value for Money" ? 95 : 50,
+          rationale: "Evidence-backed score.",
+          evidence: [],
+        })),
+      },
+    ],
+  } as unknown as AnalysisPayload;
+  const result = reweightAnalysis(analysis, [
+    { criterion: "Meets Needs / Features", weight: 35 },
+    { criterion: "Quality & Reliability", weight: 10 },
+    { criterion: "Value for Money", weight: 10 },
+    { criterion: "Brand Reputation", weight: 5 },
+    { criterion: "Customer Advocacy / NPS", weight: 5 },
+    { criterion: "Innovation / Differentiation", weight: 30 },
+    { criterion: "Sustainability", weight: 3 },
+    { criterion: "Regulatory Compliance", weight: 2 },
+  ]);
+  assert.equal(result.recommendation, "MG");
+  assert.equal(result.score, 76);
+  assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score, 90);
+  assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 35);
+});
+
+test("rejects adjusted weights that do not total 100", () => {
+  const analysis = {
+    recommendation: "MG",
+    vendorScores: [],
+  } as unknown as AnalysisPayload;
+  assert.throws(
+    () => reweightAnalysis(analysis, WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+      criterion,
+      weight: criterion === "Value for Money" ? weight + 1 : weight,
+    }))),
+    /must total 100%/,
+  );
 });

@@ -23,7 +23,7 @@ export interface ComparisonInput {
   prompt: string;
   /**
      * @minItems 2
-     * @maxItems 5
+     * @maxItems 6
      * @items.minLength 1
      * @items.maxLength 120
      */

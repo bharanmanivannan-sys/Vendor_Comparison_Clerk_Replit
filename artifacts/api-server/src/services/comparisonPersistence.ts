@@ -1,3 +1,4 @@
+import { and, eq } from "drizzle-orm";
 import { comparisonEvidenceTable, comparisonsTable, db, type InsertComparison } from "@workspace/db";
 import { normalizeEvidenceRecords } from "../lib/analysis";
 
@@ -79,4 +80,23 @@ export async function persistComparisonWithEvidence(
 /** Atomically persist a comparison and its evidence outside an existing transaction. */
 export function persistComparisonAtomically(values: InsertComparison) {
   return db.transaction((tx) => persistComparisonWithEvidence(tx, values));
+}
+
+export async function updateComparisonWithEvidence(
+  comparisonId: number,
+  userId: string,
+  values: Pick<InsertComparison, "score" | "recommendation" | "recommendationReason" | "vendorScores">,
+) {
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(comparisonsTable)
+      .set(values)
+      .where(and(eq(comparisonsTable.id, comparisonId), eq(comparisonsTable.userId, userId)))
+      .returning();
+    if (!updated) return undefined;
+    await tx.delete(comparisonEvidenceTable).where(eq(comparisonEvidenceTable.comparisonId, comparisonId));
+    const evidence = flattenComparisonEvidence(comparisonId, updated);
+    if (evidence.length) await tx.insert(comparisonEvidenceTable).values(evidence).onConflictDoNothing();
+    return updated;
+  });
 }

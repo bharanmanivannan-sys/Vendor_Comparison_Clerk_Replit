@@ -19,3 +19,5 @@
 - [Recommendation consistency](recommendation-consistency.md) — tied-score headlines must follow an explicit narrative winner, with preference phrases matched directionally.
 - [Canonical comparison identity](canonical-comparison-identity.md) — freeze the ordered entity set before research; model rows and recommendations cannot redefine it.
 - [Runtime error logging](runtime-error-logging.md) — serialize caught errors to primitive fields before logging; Node 24 inspection can crash on complex error objects.
+- [Five-year history visibility](five-year-history-visibility.md) — hide long-term performance sections unless every option has complete, evidence-backed five-year coverage.
+- [Comparison option limit](comparison-option-limit.md) — support six options end to end and reject a seventh instead of silently truncating it.

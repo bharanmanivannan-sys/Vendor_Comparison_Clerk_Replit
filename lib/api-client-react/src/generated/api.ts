@@ -58,6 +58,7 @@ import type {
   ParsedComparison,
   QuotaExceededResponse,
   RateLimitedResponse,
+  RegenerateComparisonInput,
   RevokeTenantApiKeyHeaders,
   RotateTenantApiKeyHeaders,
   Tenant,
@@ -914,6 +915,95 @@ export function useGetComparisonJob<TData = Awaited<ReturnType<typeof getCompari
 
 
 
+
+export const getRegenerateComparisonUrl = (id: number,) => {
+
+
+
+
+  return `/api/comparisons/${id}/regenerate`
+}
+
+/**
+ * @summary Recalculate a saved comparison with adjusted criterion weights
+ */
+export const regenerateComparison = async (id: number,
+    regenerateComparisonInput: RegenerateComparisonInput, options?: Parameters<typeof customFetch>[1]): Promise<Comparison> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<Comparison>(getRegenerateComparisonUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(regenerateComparisonInput)
+  }
+);}
+
+
+
+
+
+export const getRegenerateComparisonMutationKey = () => ['regenerateComparison'] as const;
+
+export const getRegenerateComparisonMutationOptions = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof regenerateComparison>>, TError,RegenerateComparisonMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof regenerateComparison>>, TError,RegenerateComparisonMutationVariables, TContext> => {
+
+const mutationKey = getRegenerateComparisonMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof regenerateComparison>>, RegenerateComparisonMutationVariables> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  regenerateComparison(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RegenerateComparisonMutationResult = NonNullable<Awaited<ReturnType<typeof regenerateComparison>>>
+    export type RegenerateComparisonMutationBody = BodyType<RegenerateComparisonInput>
+    export type RegenerateComparisonMutationError = ErrorType<LegacyErrorResponse>
+    export type RegenerateComparisonMutationVariables = {id: number;data: BodyType<RegenerateComparisonInput>}
+
+    /**
+ * @summary Recalculate a saved comparison with adjusted criterion weights
+ */
+export const useRegenerateComparison = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof regenerateComparison>>, TError,RegenerateComparisonMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof regenerateComparison>>,
+        TError,
+        RegenerateComparisonMutationVariables,
+        TContext
+      > => {
+      return useMutation(getRegenerateComparisonMutationOptions(options));
+    }
 
 export const getCreateGuestComparisonJobUrl = () => {
 

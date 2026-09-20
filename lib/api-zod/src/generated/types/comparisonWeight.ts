@@ -14,25 +14,12 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonContext } from './comparisonContext';
-import type { ComparisonIdentity } from './comparisonIdentity';
-import type { ComparisonIntent } from './comparisonIntent';
 
-/**
- * One-shot parse result. Entity boundaries are resolved before source retrieval.
- * The response preserves user order and exposes the qualifiers, decision criterion,
- * and freshness requirements that downstream research must honor.
- */
-export interface ParsedComparison {
-  prompt: string;
+export interface ComparisonWeight {
+  criterion: string;
   /**
-     * @minItems 2
-     * @maxItems 6
+     * @minimum 0
+     * @maximum 100
      */
-  vendors: string[];
-  urls: string[];
-  criteria: string[];
-  context: ComparisonContext;
-  intent: ComparisonIntent;
-  comparisonIdentity: ComparisonIdentity;
+  weight: number;
 }

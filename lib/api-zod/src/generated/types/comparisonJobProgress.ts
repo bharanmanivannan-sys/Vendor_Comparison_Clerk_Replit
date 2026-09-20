@@ -18,7 +18,7 @@
 export interface ComparisonJobProgress {
   /**
      * @minItems 2
-     * @maxItems 5
+     * @maxItems 6
      */
   entities: string[];
   subject: string;

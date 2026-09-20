@@ -169,7 +169,7 @@
 [data-testid="button-guest-research"]:disabled { opacity: .72; }
 
 [data-testid="comparison-composer"] label[for$="comparison-prompt"]::after {
-  content: "You can compare up to 5 products or vendors at a time.";
+  content: "You can compare up to 6 products or vendors at a time.";
   display: block;
   margin-top: .5rem;
   font-family: var(--app-font-sans);

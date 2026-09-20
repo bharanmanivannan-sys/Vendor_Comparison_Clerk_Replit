@@ -41,6 +41,31 @@ test("submission accepts the MG and Mahindra BaaS purchase when intent confidenc
   assert.equal(validated.context.valid, true);
 });
 
+test("submission accepts six explicitly provided comparison options", async () => {
+  const vendors = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"];
+  const validated = await validateComparisonInput({
+    prompt: "Compare Alpha, Beta, Gamma, Delta, Epsilon and Zeta for enterprise software.",
+    vendors,
+    urls: [],
+  });
+
+  assert.ok(!("error" in validated));
+  if ("error" in validated) return;
+  assert.deepEqual(validated.vendors, vendors);
+});
+
+test("submission rejects a seventh comparison option", async () => {
+  const validated = await validateComparisonInput({
+    prompt: "Compare seven enterprise software vendors.",
+    vendors: ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta"],
+    urls: [],
+  });
+
+  assert.deepEqual(validated, {
+    error: "You can compare up to 6 products or vendors at a time. Remove one or more options and try again.",
+  });
+});
+
 test("offers an actionable workaround when a multi-brand EV request is mis-grouped", () => {
   const prompt = "Compare BYD vs Tesla and MG. Which of the cars match the ANCAP standards and fit the budget under $80,000. Why? Compare the features, pricing. Which of this cars would be value for money?";
   assert.equal(

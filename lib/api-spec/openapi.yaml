@@ -261,6 +261,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}/regenerate:
+    post:
+      operationId: regenerateComparison
+      tags: [comparisons]
+      summary: Recalculate a saved comparison with adjusted criterion weights
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegenerateComparisonInput"
+      responses:
+        "200":
+          description: Regenerated comparison
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comparison"
+        "400":
+          description: Invalid criterion weights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Comparison not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
   /guest/comparison-jobs:
     post:
       operationId: createGuestComparisonJob
@@ -850,7 +891,7 @@ components:
         vendors:
           type: array
           minItems: 2
-          maxItems: 5
+          maxItems: 6
           items:
             type: string
             minLength: 1
@@ -868,6 +909,26 @@ components:
             minLength: 1
             maxLength: 100
       required: [prompt]
+    RegenerateComparisonInput:
+      type: object
+      properties:
+        weights:
+          type: array
+          minItems: 8
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/ComparisonWeight"
+      required: [weights]
+    ComparisonWeight:
+      type: object
+      properties:
+        criterion:
+          type: string
+        weight:
+          type: integer
+          minimum: 0
+          maximum: 100
+      required: [criterion, weight]
     ComparisonPromptInput:
       type: object
       properties:
@@ -887,6 +948,8 @@ components:
           type: string
         vendors:
           type: array
+          minItems: 2
+          maxItems: 6
           items:
             type: string
         urls:
@@ -928,7 +991,7 @@ components:
           type: array
           items: { type: string }
           minItems: 2
-          maxItems: 5
+          maxItems: 6
         subject:
           type: string
       required: [entities, subject]
@@ -962,14 +1025,14 @@ components:
         entities:
           type: array
           minItems: 2
-          maxItems: 5
+          maxItems: 6
           items:
             type: object
             properties:
               id: { type: string }
               name: { type: string }
             required: [id, name]
-        entityCount: { type: integer, minimum: 2, maximum: 5 }
+        entityCount: { type: integer, minimum: 2, maximum: 6 }
         comparisonType:
           type: string
           enum: [pair, multi_entity]
@@ -981,6 +1044,7 @@ components:
       properties:
         options:
           type: array
+          maxItems: 6
           items:
             type: string
         subject:
@@ -1033,6 +1097,7 @@ components:
           type: string
         vendors:
           type: array
+          maxItems: 6
           items:
             type: string
         comparisonIdentity:
@@ -1134,6 +1199,7 @@ components:
           type: string
         vendors:
           type: array
+          maxItems: 6
           items:
             type: string
         comparisonIdentity:

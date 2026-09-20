@@ -177,7 +177,7 @@ async function downloadComparisonPdf(comparison: any) {
   y -= 8;
   summary.drawText('WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 19;
-  (comparison.vendorScores || []).slice(0, 5).forEach((vendor: any) => {
+  (comparison.vendorScores || []).slice(0, 6).forEach((vendor: any) => {
     const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
     summary.drawText(clean(vendor.vendor), { x: margin, y, size: 8.5, font: bold, color: navy });
     summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290, height: 9, color: rgb(0.88, 0.86, 0.8) });
@@ -244,7 +244,7 @@ async function downloadComparisonPdf(comparison: any) {
     newAppendixPage('Scorecard and weighted decision model');
     appendixPage.drawText('OVERALL WEIGHTED SCORES', { x: margin, y: appendixY, size: 10, font: bold, color: teal });
     appendixY -= 24;
-    (comparison.vendorScores || []).slice(0, 5).forEach((vendor: any) => {
+    (comparison.vendorScores || []).slice(0, 6).forEach((vendor: any) => {
       const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
       ensureSpace(48, 'Scorecard and weighted decision model');
       appendixPage.drawText(clean(vendor.vendor), { x: margin, y: appendixY, size: 9, font: bold, color: navy });
@@ -740,6 +740,129 @@ function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: a
   </section>;
 }
 
+const WEIGHTED_CRITERIA = [
+  'Meets Needs / Features',
+  'Quality & Reliability',
+  'Value for Money',
+  'Brand Reputation',
+  'Customer Advocacy / NPS',
+  'Innovation / Differentiation',
+  'Sustainability',
+  'Regulatory Compliance',
+] as const;
+
+function validSwitchConditions(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter((item) => item && !/^(?:none|n\/?a|not available|not applicable|unknown|-)$/i.test(item))
+    : [];
+}
+
+function reweightGuestComparison(comparison: any, weights: Record<string, number>) {
+  const vendorScores = (comparison.vendorScores || []).map((vendor: any) => {
+    const weightedScores = WEIGHTED_CRITERIA.map((criterion) => {
+      const source = (vendor.weightedScores || []).find((entry: any) => entry.criterion === criterion);
+      const weight = weights[criterion] ?? source?.weight ?? 0;
+      const evidence = source?.evidence || [];
+      const usable = evidence.filter((entry: any) => entry.evidenceKind !== 'unverified');
+      const allocationWeights = evidence.map((entry: any) => usable.length && entry.evidenceKind === 'unverified' ? 0 : Math.max(1, entry.confidence ?? 1));
+      const totalAllocationWeight = allocationWeights.reduce((sum: number, value: number) => sum + value, 0) || 1;
+      return {
+        ...source,
+        criterion,
+        weight,
+        evidence: evidence.map((evidence: any, index: number) => ({
+          ...evidence,
+          criterionWeight: weight,
+          weightedContribution: Number(((source?.score ?? 50) * weight / 100 * allocationWeights[index]! / totalAllocationWeight).toFixed(2)),
+        })),
+      };
+    });
+    return {
+      ...vendor,
+      weightedScores,
+      score: Math.round(weightedScores.reduce((total, entry) => total + (entry.score ?? 50) * entry.weight, 0) / 100),
+    };
+  });
+  const ranked = [...vendorScores].sort((a: any, b: any) => b.score - a.score);
+  const topScore = ranked[0]?.score ?? comparison.score;
+  const tied = ranked.filter((vendor: any) => vendor.score === topScore);
+  const recommendation = tied.some((vendor: any) => vendor.vendor === comparison.recommendation)
+    ? comparison.recommendation
+    : tied[0]?.vendor ?? comparison.recommendation;
+  return {
+    ...comparison,
+    vendorScores,
+    score: topScore,
+    recommendation,
+    recommendationReason: `Based on your adjusted weights, ${recommendation} leads the weighted score at ${topScore}/100. The underlying evidence and criterion scores were retained.`,
+  };
+}
+
+function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest: boolean; onUpdated: (comparison: any) => void }) {
+  const initialWeights = () => Object.fromEntries(
+    WEIGHTED_CRITERIA.map((criterion) => [
+      criterion,
+      Number(comparison.vendorScores?.[0]?.weightedScores?.find((entry: any) => entry.criterion === criterion)?.weight ?? 0),
+    ]),
+  );
+  const [weights, setWeights] = useState<Record<string, number>>(initialWeights);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const total = Object.values(weights).reduce((sum, weight) => sum + (Number(weight) || 0), 0);
+  const weightValidationMessage = total > 100
+    ? `Weights exceed 100% by ${total - 100}%. Reduce one or more criteria.`
+    : total < 100
+      ? `Weights must total 100%. Add ${100 - total}% across one or more criteria.`
+      : '';
+  useEffect(() => setWeights(initialWeights()), [comparison]);
+  const updateWeight = (criterion: string, value: string) => {
+    const parsed = Number(value);
+    setWeights((current) => ({ ...current, [criterion]: Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 0 }));
+    setError('');
+  };
+  const regenerate = async () => {
+    if (total !== 100) {
+      setError(`Weights must total 100%. Current total: ${total}%.`);
+      return;
+    }
+    setPending(true);
+    setError('');
+    try {
+      if (guest) {
+        onUpdated(reweightGuestComparison(comparison, weights));
+      } else {
+        const updated = await customFetch<any>(`/api/comparisons/${comparison.id}/regenerate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weights: WEIGHTED_CRITERIA.map((criterion) => ({ criterion, weight: weights[criterion] })) }),
+        });
+        onUpdated(updated);
+      }
+    } catch (regenerationError) {
+      setError(regenerationError instanceof Error ? regenerationError.message : 'The report could not be regenerated.');
+    } finally {
+      setPending(false);
+    }
+  };
+  return <section className="mt-14 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-5 sm:p-7" data-testid="section-weight-editor">
+    <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
+      <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">01A / Adjust the decision model</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Regenerate with your priorities</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">Change the relative importance of each criterion. The evidence and criterion scores stay the same; only the weighted totals and recommendation change. This is useful when a factor is non-negotiable.</p></div>
+      <div className={`shrink-0 rounded-xl px-4 py-3 text-center ${total === 100 ? 'bg-[#dcefe9] text-[#0f766e]' : 'bg-[#f7dfdc] text-[#9a3e38]'}`}><p className="mono text-[9px] uppercase tracking-[.12em]">Total weight</p><p className="mt-1 text-xl font-bold">{total}%</p></div>
+    </div>
+    {weightValidationMessage && <p className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7dfdc] px-3 py-2 text-xs font-bold text-[#9a3e38]" role="alert" data-testid="status-weight-total">{weightValidationMessage}</p>}
+    <div className="mt-6 grid gap-x-6 gap-y-5 md:grid-cols-2">
+      {WEIGHTED_CRITERIA.map((criterion) => <label className="block" key={criterion}><div className="flex items-center justify-between gap-3 text-xs font-bold text-[#202840]"><span>{criterion}</span><div className="flex items-center gap-1"><input type="number" min={0} max={100} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`${criterion} weight`} /><span>%</span></div></div><input type="range" min={0} max={100} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="mt-2 w-full accent-[#0f766e]" aria-label={`${criterion} weight slider`} /></label>)}
+    </div>
+    <div className="mt-6 flex flex-col gap-3 border-t border-[#c8d99a] pt-5 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-[11px] leading-5 text-[#566074]">Current winner: <strong>{comparison.recommendation}</strong>. {guest ? 'A regenerated report will update this result for the current session.' : 'A regenerated report will replace this saved result for your workspace.'}</p>
+      <div className="flex gap-2"><button type="button" onClick={() => { setWeights(initialWeights()); setError(''); }} className="focus-ring rounded-xl border border-[#9ebbb0] bg-[#f8f4e8] px-4 py-3 text-xs font-bold text-[#566074]">Reset</button><button type="button" onClick={regenerate} disabled={pending || total !== 100} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="animate-spin" size={15} />}{pending ? 'Regenerating report' : 'Regenerate report'}</button></div>
+    </div>
+    {error && <p className="mt-3 text-xs font-bold text-[#9a3e38]" role="alert">{error}</p>}
+  </section>;
+}
+
 function HeadToHead({ comparison }: { comparison: any }) {
   const recommendation = comparison.vendorScores?.find((vendor: any) => vendor.vendor === comparison.recommendation)
     ?? comparison.vendorScores?.[0];
@@ -747,6 +870,7 @@ function HeadToHead({ comparison }: { comparison: any }) {
   const [selectedName, setSelectedName] = useState(alternatives[0]?.vendor ?? '');
   const selected = alternatives.find((vendor: any) => vendor.vendor === selectedName) ?? alternatives[0];
   if (!recommendation || !selected) return null;
+  const switchConditions = validSwitchConditions(selected.switchConditions);
   const rows = (recommendation.weightedScores || []).map((criterion: any) => {
     const challenger = selected.weightedScores?.find((item: any) => item.criterion === criterion.criterion);
     return { criterion: criterion.criterion, recommended: criterion.score, challenger: challenger?.score ?? 0, delta: (challenger?.score ?? 0) - criterion.score };
@@ -761,11 +885,11 @@ function HeadToHead({ comparison }: { comparison: any }) {
         </select>
       </label>
     </div>
-    <div className="mt-7 grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
-      <div className="rounded-xl bg-[#202840] p-5 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">Prefer {selected.vendor} when</p><ul className="mt-4 space-y-3">{(selected.switchConditions || []).map((condition: string) => <li className="flex gap-2 text-xs leading-5 text-[#d6dbe5]" key={condition}><Check size={14} className="mt-0.5 shrink-0 text-[#d9ef66]" />{condition}</li>)}</ul>{!selected.switchConditions?.length && <p className="mt-4 text-xs text-[#a8b0c2]">No specific switch condition was supported by the available evidence.</p>}</div>
+       <div className="mt-7 grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
+       <div className="rounded-xl bg-[#202840] p-5 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">Prefer {selected.vendor} when</p><ul className="mt-4 space-y-3">{switchConditions.map((condition: string) => <li className="flex gap-2 text-xs leading-5 text-[#d6dbe5]" key={condition}><Check size={14} className="mt-0.5 shrink-0 text-[#d9ef66]" />{condition}</li>)}</ul>{!switchConditions.length && <p className="mt-4 text-xs text-[#a8b0c2]">No specific switch condition was supported by the available evidence.</p>}</div>
       <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-left text-xs"><thead><tr className="border-b border-[#ddd5c5] text-[10px] uppercase tracking-[.1em] text-[#85877f]"><th className="pb-3">Criterion</th><th className="pb-3">{recommendation.vendor}</th><th className="pb-3">{selected.vendor}</th><th className="pb-3">Difference</th></tr></thead><tbody>{rows.map((row: any) => <tr className="border-b border-[#ece6d9] last:border-0" key={row.criterion}><td className="py-3 font-bold text-[#202840]">{row.criterion}</td><td className="py-3 text-[#687083]">{row.recommended}</td><td className="py-3 text-[#687083]">{row.challenger}</td><td className={`py-3 font-bold ${row.delta > 0 ? 'text-[#0f766e]' : row.delta < 0 ? 'text-[#b94d45]' : 'text-[#85877f]'}`}>{row.delta > 0 ? '+' : ''}{row.delta}</td></tr>)}</tbody></table></div>
-    </div>
-    <p className="mt-5 text-xs leading-5 text-[#687083]">{stronger.length ? `${selected.vendor} scores higher on ${stronger.map((row: any) => row.criterion).join(', ')}. Give those factors more weight if they are non-negotiable.` : `${recommendation.vendor} remains stronger across the current weighted criteria. Choose ${selected.vendor} only when its specific operating conditions matter more than the aggregate score.`}</p>
+     </div>
+     <p className="mt-5 text-xs leading-5 text-[#687083]">{stronger.length ? `${selected.vendor} scores higher on ${stronger.map((row: any) => row.criterion).join(', ')}. Use the weight editor above to give those factors more influence if they are non-negotiable.` : `${recommendation.vendor} remains stronger across the current weighted criteria. Choose ${selected.vendor} only when its specific operating conditions matter more than the aggregate score.`}</p>
   </section>;
 }
 
@@ -785,8 +909,21 @@ function StrategicFrameworkSection({ title, eyebrow, description, entries, testI
   return <section className="mt-14" data-testid={testId}><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">{eyebrow}</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">{title}</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{description}</p><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{entries.map(([key, values]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={key}><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#b94d45]">{key}</p><ul className="mt-4 space-y-3">{values.map((value, index) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={`${key}-${index}`}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#d9ef66] ring-1 ring-[#8a9640]" />{value}</li>)}</ul></article>)}</div></section>;
 }
 
+function hasSufficientFiveYearMarketHistory(vendorScores: any[]): boolean {
+  return vendorScores.length > 0 && vendorScores.every((vendor) => {
+    const history = vendor.marketHistory;
+    if (!history || history.lookbackYears !== 5 || !history.trendSummary?.trim()) return false;
+    const years = new Set(
+      (history.yearlyTrends || [])
+        .filter((entry: any) => entry.evidenceUrl && entry.productPerformance?.trim() && entry.marketPosition?.trim())
+        .map((entry: any) => entry.year),
+    );
+    return years.size === 5;
+  });
+}
+
 function MarketHistorySection({ vendorScores = [] }: { vendorScores?: any[] }) {
-  if (!vendorScores.some((vendor) => vendor.marketHistory)) return null;
+  if (!hasSufficientFiveYearMarketHistory(vendorScores)) return null;
 
   return (
     <section className="mt-14" data-testid="section-market-history">
@@ -1055,8 +1192,8 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     const listedOptions = prompt.match(
       /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
     )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
-    if (listedOptions.length > 5) {
-      setUrlError('You can compare up to 5 products or vendors at a time. Remove one or more options and try again.');
+    if (listedOptions.length > 6) {
+      setUrlError('You can compare up to 6 products or vendors at a time. Remove one or more options and try again.');
       return;
     }
     setUrlError('');
@@ -1396,7 +1533,7 @@ function AnalysisPage() {
   const guest = location === '/guest/result';
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
-  const [guestComparison] = useState<any>(() => {
+  const [guestComparison, setGuestComparison] = useState<any>(() => {
     if (!guest) return null;
     try {
       const raw = window.sessionStorage.getItem('vendor-compare-guest-result');
@@ -1406,6 +1543,7 @@ function AnalysisPage() {
     }
   });
   const { data, isLoading, isError, refetch } = useGetComparison(id, { query: { enabled: !guest && Boolean(id), queryKey: getGetComparisonQueryKey(id) } });
+  const queryClient = useQueryClient();
   if (!guest && isLoading) return <AppShell><LoadingPanel label="Building the analysis" /></AppShell>;
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
   if (guest && !guestComparison) return <GuestShell><div className="mx-auto max-w-3xl px-5 py-20 text-center lg:px-10"><p className="mono text-xs uppercase tracking-[.2em] text-[#b94d45]">Guest result unavailable</p><h1 className="display mt-4 text-4xl font-bold tracking-[-.05em] text-[#202840]">That comparison has expired.</h1><p className="mt-4 text-sm leading-6 text-[#687083]">Run another guest comparison or create an account to keep a private 30-day history.</p><Link href="/guest" className="focus-ring mt-7 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]" data-testid="link-guest-result-restart"><ArrowLeft size={15} /> Run another comparison</Link></div></GuestShell>;
@@ -1486,7 +1624,18 @@ function AnalysisPage() {
        <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
         <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
      <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor signal</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono text-xs font-bold text-[#0f766e]">{vendor.score}/100</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${vendor.score}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
-    <ScoreCharts vendorScores={comparison.vendorScores} />
+         <ScoreCharts vendorScores={comparison.vendorScores} />
+         <WeightEditor
+           comparison={comparison}
+           guest={guest}
+           onUpdated={(updated) => {
+             if (guest) {
+               setGuestComparison(updated);
+             } else {
+               queryClient.setQueryData(getGetComparisonQueryKey(id), updated);
+             }
+           }}
+         />
      <HeadToHead comparison={comparison} />
     <section className="mt-14 grid gap-7 lg:grid-cols-2"><AnalysisTable title="Pricing lens" rows={comparison.pricing} /><AnalysisTable title="Feature lens" rows={comparison.features} /></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Strategic read</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{swotEntries.map(([key, values]) => <div key={key} className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5"><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{key}</p><ul className="mt-4 space-y-3">{values.map((value) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={value}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#b94d45]" />{value}</li>)}</ul></div>)}</div></section>
@@ -1519,7 +1668,7 @@ function SourceAvailabilityList({ comparison }: { comparison: Comparison }) {
 }
 
 function AnalysisTable({ title, rows = [] }: { title: string; rows?: any[] }) {
-  return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><div className="border-b border-[#e3ddcf] px-5 py-4"><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[450px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3 font-bold">Dimension</th>{rows[0] && Object.keys(rows[0].values || {}).map((vendor) => <th className="px-3 py-3 font-bold" key={vendor}>{vendor}</th>)}<th className="px-5 py-3 font-bold">Winner</th></tr></thead><tbody>{rows.map((row) => <tr className="border-t border-[#e7e2d4]" key={row.dimension}><td className="px-5 py-4 font-bold text-[#202840]">{row.dimension}</td>{Object.values(row.values || {}).map((value, index) => <td className="px-3 py-4 text-[#687083]" key={`${row.dimension}-${index}`}>{value as string}</td>)}<td className="px-5 py-4 font-bold text-[#0f766e]">{row.winner}</td></tr>)}</tbody></table>{!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No lens data available for this comparison.</div>}</div></div>;
+  return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><div className="border-b border-[#e3ddcf] px-5 py-4"><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[450px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3 font-bold">Dimension</th>{rows[0] && Object.keys(rows[0].values || {}).map((vendor) => <th className="px-3 py-3 font-bold" key={vendor}>{vendor}</th>)}<th className="px-5 py-3 font-bold">Winner</th></tr></thead><tbody>{rows.map((row) => <tr className="border-t border-[#e7e2d4]" key={row.dimension}><td className="px-5 py-4 font-bold text-[#202840]">{row.dimension}</td>{Object.values(row.values || {}).map((value, index) => <td className="px-3 py-4 text-[#687083]" key={`${row.dimension}-${index}`}>{value as string}</td>)}<td className={`px-5 py-4 font-bold ${row.winner === 'Not established' ? 'text-[#85877f]' : 'text-[#0f766e]'}`}>{row.winner === 'Not established' ? 'No evidence-backed winner' : row.winner}</td></tr>)}</tbody></table>{!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No lens data available for this comparison.</div>}</div><p className="border-t border-[#e3ddcf] px-5 py-3 text-[11px] leading-5 text-[#85877f]">A lens winner is shown only when the available evidence supports a like-for-like comparison.</p></div>;
 }
 
 const fieldLabel = (field: string) => field.replace(/([A-Z])/g, ' $1').replace(/^./, (value) => value.toUpperCase());

@@ -7,6 +7,8 @@ export type AnalysisPayload = Omit<
   "userId" | "prompt" | "vendors" | "urls" | "criteria"
 >;
 
+export const MAX_COMPARISON_OPTIONS = 6;
+
 type EvidenceRecord = NonNullable<NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["weightedScores"]>[number]["evidence"]>[number];
 
 function clampScore(value: unknown, fallback = 0): number {
@@ -239,6 +241,105 @@ export const WEIGHTED_CRITERIA = [
   { criterion: "Regulatory Compliance", weight: 3 },
 ] as const;
 
+export type ComparisonWeight = {
+  criterion: string;
+  weight: number;
+};
+
+const INVALID_SWITCH_CONDITION = /^(?:none|n\/?a|not available|not applicable|unknown|-)$/i;
+
+function meaningfulSwitchConditions(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0 && !INVALID_SWITCH_CONDITION.test(item))
+    : [];
+}
+
+function normalizedWeightMap(weights: ComparisonWeight[]): Map<string, number> {
+  if (weights.length !== WEIGHTED_CRITERIA.length) {
+    throw new Error(`Provide exactly ${WEIGHTED_CRITERIA.length} criterion weights.`);
+  }
+  const supplied = new Map(weights.map((entry) => [entry.criterion.trim().toLowerCase(), entry.weight]));
+  const normalized = new Map<string, number>();
+  for (const { criterion } of WEIGHTED_CRITERIA) {
+    const weight = supplied.get(criterion.toLowerCase());
+    if (weight === undefined || !Number.isInteger(weight) || weight < 0 || weight > 100) {
+      throw new Error(`Weight for ${criterion} must be an integer from 0 to 100.`);
+    }
+    normalized.set(criterion, weight);
+  }
+  if (normalized.size !== weights.length || weights.some((entry) => !WEIGHTED_CRITERIA.some(({ criterion }) => criterion.toLowerCase() === entry.criterion.trim().toLowerCase()))) {
+    throw new Error("Weights must use the canonical comparison criteria.");
+  }
+  const total = Array.from(normalized.values()).reduce((sum, weight) => sum + weight, 0);
+  if (total !== 100) throw new Error(`Criterion weights must total 100%. Current total: ${total}%.`);
+  return normalized;
+}
+
+function reweightEvidence(
+  evidence: NonNullable<NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["weightedScores"]>[number]["evidence"]>,
+  score: number,
+  weight: number,
+) {
+  const usable = evidence.filter((entry) => entry.evidenceKind !== "unverified");
+  const allocationWeights = evidence.map((entry) => usable.length && entry.evidenceKind === "unverified" ? 0 : Math.max(1, entry.confidence));
+  const totalAllocationWeight = allocationWeights.reduce((sum, value) => sum + value, 0) || 1;
+  return evidence.map((entry, index) => ({
+    ...entry,
+    criterionWeight: weight,
+    weightedContribution: Number((
+      score * weight / 100
+      * allocationWeights[index]! / totalAllocationWeight
+    ).toFixed(2)),
+  }));
+}
+
+/** Recalculate a saved report from its validated evidence using user-supplied weights. */
+export function reweightAnalysis(
+  analysis: AnalysisPayload,
+  requestedWeights: ComparisonWeight[],
+): AnalysisPayload {
+  const weights = normalizedWeightMap(requestedWeights);
+  const vendorScores = (analysis.vendorScores ?? []).map((vendor) => {
+    const weightedScores = WEIGHTED_CRITERIA.map(({ criterion }) => {
+      const existing = vendor.weightedScores?.find((entry) => entry.criterion.toLowerCase() === criterion.toLowerCase());
+      const score = Math.max(0, Math.min(100, Math.round(existing?.score ?? 50)));
+      const weight = weights.get(criterion) ?? 0;
+      return {
+        criterion,
+        weight,
+        score,
+        rationale: existing?.rationale ?? "Score retained from the validated evidence in the original report.",
+        evidence: reweightEvidence(existing?.evidence ?? [], score, weight),
+      };
+    });
+    return {
+      ...vendor,
+      score: Math.round(weightedScores.reduce((total, entry) => total + entry.score * entry.weight, 0) / 100),
+      weightedScores,
+    };
+  });
+  const ranked = [...vendorScores].sort((a, b) => b.score - a.score);
+  const topScore = ranked[0]?.score ?? 0;
+  const tiedLeaders = ranked.filter((vendor) => vendor.score === topScore);
+  const recommendation = tiedLeaders.some((vendor) => vendor.vendor === analysis.recommendation)
+    ? analysis.recommendation
+    : tiedLeaders[0]?.vendor ?? analysis.recommendation;
+  const weightSummary = WEIGHTED_CRITERIA
+    .filter(({ criterion }) => (weights.get(criterion) ?? 0) >= 20)
+    .map(({ criterion, weight }) => `${criterion} ${weights.get(criterion) ?? weight}%`)
+    .join(", ");
+  return {
+    ...analysis,
+    vendorScores,
+    recommendation,
+    score: topScore,
+    recommendationReason: `Based on your adjusted weights, ${recommendation} leads the weighted score at ${topScore}/100. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || "your selected criteria"}.`,
+  };
+}
+
 const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 function categoryFor(prompt: string): string {
@@ -283,7 +384,7 @@ function criteriaFor(prompt: string): string[] {
     { label: "Fixed-rate term and revert rate", pattern: /\b(?:fixed rates?|fixed term|revert rates?)\b/ },
     { label: "Loan term and repayments", pattern: /\b(?:loan term|repayments?|30[ -]?year|mortgage term)\b/ },
     { label: "Deposit, LVR and LMI", pattern: /\b(?:deposit|lvr|loan.?to.?value|lenders? mortgage insurance|lmi|\d{2,3}%\s*(?:borrowing|finance))\b/ },
-    { label: "Investor-loan eligibility and conditions", pattern: /\b(?:investor loan|investment property|property investor|investment lending)\b/ },
+    { label: "Investor-loan eligibility and conditions", pattern: /\b(?:investor loans?|investment home loans?|investment property|property investor|investment lending)\b/ },
     { label: "Fees and total borrowing cost", pattern: /\b(?:loan amount|borrow|fees?|[\d.]+\s*m(?:illion)?|million)\b/ },
     { label: "Eligibility and serviceability", pattern: /\b(?:eligib|serviceability|income|approval)\b/ },
     { label: "Purchase rate and interest-free period", pattern: /\b(?:credit cards?|purchase rates?|interest rates?|interest.?free|lowest rates?)\b/ },
@@ -712,15 +813,25 @@ export function parsePrompt(prompt: string) {
   const comparedList = normalized.match(
     /\bcompare\s+(.+?)(?=\s+for\b|[?.;]|$)/i,
   );
+  const comparisonChainVendors = comparedList?.[1]
+    ?.match(/\b(?:vs\.?|versus)\b/i)
+    ? comparedList[1]
+      .split(/\s+(?:vs\.?|versus)\s+/i)
+      .flatMap((value) => value.split(/\s*,\s*|\s*,?\s+and\s+/i))
+      .map(cleanVendorName)
+      .filter((value) => value && !isPlaceholderVendor(value))
+    : [];
   const explicitList = chosen?.[1]
     ?? (againstList ? `${againstList[1]}, ${againstList[2]}` : undefined)
     ?? manufacturerList?.[1]
     ?? list?.[1]
     ?? (comparedList?.[1]?.includes(",") ? comparedList[1] : undefined);
-  const listedVendors = explicitList
-    ?.split(/\s*,\s*|\s*,?\s+and\s+/i)
-    .map(cleanVendorName)
-    .filter((value) => value && !isPlaceholderVendor(value)) ?? [];
+  const listedVendors = comparisonChainVendors.length >= 2
+    ? comparisonChainVendors
+    : explicitList
+      ?.split(/\s*,\s*|\s*,?\s+and\s+/i)
+      .map(cleanVendorName)
+      .filter((value) => value && !isPlaceholderVendor(value)) ?? [];
   const betweenPair = normalized.match(
     /\b(?:compare|comparing|comparison\s+(?:of|between))?.*?\bbetween\s+(.+?)\s+(?:and|ang)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i,
   );
@@ -755,7 +866,13 @@ export function parsePrompt(prompt: string) {
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];
   const hasExplicitVendorList = listedVendors.length >= 2
-    && (Boolean(chosen) || Boolean(againstList) || Boolean(manufacturerList) || Boolean(explicitList?.includes(",")));
+    && (
+      Boolean(chosen)
+      || Boolean(againstList)
+      || Boolean(manufacturerList)
+      || Boolean(explicitList?.includes(","))
+      || comparisonChainVendors.length >= 2
+    );
   const parsedPairVendors = [firstVendor, secondVendor]
     .filter(Boolean)
     .map((value) => cleanVendorName(value as string));
@@ -784,7 +901,7 @@ export function parsePrompt(prompt: string) {
     vendors = delimitedElectricVehicleBrands;
   }
   if (
-    vendors.length < 5
+    vendors.length < MAX_COMPARISON_OPTIONS
     && /\bany\s+other\s+relevant\s+provider\b/i.test(normalized)
     && /\bcredit cards?\b/i.test(normalized)
     && /\b(?:australia|australian)\b/i.test(normalized)
@@ -907,7 +1024,7 @@ function normalizeExtractedIntent(prompt: string, value: unknown): ComparisonInt
     : "stable";
   if (!decisionType) return null;
   return {
-    options: options.slice(0, 5),
+    options: options.slice(0, MAX_COMPARISON_OPTIONS),
     subject,
     decisionType,
     category: typeof raw.category === "string" ? raw.category.trim().slice(0, 100) : "",
@@ -936,7 +1053,7 @@ export async function extractIntentWithOpenAI(prompt: string): Promise<unknown> 
           type: "object",
           additionalProperties: false,
           properties: {
-            options: { type: "array", minItems: 0, maxItems: 5, items: { type: "string" } },
+            options: { type: "array", minItems: 0, maxItems: MAX_COMPARISON_OPTIONS, items: { type: "string" } },
             subject: { type: "string" },
             decisionType: { type: "string", enum: ["comparison", "choice", "purchase_channel", "financing", "migration"] },
             category: { type: "string" },
@@ -1166,7 +1283,7 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
 
 function fallbackAnalysis(input: AnalysisInput): AnalysisPayload {
   const category = categoryFor(input.prompt);
-  const vendors = input.vendors.slice(0, 5);
+  const vendors = input.vendors.slice(0, MAX_COMPARISON_OPTIONS);
   const scores = vendors.map((vendor, index) => ({
     vendor,
     score: 50,
@@ -1552,9 +1669,14 @@ function normalizeAnalysis(
           fallbackVendor?.providerRoleRationale ?? "Validate this role against the option's breadth, specialization, market position, and contribution to the target operating model.",
         ),
         weightedScores,
-        switchConditions: Array.isArray(item.switchConditions) && item.switchConditions.length
-          ? item.switchConditions.slice(0, 4)
-          : fallbackVendor?.switchConditions,
+        switchConditions: (() => {
+          const suppliedConditions = meaningfulSwitchConditions(item.switchConditions);
+          if (suppliedConditions.length) return suppliedConditions.slice(0, 4);
+          const fallbackConditions = meaningfulSwitchConditions(fallbackVendor?.switchConditions);
+          return fallbackConditions.length
+            ? fallbackConditions.slice(0, 4)
+            : [`Prefer ${vendor} when its strongest criteria match your non-negotiable needs.`];
+        })(),
         vrio: {
           value: vrioDimension("value"),
           rarity: vrioDimension("rarity"),

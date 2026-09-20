@@ -20,6 +20,7 @@ import type { ComparisonSummaryStatus } from './comparisonSummaryStatus';
 export interface ComparisonSummary {
   id: number;
   prompt: string;
+  /** @maxItems 6 */
   vendors: string[];
   comparisonIdentity: ComparisonIdentity;
   category: string;

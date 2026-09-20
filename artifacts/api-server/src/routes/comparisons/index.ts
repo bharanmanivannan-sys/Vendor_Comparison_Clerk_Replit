@@ -18,21 +18,24 @@ import {
   ParseComparisonPromptBody,
   ParseComparisonPromptResponse,
   ParseGuestComparisonPromptResponse,
+  RegenerateComparisonBody,
 } from "@workspace/api-zod";
 import { comparisonsTable, db } from "@workspace/db";
 import {
   buildAnalysis,
   buildComparisonIdentity,
+  MAX_COMPARISON_OPTIONS,
   parsePrompt,
   parsePromptWithIntent,
   reconcileRecommendationWithNarrative,
+  reweightAnalysis,
   validateComparisonContext,
   type AnalysisPayload,
   type AnalysisProgressStage,
 } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
-import { persistComparisonAtomically } from "../../services/comparisonPersistence";
+import { persistComparisonAtomically, updateComparisonWithEvidence } from "../../services/comparisonPersistence";
 
 const router: IRouter = Router();
 
@@ -285,9 +288,9 @@ export async function validateComparisonInput(
 ) {
   if (
     body && typeof body === "object" && "vendors" in body
-    && Array.isArray(body.vendors) && body.vendors.length > 5
+    && Array.isArray(body.vendors) && body.vendors.length > MAX_COMPARISON_OPTIONS
   ) {
-    return { error: "You can compare up to 5 products or vendors at a time. Remove one or more options and try again." } as const;
+    return { error: `You can compare up to ${MAX_COMPARISON_OPTIONS} products or vendors at a time. Remove one or more options and try again.` } as const;
   }
   const parsed = CreateComparisonBody.safeParse(body);
   if (!parsed.success || !isSafeUserInput(parsed.data?.prompt ?? "")) {
@@ -302,8 +305,8 @@ export async function validateComparisonInput(
   const parsedPrompt = hasProvidedVendors
     ? parsePrompt(input.prompt)
     : await parseWithIntent(input.prompt);
-  if (parsedPrompt.vendors.length > 5) {
-    return { error: "You can compare up to 5 products or vendors at a time. Remove one or more options and try again." } as const;
+  if (parsedPrompt.vendors.length > MAX_COMPARISON_OPTIONS) {
+    return { error: `You can compare up to ${MAX_COMPARISON_OPTIONS} products or vendors at a time. Remove one or more options and try again.` } as const;
   }
   const vendors = hasProvidedVendors ? input.vendors as string[] : parsedPrompt.vendors;
   const criteria = input.criteria?.length ? input.criteria : parsedPrompt.criteria;
@@ -564,6 +567,51 @@ router.get("/comparisons/:id", requireAuth, async (req: AuthedRequest, res): Pro
     return;
   }
   res.json(GetComparisonResponse.parse(detailFromRow(row)));
+});
+
+router.post("/comparisons/:id/regenerate", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
+  const params = GetComparisonParams.safeParse(req.params);
+  const body = RegenerateComparisonBody.safeParse(req.body);
+  if (!params.success) {
+    sendError(res, 400, "invalid_id", params.error.message);
+    return;
+  }
+  if (!body.success) {
+    sendError(res, 400, "invalid_weights", body.error.message);
+    return;
+  }
+  const [row] = await db
+    .select()
+    .from(comparisonsTable)
+    .where(and(eq(comparisonsTable.id, params.data.id), eq(comparisonsTable.userId, req.userId as string)));
+  if (!row) {
+    sendError(res, 404, "not_found", "Comparison not found");
+    return;
+  }
+  let reweighted: AnalysisPayload;
+  try {
+    reweighted = reweightAnalysis(row, body.data.weights);
+  } catch (error) {
+    sendError(res, 400, "invalid_weights", error instanceof Error ? error.message : "The criterion weights are invalid.");
+    return;
+  }
+  let updated;
+  try {
+    updated = await updateComparisonWithEvidence(params.data.id, req.userId as string, {
+      score: reweighted.score,
+      recommendation: reweighted.recommendation,
+      recommendationReason: reweighted.recommendationReason,
+      vendorScores: reweighted.vendorScores,
+    });
+  } catch (error) {
+    sendError(res, 500, "regeneration_failed", "The adjusted report could not be saved. Please try again.");
+    return;
+  }
+  if (!updated) {
+    sendError(res, 404, "not_found", "Comparison not found");
+    return;
+  }
+  res.json(GetComparisonResponse.parse(detailFromRow(updated)));
 });
 
 router.delete("/comparisons/:id", requireAuth, async (req: AuthedRequest, res): Promise<void> => {

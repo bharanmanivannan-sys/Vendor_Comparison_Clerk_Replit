@@ -39,16 +39,6 @@ export const comparisonEvidenceTable = pgTable("comparison_evidence", {
   check("comparison_evidence_direction_check", sql`${table.supportDirection} in ('supports', 'contradicts', 'context', 'neutral')`),
   check("comparison_evidence_verified_source_check", sql`${table.evidenceKind} in ('analyst_judgment', 'unverified') or ${table.sourceUrl} is not null`),
   check("comparison_evidence_contribution_check", sql`${table.weightedContribution} between 0 and ${table.criterionWeight}`),
-  check("comparison_evidence_canonical_weight_check", sql`
-    (${table.criterion} = 'Meets Needs / Features' and ${table.criterionWeight} = 25) or
-    (${table.criterion} = 'Quality & Reliability' and ${table.criterionWeight} = 20) or
-    (${table.criterion} = 'Value for Money' and ${table.criterionWeight} = 20) or
-    (${table.criterion} = 'Brand Reputation' and ${table.criterionWeight} = 7) or
-    (${table.criterion} = 'Customer Advocacy / NPS' and ${table.criterionWeight} = 10) or
-    (${table.criterion} = 'Innovation / Differentiation' and ${table.criterionWeight} = 10) or
-    (${table.criterion} = 'Sustainability' and ${table.criterionWeight} = 5) or
-    (${table.criterion} = 'Regulatory Compliance' and ${table.criterionWeight} = 3)
-  `),
 ]);
 
 export const insertComparisonEvidenceSchema = createInsertSchema(comparisonEvidenceTable).omit({ id: true, createdAt: true, updatedAt: true });

@@ -25,12 +25,12 @@ export interface ComparisonIdentity {
   category: string;
   /**
      * @minItems 2
-     * @maxItems 5
+     * @maxItems 6
      */
   entities: ComparisonIdentityEntitiesItem[];
   /**
      * @minimum 2
-     * @maximum 5
+     * @maximum 6
      */
   entityCount: number;
   comparisonType: ComparisonIdentityComparisonType;

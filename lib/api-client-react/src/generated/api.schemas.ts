@@ -117,7 +117,7 @@ export interface ComparisonInput {
   prompt: string;
   /**
      * @minItems 2
-     * @maxItems 5
+     * @maxItems 6
      * @items.minLength 1
      * @items.maxLength 120
      */
@@ -129,6 +129,23 @@ export interface ComparisonInput {
      * @items.maxLength 100
      */
   criteria?: string[];
+}
+
+export interface ComparisonWeight {
+  criterion: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  weight: number;
+}
+
+export interface RegenerateComparisonInput {
+  /**
+     * @minItems 8
+     * @maxItems 8
+     */
+  weights: ComparisonWeight[];
 }
 
 export interface ComparisonPromptInput {
@@ -170,6 +187,7 @@ export const ComparisonIntentFreshness = {
 } as const;
 
 export interface ComparisonIntent {
+  /** @maxItems 6 */
   options: string[];
   subject: string;
   decisionType: ComparisonIntentDecisionType;
@@ -213,12 +231,12 @@ export interface ComparisonIdentity {
   category: string;
   /**
      * @minItems 2
-     * @maxItems 5
+     * @maxItems 6
      */
   entities: ComparisonIdentityEntitiesItem[];
   /**
      * @minimum 2
-     * @maximum 5
+     * @maximum 6
      */
   entityCount: number;
   comparisonType: ComparisonIdentityComparisonType;
@@ -233,6 +251,10 @@ export interface ComparisonIdentity {
  */
 export interface ParsedComparison {
   prompt: string;
+  /**
+     * @minItems 2
+     * @maxItems 6
+     */
   vendors: string[];
   urls: string[];
   criteria: string[];
@@ -263,7 +285,7 @@ export const ComparisonJobStage = {
 export interface ComparisonJobProgress {
   /**
      * @minItems 2
-     * @maxItems 5
+     * @maxItems 6
      */
   entities: string[];
   subject: string;
@@ -305,6 +327,7 @@ export const ComparisonSummaryStatus = {
 export interface ComparisonSummary {
   id: number;
   prompt: string;
+  /** @maxItems 6 */
   vendors: string[];
   comparisonIdentity: ComparisonIdentity;
   category: string;
@@ -679,6 +702,7 @@ export type GuestComparisonSwot = {[key: string]: string[]};
 
 export interface GuestComparison {
   prompt: string;
+  /** @maxItems 6 */
   vendors: string[];
   comparisonIdentity: ComparisonIdentity;
   category: string;
