@@ -1,4 +1,164 @@
-normalizedScore: 60,
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  addElectricVehicleMatrixEvidence,
+  assertCanonicalComparisonConsistency,
+  type AnalysisPayload,
+  buildComparisonIdentity,
+  canonicalVendorScoreRows,
+  WEIGHTED_CRITERIA,
+  dedupeReferenceUrls,
+  electricVehicleFinalQualityIssues,
+  enforceIndianMgBaasFact,
+  filterSourcesForMarket,
+  hasElectricVehicleResearchCoverage,
+  hasFiveYearMarketHistoryCoverage,
+  hasHomeLoanResearchCoverage,
+  inferResearchMarket,
+  isElectricVehiclePrompt,
+  isObjectivePhraseVendor,
+  missingCreditCardSourceVendors,
+  missingElectricVehicleSourceVendors,
+  mergeElectricVehicleResearch,
+  normalizeDecisionGovernance,
+  normalizeEvidenceRecords,
+  normalizeLensWinner,
+  normalizeMarketHistory,
+  normalizeMarketPositionEvidence,
+  normalizeProviderRole,
+  normalizeTextField,
+  normalizeVrioStatus,
+  officialMarketSourcesFor,
+  officialHomeLoanSourcesFor,
+  parseJsonObject,
+  parsePrompt,
+  parsePromptWithIntent,
+  reconcileRecommendationWithNarrative,
+  resolveComparisonVendors,
+  requestsFiveYearHomeLoanTrend,
+  selectRecommendationLabel,
+  sourceMatchesResearchMarket,
+  validateFinalEvidenceUrls,
+  validateComparisonContext,
+} from "./analysis";
+import { flattenComparisonEvidence } from "../services/comparisonPersistence";
+import { isSafeUserInput } from "./security";
+
+const extracted = (value: object) => async () => value;
+const intent = (value: object) => ({
+  subject: "",
+  qualifiers: [],
+  decisionCriterion: "best fit for the stated use case",
+  freshness: "stable",
+  ...value,
+});
+
+test("includes NPS in the 100-point weighted decision model", () => {
+  assert.deepEqual(
+    WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Customer Advocacy / NPS"),
+    { criterion: "Customer Advocacy / NPS", weight: 10 },
+  );
+  assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("allows ordinary comparison instructions containing select and from", () => {
+  assert.equal(
+    isSafeUserInput("Select the best-matching current model from each manufacturer."),
+    true,
+  );
+  assert.equal(isSafeUserInput("SELECT * FROM users"), false);
+});
+
+test("normalizes governance lists into the string response contract", () => {
+  const [governance] = normalizeDecisionGovernance([{
+    decision: "Approve product",
+    owner: "CIO",
+    approvers: ["CIO", "Risk Committee"],
+    evidenceRequired: ["Security review", "Commercial validation"],
+    decisionGate: "Executive approval",
+  }]);
+
+  assert.equal(governance.approvers, "CIO; Risk Committee");
+  assert.equal(governance.evidenceRequired, "Security review; Commercial validation");
+  assert.equal(typeof governance.approvers, "string");
+  assert.equal(typeof governance.evidenceRequired, "string");
+  assert.equal(normalizeTextField([], "Fallback evidence"), "Fallback evidence");
+});
+
+test("normalizes market-position evidence arrays into the string response contract", () => {
+  const evidence = normalizeMarketPositionEvidence([
+    "https://example.com/market-share",
+    "https://example.com/share-value",
+  ]);
+
+  assert.equal(
+    evidence,
+    "https://example.com/market-share; https://example.com/share-value",
+  );
+  assert.equal(typeof evidence, "string");
+});
+
+test("normalizes direct advocacy percentages into deterministic weighted evidence", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://research.example.com/advocacy",
+    exactClaim: "80% of surveyed users would advocate for Product A.",
+    rawMetricValue: 80,
+    rawMetricUnit: "percent",
+    sampleSize: 500,
+    evidenceKind: "quantitative",
+    supportDirection: "supports",
+    confidence: 90,
+    normalizedScore: 12,
+  }], "Customer Advocacy / NPS", 10, ["https://research.example.com/advocacy"]);
+
+  assert.equal(evidence.normalizedScore, 80);
+  assert.equal(evidence.weightedContribution, 8);
+  assert.equal(evidence.sampleSize, 500);
+  assert.equal(evidence.normalizationMethod, "direct_percentage");
+});
+
+test("inverts adverse percentage metrics instead of rewarding higher failure rates", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://research.example.com/reliability",
+    exactClaim: "The measured complaint rate was 20 percent.",
+    rawMetricValue: 20,
+    rawMetricUnit: "percent",
+    evidenceKind: "quantitative",
+    supportDirection: "contradicts",
+    confidence: 85,
+  }], "Quality & Reliability", 20, ["https://research.example.com/reliability"]);
+
+  assert.equal(evidence.normalizedScore, 80);
+  assert.equal(evidence.weightedContribution, 16);
+  assert.equal(evidence.normalizationMethod, "inverse_percentage");
+  assert.equal(evidence.criterionWeight, 20);
+});
+
+test("canonicalizes legacy against direction to contradicts", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://research.example.com/incidents",
+    exactClaim: "Service incidents affected 15 percent of surveyed customers.",
+    rawMetricValue: 15,
+    rawMetricUnit: "percent",
+    evidenceKind: "quantitative",
+    supportDirection: "against",
+    confidence: 80,
+  }], "Quality & Reliability", 20, ["https://research.example.com/incidents"]);
+
+  assert.equal(evidence.supportDirection, "contradicts");
+  assert.equal(evidence.normalizedScore, 85);
+  assert.equal(evidence.normalizationMethod, "inverse_percentage");
+});
+
+test("preserves sourced qualitative sustainability evidence and explicit normalization", () => {
+  const [evidence] = normalizeEvidenceRecords([{
+    sourceUrl: "https://company.example.com/sustainability-report",
+    sourcePublisher: "Product A",
+    exactClaim: "The audited report documents renewable material sourcing and measured emissions reductions.",
+    evidenceKind: "qualitative",
+    supportDirection: "supports",
+    confidence: 72,
+    normalizedScore: 60,
     normalizationMethod: "documented_targets_and_measured_progress",
   }], "Sustainability", 5, ["https://company.example.com/sustainability-report"]);
 
