@@ -1196,17 +1196,24 @@ export function parsePrompt(prompt: string) {
   const list = normalized.match(
     /\b(?:across|among|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
   );
-  const comparedList = normalized.match(
-    /\bcompare\s+(.+?)(?=\s+for\b|[?.;]|$)/i,
-  );
-  const comparisonChainVendors = comparedList?.[1]
-    ?.match(/\b(?:vs\.?|versus)\b/i)
-    ? comparedList[1]
-      .split(/\s+(?:vs\.?|versus)\s+/i)
-      .flatMap((value) => value.split(/\s*,\s*|\s*,?\s+and\s+/i))
-      .map(cleanVendorName)
-      .filter((value) => value && !isPlaceholderVendor(value))
-    : [];
+  const comparedLists = Array.from(normalized.matchAll(
+    /\bcompare\s+(.+?)(?=\s+for\b|[?.;]|$)/gi,
+  ));
+  const comparedList = comparedLists[0];
+  const comparisonChains = comparedLists
+    .map((match, index) => ({
+      index,
+      vendors: match[1]?.match(/\b(?:vs\.?|versus)\b/i)
+        ? match[1]
+          .split(/\s+(?:vs\.?|versus)\s+/i)
+          .flatMap((value) => value.split(/\s*,\s*|\s*,?\s+and\s+/i))
+          .map(cleanVendorName)
+          .filter((value) => value && !isPlaceholderVendor(value))
+        : [],
+    }))
+    .filter(({ vendors }) => vendors.length >= 2)
+    .sort((left, right) => right.vendors.length - left.vendors.length || right.index - left.index);
+  const comparisonChainVendors = comparisonChains[0]?.vendors ?? [];
   const explicitList = chosen?.[1]
     ?? (againstList ? `${againstList[1]}, ${againstList[2]}` : undefined)
     ?? manufacturerList?.[1]
@@ -5204,7 +5211,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (error instanceof Error && (
       error.message === "Your input criteria can't be met across the products or services or brands chosen"
       || error.message.startsWith("Insufficient source coverage:")
-      || error.message.startsWith("Insufficient quantitative evidence:")
+      || error.message.startsWith("Insufficient quantitative evidence")
     )) {
       throw error;
     }

@@ -1533,6 +1533,35 @@ test("keeps the complete deterministic vs chain when intent extraction returns a
   assert.equal(parsed.context.valid, true);
 });
 
+test("uses the complete decision-context chain instead of an earlier conflicting pair", () => {
+  const prompt = "Compare Westpac and Macquarie Bank. Decision context and criteria: Compare Westpac vs ANZ vs NAB vs Commonwealth Bank for Investment Home Loans in Consumer Home loan segment. The loan amount is 1.3M. Which is a strongest contender offering better interest rates to the customer?";
+  const parsed = parsePrompt(prompt);
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank"]);
+  assert.equal(parsed.hasExplicitVendorList, true);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Home loans");
+});
+
+test("does not let intent extraction shrink a later authoritative decision-context chain", async () => {
+  const prompt = "Compare Westpac and Macquarie Bank. Decision context and criteria: Compare Westpac vs ANZ vs NAB vs Commonwealth Bank for Investment Home Loans in Consumer Home loan segment. The loan amount is 1.3M. Which is a strongest contender offering better interest rates to the customer?";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Westpac", "Macquarie"],
+      decisionType: "choice",
+      category: "Home loans",
+      useCase: "Investment home loan",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank"]);
+  assert.equal(parsed.comparisonIdentity.entityCount, 4);
+  assert.equal(parsed.context.valid, true);
+});
+
 test("preserves all six providers in a supported comparison", async () => {
   const prompt = "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank vs Macquarie vs Bankwest for home loans";
   const parsed = await parsePromptWithIntent(
