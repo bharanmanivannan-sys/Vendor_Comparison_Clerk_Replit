@@ -27,7 +27,7 @@ import {
   MAX_COMPARISON_OPTIONS,
   parsePrompt,
   parsePromptWithIntent,
-  reconcileRecommendationWithNarrative,
+  reconcileRecommendationDecision,
   reweightAnalysis,
   validateComparisonContext,
   type AnalysisPayload,
@@ -141,7 +141,7 @@ export function comparisonFailureMessage(error: unknown, prompt: string, vendors
 function startComparisonJob(options: {
   owner: string;
   userId?: string;
-  input: { prompt: string; urls?: string[] };
+  input: { prompt: string; market?: "IN" | "AU" | "US" | "GB"; urls?: string[] };
   vendors: string[];
   criteria: string[];
   subject: string;
@@ -322,8 +322,9 @@ export async function validateComparisonInput(
 }
 
 export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
-  const recommendation = reconcileRecommendationWithNarrative(
+  const decision = reconcileRecommendationDecision(
     row.recommendation,
+    row.score,
     row.vendorScores,
     `${row.executiveSummary} ${row.recommendationReason}`,
   );
@@ -333,8 +334,8 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
     vendors: row.vendors,
     comparisonIdentity: buildComparisonIdentity(row.prompt, row.category, row.vendors),
     category: row.category,
-    recommendation,
-    score: row.score,
+    recommendation: decision.recommendation,
+    score: decision.score,
     createdAt: row.createdAt,
     status: row.status as "complete" | "processing" | "failed",
   };

@@ -14,28 +14,16 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonInputMarket } from './comparisonInputMarket';
 
-export interface ComparisonInput {
-  /**
-     * @minLength 8
-     * @maxLength 2000
-     */
-  prompt: string;
-  /** User-selected research market. When provided, it takes precedence over location cues inferred from the prompt. */
-  market?: ComparisonInputMarket;
-  /**
-     * @minItems 2
-     * @maxItems 6
-     * @items.minLength 1
-     * @items.maxLength 120
-     */
-  vendors?: string[];
-  urls?: string[];
-  /**
-     * @maxItems 8
-     * @items.minLength 1
-     * @items.maxLength 100
-     */
-  criteria?: string[];
-}
+/**
+ * User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.
+ */
+export type ComparisonInputMarket = typeof ComparisonInputMarket[keyof typeof ComparisonInputMarket];
+
+
+export const ComparisonInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;

@@ -109,12 +109,27 @@ export interface HealthStatus {
   status: string;
 }
 
+/**
+ * User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.
+ */
+export type ComparisonInputMarket = typeof ComparisonInputMarket[keyof typeof ComparisonInputMarket];
+
+
+export const ComparisonInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
+
 export interface ComparisonInput {
   /**
      * @minLength 8
      * @maxLength 2000
      */
   prompt: string;
+  /** User-selected research market. When provided, it takes precedence over location cues inferred from the prompt. */
+  market?: ComparisonInputMarket;
   /**
      * @minItems 2
      * @maxItems 6

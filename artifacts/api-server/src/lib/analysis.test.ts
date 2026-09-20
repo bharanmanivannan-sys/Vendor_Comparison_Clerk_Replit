@@ -34,6 +34,7 @@ import {
   parsePrompt,
   parsePromptWithIntent,
   reweightAnalysis,
+  reconcileRecommendationDecision,
   reconcileRecommendationWithNarrative,
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
@@ -669,6 +670,38 @@ test("uses the requested market currency for Australian and UK comparisons", () 
   assert.equal(inferResearchMarket("Compare EVs in the UK", ["BYD", "Tesla"]).currency, "GBP");
 });
 
+test("uses the user-selected market instead of conflicting prompt cues", () => {
+  assert.deepEqual(
+    inferResearchMarket(
+      "Compare Australian bank home loans for a customer in Sydney",
+      ["Westpac", "ANZ"],
+      "IN",
+    ),
+    {
+      country: "India",
+      countryCode: "IN",
+      currency: "INR",
+      timezone: "Asia/Kolkata",
+      inferredFrom: "user-selected research market",
+    },
+  );
+  assert.equal(
+    inferResearchMarket(
+      "Compare Mahindra and Tata products priced in rupees",
+      ["Mahindra", "Tata"],
+      "AU",
+    ).countryCode,
+    "AU",
+  );
+});
+
+test("does not preload Australian home-loan sources for another selected market", () => {
+  assert.deepEqual(
+    officialHomeLoanSourcesFor(["Westpac", "ANZ", "NAB", "Commonwealth Bank"], "IN"),
+    [],
+  );
+});
+
 test("seeds exact official Indian EV product pages", () => {
   const market = inferResearchMarket(
     "Compare Hyundai Creta Electric and Mahindra BE 6 in India",
@@ -1206,6 +1239,34 @@ test("does not let narrative wording override a unique score winner", () => {
     ),
     "Replit",
   );
+});
+
+test("aligns a tied home-loan decision and displayed score with an explicit narrative leader", () => {
+  const decision = reconcileRecommendationDecision(
+    "Commonwealth Bank",
+    0,
+    [
+      { vendor: "Westpac", score: 50 },
+      { vendor: "ANZ", score: 50 },
+      { vendor: "NAB", score: 50 },
+      { vendor: "Commonwealth Bank", score: 50 },
+    ],
+    "Westpac leads with the most attractive variable and fixed interest rates. Other banks generally have higher rates or fewer discounts, making Westpac the preferred option currently.",
+  );
+
+  assert.deepEqual(decision, {
+    recommendation: "Westpac",
+    score: 50,
+  });
+  const runnerUp = [
+    { vendor: "Westpac", score: 50 },
+    { vendor: "ANZ", score: 50 },
+    { vendor: "NAB", score: 50 },
+    { vendor: "Commonwealth Bank", score: 50 },
+  ]
+    .filter((vendor) => vendor.vendor !== decision.recommendation)
+    .sort((a, b) => b.score - a.score)[0];
+  assert.equal(runnerUp?.vendor, "ANZ");
 });
 
 test("keeps Replit versus Emergent and AWS as the two requested options", () => {

@@ -125,6 +125,7 @@ export function normalizeEvidenceRecords(
 
 type AnalysisInput = {
   prompt: string;
+  market?: ResearchMarketCode;
   vendors: string[];
   urls: string[];
   criteria: string[];
@@ -229,6 +230,8 @@ export type ResearchMarket = {
   timezone: string;
   inferredFrom: string;
 };
+
+export type ResearchMarketCode = ResearchMarket["countryCode"];
 
 export const WEIGHTED_CRITERIA = [
   { criterion: "Meets Needs / Features", weight: 25 },
@@ -489,7 +492,24 @@ function extractDelimitedElectricVehicleBrands(prompt: string): string[] {
   return Array.from(new Set(longest));
 }
 
-export function inferResearchMarket(prompt: string, vendors: string[]): ResearchMarket {
+const RESEARCH_MARKETS: Record<ResearchMarketCode, Omit<ResearchMarket, "inferredFrom">> = {
+  IN: { country: "India", countryCode: "IN", currency: "INR", timezone: "Asia/Kolkata" },
+  AU: { country: "Australia", countryCode: "AU", currency: "AUD", timezone: "Australia/Sydney" },
+  US: { country: "United States", countryCode: "US", currency: "USD", timezone: "America/New_York" },
+  GB: { country: "United Kingdom", countryCode: "GB", currency: "GBP", timezone: "Europe/London" },
+};
+
+export function inferResearchMarket(
+  prompt: string,
+  vendors: string[],
+  selectedMarket?: ResearchMarketCode,
+): ResearchMarket {
+  if (selectedMarket) {
+    return {
+      ...RESEARCH_MARKETS[selectedMarket],
+      inferredFrom: "user-selected research market",
+    };
+  }
   const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
   if (/\b(?:india|indian|inr|rupees?|₹|mahindra|tata motors?|jsw mg)\b/.test(normalized)) {
     return { country: "India", countryCode: "IN", currency: "INR", timezone: "Asia/Kolkata", inferredFrom: "query location, currency, or strong local product cues" };
@@ -720,8 +740,9 @@ export function reconcileRecommendationWithNarrative(
           : false;
       });
     return explicitlyPreferredOverCompetitor || new RegExp(
-      `(?:${alias}).{0,100}(?:offers?|provides?|is|are|stands?\\s+out).{0,60}(?:superior|stronger\\s+overall|best\\s+overall|preferred|recommended)`
-      + `|(?:recommend(?:ed|s|ation)?|choose|prefer(?:red)?\\b).{0,50}(?:${alias})`,
+      `(?:${alias}).{0,100}(?:offers?|provides?|is|are|stands?\\s+out|leads?).{0,80}(?:superior|stronger\\s+overall|strongest\\s+contender|best\\s+overall|preferred|recommended|most\\s+attractive)`
+      + `|(?:recommend(?:ed|s|ation)?|choose|prefer(?:red)?\\b).{0,50}(?:${alias})`
+      + `|making\\s+(?:${alias}).{0,50}(?:the\\s+)?preferred\\s+(?:option|choice)`,
       "i",
     ).test(narrative);
   });
@@ -729,6 +750,33 @@ export function reconcileRecommendationWithNarrative(
   return tiedLeaders.some(({ vendor }) => vendor === storedRecommendation)
     ? storedRecommendation
     : tiedLeaders[0].vendor;
+}
+
+export function reconcileRecommendationDecision(
+  storedRecommendation: string,
+  storedScore: number,
+  vendorScores: Array<{
+    vendor: string;
+    score: number;
+    marketPosition?: {
+      marketShare?: string;
+      evidence?: string;
+    };
+  }>,
+  narrative: string,
+): { recommendation: string; score: number } {
+  const recommendation = reconcileRecommendationWithNarrative(
+    storedRecommendation,
+    vendorScores,
+    narrative,
+  );
+  const recommendedScore = vendorScores.find(
+    (entry) => entry.vendor.toLowerCase() === recommendation.toLowerCase(),
+  )?.score;
+  return {
+    recommendation,
+    score: Number.isFinite(recommendedScore) ? recommendedScore! : storedScore,
+  };
 }
 
 export function resolveComparisonVendors(
@@ -1814,7 +1862,11 @@ const MACQUARIE_HOME_LOAN_SOURCES = [
   "https://www.macquarie.com.au/home-loans/investor-home-loans.html",
 ];
 
-export function officialHomeLoanSourcesFor(vendors: string[]): string[] {
+export function officialHomeLoanSourcesFor(
+  vendors: string[],
+  marketCode: ResearchMarketCode = "AU",
+): string[] {
+  if (marketCode !== "AU") return [];
   const namedBankSources = vendors.flatMap((vendor) => HOME_LOAN_OFFICIAL_SOURCES[vendor] ?? []);
   const alternativeSources = vendors.includes("Macquarie") ? [] : MACQUARIE_HOME_LOAN_SOURCES;
   return Array.from(new Set([...namedBankSources, ...alternativeSources]));
@@ -1823,7 +1875,9 @@ export function officialHomeLoanSourcesFor(vendors: string[]): string[] {
 function ensureCredibleHomeLoanAlternative(
   analysis: Partial<AnalysisPayload> & { sources?: unknown },
   vendors: string[],
+  marketCode: ResearchMarketCode,
 ): void {
+  if (marketCode !== "AU") return;
   if (vendors.includes("Macquarie")) return;
   const insights = Array.isArray(analysis.insights)
     ? analysis.insights.filter((insight) => !/\balternatives?\b/i.test(insight))
@@ -2630,7 +2684,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       fallback = fallbackAnalysis(input);
     }
     const context = validateComparisonContext(input.prompt, input.vendors);
-    const researchMarket = inferResearchMarket(input.prompt, input.vendors);
+    const researchMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
     const requiresVendorDiscovery = input.vendors.some(isObjectivePhraseVendor);
     const isElectricVehicleComparison = context.segment === "Electric vehicles";
     const researchShapeVendors = input.vendors;
@@ -2664,7 +2718,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       ? `The user explicitly requested a five-year home-loan trend. For every named bank, complete marketHistory with exactly the latest five calendar years and a bank-specific trendSummary. Use official bank annual reports, results presentations, investor disclosures, home-loan or mortgage reporting, and exact bank-authored URLs; use APRA, RBA, or equivalent regulator data for comparable market context. Cover disclosed home-loan balance or commitment growth, investor-lending mix, variable and fixed-rate movements, market position or share, arrears or credit quality when disclosed, and material product or policy changes. Do not substitute share-price performance, ownership history, or generic corporate transactions for the requested home-loan trend. Mark a metric unavailable when the bank does not disclose it, and do not invent estimates. `
       : "";
     if (isProviderLevelHomeLoanDiscovery) {
-      for (const sourceUrl of officialHomeLoanSourcesFor(input.vendors)) {
+      for (const sourceUrl of officialHomeLoanSourcesFor(input.vendors, researchMarket.countryCode)) {
         if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
       }
     }
@@ -2776,7 +2830,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       throw new Error("Your input criteria can't be met across the products or services or brands chosen");
     }
     addParsedSourceUrls(parsed.sources, input.urls);
-    if (isProviderLevelHomeLoanDiscovery) ensureCredibleHomeLoanAlternative(parsed, input.vendors);
+    if (isProviderLevelHomeLoanDiscovery) {
+      ensureCredibleHomeLoanAlternative(parsed, input.vendors, researchMarket.countryCode);
+    }
     const missingSources = isProviderLevelCreditCardDiscovery
       ? missingCreditCardSourceVendors(input.vendors, input.urls)
       : [];
@@ -2876,7 +2932,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         return { response, completedAnalysis };
       });
       parsed = correctedResearch.completedAnalysis;
-      ensureCredibleHomeLoanAlternative(parsed, input.vendors);
+      ensureCredibleHomeLoanAlternative(parsed, input.vendors, researchMarket.countryCode);
       const correctedUrls = [...input.urls];
       for (const sourceUrl of collectHttpUrls(correctedResearch.response.output)) {
         if (!correctedUrls.includes(sourceUrl)) correctedUrls.push(sourceUrl);
@@ -3037,8 +3093,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       citationUrls,
       scoreVerifiedUrls,
     );
-    normalized.recommendation = reconcileRecommendationWithNarrative(
+    const reconciledDecision = reconcileRecommendationDecision(
       normalized.recommendation,
+      normalized.score,
       normalized.vendorScores,
       [
         normalized.executiveSummary,
@@ -3046,6 +3103,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         ...(normalized.nextSteps ?? []),
       ].join(" "),
     );
+    normalized.recommendation = reconciledDecision.recommendation;
+    normalized.score = reconciledDecision.score;
     normalized.sourceAvailability = evidenceAvailability.sourceAvailability;
     if (
       researchMarket.countryCode === "IN"

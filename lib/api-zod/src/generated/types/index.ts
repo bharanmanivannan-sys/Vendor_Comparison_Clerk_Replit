@@ -31,6 +31,7 @@ export * from './comparisonIdentity';
 export * from './comparisonIdentityComparisonType';
 export * from './comparisonIdentityEntitiesItem';
 export * from './comparisonInput';
+export * from './comparisonInputMarket';
 export * from './comparisonIntent';
 export * from './comparisonIntentDecisionType';
 export * from './comparisonIntentFreshness';

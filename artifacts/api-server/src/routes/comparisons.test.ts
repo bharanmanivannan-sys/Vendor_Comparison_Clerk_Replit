@@ -54,6 +54,19 @@ test("submission accepts six explicitly provided comparison options", async () =
   assert.deepEqual(validated.vendors, vendors);
 });
 
+test("submission preserves the user-selected research market while URLs remain optional", async () => {
+  const validated = await validateComparisonInput({
+    prompt: "Compare Westpac and ANZ investment home loans.",
+    market: "IN",
+    vendors: ["Westpac", "ANZ"],
+  });
+
+  assert.ok(!("error" in validated));
+  if ("error" in validated) return;
+  assert.equal(validated.input.market, "IN");
+  assert.deepEqual(validated.input.urls ?? [], []);
+});
+
 test("submission rejects a seventh comparison option", async () => {
   const validated = await validateComparisonInput({
     prompt: "Compare seven enterprise software vendors.",

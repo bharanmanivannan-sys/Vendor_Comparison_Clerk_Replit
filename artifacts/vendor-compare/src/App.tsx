@@ -1132,9 +1132,12 @@ type ComparisonJobState = {
   errorCode?: 'research_failed' | 'validation_failed';
 };
 
+type ResearchMarketCode = 'IN' | 'AU' | 'US' | 'GB';
+type ComparisonRequest = { prompt: string; market: ResearchMarketCode; urls: string[] };
+
 async function runComparisonJob(
   guest: boolean,
-  data: { prompt: string; urls: string[] },
+  data: ComparisonRequest,
   onProgress: (job: ComparisonJobState) => void,
 ): Promise<Comparison> {
   const basePath = guest ? '/api/guest/comparison-jobs' : '/api/comparison-jobs';
@@ -1157,7 +1160,7 @@ async function runComparisonJob(
 function useComparisonJob(guest: boolean) {
   const [jobState, setJobState] = useState<ComparisonJobState>();
   const mutation = useMutation({
-    mutationFn: (data: { prompt: string; urls: string[] }) => {
+    mutationFn: (data: ComparisonRequest) => {
       setJobState(undefined);
       return runComparisonJob(guest, data, setJobState);
     },
@@ -1165,8 +1168,9 @@ function useComparisonJob(guest: boolean) {
   return { ...mutation, jobState };
 }
 
-function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: { prompt: string; urls: string[] }) => void }) {
+function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: ComparisonRequest) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
+  const [market, setMarket] = useState<ResearchMarketCode | ''>('');
   const [urls, setUrls] = useState<string[]>([]);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlError, setUrlError] = useState('');
@@ -1188,7 +1192,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (pending || prompt.trim().length < 8) return;
+    if (pending || prompt.trim().length < 8 || !market) return;
     const listedOptions = prompt.match(
       /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
     )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
@@ -1197,7 +1201,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
       return;
     }
     setUrlError('');
-    onSubmit({ prompt: prompt.trim(), urls });
+    onSubmit({ prompt: prompt.trim(), market, urls });
   };
 
   const researchStages: Array<{ stage: ComparisonJobState['stage']; label: string }> = [
@@ -1224,7 +1228,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
         <div className="flex items-center gap-2">
           <Sparkles size={16} className={guest ? 'text-[#d9ef66]' : 'text-[#0f766e]'} />
           <span className={`mono text-[10px] font-bold uppercase tracking-[.18em] ${guest ? 'text-[#d9ef66]' : 'text-[#0f766e]'}`}>
-            Describe your decision
+            01 / Enter your query
           </span>
         </div>
 
@@ -1242,10 +1246,33 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
         />
 
         <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
+          <label htmlFor={guest ? 'guest-research-market' : 'research-market'} className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
+            02 / Set your research market
+          </label>
+          <p className={`mt-1 text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
+            Required. We’ll use this market’s rates, currency, regulations, availability, and official sources instead of guessing from your query.
+          </p>
+          <select
+            id={guest ? 'guest-research-market' : 'research-market'}
+            required
+            value={market}
+            onChange={(event) => setMarket(event.target.value as ResearchMarketCode | '')}
+            className={`focus-ring mt-3 w-full rounded-lg border px-3 py-3 text-sm font-semibold ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c9c1ae] bg-white text-[#202840]'}`}
+            data-testid={guest ? 'select-guest-market' : 'select-portal-market'}
+          >
+            <option value="">Select a country or market</option>
+            <option value="IN">India · INR</option>
+            <option value="AU">Australia · AUD</option>
+            <option value="US">United States · USD</option>
+            <option value="GB">United Kingdom · GBP</option>
+          </select>
+        </div>
+
+        <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
           <div className="flex items-center gap-2">
             <Link2 size={14} className={guest ? 'text-[#bde3d8]' : 'text-[#0f766e]'} />
             <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
-              Source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
+              03 / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
             </p>
           </div>
 
@@ -1291,16 +1318,16 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
 
         <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className={`max-w-lg text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
-            We’ll identify the products, market, priorities, and applicable criteria from your description, then research and score each option.
+            Your selected market controls the rates, currency, regulations, availability, and sources used in the comparison.
           </p>
           <PrimaryButton
             type="submit"
-            disabled={pending || prompt.trim().length < 8}
+            disabled={pending || prompt.trim().length < 8 || !market}
             className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
             testId={guest ? 'button-guest-research' : 'button-research-comparison'}
           >
             {pending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
-            {pending ? 'Researching and scoring' : 'Research and compare'}
+            {pending ? 'Researching and scoring' : '04 / Research and compare'}
           </PrimaryButton>
         </div>
 
@@ -1370,7 +1397,7 @@ function Portal() {
     window.sessionStorage.removeItem('vendor-compare-draft');
     return draft;
   }, []);
-  const createComparison = (data: { prompt: string; urls: string[] }) => create.mutate(
+  const createComparison = (data: ComparisonRequest) => create.mutate(
     data,
     { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) },
   );
@@ -1389,7 +1416,7 @@ function GuestPortal() {
     window.sessionStorage.removeItem('vendor-compare-draft');
     return draft;
   }, []);
-  const createComparison = (data: { prompt: string; urls: string[] }) => create.mutate(
+  const createComparison = (data: ComparisonRequest) => create.mutate(
     data,
     {
       onSuccess: (comparison) => {
@@ -1728,6 +1755,7 @@ curl -X POST "$BASE_URL/api/tenant/api-keys" \\
   -H "Content-Type: application/json" \\
   -d '{
     "prompt": "Should I use Jira or Asana for a 15-person product team managing tasks and process flows?",
+    "market": "IN",
     "urls": [],
     "criteria": [
       "Workflow flexibility",
@@ -1778,7 +1806,7 @@ const response = await fetch(
       "Idempotency-Key": customerDecisionId,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ prompt, criteria, urls })
+    body: JSON.stringify({ prompt, market, criteria, urls })
   }
 );
 
@@ -1833,6 +1861,7 @@ function LegacyApiDocsPage() {
   -H "Content-Type: application/json" \\
   -d '{
     "prompt": "Compare Product A and Product B for an Australian team",
+    "market": "AU",
     "vendors": ["Product A", "Product B"],
     "criteria": ["Value for money", "Reliability"],
      "urls": []

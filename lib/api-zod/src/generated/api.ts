@@ -132,6 +132,7 @@ export const createComparisonBodyCriteriaMax = 8;
 
 export const CreateComparisonBody = zod.object({
   "prompt": zod.string().min(createComparisonBodyPromptMin).max(createComparisonBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonBodyVendorsItemMax)).min(createComparisonBodyVendorsMin).max(createComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonBodyCriteriaItemMax)).max(createComparisonBodyCriteriaMax).optional()
@@ -368,6 +369,7 @@ export const createGuestComparisonBodyCriteriaMax = 8;
 
 export const CreateGuestComparisonBody = zod.object({
   "prompt": zod.string().min(createGuestComparisonBodyPromptMin).max(createGuestComparisonBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonBodyVendorsItemMax)).min(createGuestComparisonBodyVendorsMin).max(createGuestComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonBodyCriteriaItemMax)).max(createGuestComparisonBodyCriteriaMax).optional()
@@ -738,6 +740,7 @@ export const createComparisonJobBodyCriteriaMax = 8;
 
 export const CreateComparisonJobBody = zod.object({
   "prompt": zod.string().min(createComparisonJobBodyPromptMin).max(createComparisonJobBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonJobBodyVendorsItemMax)).min(createComparisonJobBodyVendorsMin).max(createComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonJobBodyCriteriaItemMax)).max(createComparisonJobBodyCriteriaMax).optional()
@@ -1449,6 +1452,7 @@ export const createGuestComparisonJobBodyCriteriaMax = 8;
 
 export const CreateGuestComparisonJobBody = zod.object({
   "prompt": zod.string().min(createGuestComparisonJobBodyPromptMin).max(createGuestComparisonJobBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyVendorsItemMax)).min(createGuestComparisonJobBodyVendorsMin).max(createGuestComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyCriteriaItemMax)).max(createGuestComparisonJobBodyCriteriaMax).optional()
@@ -2214,6 +2218,7 @@ export const externalCreateComparisonBodyCriteriaMax = 8;
 
 export const ExternalCreateComparisonBody = zod.object({
   "prompt": zod.string().min(externalCreateComparisonBodyPromptMin).max(externalCreateComparisonBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('User-selected research market. When provided, it takes precedence over location cues inferred from the prompt.'),
   "vendors": zod.array(zod.string().min(1).max(externalCreateComparisonBodyVendorsItemMax)).min(externalCreateComparisonBodyVendorsMin).max(externalCreateComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(externalCreateComparisonBodyCriteriaItemMax)).max(externalCreateComparisonBodyCriteriaMax).optional()
