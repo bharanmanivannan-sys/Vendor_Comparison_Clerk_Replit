@@ -3001,7 +3001,7 @@ export function addVerifiedBaasOfferEvidence(
     claim: string;
     start: number;
     subject: string;
-    upfront: number;
+    upfront?: number;
     perKm: number;
   }> = [];
   for (const document of documents) {
@@ -3033,6 +3033,23 @@ export function addVerifiedBaasOfferEvidence(
         perKm: Number(mgMatch[2]),
       });
     }
+    const windsorMatch = document.text.match(
+      /battery usage which starts from\s*₹\s*([\d.]+)\s*per\s*km[^\n]*/i,
+    );
+    if (
+      /mgmotor/i.test(new URL(document.finalUrl).hostname)
+      && /windsor-ev/i.test(document.finalUrl)
+      && windsorMatch?.index !== undefined
+    ) {
+      offers.push({
+        brand: "mg",
+        document,
+        claim: windsorMatch[0],
+        start: windsorMatch.index,
+        subject: "MG Windsor EV",
+        perKm: Number(windsorMatch[1]),
+      });
+    }
   }
 
   let added = 0;
@@ -3042,8 +3059,11 @@ export function addVerifiedBaasOfferEvidence(
     const vendorName = String((vendorScore as Record<string, unknown>).vendor ?? "");
     const brand = /\bmahindra\b/i.test(vendorName) ? "mahindra" : /\bmg\b/i.test(vendorName) ? "mg" : null;
     if (!brand) continue;
-    const offer = offers.find((candidate) => candidate.brand === brand);
-    if (!offer || !Number.isFinite(offer.upfront) || !Number.isFinite(offer.perKm)) continue;
+    const offer = offers.find((candidate) => (
+      candidate.brand === brand
+      && vendorName.toLowerCase().includes(candidate.subject.toLowerCase())
+    ));
+    if (!offer || !Number.isFinite(offer.perKm)) continue;
     const weightedScores = Array.isArray((vendorScore as Record<string, unknown>).weightedScores)
       ? (vendorScore as Record<string, unknown>).weightedScores as Array<Record<string, unknown>>
       : [];
@@ -3067,22 +3087,24 @@ export function addVerifiedBaasOfferEvidence(
       criterionWeight: 20,
       normalizationMethod: "retrieved_document_metric",
     };
-    for (const metric of [
-      {
+    const metrics: Array<Record<string, unknown>> = [];
+    if (Number.isFinite(offer.upfront)) {
+      metrics.push({
         metricKey: "baas_upfront_price",
         rawMetricValue: offer.upfront,
         rawMetricUnit: "inr_lakh",
         normalizationDirection: "lower_is_better",
         metricBasis: "baas_upfront_price:inr_lakh:battery_service_entry_price",
-      },
-      {
-        metricKey: "usage_cost_per_km",
-        rawMetricValue: offer.perKm,
-        rawMetricUnit: "inr_per_km",
-        normalizationDirection: "lower_is_better",
-        metricBasis: "usage_cost_per_km:inr_per_km:battery_service_per_km",
-      },
-    ]) {
+      });
+    }
+    metrics.push({
+      metricKey: "usage_cost_per_km",
+      rawMetricValue: offer.perKm,
+      rawMetricUnit: "inr_per_km",
+      normalizationDirection: "lower_is_better",
+      metricBasis: "usage_cost_per_km:inr_per_km:battery_service_per_km",
+    });
+    for (const metric of metrics) {
       if (evidence.some((row) => row.metricKey === metric.metricKey && row.normalizationMethod === "retrieved_document_metric")) continue;
       evidence.push({ ...common, ...metric });
       added += 1;
@@ -3405,7 +3427,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
   if (!client) return fallback;
   try {
     input.onProgress?.("finding_official_sources");
-    const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor);
+    const isBrandLevelBaasComparison = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|battery as service)\b/i.test(input.prompt)
+      && input.vendors.every((vendor) => /^(?:MG|Mahindra)$/i.test(vendor.trim()));
+    const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor) || isBrandLevelBaasComparison;
     let discoveredAlternativeInsights: string[] = [];
     if (vendorDiscoveryWasRequired) {
       const requestedCount = input.vendors.length;
@@ -3427,7 +3451,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             content: JSON.stringify({
               prompt: input.prompt,
               numberOfProducts: requestedCount,
-              instructions: `Choose exactly ${requestedCount} products that best fit the stated decision. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
+              instructions: isBrandLevelBaasComparison
+                ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
+                : `Choose exactly ${requestedCount} products that best fit the stated decision. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
               shape: {
                 vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
                 alternatives: [{ name: "Exact alternative product name", rationale: "", tradeOffs: "" }],
@@ -3470,7 +3496,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     }
     const context = validateComparisonContext(input.prompt, input.vendors);
     const researchMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
-    const requiresVendorDiscovery = input.vendors.some(isObjectivePhraseVendor);
+    const requiresVendorDiscovery = vendorDiscoveryWasRequired;
     const isElectricVehicleComparison = context.segment === "Electric vehicles";
     const researchShapeVendors = input.vendors;
     const vendorDiscoveryInstructions = vendorDiscoveryWasRequired

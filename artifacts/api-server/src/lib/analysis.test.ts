@@ -258,7 +258,7 @@ test("verifies BaaS per-kilometre cost, entry price, and ground clearance from r
 
 test("extracts official BaaS offer metrics without relying on model candidate fields", () => {
   const parsed = {
-    vendorScores: ["Mahindra", "MG"].map((vendor) => ({
+    vendorScores: ["Mahindra BE 6 SPORTEQ", "MG ZS EV"].map((vendor) => ({
       vendor,
       weightedScores: [{ criterion: "Value for Money", evidence: [] }],
     })),
@@ -295,6 +295,26 @@ test("extracts official BaaS offer metrics without relying on model candidate fi
     "usage_cost_per_km",
   ]);
   assert.ok(evidence.every((row) => row.normalizationMethod === "retrieved_document_metric"));
+});
+
+test("does not attribute an MG ZS EV offer to a different MG model", () => {
+  const parsed = {
+    vendorScores: [{
+      vendor: "MG Windsor EV",
+      weightedScores: [{ criterion: "Value for Money", evidence: [] }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+    finalUrl: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+    contentType: "text/html",
+    text: "starting at 13 LAKH + ₹ 4.50/km\nMG ZS EV",
+    sha256: "c".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(addVerifiedBaasOfferEvidence(parsed, documents), 0);
 });
 
 test("rejects aspirational or context-mismatched quantitative candidates", () => {
