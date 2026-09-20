@@ -9,7 +9,8 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "test": "node ./test.mjs",
     "test:security": "node ./security-test.mjs",
-    "test:citation-transport-matrix": "node ./citation-transport-matrix.mjs",
+    "test:citation-transport-config": "node --test ./citation-transport-matrix.test.mjs",
+    "test:citation-transport-matrix": "pnpm run test:citation-transport-config && node ./citation-transport-matrix.mjs",
     "eval:intent": "node ./intent-eval.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

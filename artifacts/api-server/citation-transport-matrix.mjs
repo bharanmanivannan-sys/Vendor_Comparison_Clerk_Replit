@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const replitConfigPath = fileURLToPath(new URL("../../.replit", import.meta.url));
+const replitConfigPath =
+  process.env.REPLIT_CONFIG_PATH ??
+  fileURLToPath(new URL("../../.replit", import.meta.url));
 const replitConfig = readFileSync(replitConfigPath, "utf8");
 const supportedMajorsMatch = replitConfig.match(
   /^SUPPORTED_NODE_MAJORS\s*=\s*"([^"]+)"\s*$/m,
