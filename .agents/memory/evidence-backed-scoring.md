@@ -37,4 +37,4 @@ Strategic provider role has a fixed 2% allocation removed from Innovation, and i
 
 **Why:** Equal evidence scores need a transparent, contract-visible decision rule rather than a hidden recommendation-only tie break.
 
-**How to apply:** Calculate and retain the 98-point base score first. Award the full two-point role criterion only when one tied leader has uniquely higher role precedence; expose both base score and bonus, and do not choose arbitrarily between equal roles.
+**How to apply:** Normalize the 98% evidence criteria to a 100-point base score. Award two points only when one tied leader has uniquely higher role precedence; expose base and bonus, and do not choose arbitrarily between equal roles.

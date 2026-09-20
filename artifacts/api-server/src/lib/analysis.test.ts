@@ -1402,11 +1402,11 @@ test("breaks top-score ties using leader, expert, accelerator, then core-provide
     applyProviderRoleTieBreak(rows);
     const winner = rows.find((row) => row.vendor === scenario.winner)!;
     const runnerUp = rows.find((row) => row.vendor !== scenario.winner)!;
-    assert.equal(winner.baseScore, 49);
+    assert.equal(winner.baseScore, 50);
     assert.equal(winner.providerRoleTieBreakBonus, 2);
-    assert.equal(winner.score, 51);
+    assert.equal(winner.score, 52);
     assert.equal(runnerUp.providerRoleTieBreakBonus, 0);
-    assert.equal(runnerUp.score, 49);
+    assert.equal(runnerUp.score, 50);
     assert.equal(
       winner.weightedScores?.find((entry) => entry.criterion === "Strategic Provider Role")?.score,
       100,
@@ -1428,7 +1428,7 @@ test("does not arbitrarily break a tie between providers with the same strategic
     })),
   }));
   applyProviderRoleTieBreak(rows);
-  assert.deepEqual(rows.map((row) => row.score), [49, 49]);
+  assert.deepEqual(rows.map((row) => row.score), [50, 50]);
   assert.deepEqual(rows.map((row) => row.providerRoleTieBreakBonus), [0, 0]);
 });
 
@@ -3132,7 +3132,7 @@ test("reweights an existing evidence-backed report without changing criterion sc
     { criterion: "Regulatory Compliance", weight: 2 },
   ]);
   assert.equal(result.recommendation, "MG");
-  assert.equal(result.score, 74);
+  assert.equal(result.score, 76);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score, 90);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 35);
 });

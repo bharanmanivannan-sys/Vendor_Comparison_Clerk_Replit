@@ -1865,9 +1865,12 @@ export function applyProviderRoleTieBreak(
         normalizationMethod: "provider_role_tie_break",
       }];
     }
-    const baseScore = Math.round((vendor.weightedScores ?? [])
-      .filter((criterion) => criterion.criterion !== "Strategic Provider Role")
-      .reduce((total, criterion) => total + criterion.score * criterion.weight, 0) / 100);
+    const baseCriteria = (vendor.weightedScores ?? [])
+      .filter((criterion) => criterion.criterion !== "Strategic Provider Role");
+    const baseWeight = baseCriteria.reduce((total, criterion) => total + criterion.weight, 0);
+    const baseScore = baseWeight > 0
+      ? Math.round(baseCriteria.reduce((total, criterion) => total + criterion.score * criterion.weight, 0) / baseWeight)
+      : vendor.score;
     vendor.baseScore = baseScore;
     vendor.providerRoleTieBreakBonus = 0;
     vendor.score = baseScore;

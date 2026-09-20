@@ -793,9 +793,11 @@ function reweightGuestComparison(comparison: any, weights: Record<string, number
   for (const vendor of vendorScores) {
     const roleCriterion = vendor.weightedScores.find((entry: any) => entry.criterion === 'Strategic Provider Role');
     if (roleCriterion) roleCriterion.score = 0;
-    vendor.baseScore = Math.round(vendor.weightedScores
-      .filter((entry: any) => entry.criterion !== 'Strategic Provider Role')
-      .reduce((total: number, entry: any) => total + (entry.score ?? 50) * entry.weight, 0) / 100);
+    const baseCriteria = vendor.weightedScores.filter((entry: any) => entry.criterion !== 'Strategic Provider Role');
+    const baseWeight = baseCriteria.reduce((total: number, entry: any) => total + entry.weight, 0);
+    vendor.baseScore = baseWeight > 0
+      ? Math.round(baseCriteria.reduce((total: number, entry: any) => total + (entry.score ?? 50) * entry.weight, 0) / baseWeight)
+      : vendor.score;
     vendor.providerRoleTieBreakBonus = 0;
     vendor.score = vendor.baseScore;
   }
