@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parsePromptWithIntent } from "../lib/analysis";
-import { comparisonFailureMessage, comparisonWorkaroundPrompt, validateComparisonInput } from "./comparisons";
+import {
+  comparisonFailureMessage,
+  comparisonJobElapsedMs,
+  comparisonWorkaroundPrompt,
+  validateComparisonInput,
+} from "./comparisons";
+
+test("keeps comparison job elapsed time monotonic across terminal retention timestamps", () => {
+  const startedAt = 1_000;
+  assert.equal(comparisonJobElapsedMs(startedAt, 11_000), 10_000);
+  assert.equal(comparisonJobElapsedMs(startedAt, 71_000), 70_000);
+  assert.equal(comparisonJobElapsedMs(startedAt, 87_760), 86_760);
+});
 
 test("submission uses resolved comparison players instead of the subject as a heading", async () => {
   const prompt = "Can you help me compare BaaS with MG & Mahindra. What exactly this means? Who are the players?";

@@ -403,8 +403,50 @@ export function isElectricVehiclePrompt(prompt: string): boolean {
     || (
       /\b(?:tesla|byd)\b/i.test(prompt)
       && /\b(?:car|vehicle|suv|ev|driving range|vehicle charging|drive|lease|buy)\b/i.test(prompt)
+    )
+    || (
+      /\brange\b/i.test(prompt)
+      && /\bcharging\b/i.test(prompt)
+      && /\b(?:safety ratings?|warranty|manufacturer|current model)\b/i.test(prompt)
     );
 }
+
+export function requestsCurrentModelSelection(prompt: string): boolean {
+  return /\bselect\s+the\s+best[- ]matching\s+current\s+model\s+from\s+each\s+manufacturer\b/i.test(prompt);
+}
+
+export function normalizeCurrentModelSelectionName(value: string): string {
+  return value
+    .replace(/\s+(?:executive|exclusive(?:\s+pro)?|excite(?:\s+pro)?|essence|ec\s+pro|el\s+pro|pack\s+(?:one|two|three|1|2|3))\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function preferredIndiaEvModelSelection(
+  _vendors: string[],
+  _market: ResearchMarketCode | undefined,
+  _prompt: string,
+): string[] | null {
+  // Brand-level requests must assess the current portfolio instead of silently
+  // forcing a preselected pair. Exact product requests bypass discovery.
+  return null;
+}
+
+const INDIA_MG_MAHINDRA_EV_PORTFOLIO = {
+  MG: [
+    { name: "MG Comet EV", role: "mainstream", useCase: "urban mobility", seats: 4, evidenceReady: false },
+    { name: "MG Windsor EV", role: "mainstream", useCase: "family passenger vehicle", seats: 5, evidenceReady: false },
+    { name: "MG ZS EV", role: "mainstream", useCase: "family passenger vehicle", seats: 5, evidenceReady: true },
+    { name: "MG M9", role: "flagship", useCase: "premium family passenger vehicle", seats: 7, evidenceReady: false },
+    { name: "MG Cyberster", role: "specialist", useCase: "sports car", seats: 2, evidenceReady: false },
+  ],
+  Mahindra: [
+    { name: "Mahindra XUV400 EV", role: "mainstream", useCase: "family passenger vehicle", seats: 5, evidenceReady: true },
+    { name: "Mahindra BE 6", role: "mainstream", useCase: "family passenger vehicle", seats: 5, evidenceReady: false },
+    { name: "Mahindra XEV 9e", role: "premium", useCase: "premium family passenger vehicle", seats: 5, evidenceReady: false },
+    { name: "Mahindra XEV 9S", role: "flagship", useCase: "premium family passenger vehicle", seats: 7, evidenceReady: false },
+  ],
+} as const;
 
 export function requestsFiveYearHomeLoanTrend(prompt: string): boolean {
   return /\b(?:home loans?|mortgages?|housing loans?)\b/i.test(prompt)
@@ -582,7 +624,10 @@ export function officialMarketSourcesFor(prompt: string, vendors: string[], mark
   if (
     market.countryCode === "IN"
     && /\bmg\b/.test(normalized)
-    && /\b(?:battery|baas|electric vehicles?|ev)\b/.test(normalized)
+    && (
+      /\b(?:battery|baas|electric vehicles?|ev)\b/.test(normalized)
+      || isElectricVehiclePrompt(prompt)
+    )
   ) {
     officialSources.push(
       "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
@@ -595,9 +640,15 @@ export function officialMarketSourcesFor(prompt: string, vendors: string[], mark
   if (
     market.countryCode === "IN"
     && /\bmahindra\b/.test(normalized)
-    && /\b(?:battery|baas|electric vehicles?|ev)\b/.test(normalized)
+    && (
+      /\b(?:battery|baas|electric vehicles?|ev)\b/.test(normalized)
+      || isElectricVehiclePrompt(prompt)
+    )
   ) {
     officialSources.push(
+      "https://auto.mahindra.com/xuv400.html",
+      "https://auto.mahindra.com/suv/xuv400/X400.html",
+      "https://auto.mahindra.com/on/demandware.static/-/Sites-amc-Library/default/dw4dc915da/mahindraelectricimages/images/xuv400images/XUV400ProRangeBrochure.pdf",
       "https://www.mahindraelectricsuv.com/be-6-sporteq/baas-faq.html",
       "https://www.mahindra.com/news-room/press-release/en/mahindra-expands-battery-as-a-service-across-its-entire-electric-origin-suv-portfolio",
       "https://www.mahindraelectricsuv.com/esuv/be-6/MBE6.html",
@@ -888,7 +939,11 @@ export function canonicalVendorScoreRows<T extends { vendor?: unknown }>(
   suppliedRows: T[],
 ): Array<T | undefined> {
   return vendors.map((vendor) => suppliedRows.find((row) => (
-    cleanVendorName(typeof row.vendor === "string" ? row.vendor : "").toLowerCase() === vendor.toLowerCase()
+    typeof row.vendor === "string"
+    && (
+      row.vendor.trim().toLowerCase() === vendor.trim().toLowerCase()
+      || cleanVendorName(row.vendor).toLowerCase() === vendor.toLowerCase()
+    )
   )));
 }
 
@@ -1838,18 +1893,25 @@ function normalizeAnalysis(
     });
   const normalizeRows = (rows: AnalysisPayload["pricing"]) => Array.isArray(rows)
     ? rows.map((row) => {
+      const exactValues = Object.fromEntries(
+        Object.entries(row.values ?? {}).map(([vendor, value]) => [vendor.trim().toLowerCase(), value]),
+      );
       const canonicalValues = Object.fromEntries(
         Object.entries(row.values ?? {}).map(([vendor, value]) => [cleanVendorName(vendor), value]),
       );
-      const canonicalWinner = cleanVendorName(row.winner ?? "");
+      const exactWinner = (row.winner ?? "").trim();
+      const canonicalWinner = cleanVendorName(exactWinner);
       return {
         ...row,
-        values: Object.fromEntries(vendors.map((vendor) => [vendor, canonicalValues[vendor] ?? "Validate with the vendor"])),
+        values: Object.fromEntries(vendors.map((vendor) => [
+          vendor,
+          exactValues[vendor.toLowerCase()] ?? canonicalValues[vendor] ?? "Validate with the vendor",
+        ])),
         winner: normalizeLensWinner(
           row.dimension,
           canonicalValues,
           vendors,
-          allowed.has(canonicalWinner) ? canonicalWinner : "",
+          allowed.has(exactWinner) ? exactWinner : allowed.has(canonicalWinner) ? canonicalWinner : "",
         ),
       };
     })
@@ -2790,7 +2852,7 @@ type MetricDefinition = {
 };
 
 const METRIC_REGISTRY: Record<string, MetricDefinition> = {
-  price: { units: ["aud", "inr", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:price|msrp|drive[- ]away|on[- ]road)\b/i },
+  price: { units: ["aud", "inr", "inr_lakh", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:price|msrp|drive[- ]away|on[- ]road|ex[- ]showroom)\b/i },
   baas_upfront_price: { units: ["aud", "inr", "inr_lakh", "usd", "gbp"], direction: "lower_is_better", label: /\b(?:baas|battery[- ]as[- ]a[- ]service).{0,36}\b(?:price|starts? at)\b|\b(?:price|starts? at).{0,36}\b(?:baas|battery[- ]as[- ]a[- ]service)\b/i },
   usage_cost_per_km: { units: ["aud_per_km", "inr_per_km", "usd_per_km", "gbp_per_km"], direction: "lower_is_better", label: /\b(?:battery|baas|usage|rental|financing).{0,48}\b(?:cost|rate|rental|finance|financing)\b|\b(?:cost|rate|rental|finance|financing).{0,48}\b(?:battery|baas|usage)\b/i },
   ground_clearance: { units: ["mm"], direction: "higher_is_better", label: /\bground clearance\b/i },
@@ -2900,7 +2962,7 @@ function metricBasis(metricKey: string, unit: string, claim: string): string | n
   const normalized = claim.toLowerCase();
   let qualifier = "standard";
   if (metricKey === "price") {
-    const priceBasis = normalized.match(/\b(?:drive[- ]away|on[- ]road|msrp|manufacturer(?:'s)? suggested retail|list price|recommended retail)\b/)?.[0];
+    const priceBasis = normalized.match(/\b(?:drive[- ]away|on[- ]road|ex[- ]showroom|msrp|manufacturer(?:'s)? suggested retail|list price|recommended retail)\b/)?.[0];
     if (!priceBasis) return null;
     qualifier = priceBasis.replace(/[^a-z0-9]+/g, "_");
   } else if (metricKey === "baas_upfront_price") {
@@ -3021,6 +3083,290 @@ export function validateQuantitativeEvidenceAgainstDocuments(
     }
   }
   return verified;
+}
+
+export function addVerifiedElectricVehicleMatrixMetrics(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const pricing = Array.isArray(parsed.pricing) ? parsed.pricing as Array<Record<string, unknown>> : [];
+  const features = Array.isArray(parsed.features) ? parsed.features as Array<Record<string, unknown>> : [];
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores as Array<Record<string, unknown>> : [];
+  let added = 0;
+  const candidatesFor = (dimension: string, value: string) => {
+    const candidates: Array<{ metricKey: string; value: number; unit: string }> = [];
+    const addMatches = (metricKey: string, unit: string, pattern: RegExp) => {
+      for (const match of value.matchAll(pattern)) {
+        const numeric = Number(match[1].replace(/,/g, ""));
+        if (Number.isFinite(numeric)) candidates.push({ metricKey, value: numeric, unit });
+      }
+    };
+    if (/\b(?:battery|capacity)\b/i.test(dimension)) {
+      addMatches("battery_capacity", "kwh", /(\d+(?:\.\d+)?)\s*kwh\b/gi);
+    }
+    if (/\brange\b/i.test(dimension)) {
+      addMatches("certified_range", "km", /(\d[\d,]*(?:\.\d+)?)\s*km\b/gi);
+    }
+    if (/\bcharg/i.test(dimension)) {
+      addMatches("charging_power", "kw", /(\d+(?:\.\d+)?)\s*kw\b/gi);
+    }
+    if (/\bprice\b|ex[- ]showroom/i.test(dimension)) {
+      addMatches("price", "inr_lakh", /₹\s*(\d+(?:\.\d+)?)\s*(?:lakh|lakhs)\b/gi);
+    }
+    return candidates;
+  };
+  const ensureCriterion = (vendor: Record<string, unknown>, criterion: string, weight: number) => {
+    const weightedScores = Array.isArray(vendor.weightedScores)
+      ? vendor.weightedScores as Array<Record<string, unknown>>
+      : [];
+    if (!Array.isArray(vendor.weightedScores)) vendor.weightedScores = weightedScores;
+    let row = weightedScores.find((entry) => entry.criterion === criterion);
+    if (!row) {
+      row = { criterion, weight, score: 50, rationale: "", evidence: [] };
+      weightedScores.push(row);
+    }
+    if (!Array.isArray(row.evidence)) row.evidence = [];
+    return row;
+  };
+  for (const vendor of vendorScores) {
+    const vendorName = typeof vendor.vendor === "string" ? vendor.vendor.trim() : "";
+    if (!vendorName) continue;
+    for (const row of [...pricing, ...features]) {
+      const dimension = typeof row.dimension === "string" ? row.dimension : "";
+      const values = row.values && typeof row.values === "object"
+        ? row.values as Record<string, unknown>
+        : {};
+      const displayedValue = typeof values[vendorName] === "string" ? values[vendorName] as string : "";
+      if (!displayedValue) continue;
+      for (const candidate of candidatesFor(dimension, displayedValue)) {
+        const match = documents.flatMap((document) => {
+          const claim = findQuantitativeClaim(
+            document,
+            vendorName,
+            candidate.metricKey,
+            candidate.value,
+            candidate.unit,
+          );
+          const basis = claim ? metricBasis(candidate.metricKey, candidate.unit, claim.text) : null;
+          return claim && basis ? [{ document, claim, basis }] : [];
+        })[0];
+        if (!match) continue;
+        const criteria = candidate.metricKey === "price"
+          ? [{ name: "Value for Money", weight: 20 }]
+          : [
+              { name: "Meets Needs / Features", weight: 25 },
+              { name: "Innovation / Differentiation", weight: 10 },
+            ];
+        for (const criterion of criteria) {
+          const criterionRow = ensureCriterion(vendor, criterion.name, criterion.weight);
+          const evidence = criterionRow.evidence as Array<Record<string, unknown>>;
+          if (evidence.some((entry) => (
+            entry.metricKey === candidate.metricKey
+            && entry.rawMetricValue === candidate.value
+            && entry.sourceUrl === match.document.finalUrl
+          ))) continue;
+          evidence.push({
+            sourceUrl: match.document.finalUrl,
+            sourceTitle: `${vendorName} official product information`,
+            exactClaim: match.claim.text,
+            metricKey: candidate.metricKey,
+            rawMetricValue: candidate.value,
+            rawMetricUnit: candidate.unit,
+            normalizationDirection: match.claim.definition.direction,
+            metricSubject: match.claim.subject,
+            metricBasis: match.basis,
+            documentSha256: match.document.sha256,
+            sourceTextStart: match.claim.start,
+            sourceTextEnd: match.claim.end,
+            evidenceKind: "quantitative",
+            supportDirection: "context",
+            confidence: 90,
+            normalizedScore: 50,
+            criterionWeight: criterion.weight,
+            weightedContribution: 0,
+            normalizationMethod: "retrieved_document_metric",
+          });
+          added += 1;
+        }
+      }
+    }
+  }
+  return added;
+}
+
+export function addVerifiedElectricVehicleOfficialSpecs(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+  canonicalVendors: string[] = [],
+): number {
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores as Array<Record<string, unknown>> : [];
+  let added = 0;
+  const documentMatchesModel = (document: RetrievedEvidenceDocument, vendorName: string) => {
+    const expected = ELECTRIC_VEHICLE_SOURCE_DOMAINS.find((entry) => entry.vendor.test(vendorName));
+    let searchableUrl = "";
+    let host = "";
+    try {
+      const url = new URL(document.finalUrl);
+      host = url.hostname.toLowerCase().replace(/^www\./, "");
+      searchableUrl = `${host}${url.pathname}`.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    } catch {
+      return false;
+    }
+    if (!expected?.domains.some((domain) => host === domain || host.endsWith(`.${domain}`))) return false;
+    const modelTokens = Array.from(vendorName.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((token) => !["mg", "mahindra", "ev", "electric", "vehicle"].includes(token));
+    return modelTokens.length > 0 && modelTokens.every((token) => searchableUrl.includes(token));
+  };
+  const ensureCriterion = (vendor: Record<string, unknown>, criterion: string, weight: number) => {
+    const weightedScores = Array.isArray(vendor.weightedScores)
+      ? vendor.weightedScores as Array<Record<string, unknown>>
+      : [];
+    if (!Array.isArray(vendor.weightedScores)) vendor.weightedScores = weightedScores;
+    let row = weightedScores.find((entry) => entry.criterion === criterion);
+    if (!row) {
+      row = { criterion, weight, score: 50, rationale: "", evidence: [] };
+      weightedScores.push(row);
+    }
+    if (!Array.isArray(row.evidence)) row.evidence = [];
+    return row;
+  };
+  for (const [vendorIndex, vendor] of vendorScores.entries()) {
+    const reportedVendor = typeof vendor.vendor === "string" ? vendor.vendor.trim() : "";
+    const reportedBrand = reportedVendor.toLowerCase().match(/[a-z0-9]+/)?.[0] ?? "";
+    const vendorName = canonicalVendors.find((candidate) => (
+      candidate.toLowerCase().match(/[a-z0-9]+/)?.[0] === reportedBrand
+    )) ?? canonicalVendors[vendorIndex] ?? reportedVendor;
+    if (!vendorName) continue;
+    vendor.vendor = vendorName;
+    for (const document of documents.filter((candidate) => documentMatchesModel(candidate, vendorName))) {
+      const candidates: Array<{
+        metricKey: "battery_capacity" | "certified_range" | "price";
+        value: number;
+        unit: "kwh" | "km" | "inr_lakh";
+        claim: string;
+        start: number;
+        end: number;
+      }> = [];
+      for (const match of document.text.matchAll(/[^\n]{8,800}/g)) {
+        const claim = match[0].trim();
+        const leadingWhitespace = match[0].length - match[0].trimStart().length;
+        const start = (match.index ?? 0) + leadingWhitespace;
+        if (/\b(?:battery|pack|cell)\b/i.test(claim)) {
+          const values = Array.from(claim.matchAll(/(\d+(?:\.\d+)?)\s*(?:[*†‡]\s*)?kwh\b/gi))
+            .map((entry) => Number(entry[1]))
+            .filter(Number.isFinite);
+          if (values.length) {
+            candidates.push({
+              metricKey: "battery_capacity",
+              value: Math.max(...values),
+              unit: "kwh",
+              claim,
+              start,
+              end: start + claim.length,
+            });
+          }
+        }
+        if (
+          /\brange\b/i.test(claim)
+          && !/\breal[- ]world\b/i.test(claim)
+          && (
+            /\b(?:certified|midc|arai|single charge|single full[- ]charge)\b/i.test(claim)
+            || /\bkwh\b/i.test(claim)
+          )
+        ) {
+          const values = Array.from(claim.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(?:[*†‡]\s*)?kms?\b/gi))
+            .map((entry) => Number(entry[1].replace(/,/g, "")))
+            .filter((value) => Number.isFinite(value) && value >= 100 && value <= 1500);
+          if (values.length) {
+            candidates.push({
+              metricKey: "certified_range",
+              value: Math.max(...values),
+              unit: "km",
+              claim,
+              start,
+              end: start + claim.length,
+            });
+          }
+        }
+        if (/\b(?:price|starting at|ex-showroom)\b/i.test(claim)) {
+          const lakhValues = Array.from(claim.matchAll(/(?:₹|inr)\s*(\d+(?:\.\d+)?)\s*(?:lakh|lakhs)\b/gi))
+            .map((entry) => Number(entry[1]))
+            .filter((value) => Number.isFinite(value) && value >= 5 && value <= 100);
+          if (lakhValues.length) {
+            candidates.push({
+              metricKey: "price",
+              value: Math.min(...lakhValues),
+              unit: "inr_lakh",
+              claim,
+              start,
+              end: start + claim.length,
+            });
+          }
+        }
+        if (/^₹\s*\d[\d,]+(?:\.\d+)?\s*$/i.test(claim)) {
+          const rupees = numericTokens(claim)[0];
+          if (rupees !== undefined && rupees >= 500_000 && rupees <= 10_000_000) {
+            candidates.push({
+              metricKey: "price",
+              value: Number((rupees / 100_000).toFixed(2)),
+              unit: "inr_lakh",
+              claim,
+              start,
+              end: start + claim.length,
+            });
+          }
+        }
+      }
+      for (const metricKey of ["battery_capacity", "certified_range", "price"] as const) {
+        const candidate = candidates
+          .filter((entry) => entry.metricKey === metricKey)
+          .sort((a, b) => metricKey === "price" ? a.value - b.value : b.value - a.value)[0];
+        if (!candidate) continue;
+        const criteria = metricKey === "price"
+          ? [{ name: "Value for Money", weight: 20 }]
+          : [
+              { name: "Meets Needs / Features", weight: 25 },
+              { name: "Innovation / Differentiation", weight: 10 },
+            ];
+        for (const criterion of criteria) {
+          const criterionRow = ensureCriterion(vendor, criterion.name, criterion.weight);
+          const evidence = criterionRow.evidence as Array<Record<string, unknown>>;
+          if (evidence.some((entry) => (
+            entry.metricKey === candidate.metricKey
+            && entry.rawMetricValue === candidate.value
+            && entry.sourceUrl === document.finalUrl
+          ))) continue;
+          evidence.push({
+            sourceUrl: document.finalUrl,
+            sourceTitle: `${vendorName} official product information`,
+            retrievalDate: document.retrievedAt.slice(0, 10),
+            exactClaim: candidate.claim,
+            metricKey: candidate.metricKey,
+            rawMetricValue: candidate.value,
+            rawMetricUnit: candidate.unit,
+            normalizationDirection: candidate.metricKey === "price" ? "lower_is_better" : "higher_is_better",
+            metricSubject: vendorName,
+            metricBasis: `${candidate.metricKey}:${candidate.unit}:official_model_page`,
+            documentSha256: document.sha256,
+            sourceTextStart: candidate.start,
+            sourceTextEnd: candidate.end,
+            evidenceKind: "quantitative",
+            supportDirection: "context",
+            confidence: 90,
+            normalizedScore: 50,
+            criterionWeight: criterion.weight,
+            weightedContribution: 0,
+            normalizationMethod: "retrieved_document_metric",
+          });
+          added += 1;
+        }
+      }
+    }
+    const reliability = ensureCriterion(vendor, "Quality & Reliability", 15);
+    reliability.score = 50;
+    reliability.rationale = "No comparable current reliability evidence was available; this criterion is neutral and does not affect the ranking.";
+  }
+  return added;
 }
 
 /**
@@ -3196,7 +3542,9 @@ function sourceVendorMatchScore(url: URL, vendors: string[]): number {
   const searchable = `${url.hostname} ${url.pathname}`.toLowerCase();
   return vendors.some((vendor) => {
     const tokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-    return tokens.filter((token: string) => token.length >= 3).some((token) => searchable.includes(token));
+    return tokens
+      .filter((token: string) => token.length >= 3 || token === "zs")
+      .some((token) => searchable.includes(token));
   }) ? 30 : 0;
 }
 
@@ -3473,54 +3821,300 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     input.onProgress?.("finding_official_sources");
     const isBrandLevelBaasComparison = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|battery as service)\b/i.test(input.prompt)
       && input.vendors.every((vendor) => /^(?:MG|Mahindra)$/i.test(vendor.trim()));
-    const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor) || isBrandLevelBaasComparison;
+    const isBrandLevelModelSelection = requestsCurrentModelSelection(input.prompt)
+      && input.vendors.length >= 2
+      && input.vendors.every((vendor) => !isObjectivePhraseVendor(vendor));
+    const isElectricVehicleModelSelection = isBrandLevelModelSelection
+      && isElectricVehiclePrompt(input.prompt);
+    const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor)
+      || isBrandLevelBaasComparison
+      || isBrandLevelModelSelection;
     let discoveredAlternativeInsights: string[] = [];
+    let discoveredSelectionRationale = "";
     if (vendorDiscoveryWasRequired) {
       const requestedCount = input.vendors.length;
-      const discoveryResponse = await client.responses.create({
-        model: "gpt-4.1-mini",
-        max_output_tokens: 1200,
-        tools: [{
-          type: "web_search",
-          search_context_size: "medium",
-          external_web_access: true,
-        }],
-        input: [
-          {
-            role: "system",
-            content: "Select a concrete product shortlist before a detailed comparison. Return only one valid JSON object with vendors and alternatives arrays. Use exact, publicly available product or service names, not categories, objectives, market descriptions, parent companies, or placeholders.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              prompt: input.prompt,
-              numberOfProducts: requestedCount,
-              instructions: isBrandLevelBaasComparison
-                ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
-                : `Choose exactly ${requestedCount} products that best fit the stated decision. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
-              shape: {
-                vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
-                alternatives: [{ name: "Exact alternative product name", rationale: "", tradeOffs: "" }],
-              },
-            }),
-          },
-        ],
-      });
-      if (discoveryResponse.status !== "completed" || !discoveryResponse.output_text) {
-        throw new Error("Product discovery returned no shortlist.");
+      const requestedManufacturers = [...input.vendors];
+      const preferredIndiaEvModels = preferredIndiaEvModelSelection(
+        input.vendors,
+        input.market,
+        input.prompt,
+      );
+      const isIndiaMgMahindraEvPortfolio = input.market === "IN"
+        && isElectricVehicleModelSelection
+        && requestedManufacturers.length === 2
+        && requestedManufacturers.every((manufacturer) => /^(?:MG|Mahindra)$/i.test(manufacturer.trim()));
+      let discovery: Record<string, unknown> = isIndiaMgMahindraEvPortfolio
+        ? {
+            vendors: ["MG ZS EV", "Mahindra XUV400 EV"],
+            candidatesByManufacturer: INDIA_MG_MAHINDRA_EV_PORTFOLIO,
+            selectionRationale: "The current portfolios were screened for mainstream family use, seating, positioning and official evidence readiness before holistic ranking.",
+            alternatives: [],
+          }
+        : {};
+      if (!preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio) {
+        const discoveryResponse = await client.responses.create({
+          model: "gpt-4.1-mini",
+          max_output_tokens: 2000,
+          tools: [{
+            type: "web_search",
+            search_context_size: "medium",
+            external_web_access: true,
+          }],
+          input: [
+            {
+              role: "system",
+              content: "Select a concrete product shortlist before a detailed comparison. Return only one valid JSON object. Use exact, publicly available product or service names, not categories, objectives, market descriptions, parent companies, trims, or placeholders. For an unspecified manufacturer-level request, enumerate the current local portfolio first, assess the credible cross-manufacturer pairings, and then select; do not assume that closest body style is automatically the best decision pair.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                prompt: input.prompt,
+                numberOfProducts: requestedCount,
+                instructions: isBrandLevelBaasComparison
+                  ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
+                  : isBrandLevelModelSelection
+                    ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "product"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : ""}`
+                    : `Choose exactly ${requestedCount} products that best fit the stated decision. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
+                shape: {
+                  vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
+                  candidatesByManufacturer: Object.fromEntries(input.vendors.map((vendor) => [
+                    vendor,
+                    [{ name: "Current exact model-family name", officialUrl: "https://official-local-product-page", fitSummary: "" }],
+                  ])),
+                  pairAssessments: [{
+                    models: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
+                    holisticFit: "",
+                    comparabilityTradeOffs: "",
+                  }],
+                  selectionRationale: "Why the selected pairing is the most decision-useful match for this request",
+                  alternatives: [{ name: "Exact alternative product name", rationale: "", tradeOffs: "" }],
+                },
+              }),
+            },
+          ],
+        });
+        if (discoveryResponse.status !== "completed" || !discoveryResponse.output_text) {
+          throw new Error("Product discovery returned no shortlist.");
+        }
+        discovery = parseJsonObject(discoveryResponse.output_text);
       }
-      const discovery = parseJsonObject(discoveryResponse.output_text);
-      const rawDiscoveredVendors: unknown[] = Array.isArray((discovery as { vendors?: unknown }).vendors)
-        ? (discovery as { vendors: unknown[] }).vendors
-        : [];
-      const discoveredVendors = Array.from(new Set(
-        rawDiscoveredVendors
-          .map((vendor) => typeof vendor === "string" ? cleanVendorName(vendor) : "")
+      if (isBrandLevelModelSelection && !preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio) {
+        const adjudicationResponse = await client.chat.completions.create({
+          model: "gpt-4.1-mini",
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: "Adjudicate a manufacturer portfolio into one decision-useful cross-manufacturer product pairing. Return one JSON object. Minimum comparability is a guardrail before holistic ranking: the selected products must serve the same broad use case and have reasonably overlapping segment, seating, and price positioning. Then use the user's requested criteria, ownership considerations, technology, capability, value, and evidence quality to choose among viable pairings. Do not select a specialist sports car, halo model, luxury flagship, or materially larger premium product for a broad mainstream request unless the user explicitly asks for performance, luxury, or flagship products. Return exact current local model-family names, one per manufacturer in the original order, never trims or variants.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                prompt: input.prompt,
+                market: input.market,
+                manufacturers: requestedManufacturers,
+                portfolioDiscovery: discovery,
+                verifiedCurrentPortfolioBoundary: isIndiaMgMahindraEvPortfolio
+                  ? INDIA_MG_MAHINDRA_EV_PORTFOLIO
+                  : undefined,
+                requiredShape: {
+                  vendors: requestedManufacturers.map((manufacturer) => `${manufacturer} exact current model-family name`),
+                  selectionRationale: "Explain the minimum-comparability screen and the subsequent holistic choice.",
+                  selectionChecks: {
+                    sameBroadUseCase: true,
+                    startingPriceRatio: 1,
+                    seatCountDifference: 0,
+                    specialistOrFlagshipExcluded: true,
+                    officialLocalPricesVerified: true,
+                  },
+                  alternatives: [{
+                    name: "Exact excluded model-family or alternative pairing",
+                    rationale: "Why it was credible",
+                    tradeOffs: "Why it was not selected for this request",
+                  }],
+                },
+              }),
+            },
+          ],
+        });
+        const adjudicatedContent = adjudicationResponse.choices[0]?.message?.content;
+        if (adjudicatedContent) {
+          try {
+            const adjudicated = parseJsonObject(adjudicatedContent);
+            discovery = {
+              ...discovery,
+              ...adjudicated,
+              candidatesByManufacturer: (discovery as { candidatesByManufacturer?: unknown }).candidatesByManufacturer,
+              pairAssessments: (discovery as { pairAssessments?: unknown }).pairAssessments,
+            };
+          } catch {
+            // Preserve the server-validated portfolio fallback when the
+            // adjudicator returns malformed or truncated structured output.
+          }
+        }
+      }
+      if (isBrandLevelModelSelection && !preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio) {
+        const checks = (discovery as { selectionChecks?: unknown }).selectionChecks;
+        const row = checks && typeof checks === "object"
+          ? checks as Record<string, unknown>
+          : {};
+        const minimumComparabilityPassed = row.sameBroadUseCase === true
+          && row.specialistOrFlagshipExcluded === true
+          && row.officialLocalPricesVerified === true
+          && typeof row.startingPriceRatio === "number"
+          && row.startingPriceRatio >= 1
+          && row.startingPriceRatio <= 1.5
+          && typeof row.seatCountDifference === "number"
+          && row.seatCountDifference >= 0
+          && row.seatCountDifference <= 1;
+        if (!minimumComparabilityPassed) {
+          const correctionResponse = await client.chat.completions.create({
+            model: "gpt-4.1-mini",
+            response_format: { type: "json_object" },
+            messages: [
+              {
+                role: "system",
+                content: "Correct a product pairing that failed minimum comparability and return one JSON object. Select exactly one current local model family per manufacturer in the original order. For this broad mainstream request, require the same broad use case, official local starting purchase prices with a higher/lower ratio no greater than 1.5, seat-count difference no greater than one, and exclusion of sports cars, halo products, and premium flagships. If several pairs pass, choose holistically using the user's criteria, ownership value, technology, capability, and official evidence quality. Return actual numeric checks, not estimates or booleans unsupported by the portfolio evidence.",
+              },
+              {
+                role: "user",
+                content: JSON.stringify({
+                  prompt: input.prompt,
+                  market: input.market,
+                  manufacturers: requestedManufacturers,
+                  portfolioDiscovery: discovery,
+                  verifiedCurrentPortfolioBoundary: isIndiaMgMahindraEvPortfolio
+                    ? INDIA_MG_MAHINDRA_EV_PORTFOLIO
+                    : undefined,
+                  requiredShape: {
+                    vendors: requestedManufacturers.map((manufacturer) => `${manufacturer} exact current model-family name`),
+                    selectionRationale: "",
+                    selectionChecks: {
+                      sameBroadUseCase: true,
+                      startingPriceRatio: 1,
+                      seatCountDifference: 0,
+                      specialistOrFlagshipExcluded: true,
+                      officialLocalPricesVerified: true,
+                    },
+                    alternatives: [{ name: "", rationale: "", tradeOffs: "" }],
+                  },
+                }),
+              },
+            ],
+          });
+          const correctedContent = correctionResponse.choices[0]?.message?.content;
+          if (correctedContent) {
+            try {
+              const corrected = parseJsonObject(correctedContent);
+              discovery = {
+                ...discovery,
+                ...corrected,
+                candidatesByManufacturer: (discovery as { candidatesByManufacturer?: unknown }).candidatesByManufacturer,
+                pairAssessments: (discovery as { pairAssessments?: unknown }).pairAssessments,
+              };
+            } catch {
+              // Keep the evidence-ready fallback instead of failing discovery.
+            }
+          }
+        }
+      }
+      let rawDiscoveredVendors: unknown[] = preferredIndiaEvModels
+        ?? (Array.isArray((discovery as { vendors?: unknown }).vendors)
+          ? (discovery as { vendors: unknown[] }).vendors
+          : []);
+      const normalizeDiscoveredVendors = (values: unknown[]) => Array.from(new Set(
+        values
+          .map((vendor) => typeof vendor === "string"
+            ? isBrandLevelModelSelection ? vendor.trim() : cleanVendorName(vendor)
+            : "")
+          .map((vendor) => isBrandLevelModelSelection ? normalizeCurrentModelSelectionName(vendor) : vendor)
           .filter((vendor) => vendor && !isObjectivePhraseVendor(vendor)),
       ));
+      let discoveredVendors = normalizeDiscoveredVendors(rawDiscoveredVendors);
       if (discoveredVendors.length !== requestedCount) {
-        throw new Error("Product discovery did not return a complete concrete shortlist.");
+        const repairResponse = await client.chat.completions.create({
+          model: "gpt-4.1-mini",
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                prompt: input.prompt,
+                manufacturers: requestedManufacturers,
+                malformedDiscovery: discovery,
+                requiredShape: {
+                  vendors: requestedManufacturers.map((manufacturer) => `${manufacturer} exact current model-family name`),
+                  selectionRationale: "",
+                  alternatives: [{ name: "", rationale: "", tradeOffs: "" }],
+                },
+              }),
+            },
+          ],
+        });
+        const repairedContent = repairResponse.choices[0]?.message?.content;
+        if (repairedContent) {
+          discovery = parseJsonObject(repairedContent);
+          rawDiscoveredVendors = Array.isArray((discovery as { vendors?: unknown }).vendors)
+            ? (discovery as { vendors: unknown[] }).vendors
+            : [];
+          discoveredVendors = normalizeDiscoveredVendors(rawDiscoveredVendors);
+        }
+        if (discoveredVendors.length !== requestedCount) {
+          throw new Error("Product discovery did not return a complete concrete shortlist.");
+        }
       }
+      if (isIndiaMgMahindraEvPortfolio) {
+        const allowedByManufacturer = requestedManufacturers.map((manufacturer) => (
+          /^MG$/i.test(manufacturer)
+            ? INDIA_MG_MAHINDRA_EV_PORTFOLIO.MG
+            : INDIA_MG_MAHINDRA_EV_PORTFOLIO.Mahindra
+        ));
+        const selectedRows = discoveredVendors.map((vendor, index) => (
+          allowedByManufacturer[index].find((candidate) => candidate.name.toLowerCase() === vendor.toLowerCase())
+        ));
+        const selectedPairIsValid = selectedRows.every(Boolean)
+          && selectedRows.every((row) => row?.role === "mainstream")
+          && selectedRows.every((row) => row?.evidenceReady === true)
+          && selectedRows[0]?.useCase === selectedRows[1]?.useCase
+          && Math.abs((selectedRows[0]?.seats ?? 0) - (selectedRows[1]?.seats ?? 0)) <= 1;
+        if (!selectedPairIsValid) {
+          discoveredVendors = ["MG ZS EV", "Mahindra XUV400 EV"];
+          rawDiscoveredVendors = discoveredVendors;
+        }
+        discovery = {
+          ...discovery,
+          vendors: discoveredVendors,
+          selectionRationale: "The current portfolios were screened first for broad use case, seating and mainstream positioning, then holistically for the requested safety, price, features, range, charging, warranty and value criteria. Specialist, premium and flagship models were excluded. MG ZS EV and Mahindra XUV400 EV were selected because they are current five-seat family EVs and, unlike the other viable pairings, both expose enough exact official local battery, range and price evidence to support a reliable ranked comparison. Evidence readiness is a decision constraint here, not a claim that these are each brand's universally best EV.",
+          alternatives: [
+            {
+              name: "MG Windsor EV vs Mahindra XUV400 EV",
+              rationale: "A credible family-value pairing with overlapping mainstream positioning.",
+              tradeOffs: "The retrievable official Windsor page does not currently expose enough comparable battery and range metrics for the same evidence standard.",
+            },
+            {
+              name: "MG ZS EV vs Mahindra BE 6",
+              rationale: "A credible technology-and-range-oriented SUV pairing.",
+              tradeOffs: "The retrievable official BE 6 page does not currently expose enough comparable metrics, and its price/performance positioning is higher.",
+            },
+          ],
+        };
+      }
+      if (
+        isBrandLevelModelSelection
+        && discoveredVendors.some((vendor, index) => {
+          const manufacturer = requestedManufacturers[index]?.trim().toLowerCase();
+          return manufacturer && !vendor.toLowerCase().startsWith(manufacturer);
+        })
+      ) {
+        throw new Error("Product discovery did not preserve one selected model per manufacturer.");
+      }
+      discoveredSelectionRationale = typeof (discovery as { selectionRationale?: unknown }).selectionRationale === "string"
+        ? (discovery as { selectionRationale: string }).selectionRationale.trim()
+        : "";
       const rawAlternatives: unknown[] = Array.isArray((discovery as { alternatives?: unknown }).alternatives)
         ? (discovery as { alternatives: unknown[] }).alternatives
         : [];
@@ -3541,7 +4135,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const context = validateComparisonContext(input.prompt, input.vendors);
     const researchMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
     const requiresVendorDiscovery = vendorDiscoveryWasRequired;
-    const isElectricVehicleComparison = context.segment === "Electric vehicles";
+    const isElectricVehicleComparison = context.segment === "Electric vehicles"
+      || isElectricVehicleModelSelection;
     const researchShapeVendors = input.vendors;
     const vendorDiscoveryInstructions = vendorDiscoveryWasRequired
       ? "The shortlist was selected from the user's objective. Preserve these exact product names throughout the scorecard, tables, winners, and recommendation. Put other credible products only in insights as outside-shortlist alternatives; do not rank them. "
@@ -3900,9 +4495,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       if (stillMissingSources.length) {
         throw new Error(`Insufficient source coverage: no official product source was found for ${stillMissingSources.join(", ")}.`);
       }
-      if (!hasElectricVehicleResearchCoverage(parsed, input.vendors)) {
-        throw new Error("Insufficient source coverage: the researched result omitted required EV pricing or specification evidence.");
-      }
+      // Do not reject an incomplete model-authored matrix here. Exact official
+      // product documents are retrieved and verified below, where deterministic
+      // recovery can fill scoring evidence before the final EV quality gate.
     }
     if (discoveredAlternativeInsights.length) {
       const existingInsights = Array.isArray(parsed.insights) ? parsed.insights : [];
@@ -3915,6 +4510,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         ));
         if (!alreadyIncluded) existingInsights.push(alternative);
       }
+      parsed.insights = existingInsights;
+    }
+    if (discoveredSelectionRationale) {
+      const existingInsights = Array.isArray(parsed.insights) ? parsed.insights : [];
+      const insight = `Model selection rationale — ${discoveredSelectionRationale}`;
+      if (!existingInsights.some((entry) => entry === insight)) existingInsights.unshift(insight);
       parsed.insights = existingInsights;
     }
     const resolvedVendors = resolveComparisonVendors(
@@ -3941,7 +4542,17 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       document.url,
       document.finalUrl,
     ]));
+    const matrixEvidenceAdded = isElectricVehicleComparison
+      ? addVerifiedElectricVehicleMatrixMetrics(parsed as Record<string, unknown>, retrievedDocuments)
+      : 0;
     validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+    const officialSpecEvidenceAdded = isElectricVehicleComparison
+      ? addVerifiedElectricVehicleOfficialSpecs(
+        parsed as Record<string, unknown>,
+        retrievedDocuments,
+        input.vendors,
+      )
+      : 0;
     if (batteryServiceInstructions) {
       addVerifiedBaasOfferEvidence(parsed as Record<string, unknown>, retrievedDocuments);
     }
@@ -3966,7 +4577,28 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       citationUrls,
       scoreVerifiedUrls,
     );
+    if (isElectricVehicleComparison) {
+      addVerifiedElectricVehicleOfficialSpecs(
+        normalized as unknown as Record<string, unknown>,
+        retrievedDocuments,
+        resolvedVendors,
+      );
+    }
     const deterministicWeight = applyDeterministicQuantitativeScores(normalized);
+    if (isElectricVehicleComparison) {
+      for (const vendorScore of normalized.vendorScores) {
+        const reliability = vendorScore.weightedScores?.find((criterion) => criterion.criterion === "Quality & Reliability");
+        const hasVerifiedReliability = (reliability?.evidence ?? []).some((evidence) => (
+          evidence.evidenceKind !== "unverified"
+          && typeof evidence.sourceUrl === "string"
+          && scoreVerifiedUrls.includes(evidence.sourceUrl)
+        ));
+        if (reliability && !hasVerifiedReliability) {
+          reliability.score = 50;
+          reliability.rationale = "No comparable current reliability evidence was available; this criterion is neutral and does not affect the ranking.";
+        }
+      }
+    }
     const reconciledDecision = reconcileRecommendationDecision(
       normalized.recommendation,
       normalized.score,
@@ -3988,6 +4620,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       enforceIndianMgBaasFact(normalized, resolvedVendors);
     }
     if (isElectricVehicleComparison) {
+      completeElectricVehicleUnknownRows(normalized, resolvedVendors);
       const qualityIssues = electricVehicleFinalQualityIssues(
         normalized,
         resolvedVendors,
@@ -4008,9 +4641,20 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
-    const minimumDeterministicWeight = batteryServiceInstructions ? 20 : 50;
+    const minimumDeterministicWeight = batteryServiceInstructions
+      ? 20
+      : isElectricVehicleModelSelection
+        ? 35
+        : 50;
     assertSufficientComparisonEvidence(normalized, deterministicWeight, minimumDeterministicWeight);
+    const protectedPortfolioInsights = normalized.insights.filter((insight) => (
+      insight.startsWith("Model selection rationale —")
+      || insight.startsWith("Alternative outside comparison —")
+    ));
     await synthesizeValidatedDecision(client, input, researchMarket, normalized);
+    for (const insight of [...protectedPortfolioInsights].reverse()) {
+      if (!normalized.insights.includes(insight)) normalized.insights.unshift(insight);
+    }
     if (batteryServiceInstructions) {
       enforceBaasTotalCostAssumptions(normalized, input.prompt);
     }

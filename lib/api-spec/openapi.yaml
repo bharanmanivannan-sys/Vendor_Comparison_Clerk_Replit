@@ -973,6 +973,7 @@ components:
       required: [prompt, vendors, urls, criteria, context, intent, comparisonIdentity]
     ComparisonJobAccepted:
       type: object
+      description: Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
       properties:
         jobId:
           type: string
@@ -984,7 +985,12 @@ components:
           $ref: "#/components/schemas/ComparisonJobStage"
         progress:
           $ref: "#/components/schemas/ComparisonJobProgress"
-      required: [jobId, status, stage, progress]
+        targetCompletionSeconds:
+          type: integer
+          minimum: 1
+          example: 120
+          description: Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+      required: [jobId, status, stage, progress, targetCompletionSeconds]
     ComparisonJobStage:
       type: string
       enum: [finding_official_sources, building_evidence, analysing_evidence, validating_comparison, preparing_result, completed]
@@ -1010,6 +1016,15 @@ components:
           $ref: "#/components/schemas/ComparisonJobStage"
         progress:
           $ref: "#/components/schemas/ComparisonJobProgress"
+        elapsedMs:
+          type: integer
+          minimum: 0
+          description: Server-measured milliseconds since this job was created.
+        targetCompletionSeconds:
+          type: integer
+          minimum: 1
+          example: 120
+          description: Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
         result:
           oneOf:
             - $ref: "#/components/schemas/Comparison"
@@ -1021,7 +1036,7 @@ components:
           type: string
           description: Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
           enum: [research_failed, validation_failed, insufficient_quantitative_evidence]
-      required: [status, stage, progress]
+      required: [status, stage, progress, elapsedMs, targetCompletionSeconds]
     ComparisonIdentity:
       type: object
       description: Canonical comparison set used by every downstream label and recommendation.

@@ -18,9 +18,17 @@ import type { ComparisonJobAcceptedStatus } from './comparisonJobAcceptedStatus'
 import type { ComparisonJobProgress } from './comparisonJobProgress';
 import type { ComparisonJobStage } from './comparisonJobStage';
 
+/**
+ * Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
+ */
 export interface ComparisonJobAccepted {
   jobId: string;
   status: ComparisonJobAcceptedStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
+  /**
+     * Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+     * @minimum 1
+     */
+  targetCompletionSeconds: number;
 }

@@ -50,11 +50,13 @@ const comparisonJobs = new Map<string, {
   result?: unknown;
   message?: string;
   errorCode?: "research_failed" | "validation_failed" | "insufficient_quantitative_evidence";
+  startedAt: number;
   createdAt: number;
 }>();
 const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
 const JOB_TTL_MS = 15 * 60 * 1000;
+const COMPARISON_TARGET_SECONDS = 120;
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: message, code, message });
@@ -81,6 +83,10 @@ router.post("/visitor-session", async (req: Request, res: Response): Promise<voi
 
 function requestOwner(req: Request): string {
   return req.ip || req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || "unknown";
+}
+
+export function comparisonJobElapsedMs(startedAt: number, now = Date.now()): number {
+  return Math.max(0, now - startedAt);
 }
 
 function pruneComparisonJobs(): void {
@@ -152,12 +158,14 @@ function startComparisonJob(options: {
 }): string {
   pruneComparisonJobs();
   const id = randomUUID();
+  const startedAt = Date.now();
   comparisonJobs.set(id, {
     owner: options.owner,
     status: "processing",
     stage: "finding_official_sources",
     progress: { entities: options.vendors, subject: options.subject },
-    createdAt: Date.now(),
+    startedAt,
+    createdAt: startedAt,
   });
   void (async () => {
     const urls = [...(options.input.urls ?? [])];
@@ -202,6 +210,7 @@ function startComparisonJob(options: {
           stage: "completed",
           progress: { entities: options.vendors, subject: options.subject },
           result: CreateComparisonResponse.parse(detailFromRow(created)),
+          startedAt,
           createdAt: Date.now(),
         });
       } else {
@@ -211,6 +220,7 @@ function startComparisonJob(options: {
           stage: "completed",
           progress: { entities: options.vendors, subject: options.subject },
           result: CreateGuestComparisonResponse.parse(payload),
+          startedAt,
           createdAt: Date.now(),
         });
       }
@@ -229,6 +239,7 @@ function startComparisonJob(options: {
         progress: { entities: options.vendors, subject: options.subject },
         errorCode: comparisonFailureCode(error),
         message: comparisonFailureMessage(error, options.input.prompt, options.vendors),
+        startedAt,
         createdAt: Date.now(),
       });
     }
@@ -246,6 +257,8 @@ function sendComparisonJob(req: Request, res: Response, owner: string): void {
     status: job.status,
     stage: job.stage,
     progress: job.progress,
+    elapsedMs: comparisonJobElapsedMs(job.startedAt),
+    targetCompletionSeconds: COMPARISON_TARGET_SECONDS,
     result: job.result,
     message: job.message,
     errorCode: job.errorCode,
@@ -438,6 +451,7 @@ router.post("/guest/comparison-jobs", async (req: Request, res): Promise<void> =
     jobId,
     status: "processing",
     stage: "finding_official_sources",
+    targetCompletionSeconds: COMPARISON_TARGET_SECONDS,
     progress: {
       entities: validated.vendors,
       subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)
@@ -516,6 +530,7 @@ router.post("/comparison-jobs", requireAuth, async (req: AuthedRequest, res): Pr
     jobId,
     status: "processing",
     stage: "finding_official_sources",
+    targetCompletionSeconds: COMPARISON_TARGET_SECONDS,
     progress: {
       entities: validated.vendors,
       subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)

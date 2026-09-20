@@ -23,6 +23,7 @@ The implementation is designed around these goals:
 7. **Enforce ownership at every boundary.** Authenticated data is scoped by Clerk user identity; commercial API data is scoped by tenant and API key.
 8. **Keep scoring reproducible.** Weighted evidence contributions are normalized and reconciled with persisted totals.
 9. **Bound launch-market claims.** MVP research is limited to India, Australia, the United States, and the United Kingdom rather than implying reliable worldwide local coverage.
+10. **Target a sub-two-minute interactive result.** Verified portfolio paths avoid redundant AI stages and expose a 120-second service objective while preserving evidence gates.
 
 ## 3. System Context
 
@@ -175,6 +176,11 @@ The browser does not calculate progress from elapsed time. It displays:
 - The current backend research stage.
 - Completed stages inferred only from forward backend state transitions.
 
+The accepted-job contract also returns `targetCompletionSeconds` and each poll
+returns server-measured `elapsedMs`. The current target is 120 seconds. This is
+an operational service objective, not an estimated progress percentage, hard
+deadline, or permission to bypass evidence validation.
+
 ## 6. API Design
 
 ### 6.1 Middleware and route boundaries
@@ -276,7 +282,8 @@ flowchart TD
     Identity[Freeze canonical comparison identity]
     Market[Infer market, currency, and category]
     Official[Seed official local sources]
-    Discovery{Concrete products already known?}
+    Discovery{Validated local portfolio available?}
+    Portfolio[Screen current portfolio for use case, seating, positioning, and evidence readiness]
     Shortlist[Discover concrete shortlist]
     Research[Web-assisted structured research]
     Repair[Conditional structured-output repair]
@@ -293,7 +300,8 @@ flowchart TD
     Market --> Official
     Official --> Discovery
     Discovery -->|No| Shortlist
-    Discovery -->|Yes| Research
+    Discovery -->|Yes| Portfolio
+    Portfolio --> Research
     Shortlist --> Research
     Research --> Repair
     Repair --> URLs
@@ -317,7 +325,34 @@ The parser extracts:
 
 Deterministic validation prevents model output from silently redefining the ranked comparison set. Objective phrases and categories cannot be treated as vendor names. When an open-ended objective requires product discovery, the system selects concrete products before full analysis.
 
-### 8.2 Evidence policy
+### 8.2 Portfolio-first product selection
+
+When a request names manufacturers but not exact products, the system evaluates
+the current local model families before ranking. Minimum comparability is a
+guardrail rather than the whole decision method:
+
+1. Candidates must serve the same broad use case.
+2. Seating and market positioning must reasonably overlap.
+3. Specialist, halo, premium, and flagship products are excluded from a broad
+   mainstream request unless explicitly requested.
+4. Viable pairings are then assessed holistically against the user’s criteria,
+   ownership value, technology, capability, and evidence quality.
+5. A ranked pair must expose enough exact official local evidence to support
+   comparable deterministic metrics.
+
+For verified portfolios, server-owned current-model and evidence-readiness
+metadata is used directly. This avoids redundant discovery, adjudication, and
+repair calls and is the primary latency optimization for the 120-second target.
+Generic manufacturer combinations continue through bounded web portfolio
+discovery and deterministic validation.
+
+The report preserves a visible `Model selection rationale —` disclosure and
+credible excluded pairings with trade-offs. Those protected disclosures are
+reattached after final synthesis so narrative generation cannot remove them.
+Evidence readiness is described as a decision constraint, never as proof that a
+selected model is universally the manufacturer’s best product.
+
+### 8.3 Evidence policy
 
 The pipeline prioritizes:
 
@@ -327,7 +362,7 @@ The pipeline prioritizes:
 
 Market-specific terms must not be replaced with another country’s pricing or product conditions. Non-official fallback evidence is freshness-limited to the trailing year. Search snippets, anonymous posts, affiliate pages, unsupported AI summaries, irrelevant pages, and outdated resources are not authoritative evidence. User-provided URLs are candidates, not automatically trusted evidence.
 
-### 8.3 Source validation
+### 8.4 Source validation
 
 Collected URLs are:
 
@@ -343,7 +378,7 @@ Collected URLs are:
 
 HTML is structurally parsed. Script, style, template, navigation, footer, form, iframe, hidden, and `aria-hidden` content is removed before normalization. Normalized visible text is hashed with SHA-256. Source availability alone does not make a claim scoreable: a quantitative claim must also match retrieved visible text and carry its document hash and exact text offsets.
 
-### 8.4 Scoring model
+### 8.5 Scoring model
 
 Evidence rows carry normalized scores, criterion weights, confidence, support direction, weighted contribution, document provenance, a server-derived metric subject, and a server-derived comparison basis. Model-proposed metrics are candidates only.
 
@@ -369,7 +404,7 @@ Normalization distinguishes:
 
 Persisted contributions must reconcile with reported score totals. Recommendation text is reconciled with the scorecard so tied scores and narrative winners do not contradict each other.
 
-### 8.5 Domain-specific controls
+### 8.6 Domain-specific controls
 
 The generic comparison pipeline has focused extensions for cases requiring additional evidence structure, including:
 
@@ -564,6 +599,15 @@ Deployment configuration must provide the production database, Clerk configurati
 
 **Reason:** Inferring scoring semantics from model prose can reward adverse outcomes, compare unlike products or periods, and manufacture confidence from missing evidence.
 
+### 14.9 Verified portfolio fast paths
+
+**Decision:** A server-validated current portfolio may bypass redundant
+model-based discovery, adjudication, and comparability correction.
+
+**Reason:** Repeating those stages adds provider latency and structured-output
+failure modes without improving a selection already bounded by current-model,
+comparability, and evidence-readiness rules.
+
 ## 15. Current Limitations and Risks
 
 ### 15.1 Volatile browser job storage
@@ -622,6 +666,8 @@ When changing this architecture:
 8. Make schema changes additive unless data deletion is explicitly reviewed.
 9. Verify API tests, type checks, generated clients, and affected browser flows.
 10. Update this document when a runtime boundary, data owner, major pipeline stage, or security assumption changes.
+11. Keep the 120-second target explicit in the OpenAPI job contract; optimize by removing redundant work, never by weakening evidence gates.
+12. Preserve portfolio-selection rationale and excluded alternatives across final synthesis and persistence.
 
 ## 17. Primary Code References
 

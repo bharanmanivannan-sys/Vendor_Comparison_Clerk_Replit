@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addElectricVehicleMatrixEvidence,
+  addVerifiedElectricVehicleMatrixMetrics,
+  addVerifiedElectricVehicleOfficialSpecs,
   addVerifiedBaasOfferEvidence,
   applyDeterministicQuantitativeScores,
   assertCanonicalComparisonConsistency,
@@ -26,6 +28,7 @@ import {
   missingElectricVehicleSourceVendors,
   mergeElectricVehicleResearch,
   normalizeDecisionGovernance,
+  normalizeCurrentModelSelectionName,
   normalizeEvidenceRecords,
   normalizeLensWinner,
   normalizeMarketHistory,
@@ -38,12 +41,14 @@ import {
   parseJsonObject,
   parsePrompt,
   parsePromptWithIntent,
+  preferredIndiaEvModelSelection,
   reweightAnalysis,
   reconcileRecommendationDecision,
   reconcileRecommendationWithNarrative,
   rankEvidenceSources,
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
+  requestsCurrentModelSelection,
   selectRecommendationLabel,
   sourceMatchesResearchMarket,
   validateFinalEvidenceUrls,
@@ -628,6 +633,36 @@ test("allows ordinary comparison instructions containing select and from", () =>
     true,
   );
   assert.equal(isSafeUserInput("SELECT * FROM users"), false);
+});
+
+test("uses portfolio discovery instead of forcing a predetermined manufacturer pair", () => {
+  const prompt = "Compare MG vs Mahindra available in the requested market. Select the best-matching current model from each manufacturer. Compare official safety ratings, pricing, features, range, charging, warranty, and value for money";
+  assert.equal(isElectricVehiclePrompt(prompt), true);
+  assert.equal(requestsCurrentModelSelection(prompt), true);
+  assert.equal(normalizeCurrentModelSelectionName("MG ZS EV Executive"), "MG ZS EV");
+  assert.equal(normalizeCurrentModelSelectionName("Mahindra XUV400 EV EC Pro"), "Mahindra XUV400 EV");
+  assert.equal(preferredIndiaEvModelSelection(["MG", "Mahindra"], "IN", prompt), null);
+  assert.equal(preferredIndiaEvModelSelection(["MG", "Mahindra"], "AU", prompt), null);
+});
+
+test("preserves exact EV model score rows during canonical matching", () => {
+  const rows = [{ vendor: "MG ZS EV", score: 61 }, { vendor: "Mahindra XUV400 EV", score: 59 }];
+  assert.deepEqual(
+    canonicalVendorScoreRows(["MG ZS EV", "Mahindra XUV400 EV"], rows),
+    rows,
+  );
+});
+
+test("seeds exact official India sources for discovered MG and Mahindra EV models", () => {
+  const sources = officialMarketSourcesFor(
+    "Compare official safety ratings, pricing, features, range, charging, warranty, and value for money",
+    ["MG ZS", "Mahindra XUV400"],
+    inferResearchMarket("Compare EVs", ["MG ZS EV", "Mahindra XUV400 EV"], "IN"),
+  );
+
+  assert.ok(sources.includes("https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india"));
+  assert.ok(sources.includes("https://auto.mahindra.com/xuv400.html"));
+  assert.ok(sources.some((source) => source.endsWith("XUV400ProRangeBrochure.pdf")));
 });
 
 test("normalizes governance lists into the string response contract", () => {
@@ -1273,11 +1308,12 @@ test("seeds exact official Indian EV product pages", () => {
     "Compare Hyundai Creta Electric and Mahindra BE 6 in India",
     ["Hyundai Creta Electric", "Mahindra BE 6"],
   );
-  assert.deepEqual(officialMarketSourcesFor(
+  const sources = officialMarketSourcesFor(
     "Compare Hyundai Creta Electric and Mahindra BE 6 in India",
     ["Hyundai Creta Electric", "Mahindra BE 6"],
     market,
-  ), [
+  );
+  for (const source of [
     "https://www.hyundai.com/in/en/find-a-car/creta-electric/highlights",
     "https://www.hyundai.com/in/en/find-a-car/creta-electric/specification",
     "https://www.autocarindia.com/cars/hyundai/creta-electric/specifications",
@@ -1286,7 +1322,9 @@ test("seeds exact official Indian EV product pages", () => {
     "https://www.mahindraelectricsuv.com/esuv/be-6/MBE6.html",
     "https://www.cardekho.com/compare/hyundai-creta-electric-and-mahindra-be-6.htm",
     "https://en.wikipedia.org/wiki/Mahindra_BE_6",
-  ]);
+  ]) {
+    assert.ok(sources.includes(source));
+  }
 });
 
 test("excludes clearly mismatched regional sources from India research", () => {
@@ -1966,6 +2004,105 @@ test("derives EV score evidence from displayed matrix winners", () => {
     hyundai.find((row) => row.criterion === "Quality & Reliability")?.evidence?.[0]?.exactClaim ?? "",
     /No reliability evidence/,
   );
+});
+
+test("verifies EV matrix metrics against exact official product documents before scoring", () => {
+  const vendors = ["MG ZS EV", "Mahindra XUV400 EV"];
+  const analysis = {
+    pricing: [{
+      dimension: "Exact variant and ex-showroom price",
+      values: { "MG ZS EV": "₹18.98 lakh", "Mahindra XUV400 EV": "₹15.49 lakh" },
+    }],
+    features: [
+      {
+        dimension: "Battery capacity and certified range",
+        values: { "MG ZS EV": "50.3 kWh; 461 km", "Mahindra XUV400 EV": "39.4 kWh; 456 km" },
+      },
+      {
+        dimension: "DC charging power",
+        values: { "MG ZS EV": "50 kW DC", "Mahindra XUV400 EV": "50 kW DC" },
+      },
+    ],
+    vendorScores: vendors.map((vendor) => ({ vendor, score: 50, weightedScores: [] })),
+  } as unknown as AnalysisPayload;
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+      finalUrl: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+      contentType: "text/html",
+      text: [
+        "MG ZS EV ex-showroom price is ₹18.98 lakh.",
+        "MG ZS EV battery capacity is 50.3 kWh.",
+        "MG ZS EV certified range is 461 km.",
+        "MG ZS EV DC charging power is 50 kW.",
+      ].join("\n"),
+      sha256: "a".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: "https://auto.mahindra.com/xuv400.html",
+      finalUrl: "https://auto.mahindra.com/xuv400.html",
+      contentType: "text/html",
+      text: [
+        "Mahindra XUV400 EV ex-showroom price is ₹15.49 lakh.",
+        "Mahindra XUV400 EV battery capacity is 39.4 kWh.",
+        "Mahindra XUV400 EV certified range is 456 km.",
+        "Mahindra XUV400 EV DC charging power is 50 kW.",
+      ].join("\n"),
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+
+  assert.equal(addVerifiedElectricVehicleMatrixMetrics(analysis, documents), 6);
+  assert.equal(applyDeterministicQuantitativeScores(analysis), 55);
+  assert.ok(analysis.vendorScores.every((vendor) => vendor.score !== 50));
+});
+
+test("extracts controlled EV specs from exact official model pages with separated headings", () => {
+  const analysis = {
+    vendorScores: ["MG ZS", "Mahindra XUV400"].map((vendor) => ({
+      vendor,
+      score: 50,
+      weightedScores: [],
+    })),
+  } as unknown as AnalysisPayload;
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+      finalUrl: "https://www.mgmotor.co.in/vehicles/mgzsev-electric-car-in-india",
+      contentType: "text/html",
+      text: "MG ZS EV\nThe ZS EV is equipped with a 50.3 kWh lithium-ion battery pack.\nThe ZS EV delivers a certified range of 461* km on a single charge.",
+      sha256: "c".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: "https://auto.mahindra.com/xuv400.html",
+      finalUrl: "https://auto.mahindra.com/xuv400.html",
+      contentType: "text/html",
+      text: "Mahindra XUV400\nGo up to 456* km on a single charge with 39.4 kWh battery pack. MIDC certified range.",
+      sha256: "d".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+
+  analysis.vendorScores[0].vendor = "MG";
+  analysis.vendorScores[1].vendor = "Mahindra";
+  assert.equal(addVerifiedElectricVehicleOfficialSpecs(
+    analysis,
+    documents,
+    ["MG ZS EV", "Mahindra XUV400 EV"],
+  ), 8);
+  assert.deepEqual(
+    analysis.vendorScores.map((vendor) => vendor.vendor),
+    ["MG ZS EV", "Mahindra XUV400 EV"],
+  );
+  assert.equal(applyDeterministicQuantitativeScores(analysis), 35);
+  assert.ok(analysis.vendorScores.every((vendor) => vendor.score !== 50));
 });
 
 test("merges missing EV matrix rows and cells from the initial research pass", () => {

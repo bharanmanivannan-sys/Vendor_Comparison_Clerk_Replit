@@ -9,6 +9,7 @@ The repository also includes a free-beta, tenant-scoped API with usage controls.
 - Natural-language product and vendor comparison
 - Hybrid input parsing: model-assisted intent extraction plus deterministic entity-boundary validation
 - Brand-level product discovery, including recommendations across product catalogs
+- Portfolio-first model selection with comparability and evidence-readiness guardrails
 - Current web research with cited sources
 - Weighted scoring, pricing, features, SWOT, PESTLE, SOAR, and VRIO analysis
 - Guest comparison flow
@@ -98,6 +99,11 @@ pnpm --filter @workspace/api-server test
 
 Some API tests require the development PostgreSQL schema to be up to date.
 
+Repository engineering and decision-quality rules are maintained in
+[`.github/DECISIONINTEL_RULES.md`](.github/DECISIONINTEL_RULES.md). The current
+as-built design is documented in
+[`docs/architecture-and-design.md`](docs/architecture-and-design.md).
+
 ## API overview
 
 The commercial API provides:
@@ -110,6 +116,11 @@ The commercial API provides:
 - Usage reporting
 
 The API contract and generated clients are maintained from `lib/api-spec/openapi.yaml`.
+
+Browser comparison jobs expose a `targetCompletionSeconds` service objective
+and server-measured `elapsedMs` while polling. The current target is 120
+seconds. It is not an estimated progress percentage or a reason to weaken
+source validation.
 
 ### Input parsing contract
 

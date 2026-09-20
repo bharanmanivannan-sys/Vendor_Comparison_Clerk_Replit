@@ -773,6 +773,7 @@ export const createComparisonJobResponseProgressEntitiesMax = 6;
 
 
 
+
 export const CreateComparisonJobResponse = zod.object({
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
@@ -780,8 +781,9 @@ export const CreateComparisonJobResponse = zod.object({
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(createComparisonJobResponseProgressEntitiesMin).max(createComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
-})
-})
+}),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
+}).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
 
 
 /**
@@ -793,6 +795,9 @@ export const GetComparisonJobParams = zod.object({
 
 export const getComparisonJobResponseProgressEntitiesMin = 2;
 export const getComparisonJobResponseProgressEntitiesMax = 6;
+
+export const getComparisonJobResponseElapsedMsMin = 0;
+
 
 export const getComparisonJobResponseResultOneOneVendorsMax = 6;
 
@@ -855,6 +860,8 @@ export const GetComparisonJobResponse = zod.object({
   "entities": zod.array(zod.string()).min(getComparisonJobResponseProgressEntitiesMin).max(getComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
+  "elapsedMs": zod.number().int().min(getComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
@@ -1518,6 +1525,7 @@ export const createGuestComparisonJobResponseProgressEntitiesMax = 6;
 
 
 
+
 export const CreateGuestComparisonJobResponse = zod.object({
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
@@ -1525,8 +1533,9 @@ export const CreateGuestComparisonJobResponse = zod.object({
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(createGuestComparisonJobResponseProgressEntitiesMin).max(createGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
-})
-})
+}),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
+}).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
 
 
 /**
@@ -1538,6 +1547,9 @@ export const GetGuestComparisonJobParams = zod.object({
 
 export const getGuestComparisonJobResponseProgressEntitiesMin = 2;
 export const getGuestComparisonJobResponseProgressEntitiesMax = 6;
+
+export const getGuestComparisonJobResponseElapsedMsMin = 0;
+
 
 export const getGuestComparisonJobResponseResultOneOneVendorsMax = 6;
 
@@ -1600,6 +1612,8 @@ export const GetGuestComparisonJobResponse = zod.object({
   "entities": zod.array(zod.string()).min(getGuestComparisonJobResponseProgressEntitiesMin).max(getGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
+  "elapsedMs": zod.number().int().min(getGuestComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),

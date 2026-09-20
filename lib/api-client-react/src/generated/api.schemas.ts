@@ -306,11 +306,19 @@ export interface ComparisonJobProgress {
   subject: string;
 }
 
+/**
+ * Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
+ */
 export interface ComparisonJobAccepted {
   jobId: string;
   status: ComparisonJobAcceptedStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
+  /**
+     * Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+     * @minimum 1
+     */
+  targetCompletionSeconds: number;
 }
 
 export type ComparisonJobStateStatus = typeof ComparisonJobStateStatus[keyof typeof ComparisonJobStateStatus];
@@ -787,6 +795,16 @@ export interface ComparisonJobState {
   status: ComparisonJobStateStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
+  /**
+     * Server-measured milliseconds since this job was created.
+     * @minimum 0
+     */
+  elapsedMs: number;
+  /**
+     * Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+     * @minimum 1
+     */
+  targetCompletionSeconds: number;
   result?: Comparison | GuestComparison;
   /** User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt. */
   message?: string;
