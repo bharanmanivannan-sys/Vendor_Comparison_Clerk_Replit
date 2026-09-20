@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Comparison } from './comparison';
+import type { ComparisonJobProgress } from './comparisonJobProgress';
 import type { ComparisonJobStage } from './comparisonJobStage';
 import type { ComparisonJobStateErrorCode } from './comparisonJobStateErrorCode';
 import type { ComparisonJobStateStatus } from './comparisonJobStateStatus';
@@ -26,6 +27,7 @@ import type { GuestComparison } from './guestComparison';
 export interface ComparisonJobState {
   status: ComparisonJobStateStatus;
   stage: ComparisonJobStage;
+  progress: ComparisonJobProgress;
   result?: Comparison | GuestComparison;
   message?: string;
   errorCode?: ComparisonJobStateErrorCode;

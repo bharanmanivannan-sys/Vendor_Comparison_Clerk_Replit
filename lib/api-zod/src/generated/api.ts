@@ -725,10 +725,19 @@ export const CreateComparisonJobBody = zod.object({
   "criteria": zod.array(zod.string().min(1).max(createComparisonJobBodyCriteriaItemMax)).max(createComparisonJobBodyCriteriaMax).optional()
 })
 
+export const createComparisonJobResponseProgressEntitiesMin = 2;
+export const createComparisonJobResponseProgressEntitiesMax = 5;
+
+
+
 export const CreateComparisonJobResponse = zod.object({
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
-  "stage": zod.enum(['researching', 'validating', 'completed'])
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "progress": zod.object({
+  "entities": zod.array(zod.string()).min(createComparisonJobResponseProgressEntitiesMin).max(createComparisonJobResponseProgressEntitiesMax),
+  "subject": zod.string()
+})
 })
 
 
@@ -738,6 +747,9 @@ export const CreateComparisonJobResponse = zod.object({
 export const GetComparisonJobParams = zod.object({
   "id": zod.coerce.string().uuid()
 })
+
+export const getComparisonJobResponseProgressEntitiesMin = 2;
+export const getComparisonJobResponseProgressEntitiesMax = 5;
 
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 5;
@@ -783,7 +795,11 @@ export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItem
 
 export const GetComparisonJobResponse = zod.object({
   "status": zod.enum(['processing', 'complete', 'failed']),
-  "stage": zod.enum(['researching', 'validating', 'completed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "progress": zod.object({
+  "entities": zod.array(zod.string()).min(getComparisonJobResponseProgressEntitiesMin).max(getComparisonJobResponseProgressEntitiesMax),
+  "subject": zod.string()
+}),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
@@ -1182,10 +1198,19 @@ export const CreateGuestComparisonJobBody = zod.object({
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyCriteriaItemMax)).max(createGuestComparisonJobBodyCriteriaMax).optional()
 })
 
+export const createGuestComparisonJobResponseProgressEntitiesMin = 2;
+export const createGuestComparisonJobResponseProgressEntitiesMax = 5;
+
+
+
 export const CreateGuestComparisonJobResponse = zod.object({
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
-  "stage": zod.enum(['researching', 'validating', 'completed'])
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "progress": zod.object({
+  "entities": zod.array(zod.string()).min(createGuestComparisonJobResponseProgressEntitiesMin).max(createGuestComparisonJobResponseProgressEntitiesMax),
+  "subject": zod.string()
+})
 })
 
 
@@ -1195,6 +1220,9 @@ export const CreateGuestComparisonJobResponse = zod.object({
 export const GetGuestComparisonJobParams = zod.object({
   "id": zod.coerce.string().uuid()
 })
+
+export const getGuestComparisonJobResponseProgressEntitiesMin = 2;
+export const getGuestComparisonJobResponseProgressEntitiesMax = 5;
 
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 5;
@@ -1240,7 +1268,11 @@ export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScore
 
 export const GetGuestComparisonJobResponse = zod.object({
   "status": zod.enum(['processing', 'complete', 'failed']),
-  "stage": zod.enum(['researching', 'validating', 'completed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "progress": zod.object({
+  "entities": zod.array(zod.string()).min(getGuestComparisonJobResponseProgressEntitiesMin).max(getGuestComparisonJobResponseProgressEntitiesMax),
+  "subject": zod.string()
+}),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),

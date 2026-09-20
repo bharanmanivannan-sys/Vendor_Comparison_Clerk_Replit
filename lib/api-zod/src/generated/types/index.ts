@@ -36,6 +36,7 @@ export * from './comparisonIntentDecisionType';
 export * from './comparisonIntentFreshness';
 export * from './comparisonJobAccepted';
 export * from './comparisonJobAcceptedStatus';
+export * from './comparisonJobProgress';
 export * from './comparisonJobStage';
 export * from './comparisonJobState';
 export * from './comparisonJobStateErrorCode';

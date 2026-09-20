@@ -14,13 +14,12 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ComparisonJobAcceptedStatus } from './comparisonJobAcceptedStatus';
-import type { ComparisonJobProgress } from './comparisonJobProgress';
-import type { ComparisonJobStage } from './comparisonJobStage';
 
-export interface ComparisonJobAccepted {
-  jobId: string;
-  status: ComparisonJobAcceptedStatus;
-  stage: ComparisonJobStage;
-  progress: ComparisonJobProgress;
+export interface ComparisonJobProgress {
+  /**
+     * @minItems 2
+     * @maxItems 5
+     */
+  entities: string[];
+  subject: string;
 }

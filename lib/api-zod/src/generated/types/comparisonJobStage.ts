@@ -19,7 +19,10 @@ export type ComparisonJobStage = typeof ComparisonJobStage[keyof typeof Comparis
 
 
 export const ComparisonJobStage = {
-  researching: 'researching',
-  validating: 'validating',
+  finding_official_sources: 'finding_official_sources',
+  building_evidence: 'building_evidence',
+  analysing_evidence: 'analysing_evidence',
+  validating_comparison: 'validating_comparison',
+  preparing_result: 'preparing_result',
   completed: 'completed',
 } as const;

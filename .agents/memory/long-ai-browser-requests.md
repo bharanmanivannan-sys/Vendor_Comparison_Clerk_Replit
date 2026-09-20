@@ -7,4 +7,4 @@ Browser-facing comparison research must use a short job-submission request follo
 
 **Why:** Research can occasionally take more than three minutes, especially for niche comparisons that need web evidence and structured-output repair. The Replit preview proxy can close an idle synchronous request, while HTTP 102 can itself cause browser fetch to reject even when command-line clients accept it.
 
-**How to apply:** Any new long-running browser operation should return a job identifier immediately, run work server-side, and expose a status/result polling endpoint with explicit failed and expired states. Client polling windows must allow at least five minutes.
+**How to apply:** Any new long-running browser operation should return a job identifier immediately, run work server-side, and expose a status/result polling endpoint with explicit failed and expired states. Client polling windows must allow at least five minutes. Progress labels must come from backend stage transitions; never infer stages or percentages from elapsed browser time.

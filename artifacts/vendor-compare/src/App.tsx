@@ -988,22 +988,29 @@ function comparisonErrorMessage(error: unknown) {
 
 type ComparisonJobState = {
   status: 'processing' | 'complete' | 'failed';
-  stage: 'researching' | 'validating' | 'completed';
+  stage: 'finding_official_sources' | 'building_evidence' | 'analysing_evidence' | 'validating_comparison' | 'preparing_result' | 'completed';
+  progress: { entities: string[]; subject: string };
   result?: Comparison;
   message?: string;
   errorCode?: 'research_failed' | 'validation_failed';
 };
 
-async function runComparisonJob(guest: boolean, data: { prompt: string; urls: string[] }): Promise<Comparison> {
+async function runComparisonJob(
+  guest: boolean,
+  data: { prompt: string; urls: string[] },
+  onProgress: (job: ComparisonJobState) => void,
+): Promise<Comparison> {
   const basePath = guest ? '/api/guest/comparison-jobs' : '/api/comparison-jobs';
-  const created = await customFetch<{ jobId: string }>(basePath, {
+  const created = await customFetch<{ jobId: string; status: 'processing'; stage: ComparisonJobState['stage']; progress: ComparisonJobState['progress'] }>(basePath, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
+  onProgress(created);
   for (let attempt = 0; attempt < 300; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     const job = await customFetch<ComparisonJobState>(`${basePath}/${created.jobId}`);
+    onProgress(job);
     if (job.status === 'complete' && job.result) return job.result;
     if (job.status === 'failed') throw new Error(job.message || 'Product research could not be completed.');
   }
@@ -1011,28 +1018,21 @@ async function runComparisonJob(guest: boolean, data: { prompt: string; urls: st
 }
 
 function useComparisonJob(guest: boolean) {
-  return useMutation({
-    mutationFn: (data: { prompt: string; urls: string[] }) => runComparisonJob(guest, data),
+  const [jobState, setJobState] = useState<ComparisonJobState>();
+  const mutation = useMutation({
+    mutationFn: (data: { prompt: string; urls: string[] }) => {
+      setJobState(undefined);
+      return runComparisonJob(guest, data, setJobState);
+    },
   });
+  return { ...mutation, jobState };
 }
 
-function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; onSubmit: (data: { prompt: string; urls: string[] }) => void }) {
+function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: { prompt: string; urls: string[] }) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [urls, setUrls] = useState<string[]>([]);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlError, setUrlError] = useState('');
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    if (!pending) {
-      setElapsed(0);
-      return;
-    }
-    const interval = setInterval(() => {
-      setElapsed(e => e + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [pending]);
 
   const addUrl = () => {
     const value = urlDraft.trim();
@@ -1063,7 +1063,19 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     onSubmit({ prompt: prompt.trim(), urls });
   };
 
-  const stage = elapsed < 12 ? 0 : elapsed < 35 ? 1 : elapsed < 75 ? 2 : 3;
+  const researchStages: Array<{ stage: ComparisonJobState['stage']; label: string }> = [
+    { stage: 'finding_official_sources', label: 'Finding official sources' },
+    { stage: 'building_evidence', label: 'Building evidence base' },
+    { stage: 'analysing_evidence', label: 'Analysing evidence' },
+    { stage: 'validating_comparison', label: 'Validating comparison' },
+    { stage: 'preparing_result', label: 'Preparing result' },
+  ];
+  const activeStageIndex = researchStages.findIndex(({ stage }) => stage === jobState?.stage);
+  const parsedProgress = [
+    'Understanding your request',
+    ...(jobState?.progress.entities ?? []).map((entity) => `Identified ${entity}`),
+    ...(jobState?.progress.subject ? [`Identified ${jobState.progress.subject}`] : []),
+  ];
 
   return (
     <div className={`animate-rise animate-rise-1 mt-9 max-w-4xl rounded-2xl border shadow-[5px_5px_0_#d9ef66] grid ${guest ? 'border-[#202840] bg-[#202840]' : 'border-[#bcb5a5] bg-[#f8f4e8]'} `} style={{ gridTemplateColumns: '1fr' }}>
@@ -1175,56 +1187,27 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
             </h3>
           </div>
 
-          <div className="mb-6 flex w-full max-w-lg items-center gap-4">
-            <div className={`font-mono text-sm font-bold w-[3rem] ${guest ? 'text-[#d9ef66]' : 'text-[#0f766e] dark:text-[#d9ef66]'}`}>
-              {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
-            </div>
-            <div className={`h-2 flex-1 rounded-full overflow-hidden ${guest ? 'bg-[#3a4664]' : 'bg-[#e7e2d4] dark:bg-[#252d43]'}`}>
-              <div
-                className={`h-full rounded-full transition-all duration-1000 ease-linear ${guest ? 'bg-[#d9ef66]' : 'bg-[#0f766e] dark:bg-[#d9ef66]'}`}
-                style={{ width: `${Math.min(100, (elapsed / 300) * 100)}%` }}
-              />
-            </div>
-          </div>
-
           <p className={`mb-2 text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#d9ef66]' : 'text-[#0f766e] dark:text-[#d9ef66]'}`}>
-            Elapsed time · five-minute research window
+            Live job progress
           </p>
           <p className={`mb-8 text-sm font-medium ${guest ? 'text-[#a8b0c2]' : 'text-[#556075] dark:text-[#b8c1d3]'}`}>
-            Please keep this page open. Complex research can take up to five minutes.
+            Updates appear only when the research pipeline reaches a measured stage.
           </p>
 
           <div className="mb-10 flex w-full max-w-lg flex-col gap-4">
-            <p className={`text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e] dark:text-[#a8b0c2]'}`}>
-              Estimated research focus
-            </p>
-            {[
-              "Identify the products, market and constraints",
-              "Research current official and independent sources",
-              "Score each option using the weighted criteria",
-              "Check for credible alternatives and trade-offs"
-            ].map((stageText, i) => {
-              const isActive = stage === i;
-              const isPast = stage > i;
-
-              let textColor = '';
-              if (guest) {
-                textColor = isActive ? 'text-[#d9ef66]' : isPast ? 'text-[#f8f4e8]' : 'text-[#49536e]';
-              } else {
-                textColor = isActive ? 'text-[#0f766e] dark:text-[#d9ef66]' : isPast ? 'text-[#202840] dark:text-[#f8f4e8]' : 'text-[#a8b0c2] dark:text-[#4f596d]';
-              }
-
-              return (
-                <div key={i} className={`flex items-center gap-3 text-sm font-semibold transition-colors duration-500 ${textColor}`}>
-                  {isActive ? (
-                    <LoaderCircle size={16} className="animate-spin motion-reduce:animate-none" />
-                  ) : (
-                    <span className="grid size-4 place-items-center rounded-full border border-current text-[9px]">{i + 1}</span>
-                  )}
-                  <span>{stageText}</span>
-                </div>
-              );
-            })}
+            {[...parsedProgress.map((label) => ({ label, state: 'complete' as const })), ...researchStages.map(({ stage: itemStage, label }, index) => ({
+              label,
+              state: jobState?.stage === 'completed' || (activeStageIndex >= 0 && index < activeStageIndex)
+                ? 'complete' as const
+                : itemStage === jobState?.stage
+                  ? 'active' as const
+                  : 'pending' as const,
+            }))].map((item) => (
+              <div key={item.label} className={`flex items-center gap-3 text-sm font-semibold ${guest ? item.state === 'active' ? 'text-[#d9ef66]' : item.state === 'complete' ? 'text-[#f8f4e8]' : 'text-[#667089]' : item.state === 'active' ? 'text-[#0f766e]' : item.state === 'complete' ? 'text-[#202840]' : 'text-[#a8b0c2]'}`}>
+                {item.state === 'complete' ? <Check size={16} /> : item.state === 'active' ? <LoaderCircle size={16} className="animate-spin motion-reduce:animate-none" /> : <span className="grid size-4 place-items-center text-base font-normal">○</span>}
+                <span>{item.label}</span>
+              </div>
+            ))}
           </div>
 
           <div className={`mt-auto pt-6 border-t w-full ${guest ? 'border-[#3a4664]' : 'border-[#d0c8b7] dark:border-[#414b65]'}`}>
@@ -1254,7 +1237,7 @@ function Portal() {
     data,
     { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) },
   );
-  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
+  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} jobState={create.jobState} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
 }
 
 function BetaApiAccessPanel() {
@@ -1278,7 +1261,7 @@ function GuestPortal() {
       },
     },
   );
-  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Describe the choice. We’ll research the rest.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Start with natural language. Add source URLs only if you have specific pages; otherwise the app will find current evidence for the comparison.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]"><ArrowLeft size={14} /> Back to home</Link></div><ComparisonComposer initialPrompt={initialPrompt} guest pending={create.isPending} error={create.error} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div><div className="animate-rise animate-rise-2 mt-12 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / DESCRIBE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the products or brands, your intended outcome, budget, market, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / RESEARCH</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We find current product, pricing, reliability, support, and sustainability evidence.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / SCORE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Weighted charts make the trade-offs and recommendation visible.</p></div></div></div></GuestShell>;
+  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Describe the choice. We’ll research the rest.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Start with natural language. Add source URLs only if you have specific pages; otherwise the app will find current evidence for the comparison.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]"><ArrowLeft size={14} /> Back to home</Link></div><ComparisonComposer initialPrompt={initialPrompt} guest pending={create.isPending} error={create.error} jobState={create.jobState} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div><div className="animate-rise animate-rise-2 mt-12 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / DESCRIBE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the products or brands, your intended outcome, budget, market, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / RESEARCH</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We find current product, pricing, reliability, support, and sustainability evidence.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / SCORE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Weighted charts make the trade-offs and recommendation visible.</p></div></div></div></GuestShell>;
 }
 
 function ParsedBriefPortal() {

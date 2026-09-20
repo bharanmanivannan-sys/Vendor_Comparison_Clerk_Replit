@@ -28,6 +28,7 @@ import {
   reconcileRecommendationWithNarrative,
   validateComparisonContext,
   type AnalysisPayload,
+  type AnalysisProgressStage,
 } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
@@ -40,7 +41,8 @@ const guestWindows = new Map<string, { count: number; resetAt: number }>();
 const comparisonJobs = new Map<string, {
   owner: string;
   status: "processing" | "complete" | "failed";
-  stage: "researching" | "validating" | "completed";
+  stage: AnalysisProgressStage | "preparing_result" | "completed";
+  progress: { entities: string[]; subject: string };
   result?: unknown;
   message?: string;
   errorCode?: "research_failed" | "validation_failed";
@@ -139,24 +141,32 @@ function startComparisonJob(options: {
   input: { prompt: string; urls?: string[] };
   vendors: string[];
   criteria: string[];
+  subject: string;
 }): string {
   pruneComparisonJobs();
   const id = randomUUID();
   comparisonJobs.set(id, {
     owner: options.owner,
     status: "processing",
-    stage: "researching",
+    stage: "finding_official_sources",
+    progress: { entities: options.vendors, subject: options.subject },
     createdAt: Date.now(),
   });
   void (async () => {
     const urls = [...(options.input.urls ?? [])];
+    const updateStage = (stage: AnalysisProgressStage | "preparing_result"): void => {
+      const current = comparisonJobs.get(id);
+      if (current?.status === "processing") comparisonJobs.set(id, { ...current, stage });
+    };
     try {
       const analysis = await buildAnalysis({
         ...options.input,
         vendors: options.vendors,
         criteria: options.criteria,
         urls,
+        onProgress: updateStage,
       });
+      updateStage("preparing_result");
       const payload = {
         prompt: options.input.prompt,
         vendors: options.vendors,
@@ -183,6 +193,7 @@ function startComparisonJob(options: {
           owner: options.owner,
           status: "complete",
           stage: "completed",
+          progress: { entities: options.vendors, subject: options.subject },
           result: CreateComparisonResponse.parse(detailFromRow(created)),
           createdAt: Date.now(),
         });
@@ -191,6 +202,7 @@ function startComparisonJob(options: {
           owner: options.owner,
           status: "complete",
           stage: "completed",
+          progress: { entities: options.vendors, subject: options.subject },
           result: CreateGuestComparisonResponse.parse(payload),
           createdAt: Date.now(),
         });
@@ -206,9 +218,8 @@ function startComparisonJob(options: {
       comparisonJobs.set(id, {
         owner: options.owner,
         status: "failed",
-        stage: error instanceof Error && /canonical comparison entity|comparison matrix/i.test(error.message)
-          ? "validating"
-          : "researching",
+        stage: comparisonJobs.get(id)?.stage ?? "finding_official_sources",
+        progress: { entities: options.vendors, subject: options.subject },
         errorCode: error instanceof Error && /canonical comparison entity|comparison matrix/i.test(error.message)
           ? "validation_failed"
           : "research_failed",
@@ -229,6 +240,7 @@ function sendComparisonJob(req: Request, res: Response, owner: string): void {
   const payload = {
     status: job.status,
     stage: job.stage,
+    progress: job.progress,
     result: job.result,
     message: job.message,
     errorCode: job.errorCode,
@@ -412,11 +424,20 @@ router.post("/guest/comparison-jobs", async (req: Request, res): Promise<void> =
     input: validated.input,
     vendors: validated.vendors,
     criteria: validated.criteria,
+    subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)
+      ? "Battery-as-a-Service"
+      : validated.context.segment,
   });
   res.status(202).json(CreateGuestComparisonJobResponse.parse({
     jobId,
     status: "processing",
-    stage: "researching",
+    stage: "finding_official_sources",
+    progress: {
+      entities: validated.vendors,
+      subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)
+        ? "Battery-as-a-Service"
+        : validated.context.segment,
+    },
   }));
 });
 
@@ -481,11 +502,20 @@ router.post("/comparison-jobs", requireAuth, async (req: AuthedRequest, res): Pr
     input: validated.input,
     vendors: validated.vendors,
     criteria: validated.criteria,
+    subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)
+      ? "Battery-as-a-Service"
+      : validated.context.segment,
   });
   res.status(202).json(CreateComparisonJobResponse.parse({
     jobId,
     status: "processing",
-    stage: "researching",
+    stage: "finding_official_sources",
+    progress: {
+      entities: validated.vendors,
+      subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)
+        ? "Battery-as-a-Service"
+        : validated.context.segment,
+    },
   }));
 });
 

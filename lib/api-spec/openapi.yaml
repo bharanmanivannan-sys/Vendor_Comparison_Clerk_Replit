@@ -915,10 +915,23 @@ components:
           enum: [processing]
         stage:
           $ref: "#/components/schemas/ComparisonJobStage"
-      required: [jobId, status, stage]
+        progress:
+          $ref: "#/components/schemas/ComparisonJobProgress"
+      required: [jobId, status, stage, progress]
     ComparisonJobStage:
       type: string
-      enum: [researching, validating, completed]
+      enum: [finding_official_sources, building_evidence, analysing_evidence, validating_comparison, preparing_result, completed]
+    ComparisonJobProgress:
+      type: object
+      properties:
+        entities:
+          type: array
+          items: { type: string }
+          minItems: 2
+          maxItems: 5
+        subject:
+          type: string
+      required: [entities, subject]
     ComparisonJobState:
       type: object
       description: Pollable state for asynchronous comparison research.
@@ -928,6 +941,8 @@ components:
           enum: [processing, complete, failed]
         stage:
           $ref: "#/components/schemas/ComparisonJobStage"
+        progress:
+          $ref: "#/components/schemas/ComparisonJobProgress"
         result:
           oneOf:
             - $ref: "#/components/schemas/Comparison"
@@ -937,7 +952,7 @@ components:
         errorCode:
           type: string
           enum: [research_failed, validation_failed]
-      required: [status, stage]
+      required: [status, stage, progress]
     ComparisonIdentity:
       type: object
       description: Canonical comparison set used by every downstream label and recommendation.

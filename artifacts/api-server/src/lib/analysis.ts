@@ -126,7 +126,14 @@ type AnalysisInput = {
   vendors: string[];
   urls: string[];
   criteria: string[];
+  onProgress?: (stage: AnalysisProgressStage) => void;
 };
+
+export type AnalysisProgressStage =
+  | "finding_official_sources"
+  | "building_evidence"
+  | "analysing_evidence"
+  | "validating_comparison";
 
 export type ComparisonContext = {
   valid: boolean;
@@ -2436,6 +2443,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
   const userSuppliedUrls = [...input.urls];
   if (!client) return fallback;
   try {
+    input.onProgress?.("finding_official_sources");
     const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor);
     let discoveredAlternativeInsights: string[] = [];
     if (vendorDiscoveryWasRequired) {
@@ -2538,6 +2546,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
       }
     }
+    input.onProgress?.("building_evidence");
     const researchResponse = await retryAiStage("Product research", async () => {
       const response = await client.responses.create({
         model: "gpt-4.1-mini",
@@ -2886,6 +2895,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
     const scoreVerifiedUrls = dedupeReferenceUrls(evidenceAvailability.reachable);
     input.urls.splice(0, input.urls.length, ...citationUrls);
+    input.onProgress?.("analysing_evidence");
     if (isElectricVehicleComparison) {
       addElectricVehicleMatrixEvidence(parsed, resolvedVendors, citationUrls, scoreVerifiedUrls);
     }
@@ -2947,6 +2957,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       if (!normalized.insights.includes(insight)) normalized.insights.push(insight);
     }
     if (!requiresVendorDiscovery) {
+      input.onProgress?.("validating_comparison");
       assertCanonicalComparisonConsistency(resolvedVendors, normalized);
     }
     return normalized;

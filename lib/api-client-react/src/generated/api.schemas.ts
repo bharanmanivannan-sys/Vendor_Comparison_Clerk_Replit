@@ -252,15 +252,28 @@ export type ComparisonJobStage = typeof ComparisonJobStage[keyof typeof Comparis
 
 
 export const ComparisonJobStage = {
-  researching: 'researching',
-  validating: 'validating',
+  finding_official_sources: 'finding_official_sources',
+  building_evidence: 'building_evidence',
+  analysing_evidence: 'analysing_evidence',
+  validating_comparison: 'validating_comparison',
+  preparing_result: 'preparing_result',
   completed: 'completed',
 } as const;
+
+export interface ComparisonJobProgress {
+  /**
+     * @minItems 2
+     * @maxItems 5
+     */
+  entities: string[];
+  subject: string;
+}
 
 export interface ComparisonJobAccepted {
   jobId: string;
   status: ComparisonJobAcceptedStatus;
   stage: ComparisonJobStage;
+  progress: ComparisonJobProgress;
 }
 
 export type ComparisonJobStateStatus = typeof ComparisonJobStateStatus[keyof typeof ComparisonJobStateStatus];
@@ -699,6 +712,7 @@ export interface GuestComparison {
 export interface ComparisonJobState {
   status: ComparisonJobStateStatus;
   stage: ComparisonJobStage;
+  progress: ComparisonJobProgress;
   result?: Comparison | GuestComparison;
   message?: string;
   errorCode?: ComparisonJobStateErrorCode;
