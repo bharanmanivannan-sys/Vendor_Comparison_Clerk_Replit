@@ -5,6 +5,7 @@ import {
   addVerifiedElectricVehicleMatrixMetrics,
   addVerifiedElectricVehicleOfficialSpecs,
   addVerifiedBaasOfferEvidence,
+  addVerifiedHomeLoanRateEvidence,
   applyDeterministicQuantitativeScores,
   assertCanonicalComparisonConsistency,
   assertSufficientComparisonEvidence,
@@ -663,6 +664,147 @@ test("uses server-owned metric direction and records document provenance", () =>
   assert.equal(evidence.documentSha256, "d".repeat(64));
   assert.equal(evidence.sourceTextStart, 0);
   assert.equal(evidence.sourceTextEnd, documents[0].text.length);
+});
+
+test("verifies investor home-loan rates when official tables split headings from values", () => {
+  const parsed = {
+    vendorScores: [{
+      vendor: "Westpac",
+      weightedScores: [{
+        criterion: "Value for Money",
+        evidence: [{
+          sourceUrl: "https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates/",
+          metricKey: "variable_interest_rate",
+          rawMetricValue: 6.14,
+          rawMetricUnit: "percent",
+          evidenceKind: "percentage",
+          confidence: 95,
+        }],
+      }],
+    }],
+  };
+  const text = [
+    "Rates for new investment loans",
+    "Rates for LVRs up to 70%",
+    "Variable rate investment home loans (Principal & Interest repayments)",
+    "Flexi First Option Investment Property Loan",
+    "Variable rate |",
+    "Comparison rate* |",
+    "Online Offer |",
+    "6.14% p.a. |",
+    "6.15% p.a. |",
+  ].join("\n");
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates",
+    finalUrl: "https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates/",
+    contentType: "text/html",
+    text,
+    sha256: "f".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, documents), 1);
+  const evidence = parsed.vendorScores[0].weightedScores[0].evidence[0] as Record<string, unknown>;
+  assert.equal(evidence.metricSubject, "Westpac");
+  assert.match(String(evidence.metricBasis), /investment.*principal_interest/);
+  assert.equal(evidence.normalizationMethod, "retrieved_document_metric");
+});
+
+test("does not infer split-table home-loan identity from a non-official domain", () => {
+  const parsed = {
+    vendorScores: [{
+      vendor: "Westpac",
+      weightedScores: [{
+        criterion: "Value for Money",
+        evidence: [{
+          sourceUrl: "https://rates.example/investor",
+          metricKey: "variable_interest_rate",
+          rawMetricValue: 5.5,
+          rawMetricUnit: "percent",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://rates.example/investor",
+    finalUrl: "https://rates.example/investor",
+    contentType: "text/html",
+    text: "Investor\nLVR up to 70%\nPrincipal and interest\nVariable rate\n5.50% p.a.",
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, documents), 0);
+});
+
+test("extracts comparable investor variable rates from official split tables without model candidates", () => {
+  const vendors = ["Westpac", "ANZ", "NAB", "Commonwealth Bank"];
+  const parsed = {
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      weightedScores: [{ criterion: "Value for Money", weight: 20, evidence: [] }],
+    })),
+  };
+  const document = (
+    url: string,
+    text: string,
+    hash: string,
+  ): RetrievedEvidenceDocument => ({
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text,
+    sha256: hash.repeat(64),
+    retrievedAt: "2026-09-20T00:00:00.000Z",
+    truncated: false,
+  });
+  const documents = [
+    document("https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates/", [
+      "Rates for new investment loans",
+      "Rates for LVRs up to 70%",
+      "Variable rate investment home loans (Principal & Interest repayments)",
+      "Flexi First Option Investment Property Loan",
+      "Variable rate |",
+      "Comparison rate* |",
+      "Online Offer |",
+      "6.14% p.a. |",
+      "6.15% p.a. |",
+      "Variable rate investment home loans (Interest Only repayments)",
+    ].join("\n"), "a"),
+    document("https://www.anz.com.au/personal/home-loans/interest-rates/rate-changes", [
+      "Principal and interest repayments",
+      "ANZ Simplicity PLUS Residential Investment Property Loan (RIPL) Index Rate",
+      "+0.25% p.a.",
+      "7.99% p.a.",
+      "7.99% p.a.",
+    ].join("\n"), "b"),
+    document("https://www.nab.com.au/personal/interest-rates-fees-and-charges/home-loan-interest-rates", [
+      "NAB Base Variable Rate Home Loan – Residential Investment",
+      "Interest rate | Comparison rate |",
+      "Principal and interest",
+      "| 6.96% p.a. | 6.96% p.a. |",
+    ].join("\n"), "c"),
+    document("https://www.commbank.com.au/home-loans/standard-variable-rate.html", [
+      "Rates for new borrowings (Investment)",
+      "Loan type",
+      "Interest rate",
+      "Comparison rate",
+      "Standard Variable Rate with Wealth Package LVR 60% or below (with discount margin offer)",
+      "6.54% p.a.",
+      "6.92% p.a.",
+      "The rates shown are interest rates for new borrowings with principal and interest repayments.",
+    ].join("\n"), "d"),
+  ];
+
+  assert.equal(addVerifiedHomeLoanRateEvidence(parsed, documents), 4);
+  const evidence = parsed.vendorScores.map(
+    (vendor) => vendor.weightedScores[0].evidence[0],
+  ) as Array<Record<string, unknown>>;
+  assert.deepEqual(evidence.map((row) => row.rawMetricValue), [6.14, 7.99, 6.96, 6.54]);
+  assert.ok(evidence.every((row) => row.metricBasis === "variable_interest_rate:percent:advertised_investor_principal_interest"));
+  assert.equal(applyDeterministicQuantitativeScores(parsed as unknown as AnalysisPayload), 20);
 });
 
 test("does not cross-attribute a shared-brand metric between Model 3 and Model Y", () => {
@@ -2694,7 +2836,7 @@ test("keeps public citations for direct review while excluding blocked destinati
 
 test("seeds official variable and fixed home-loan sources for named banks", () => {
   const sources = officialHomeLoanSourcesFor(["Westpac", "ANZ", "NAB", "CBA"]);
-  assert.equal(sources.length, 6);
+  assert.equal(sources.length, 9);
   assert.ok(sources.some((url) => url.includes("westpac.com.au")));
   assert.ok(sources.some((url) => url.includes("anz.com.au")));
   assert.ok(sources.some((url) => url.includes("nab.com.au")));

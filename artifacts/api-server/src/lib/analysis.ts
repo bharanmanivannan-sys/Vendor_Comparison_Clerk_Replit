@@ -2492,15 +2492,19 @@ const HOME_LOAN_OFFICIAL_SOURCES: Record<string, string[]> = {
   ],
   ANZ: [
     "https://www.anz.com.au/personal/home-loans/interest-rates",
+    "https://www.anz.com.au/personal/home-loans/interest-rates/rate-changes",
+    "https://www.anz.com.au/personal/home-loans/standard-variable-rate",
   ],
   NAB: [
     "https://www.nab.com.au/personal/interest-rates-fees-and-charges/home-loan-interest-rates",
   ],
   CBA: [
     "https://www.commbank.com.au/home-loans/interest-rates.html",
+    "https://www.commbank.com.au/home-loans/standard-variable-rate.html",
   ],
   "Commonwealth Bank": [
     "https://www.commbank.com.au/home-loans/interest-rates.html",
+    "https://www.commbank.com.au/home-loans/standard-variable-rate.html",
   ],
 };
 
@@ -2517,6 +2521,21 @@ export function officialHomeLoanSourcesFor(
   const namedBankSources = vendors.flatMap((vendor) => HOME_LOAN_OFFICIAL_SOURCES[vendor] ?? []);
   const alternativeSources = vendors.includes("Macquarie") ? [] : MACQUARIE_HOME_LOAN_SOURCES;
   return Array.from(new Set([...namedBankSources, ...alternativeSources]));
+}
+
+function officialHomeLoanRateSourcesFor(
+  vendors: string[],
+  marketCode: ResearchMarketCode,
+): string[] {
+  if (marketCode !== "AU") return [];
+  return vendors.flatMap((vendor) => {
+    const sources = HOME_LOAN_OFFICIAL_SOURCES[vendor] ?? [];
+    if (vendor === "ANZ") return sources.filter((source) => /\/rate-changes$/.test(source));
+    if (vendor === "CBA" || vendor === "Commonwealth Bank") {
+      return sources.filter((source) => /\/standard-variable-rate\.html$/.test(source));
+    }
+    return sources.slice(0, 1);
+  });
 }
 
 function ensureCredibleHomeLoanAlternative(
@@ -3133,7 +3152,7 @@ function findQuantitativeClaim(
   metricKey: string,
   rawValue: number,
   rawUnit: string,
-): { text: string; start: number; end: number; definition: MetricDefinition; subject: string } | null {
+): { text: string; basisText: string; start: number; end: number; definition: MetricDefinition; subject: string } | null {
   const definition = METRIC_REGISTRY[metricKey];
   if (!definition || !definition.units.includes(rawUnit)) return null;
   const vendorTokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? []);
@@ -3142,6 +3161,15 @@ function findQuantitativeClaim(
     `\\b${vendorTokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]{0,6}")}\\b`,
     "i",
   );
+  const officialHomeLoanHost = (HOME_LOAN_OFFICIAL_SOURCES[vendor] ?? []).some((source) => {
+    try {
+      const sourceHost = new URL(source).hostname.replace(/^www\./, "");
+      const documentHost = new URL(document.finalUrl).hostname.replace(/^www\./, "");
+      return documentHost === sourceHost || documentHost.endsWith(`.${sourceHost}`);
+    } catch {
+      return false;
+    }
+  });
   const segmentPattern = /[^\n]+/g;
   for (const match of document.text.matchAll(segmentPattern)) {
     const segment = match[0].trim();
@@ -3168,17 +3196,23 @@ function findQuantitativeClaim(
       /\b(?:up to|starting from|starts? at|approximately|about|around|target|aims? to|could|may reach)\b/i.test(valueQualifierContext)
       && metricKey !== "baas_upfront_price"
     ) continue;
-    const context = segment.slice(Math.max(0, pairStart - 120), Math.min(segment.length, pairStart + 120));
-    if (!definition.label.test(context)) continue;
     const leadingWhitespace = match[0].length - match[0].trimStart().length;
     const start = (match.index ?? 0) + leadingWhitespace;
-    const identityContextStart = Math.max(0, start - 180);
-    const identityContextEnd = Math.min(document.text.length, start + segment.length + 80);
+    const identityContextStart = Math.max(0, start - (officialHomeLoanHost ? 520 : 180));
+    const identityContextEnd = Math.min(document.text.length, start + segment.length + 180);
     const identityContext = document.text.slice(identityContextStart, identityContextEnd);
+    if (!definition.label.test(identityContext)) continue;
     const identityMatch = identityContext.match(vendorIdentityPattern);
-    if (!identityMatch) continue;
-    const subject = identityMatch[0];
-    return { text: segment, start, end: start + segment.length, definition, subject };
+    if (!identityMatch && !officialHomeLoanHost) continue;
+    const subject = identityMatch?.[0] ?? vendor;
+    return {
+      text: segment,
+      basisText: identityContext,
+      start,
+      end: start + segment.length,
+      definition,
+      subject,
+    };
   }
   return null;
 }
@@ -3215,9 +3249,11 @@ function metricBasis(metricKey: string, unit: string, claim: string): string | n
     if (!window) return null;
     qualifier = window.replace(/[^a-z0-9]+/g, "_");
   } else if (metricKey === "variable_interest_rate" || metricKey === "comparison_rate") {
-    const lvr = normalized.match(/\b(?:up to |maximum )?\d{1,3}\s*%\s*lvr\b/)?.[0];
-    const borrower = normalized.match(/\b(?:owner[- ]occupier|investor)\b/)?.[0];
-    const repayment = normalized.match(/\b(?:principal and interest|interest[- ]only)\b/)?.[0];
+    const lvr = normalized.match(
+      /\b(?:lvrs?\s*(?:up to|above|over)?\s*\d{1,3}(?:\.\d+)?\s*%|(?:up to|maximum)\s*\d{1,3}(?:\.\d+)?\s*%\s*lvr|\d{1,3}(?:\.\d+)?\s*%\s*(?:or less|or below))/,
+    )?.[0];
+    const borrower = normalized.match(/\b(?:owner[- ]occupier|investor|investment(?: property)?)\b/)?.[0];
+    const repayment = normalized.match(/\b(?:principal (?:and|&) interest|interest[- ]only)\b/)?.[0];
     if (!lvr || !borrower || !repayment) return null;
     qualifier = `${lvr}:${borrower}:${repayment}`.replace(/[^a-z0-9]+/g, "_");
   } else if (metricKey.endsWith("_fee")) {
@@ -3278,7 +3314,7 @@ export function validateQuantitativeEvidenceAgainstDocuments(
         const match = document && metricKey && unit
           ? findQuantitativeClaim(document, vendorName, metricKey, row.rawMetricValue, unit)
           : null;
-        const basis = match ? metricBasis(metricKey, unit, match.text) : null;
+        const basis = match ? metricBasis(metricKey, unit, match.basisText) : null;
         if (!match || !document || !basis) {
           row.evidenceKind = "unverified";
           row.confidence = Math.min(typeof row.confidence === "number" ? row.confidence : 0, 10);
@@ -3682,8 +3718,18 @@ export function addVerifiedBaasOfferEvidence(
     const weightedScores = Array.isArray((vendorScore as Record<string, unknown>).weightedScores)
       ? (vendorScore as Record<string, unknown>).weightedScores as Array<Record<string, unknown>>
       : [];
-    const criterion = weightedScores.find((row) => row.criterion === "Value for Money");
-    if (!criterion) continue;
+    let criterion = weightedScores.find((row) => row.criterion === "Value for Money");
+    if (!criterion) {
+      criterion = {
+        criterion: "Value for Money",
+        weight: 20,
+        score: 50,
+        rationale: "Official advertised investor variable rate.",
+        evidence: [],
+      };
+      weightedScores.push(criterion);
+      (vendorScore as Record<string, unknown>).weightedScores = weightedScores;
+    }
     const evidence = Array.isArray(criterion.evidence)
       ? criterion.evidence as Array<Record<string, unknown>>
       : [];
@@ -3724,6 +3770,142 @@ export function addVerifiedBaasOfferEvidence(
       evidence.push({ ...common, ...metric });
       added += 1;
     }
+  }
+  return added;
+}
+
+/**
+ * Official Australian bank pages expose investor rates in tables whose
+ * headings and values are often split across lines. Recover one advertised
+ * principal-and-interest variable offer per bank without relying on optional
+ * model-generated metric fields.
+ */
+export function addVerifiedHomeLoanRateEvidence(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  type RateOffer = {
+    vendor: string;
+    document: RetrievedEvidenceDocument;
+    claim: string;
+    start: number;
+    rate: number;
+  };
+  const offers: RateOffer[] = [];
+  const addOffer = (
+    vendor: string,
+    document: RetrievedEvidenceDocument,
+    match: RegExpMatchArray | null,
+    valueIndex: number,
+  ) => {
+    if (match?.index === undefined) return;
+    const rate = Number(match[valueIndex]);
+    if (!Number.isFinite(rate)) return;
+    offers.push({ vendor, document, claim: match[0], start: match.index, rate });
+  };
+
+  for (const document of documents) {
+    const host = new URL(document.finalUrl).hostname.replace(/^www\./, "");
+    if (host === "westpac.com.au") {
+      const section = document.text.match(
+        /Rates for new investment loans[\s\S]{0,2200}?Variable rate investment home loans \(Interest Only repayments\)/i,
+      )?.[0] ?? "";
+      const match = section.match(
+        /Variable rate investment home loans \(Principal\s*&\s*Interest repayments\)[\s\S]{0,900}?Online Offer[\s\S]{0,80}?(\d+\.\d+)%\s*p\.a\.[\s\S]{0,40}?(\d+\.\d+)%\s*p\.a\./i,
+      );
+      if (match) {
+        const sectionStart = document.text.indexOf(section);
+        Object.defineProperty(match, "index", { value: sectionStart + (match.index ?? 0) });
+      }
+      addOffer("Westpac", document, match, 1);
+    } else if (host === "anz.com.au" && /\/rate-changes\/?$/.test(new URL(document.finalUrl).pathname)) {
+      addOffer(
+        "ANZ",
+        document,
+        document.text.match(
+          /ANZ Simplicity PLUS Residential Investment Property Loan \(RIPL\) Index Rate[\s\S]{0,180}?\+\d+\.\d+%\s*p\.a\.[\s\S]{0,40}?(\d+\.\d+)%\s*p\.a\.[\s\S]{0,40}?(\d+\.\d+)%\s*p\.a\./i,
+        ),
+        1,
+      );
+    } else if (host === "nab.com.au") {
+      addOffer(
+        "NAB",
+        document,
+        document.text.match(
+          /NAB Base Variable Rate Home Loan\s*[–-]\s*Residential Investment[\s\S]{0,260}?Principal and interest[\s\S]{0,80}?\|\s*(\d+\.\d+)%\s*p\.a\.\s*\|\s*(\d+\.\d+)%\s*p\.a\./i,
+        ),
+        1,
+      );
+    } else if (host === "commbank.com.au" && /standard-variable-rate\.html$/.test(new URL(document.finalUrl).pathname)) {
+      addOffer(
+        "Commonwealth Bank",
+        document,
+        document.text.match(
+          /Rates for new borrowings \(Investment\)[\s\S]{0,220}?Standard Variable Rate with Wealth Package LVR 60% or below[\s\S]{0,120}?(\d+\.\d+)%\s*p\.a\.[\s\S]{0,40}?(\d+\.\d+)%\s*p\.a\./i,
+        ),
+        1,
+      );
+    }
+  }
+
+  let added = 0;
+  const offerMatchesVendor = (offerVendor: string, vendorName: string) => {
+    if (offerVendor === "Westpac") return /\bwestpac\b/i.test(vendorName);
+    if (offerVendor === "ANZ") return /\banz\b/i.test(vendorName);
+    if (offerVendor === "NAB") return /\bnab\b/i.test(vendorName);
+    return /\b(?:commonwealth bank|commbank|cba)\b/i.test(vendorName);
+  };
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
+  for (const vendorScore of vendorScores) {
+    if (!vendorScore || typeof vendorScore !== "object") continue;
+    const vendorName = String((vendorScore as Record<string, unknown>).vendor ?? "");
+    const offer = offers.find((candidate) => offerMatchesVendor(candidate.vendor, vendorName));
+    if (!offer) continue;
+    const weightedScores = Array.isArray((vendorScore as Record<string, unknown>).weightedScores)
+      ? (vendorScore as Record<string, unknown>).weightedScores as Array<Record<string, unknown>>
+      : [];
+    let criterion = weightedScores.find((row) => row.criterion === "Value for Money");
+    if (!criterion) {
+      criterion = {
+        criterion: "Value for Money",
+        weight: 20,
+        score: 50,
+        rationale: "Official advertised investor variable rate.",
+        evidence: [],
+      };
+      weightedScores.push(criterion);
+      (vendorScore as Record<string, unknown>).weightedScores = weightedScores;
+    }
+    const evidence = Array.isArray(criterion.evidence)
+      ? criterion.evidence as Array<Record<string, unknown>>
+      : [];
+    criterion.evidence = evidence;
+    if (evidence.some((row) => (
+      row.metricKey === "variable_interest_rate"
+      && row.normalizationMethod === "retrieved_document_metric"
+      && row.metricBasis === "variable_interest_rate:percent:advertised_investor_principal_interest"
+    ))) continue;
+    evidence.push({
+      sourceUrl: offer.document.finalUrl,
+      sourceTitle: `${vendorName} official investor home-loan rates`,
+      exactClaim: offer.claim,
+      metricKey: "variable_interest_rate",
+      rawMetricValue: offer.rate,
+      rawMetricUnit: "percent",
+      normalizationDirection: "lower_is_better",
+      metricSubject: offer.vendor,
+      metricBasis: "variable_interest_rate:percent:advertised_investor_principal_interest",
+      retrievalDate: offer.document.retrievedAt.slice(0, 10),
+      documentSha256: offer.document.sha256,
+      sourceTextStart: offer.start,
+      sourceTextEnd: offer.start + offer.claim.length,
+      evidenceKind: "percentage",
+      supportDirection: "supports",
+      confidence: 95,
+      criterionWeight: 20,
+      normalizationMethod: "retrieved_document_metric",
+    });
+    added += 1;
   }
   return added;
 }
@@ -4769,11 +4951,22 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       researchMarket,
       userSuppliedUrls,
     );
-    input.urls.splice(0, input.urls.length, ...rankedUrls);
+    const requiredHomeLoanRateUrls = isProviderLevelHomeLoanDiscovery
+      ? officialHomeLoanRateSourcesFor(resolvedVendors, researchMarket.countryCode)
+      : [];
+    input.urls.splice(
+      0,
+      input.urls.length,
+      ...dedupeReferenceUrls([...rankedUrls, ...requiredHomeLoanRateUrls]),
+    );
     const evidenceAvailability = await validateFinalEvidenceUrls(input.urls);
     const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
     input.onProgress?.("building_evidence");
-    const retrievedResults = await retrieveEvidenceDocuments(evidenceAvailability.reachable);
+    const retrievalUrls = dedupeReferenceUrls([
+      ...evidenceAvailability.reachable,
+      ...requiredHomeLoanRateUrls,
+    ]);
+    const retrievedResults = await retrieveEvidenceDocuments(retrievalUrls);
     const retrievedDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
     const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
       document.url,
@@ -4792,6 +4985,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       : 0;
     if (batteryServiceInstructions) {
       addVerifiedBaasOfferEvidence(parsed as Record<string, unknown>, retrievedDocuments);
+    }
+    if (isProviderLevelHomeLoanDiscovery) {
+      addVerifiedHomeLoanRateEvidence(parsed as Record<string, unknown>, retrievedDocuments);
     }
     input.urls.splice(0, input.urls.length, ...citationUrls);
     input.onProgress?.("analysing_evidence");
@@ -4819,6 +5015,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         normalized as unknown as Record<string, unknown>,
         retrievedDocuments,
         resolvedVendors,
+      );
+    }
+    if (isProviderLevelHomeLoanDiscovery) {
+      addVerifiedHomeLoanRateEvidence(
+        normalized as unknown as Record<string, unknown>,
+        retrievedDocuments,
       );
     }
     const deterministicWeight = applyDeterministicQuantitativeScores(normalized);
@@ -4878,7 +5080,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
-    const minimumDeterministicWeight = batteryServiceInstructions
+    const minimumDeterministicWeight = batteryServiceInstructions || isProviderLevelHomeLoanDiscovery
       ? 20
       : isElectricVehicleModelSelection
         ? 35
