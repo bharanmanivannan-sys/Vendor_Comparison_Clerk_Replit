@@ -1304,8 +1304,8 @@ export const RegenerateComparisonParams = zod.object({
 export const regenerateComparisonBodyWeightsItemWeightMin = 0;
 export const regenerateComparisonBodyWeightsItemWeightMax = 100;
 
-export const regenerateComparisonBodyWeightsMin = 8;
-export const regenerateComparisonBodyWeightsMax = 8;
+export const regenerateComparisonBodyWeightsMin = 9;
+export const regenerateComparisonBodyWeightsMax = 9;
 
 
 

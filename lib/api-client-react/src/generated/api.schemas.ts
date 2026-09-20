@@ -169,8 +169,8 @@ export interface ComparisonWeight {
 
 export interface RegenerateComparisonInput {
   /**
-     * @minItems 8
-     * @maxItems 8
+     * @minItems 9
+     * @maxItems 9
      */
   weights: ComparisonWeight[];
 }
