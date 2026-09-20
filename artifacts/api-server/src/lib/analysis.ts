@@ -681,6 +681,43 @@ export function enforceIndianMgBaasFact(analysis: AnalysisPayload, vendors: stri
   }
 }
 
+export function enforceBaasTotalCostAssumptions(
+  analysis: AnalysisPayload,
+  prompt: string,
+): void {
+  const hasDistance = /\b\d[\d,.]*\s*(?:km|kilomet(?:er|re)s?)\b/i.test(prompt);
+  const hasPeriod = /\b\d[\d,.]*\s*(?:months?|years?|yrs?)\b/i.test(prompt);
+  if (hasDistance && hasPeriod) return;
+  const unsupportedClaim = /\b(?:total cost of ownership|TCO|lifetime ownership cost|whole[- ]of[- ]life cost)\b/i;
+  const replacement = "A total ownership cost cannot be established without both distance and ownership-period assumptions.";
+  const sanitize = (text: string): string => {
+    if (!unsupportedClaim.test(text)) return text;
+    const kept = text
+      .split(/(?<=[.!?])\s+/)
+      .filter((sentence) => !unsupportedClaim.test(sentence));
+    return [...kept, replacement].filter(Boolean).join(" ").trim();
+  };
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (typeof value[index] === "string") value[index] = sanitize(value[index]);
+        else visit(value[index]);
+      }
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    for (const [key, item] of Object.entries(record)) {
+      if (typeof item === "string" && key !== "sourceUrl" && key !== "exactClaim") {
+        record[key] = sanitize(item);
+      } else {
+        visit(item);
+      }
+    }
+  };
+  visit(analysis);
+}
+
 function isPlaceholderVendor(value: string): boolean {
   return /^vendor\s+[a-d]$/i.test(value.trim())
     || /^(?:any|another|other)\s+(?:other\s+)?relevant\s+(?:provider|vendor|brand|product|service)s?$/i.test(value.trim());
@@ -3005,19 +3042,21 @@ export function addVerifiedBaasOfferEvidence(
     perKm: number;
   }> = [];
   for (const document of documents) {
-    const mahindraMatch = document.text.match(
-      /BE 6 SPORTEQ[^\n]{0,80}?starts at\s*₹\s*([\d.]+)\s*Lakh[^\n]{0,140}?₹\s*([\d.]+)\s*\/\s*km[^\n]*/i,
-    );
-    if (/mahindra/i.test(new URL(document.finalUrl).hostname) && mahindraMatch?.index !== undefined) {
-      offers.push({
-        brand: "mahindra",
-        document,
-        claim: mahindraMatch[0],
-        start: mahindraMatch.index,
-        subject: "Mahindra BE 6 SPORTEQ",
-        upfront: Number(mahindraMatch[1]),
-        perKm: Number(mahindraMatch[2]),
-      });
+    if (/mahindra/i.test(new URL(document.finalUrl).hostname)) {
+      for (const mahindraMatch of document.text.matchAll(
+        /(BE 6 SPORTEQ|XEV 9S|XEV 9e)[^\n]{0,80}?starts at\s*₹\s*([\d.]+)\s*Lakh[^\n]{0,140}?₹\s*([\d.]+)\s*\/\s*km[^\n]*/gi,
+      )) {
+        if (mahindraMatch.index === undefined) continue;
+        offers.push({
+          brand: "mahindra",
+          document,
+          claim: mahindraMatch[0],
+          start: mahindraMatch.index,
+          subject: `Mahindra ${mahindraMatch[1].toUpperCase()}`,
+          upfront: Number(mahindraMatch[2]),
+          perKm: Number(mahindraMatch[3]),
+        });
+      }
     }
     const mgMatch = document.text.match(
       /starting at\s*([\d.]+)\s*LAKH\s*\+\s*₹\s*([\d.]+)\s*\/\s*km\s*\nMG ZS EV\b/i,
@@ -3053,6 +3092,11 @@ export function addVerifiedBaasOfferEvidence(
   }
 
   let added = 0;
+  const productIdentity = (value: string) => (
+    Array.from(value.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((token) => token !== "ev")
+      .join(" ")
+  );
   const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
   for (const vendorScore of vendorScores) {
     if (!vendorScore || typeof vendorScore !== "object") continue;
@@ -3061,7 +3105,7 @@ export function addVerifiedBaasOfferEvidence(
     if (!brand) continue;
     const offer = offers.find((candidate) => (
       candidate.brand === brand
-      && vendorName.toLowerCase().includes(candidate.subject.toLowerCase())
+      && productIdentity(vendorName) === productIdentity(candidate.subject)
     ));
     if (!offer || !Number.isFinite(offer.perKm)) continue;
     const weightedScores = Array.isArray((vendorScore as Record<string, unknown>).weightedScores)
@@ -3877,9 +3921,6 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.vendors,
       Array.isArray(parsed.vendorScores) ? parsed.vendorScores : undefined,
     );
-    if (requiresVendorDiscovery && resolvedVendors === input.vendors) {
-      throw new Error("Product research did not return concrete comparable product names. Refine the request or try again.");
-    }
     const vendorsWereResolved = resolvedVendors.some((vendor, index) => vendor !== input.vendors[index]);
     if (vendorsWereResolved) input.vendors.splice(0, input.vendors.length, ...resolvedVendors);
     const normalizationFallback = vendorsWereResolved ? fallbackAnalysis(input) : fallback;
@@ -3970,6 +4011,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const minimumDeterministicWeight = batteryServiceInstructions ? 20 : 50;
     assertSufficientComparisonEvidence(normalized, deterministicWeight, minimumDeterministicWeight);
     await synthesizeValidatedDecision(client, input, researchMarket, normalized);
+    if (batteryServiceInstructions) {
+      enforceBaasTotalCostAssumptions(normalized, input.prompt);
+    }
     if (!requiresVendorDiscovery) {
       input.onProgress?.("validating_comparison");
       assertCanonicalComparisonConsistency(resolvedVendors, normalized);

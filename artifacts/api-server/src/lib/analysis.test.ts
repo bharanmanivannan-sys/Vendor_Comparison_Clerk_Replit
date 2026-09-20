@@ -13,6 +13,7 @@ import {
   dedupeReferenceUrls,
   electricVehicleFinalQualityIssues,
   evidenceSufficiency,
+  enforceBaasTotalCostAssumptions,
   enforceIndianMgBaasFact,
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
@@ -317,6 +318,48 @@ test("does not attribute an MG ZS EV offer to a different MG model", () => {
   assert.equal(addVerifiedBaasOfferEvidence(parsed, documents), 0);
 });
 
+test("extracts exact XEV 9S and Windsor offers despite a harmless EV suffix difference", () => {
+  const parsed = {
+    vendorScores: ["Mahindra XEV 9S", "MG Windsor"].map((vendor) => ({
+      vendor,
+      weightedScores: [{ criterion: "Value for Money", evidence: [] }],
+    })),
+  };
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: "https://www.mahindraelectricsuv.com/be-6-sporteq/baas-faq.html",
+      finalUrl: "https://www.mahindraelectricsuv.com/be-6-sporteq/baas-faq.html",
+      contentType: "text/html",
+      text: "XEV 9S now starts at ₹12.65 Lakh with battery financing at an effective usage cost of ₹3.75/km",
+      sha256: "d".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
+      finalUrl: "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
+      contentType: "text/html",
+      text: "MG Windsor EV BaaS FAQs\nIn the BAAS program, you pay for battery usage which starts from ₹3.5 per km (excluding charging cost).",
+      sha256: "e".repeat(64),
+      retrievedAt: "2026-09-20T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+
+  assert.equal(addVerifiedBaasOfferEvidence(parsed, documents), 3);
+  const evidence = parsed.vendorScores.flatMap(
+    (vendor) => vendor.weightedScores[0].evidence,
+  ) as Array<Record<string, unknown>>;
+  assert.deepEqual(
+    evidence.filter((row) => row.metricKey === "usage_cost_per_km").map((row) => row.rawMetricValue),
+    [3.75, 3.5],
+  );
+  assert.deepEqual(
+    evidence.filter((row) => row.metricKey === "usage_cost_per_km").map((row) => row.metricSubject),
+    ["Mahindra XEV 9S", "MG Windsor EV"],
+  );
+});
+
 test("rejects aspirational or context-mismatched quantitative candidates", () => {
   const parsed: Record<string, unknown> = {
     vendorScores: [{
@@ -541,6 +584,42 @@ test("allows a BaaS comparison to rank on a fully verified offer-cost criterion"
 
   assert.doesNotThrow(() => assertSufficientComparisonEvidence(analysis, 20, 20));
   assert.throws(() => assertSufficientComparisonEvidence(analysis, 45), /Insufficient quantitative evidence/);
+});
+
+test("removes unsupported BaaS total-cost claims when distance or period is absent", () => {
+  const analysis = {
+    executiveSummary: "MG has a more attractive total cost of ownership.",
+    recommendationReason: "The documented per-kilometre rate is lower.",
+    insights: ["TCO is expected to favor MG over five years."],
+    vendorScores: [{
+      vendor: "MG Windsor",
+      weightedScores: [{
+        criterion: "Value for Money",
+        rationale: "Its total cost of ownership should be lower.",
+      }],
+    }],
+  } as unknown as AnalysisPayload;
+
+  enforceBaasTotalCostAssumptions(
+    analysis,
+    "Compare Mahindra and MG Battery as a Service vehicles for Indian roads.",
+  );
+
+  assert.doesNotMatch(JSON.stringify(analysis), /more attractive total cost|TCO is expected|should be lower/);
+  assert.match(analysis.executiveSummary, /cannot be established without both distance and ownership-period assumptions/);
+});
+
+test("preserves BaaS total-cost analysis when distance and ownership period are supplied", () => {
+  const analysis = {
+    executiveSummary: "MG has a lower total cost of ownership for this scenario.",
+  } as unknown as AnalysisPayload;
+
+  enforceBaasTotalCostAssumptions(
+    analysis,
+    "Compare BaaS costs over 5 years at 15,000 km per year.",
+  );
+
+  assert.match(analysis.executiveSummary, /lower total cost of ownership/);
 });
 
 test("allows ordinary comparison instructions containing select and from", () => {
