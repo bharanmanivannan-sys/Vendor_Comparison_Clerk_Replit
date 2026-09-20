@@ -14,3 +14,9 @@ Evidence readiness is part of product selection when the user requests a ranked,
 **Why:** Current product pages can be reachable yet expose no usable specification text. Selecting those products leads to neutral ties or intermittent failures after otherwise valid portfolio discovery.
 
 **How to apply:** Prefer a comparable pair with sufficient official evidence, explicitly disclose that evidence readiness constrained selection, and retain alternatives with the missing evidence or positioning trade-off. Protected selection disclosures must survive final narrative synthesis.
+
+A server-validated current portfolio may bypass model-based discovery, adjudication, and correction stages.
+
+**Why:** Repeating model calls after the server already owns the current-model, comparability, and evidence-readiness boundary adds latency and structured-output failure modes without improving the decision.
+
+**How to apply:** Use the validated portfolio directly, retain the same deterministic selection and evidence gates, and measure the browser job from accepted submission to its first terminal poll. Optimize toward the 120-second service target by removing redundant work, never by weakening verification.
