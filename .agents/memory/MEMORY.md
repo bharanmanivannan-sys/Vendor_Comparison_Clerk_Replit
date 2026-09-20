@@ -21,3 +21,4 @@
 - [Runtime error logging](runtime-error-logging.md) — serialize caught errors to primitive fields before logging; Node 24 inspection can crash on complex error objects.
 - [Five-year history visibility](five-year-history-visibility.md) — hide long-term performance sections unless every option has complete, evidence-backed five-year coverage.
 - [Comparison option limit](comparison-option-limit.md) — support six options end to end and reject a seventh instead of silently truncating it.
+- [PostgreSQL idle-client errors](postgres-idle-client-errors.md) — handle pool error events so transient connection termination cannot kill active comparison jobs.
