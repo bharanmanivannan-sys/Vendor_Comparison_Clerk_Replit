@@ -1292,7 +1292,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           </div>
 
           <p className={`mt-1 text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
-            Leave this empty and we’ll research current sources. Add links only when you want specific pages included.
+            Leave this empty and we’ll research current sources. For a stronger subsequent attempt, add exact current pages for each option; irrelevant or outdated resources are excluded.
           </p>
 
           <div className="mt-3 flex gap-2">

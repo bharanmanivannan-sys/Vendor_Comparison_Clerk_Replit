@@ -1935,7 +1935,7 @@ export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload):
     for (const criterion of vendor.weightedScores ?? []) {
       if (scoredCriteria.has(criterion.criterion)) continue;
       criterion.score = 50;
-      criterion.rationale = "This criterion is neutral because a comparable verified metric was not available for every shortlisted option.";
+      criterion.rationale = "A neutral score of 50/100 was assigned because a current, relevant, comparable verified metric was not available for every shortlisted option. This midpoint prevents missing evidence from favouring or penalising either option; it is not evidence that the options perform equally.";
       criterion.evidence = (criterion.evidence ?? []).map((evidence, index) => ({
         ...evidence,
         normalizedScore: 50,
@@ -1998,7 +1998,8 @@ export function assertSufficientComparisonEvidence(analysis: AnalysisPayload, de
   if (coverage.sufficient) return;
   throw new Error(
     "Insufficient quantitative evidence: There is not enough comparable verified evidence to rank these options reliably. "
-    + "Add exact current product pages or refine the options and criteria, then try again.",
+    + "Any 50/100 weighted scores are neutral placeholders used when current comparable evidence is missing, not proof of equal performance. "
+    + "On your next attempt, add exact current URLs for each option. Irrelevant, undated non-official, or outdated sources will not be used.",
   );
 }
 
@@ -2044,11 +2045,13 @@ async function synthesizeValidatedDecision(
     analysis.insights = [
       `The ranking is based on ${analysis.vendorScores[0]?.weightedScores?.filter((criterion) => criterion.score !== 50).reduce((total, criterion) => total + criterion.weight, 0) ?? 0}% of the weighted model with differentiating comparable metrics.`,
       "Criteria without a comparable verified metric for every option were held neutral and did not create an advantage.",
+      "A 50/100 criterion score is the neutral midpoint used when verified comparable evidence is missing; it does not mean the options were proven equal.",
     ];
     analysis.nextSteps = [
       "Verify the cited current product terms directly with each shortlisted provider.",
       "Confirm that the compared metric basis, eligibility, and commercial assumptions match your situation.",
       "Re-run the comparison when material prices, rates, specifications, or requirements change.",
+      "For the next comparison, provide exact current URLs for each option; irrelevant or outdated resources will be excluded.",
     ];
   };
   fallback();
@@ -3331,6 +3334,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       `For non-official fallback evidence, search newest-first beginning with ${currentDate.slice(0, 7)} and use only reputable sources published or materially updated on or after ${oldestFallbackDateText}. Include the publication/update date and URL. Undated or older fallback sources must be treated as unavailable, not used as current evidence.`,
       "Official current product pages may be used when they are undated, but time-sensitive claims such as prices and offers must be marked with the retrieval/as-of date.",
       "Never treat search-result snippets, AI summaries, affiliate pages, anonymous posts, forums, or user-generated reviews as authoritative evidence.",
+      "Treat user-provided URLs as candidate sources, not automatically valid evidence. Use them only when they are directly relevant to the named option, criterion, market, and requested time period. Exclude irrelevant pages and outdated resources; never use an old source merely to fill an evidence gap.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",

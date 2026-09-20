@@ -100,3 +100,17 @@ test("reports missing official product evidence instead of blaming a valid refin
   assert.match(message, /BYD/);
   assert.doesNotMatch(message, /try this phrase instead/i);
 });
+
+test("explains neutral 50 scores and asks for current relevant URLs on the next attempt", () => {
+  const message = comparisonFailureMessage(
+    new Error("Insufficient quantitative evidence"),
+    "Compare Alpha and Beta.",
+    ["Alpha", "Beta"],
+  );
+
+  assert.match(message, /50\/100 weighted score/i);
+  assert.match(message, /neutral midpoint/i);
+  assert.match(message, /not proof that the options are equal/i);
+  assert.match(message, /next attempt, add exact current URLs/i);
+  assert.match(message, /irrelevant or outdated resources will not be used/i);
+});
