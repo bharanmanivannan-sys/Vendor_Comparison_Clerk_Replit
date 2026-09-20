@@ -328,6 +328,7 @@ export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[key
 export const ComparisonJobStateErrorCode = {
   research_failed: 'research_failed',
   validation_failed: 'validation_failed',
+  insufficient_quantitative_evidence: 'insufficient_quantitative_evidence',
 } as const;
 
 export type ComparisonSummaryStatus = typeof ComparisonSummaryStatus[keyof typeof ComparisonSummaryStatus];
@@ -383,6 +384,14 @@ export const VendorScoreProviderRole = {
   expert: 'expert',
 } as const;
 
+export type ScoreEvidenceNormalizationDirection = typeof ScoreEvidenceNormalizationDirection[keyof typeof ScoreEvidenceNormalizationDirection];
+
+
+export const ScoreEvidenceNormalizationDirection = {
+  higher_is_better: 'higher_is_better',
+  lower_is_better: 'lower_is_better',
+} as const;
+
 export type ScoreEvidenceEvidenceKind = typeof ScoreEvidenceEvidenceKind[keyof typeof ScoreEvidenceEvidenceKind];
 
 
@@ -411,8 +420,11 @@ export interface ScoreEvidence {
   sourceDate?: string;
   retrievalDate: string;
   exactClaim: string;
+  /** Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee. */
+  metricKey?: string;
   rawMetricValue?: number;
   rawMetricUnit?: string;
+  normalizationDirection?: ScoreEvidenceNormalizationDirection;
   /** @minimum 0 */
   sampleSize?: number;
   evidenceKind: ScoreEvidenceEvidenceKind;

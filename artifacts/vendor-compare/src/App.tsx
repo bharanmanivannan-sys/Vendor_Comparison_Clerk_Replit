@@ -1132,8 +1132,15 @@ type ComparisonJobState = {
   progress: { entities: string[]; subject: string };
   result?: Comparison;
   message?: string;
-  errorCode?: 'research_failed' | 'validation_failed';
+  errorCode?: 'research_failed' | 'validation_failed' | 'insufficient_quantitative_evidence';
 };
+
+class ComparisonJobError extends Error {
+  constructor(message: string, readonly errorCode?: ComparisonJobState['errorCode']) {
+    super(message);
+    this.name = 'ComparisonJobError';
+  }
+}
 
 type ResearchMarketCode = 'IN' | 'AU' | 'US' | 'GB';
 type ComparisonRequest = { prompt: string; market: ResearchMarketCode; urls: string[] };
@@ -1155,7 +1162,12 @@ async function runComparisonJob(
     const job = await customFetch<ComparisonJobState>(`${basePath}/${created.jobId}`);
     onProgress(job);
     if (job.status === 'complete' && job.result) return job.result;
-    if (job.status === 'failed') throw new Error(job.message || 'Product research could not be completed.');
+    if (job.status === 'failed') {
+      throw new ComparisonJobError(
+        job.message || 'Product research could not be completed.',
+        job.errorCode,
+      );
+    }
   }
   throw new Error('Product research did not finish within five minutes. Please try again.');
 }

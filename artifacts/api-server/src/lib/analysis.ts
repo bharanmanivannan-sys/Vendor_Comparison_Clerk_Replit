@@ -8,6 +8,16 @@ export type AnalysisPayload = Omit<
 >;
 
 export const MAX_COMPARISON_OPTIONS = 6;
+export type ComparisonFailureCode = "research_failed" | "validation_failed" | "insufficient_quantitative_evidence";
+
+export function comparisonFailureCode(error: unknown): ComparisonFailureCode {
+  const message = error instanceof Error ? error.message : "";
+  if (/insufficient (?:quantitative evidence|source coverage)|fewer than three independently reachable/i.test(message)) {
+    return "insufficient_quantitative_evidence";
+  }
+  if (/canonical comparison entity|comparison matrix/i.test(message)) return "validation_failed";
+  return "research_failed";
+}
 
 type EvidenceRecord = NonNullable<NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["weightedScores"]>[number]["evidence"]>[number];
 
@@ -44,6 +54,13 @@ export function normalizeEvidenceRecords(
     const rawMetric = typeof row.rawMetricValue === "number" && Number.isFinite(row.rawMetricValue)
       ? row.rawMetricValue : undefined;
     const unit = typeof row.rawMetricUnit === "string" ? row.rawMetricUnit.trim() : undefined;
+    const metricKey = typeof row.metricKey === "string"
+      ? row.metricKey.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
+      : undefined;
+    const normalizationDirection = row.normalizationDirection === "higher_is_better"
+      || row.normalizationDirection === "lower_is_better"
+      ? row.normalizationDirection
+      : undefined;
     const isPercentage = rawMetric !== undefined && /%|percent|percentage/i.test(unit ?? "");
     const requestedKind = typeof row.evidenceKind === "string" ? row.evidenceKind.trim().toLowerCase() : "unverified";
     const requestedEvidenceKind = ["quantitative", "percentage", "qualitative", "analyst_judgment", "unverified"].includes(requestedKind)
@@ -92,8 +109,10 @@ export function normalizeEvidenceRecords(
       sourceDate: normalizeDate(row.sourceDate),
       retrievalDate: normalizeDate(row.retrievalDate) ?? new Date().toISOString().slice(0, 10),
       exactClaim,
+      metricKey: metricKey || undefined,
       rawMetricValue: rawMetric,
       rawMetricUnit: unit,
+      normalizationDirection,
       sampleSize: typeof row.sampleSize === "number" && Number.isInteger(row.sampleSize) && row.sampleSize >= 0 ? row.sampleSize : undefined,
       evidenceKind,
       supportDirection,
@@ -1808,6 +1827,259 @@ function normalizeAnalysis(
   };
 }
 
+function comparableMetric(entry: EvidenceRecord): {
+  key: string;
+  value: number;
+  unit: string;
+  lowerIsBetter: boolean;
+} | null {
+  if (
+    !entry.metricKey
+    || !entry.normalizationDirection
+    || entry.rawMetricValue === undefined
+    || !entry.sourceUrl
+    || entry.evidenceKind === "unverified"
+    || entry.evidenceKind === "analyst_judgment"
+  ) return null;
+  return {
+    key: entry.metricKey,
+    value: entry.rawMetricValue,
+    unit: (entry.rawMetricUnit || "number").trim().toLowerCase().replace(/\s+/g, " "),
+    lowerIsBetter: entry.normalizationDirection === "lower_is_better",
+  };
+}
+
+/**
+ * Replace model-provided scores with deterministic relative scores whenever at
+ * least two vendors expose comparable verified raw metrics for a criterion.
+ */
+export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload): number {
+  const scoredCriteria = new Set<string>();
+  for (const { criterion, weight } of WEIGHTED_CRITERIA) {
+    const comparableByVendor = analysis.vendorScores.map((vendor) => {
+      const criterionScore = vendor.weightedScores?.find((entry) => entry.criterion === criterion);
+      const metrics = (criterionScore?.evidence ?? []).flatMap((evidence, evidenceIndex) => {
+        const metric = comparableMetric(evidence);
+        return metric ? [{ metric, evidenceIndex, confidence: evidence.confidence }] : [];
+      });
+      return { vendor, criterionScore, metrics };
+    });
+    if (comparableByVendor.some((entry) => !entry.criterionScore || !entry.metrics.length)) continue;
+    const commonKeys = comparableByVendor[0].metrics
+      .map(({ metric }) => `${metric.key}:${metric.unit}:${metric.lowerIsBetter}`)
+      .filter((key) => comparableByVendor.every((entry) => entry.metrics.some(({ metric }) => (
+        `${metric.key}:${metric.unit}:${metric.lowerIsBetter}` === key
+      ))));
+    const canonicalKey = commonKeys[0];
+    if (!canonicalKey) continue;
+    const canonical = comparableByVendor.map((entry) => {
+      const selected = entry.metrics
+        .filter(({ metric }) => `${metric.key}:${metric.unit}:${metric.lowerIsBetter}` === canonicalKey)
+        .sort((a, b) => b.confidence - a.confidence)[0];
+      return { ...entry, selected };
+    });
+    const values = canonical.map((entry) => entry.selected.metric.value);
+    const minimum = Math.min(...values);
+    const maximum = Math.max(...values);
+    for (const entry of canonical) {
+      const { metric } = entry.selected;
+      const ratio = maximum === minimum
+        ? 0.5
+        : metric.lowerIsBetter
+          ? (maximum - metric.value) / (maximum - minimum)
+          : (metric.value - minimum) / (maximum - minimum);
+      const deterministicScore = Math.round(30 + ratio * 70);
+      entry.criterionScore!.score = deterministicScore;
+      entry.criterionScore!.rationale = `Calculated from comparable verified ${metric.key.replace(/_/g, " ")} values (${metric.unit}) across every shortlisted option.`;
+      entry.criterionScore!.evidence = (entry.criterionScore!.evidence ?? []).map((evidence, evidenceIndex) => ({
+        ...evidence,
+        normalizedScore: evidenceIndex === entry.selected.evidenceIndex ? deterministicScore : evidence.normalizedScore,
+        criterionWeight: weight,
+        weightedContribution: evidenceIndex === entry.selected.evidenceIndex
+          ? Number((deterministicScore * weight / 100).toFixed(2))
+          : 0,
+        normalizationMethod: evidenceIndex === entry.selected.evidenceIndex
+          ? metric.lowerIsBetter ? "inverse_comparable_metric" : "direct_comparable_metric"
+          : evidence.normalizationMethod,
+      }));
+    }
+    scoredCriteria.add(criterion);
+  }
+  for (const vendor of analysis.vendorScores) {
+    for (const criterion of vendor.weightedScores ?? []) {
+      if (scoredCriteria.has(criterion.criterion)) continue;
+      criterion.score = 50;
+      criterion.rationale = "This criterion is neutral because a comparable verified metric was not available for every shortlisted option.";
+      criterion.evidence = (criterion.evidence ?? []).map((evidence, index) => ({
+        ...evidence,
+        normalizedScore: 50,
+        weightedContribution: index === 0 ? Number((50 * criterion.weight / 100).toFixed(2)) : 0,
+        normalizationMethod: "insufficient_comparable_evidence_neutral",
+      }));
+    }
+  }
+  for (const vendor of analysis.vendorScores) {
+    vendor.score = Math.round((vendor.weightedScores ?? []).reduce(
+      (total, entry) => total + entry.score * entry.weight,
+      0,
+    ) / 100);
+  }
+  return WEIGHTED_CRITERIA
+    .filter(({ criterion }) => scoredCriteria.has(criterion))
+    .reduce((total, { weight }) => total + weight, 0);
+}
+
+export function evidenceSufficiency(analysis: AnalysisPayload, deterministicWeight = 0): {
+  sufficient: boolean;
+  verifiedEvidence: number;
+  vendorsWithVerifiedEvidence: number;
+  comparableCriteria: number;
+  allScoresNeutral: boolean;
+} {
+  const vendorCoverage = analysis.vendorScores.map((vendor) => (
+    (vendor.weightedScores ?? []).flatMap((criterion) => criterion.evidence ?? []).filter((entry) => (
+      Boolean(entry.sourceUrl)
+      && entry.evidenceKind !== "unverified"
+      && entry.evidenceKind !== "analyst_judgment"
+    )).length
+  ));
+  const verifiedEvidence = vendorCoverage.reduce((total, count) => total + count, 0);
+  const vendorsWithVerifiedEvidence = vendorCoverage.filter((count) => count > 0).length;
+  const comparableCriteria = WEIGHTED_CRITERIA.filter(({ criterion }) => (
+    analysis.vendorScores.every((vendor) => vendor.weightedScores?.some((entry) => (
+      entry.criterion === criterion
+      && !entry.evidence?.every((evidence) => evidence.normalizationMethod === "insufficient_comparable_evidence_neutral")
+    )))
+  )).length;
+  const allScoresNeutral = analysis.vendorScores.every((vendor) => (
+    (vendor.weightedScores ?? []).every((criterion) => criterion.score === 50)
+  ));
+  const overallScores = analysis.vendorScores.map((vendor) => vendor.score);
+  const hasScoreSeparation = overallScores.length > 1 && Math.max(...overallScores) > Math.min(...overallScores);
+  return {
+    sufficient: vendorsWithVerifiedEvidence === analysis.vendorScores.length
+      && deterministicWeight >= 50
+      && hasScoreSeparation,
+    verifiedEvidence,
+    vendorsWithVerifiedEvidence,
+    comparableCriteria,
+    allScoresNeutral,
+  };
+}
+
+export function assertSufficientComparisonEvidence(analysis: AnalysisPayload, deterministicWeight = 0): void {
+  const coverage = evidenceSufficiency(analysis, deterministicWeight);
+  if (coverage.sufficient) return;
+  throw new Error(
+    "Insufficient quantitative evidence: There is not enough comparable verified evidence to rank these options reliably. "
+    + "Add exact current product pages or refine the options and criteria, then try again.",
+  );
+}
+
+async function synthesizeValidatedDecision(
+  client: OpenAI,
+  input: AnalysisInput,
+  market: ResearchMarket,
+  analysis: AnalysisPayload,
+): Promise<void> {
+  const evidenceDataset = analysis.vendorScores.map((vendor) => ({
+    vendor: vendor.vendor,
+    score: vendor.score,
+    criteria: (vendor.weightedScores ?? []).map((criterion) => ({
+      criterion: criterion.criterion,
+      weight: criterion.weight,
+      score: criterion.score,
+      evidence: (criterion.evidence ?? [])
+        .filter((evidence) => (
+          Boolean(evidence.sourceUrl)
+          && evidence.evidenceKind !== "unverified"
+          && evidence.evidenceKind !== "analyst_judgment"
+        ))
+        .map((evidence) => ({
+          sourceUrl: evidence.sourceUrl,
+          sourcePublisher: evidence.sourcePublisher,
+          sourceDate: evidence.sourceDate,
+          exactClaim: evidence.exactClaim,
+          metricKey: evidence.metricKey,
+          rawMetricValue: evidence.rawMetricValue,
+          rawMetricUnit: evidence.rawMetricUnit,
+          confidence: evidence.confidence,
+          normalizationMethod: evidence.normalizationMethod,
+        })),
+    })),
+  }));
+  const fallback = () => {
+    const runnerUp = [...analysis.vendorScores].sort((a, b) => b.score - a.score)[1];
+    analysis.executiveSummary = `${analysis.recommendation} ranks first on the validated weighted evidence with ${analysis.score}/100${runnerUp ? `, ahead of ${runnerUp.vendor} at ${runnerUp.score}/100` : ""}. The ranking uses only comparable evidence that passed source validation.`;
+    analysis.recommendationReason = `${analysis.recommendation} has the highest evidence-backed weighted score. Review the cited metrics and switch conditions before making a final commitment.`;
+    for (const vendor of analysis.vendorScores) {
+      vendor.verdict = `${vendor.vendor} scored ${vendor.score}/100 from comparable verified metrics; unsupported criteria were held neutral.`;
+    }
+    analysis.insights = [
+      `The ranking is based on ${analysis.vendorScores[0]?.weightedScores?.filter((criterion) => criterion.score !== 50).reduce((total, criterion) => total + criterion.weight, 0) ?? 0}% of the weighted model with differentiating comparable metrics.`,
+      "Criteria without a comparable verified metric for every option were held neutral and did not create an advantage.",
+    ];
+    analysis.nextSteps = [
+      "Verify the cited current product terms directly with each shortlisted provider.",
+      "Confirm that the compared metric basis, eligibility, and commercial assumptions match your situation.",
+      "Re-run the comparison when material prices, rates, specifications, or requirements change.",
+    ];
+  };
+  fallback();
+  try {
+    const response = await client.chat.completions.create({
+      model: "gpt-4.1-mini",
+      response_format: { type: "json_object" },
+      max_completion_tokens: 2400,
+      messages: [
+        {
+          role: "system",
+          content: "You are the final decision synthesizer. Use only the supplied validated evidence dataset. Do not search, add facts, change scores, change the winner, infer missing values, or cite a URL absent from the dataset. Return one compact JSON object.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            prompt: input.prompt,
+            market,
+            recommendation: analysis.recommendation,
+            score: analysis.score,
+            evidenceDataset,
+            requiredOutput: {
+              executiveSummary: "A concise evidence-backed decision summary.",
+              recommendationReason: "Why the fixed recommendation wins, including decisive metrics and trade-offs.",
+              vendorVerdicts: Object.fromEntries(analysis.vendorScores.map((vendor) => [vendor.vendor, "Concise evidence-backed verdict."])),
+              insights: ["Evidence-backed insight or limitation."],
+              nextSteps: ["Action that verifies or operationalizes the decision."],
+            },
+          }),
+        },
+      ],
+    });
+    const content = response.choices[0]?.message?.content;
+    if (!content) return;
+    const synthesized = parseJsonObject(content) as Record<string, unknown>;
+    analysis.executiveSummary = normalizeTextField(synthesized.executiveSummary, analysis.executiveSummary);
+    analysis.recommendationReason = normalizeTextField(synthesized.recommendationReason, analysis.recommendationReason);
+    const verdicts = synthesized.vendorVerdicts && typeof synthesized.vendorVerdicts === "object"
+      ? synthesized.vendorVerdicts as Record<string, unknown>
+      : {};
+    for (const vendor of analysis.vendorScores) {
+      vendor.verdict = normalizeTextField(verdicts[vendor.vendor], vendor.verdict);
+    }
+    analysis.insights = Array.isArray(synthesized.insights)
+      ? synthesized.insights.map((item) => normalizeTextField(item, "")).filter(Boolean).slice(0, 8)
+      : analysis.insights;
+    analysis.nextSteps = Array.isArray(synthesized.nextSteps)
+      ? synthesized.nextSteps.map((item) => normalizeTextField(item, "")).filter(Boolean).slice(0, 6)
+      : analysis.nextSteps;
+  } catch (error) {
+    console.warn("Validated decision synthesis failed; using deterministic evidence summary", error instanceof Error
+      ? { name: error.name, message: error.message }
+      : { message: String(error) });
+    fallback();
+  }
+}
+
 export function normalizeLensWinner(
   dimension: string,
   values: Record<string, string>,
@@ -2422,6 +2694,86 @@ export function dedupeReferenceUrls(urls: string[]): string[] {
   return Array.from(unique.values());
 }
 
+function sourceVendorMatchScore(url: URL, vendors: string[]): number {
+  const searchable = `${url.hostname} ${url.pathname}`.toLowerCase();
+  return vendors.some((vendor) => {
+    const tokens = vendor.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    return tokens.filter((token) => token.length >= 3).some((token) => searchable.includes(token));
+  }) ? 30 : 0;
+}
+
+function sourceMarketScore(url: URL, market: ResearchMarket): number {
+  const hostname = url.hostname.toLowerCase();
+  const localSuffixes: Record<ResearchMarketCode, string[]> = {
+    IN: [".in"],
+    AU: [".au"],
+    US: [".gov", ".us"],
+    GB: [".uk"],
+  };
+  return localSuffixes[market.countryCode].some((suffix) => hostname.endsWith(suffix)) ? 18 : 0;
+}
+
+/** Rank and bound discovered sources before network retrieval and evidence extraction. */
+export function rankEvidenceSources(
+  urls: string[],
+  vendors: string[],
+  market: ResearchMarket,
+  userSuppliedUrls: string[] = [],
+  maximum = 30,
+): string[] {
+  const supplied = new Set(dedupeReferenceUrls(userSuppliedUrls));
+  const currentYear = new Date().getUTCFullYear();
+  const scored = dedupeReferenceUrls(urls).map((source, index) => {
+    const url = new URL(source);
+    const hostname = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase();
+    const authority = /\.(?:gov|gov\.[a-z]{2}|edu|ac\.[a-z]{2})$/.test(hostname)
+      || /\b(?:regulator|standards?|statistics|centralbank|reservebank)\b/.test(hostname)
+      ? 35
+      : 0;
+    const productSpecificity = /(?:price|pricing|rate|rates|fee|fees|spec|specification|product|plan|card|loan|warranty|support|report|disclosure)/.test(path)
+      ? 16
+      : 0;
+    const datedPathYears = Array.from(path.matchAll(/\b(20\d{2})\b/g), (match) => Number(match[1]));
+    const stalePenalty = datedPathYears.length && Math.max(...datedPathYears) < currentYear - 1 ? 30 : 0;
+    return {
+      source,
+      hostname,
+      index,
+      score: (supplied.has(source) ? 100 : 0)
+        + authority
+        + sourceMarketScore(url, market)
+        + sourceVendorMatchScore(url, vendors)
+        + productSpecificity
+        - stalePenalty,
+    };
+  }).sort((a, b) => b.score - a.score || a.index - b.index);
+  const hostCounts = new Map<string, number>();
+  const selected: string[] = [];
+  const selectedSet = new Set<string>();
+  const limit = Math.max(maximum, supplied.size + vendors.length + 3);
+  const add = (candidate: typeof scored[number]) => {
+    if (selectedSet.has(candidate.source)) return;
+    selected.push(candidate.source);
+    selectedSet.add(candidate.source);
+    hostCounts.set(candidate.hostname, (hostCounts.get(candidate.hostname) ?? 0) + 1);
+  };
+  for (const candidate of scored.filter((entry) => supplied.has(entry.source))) add(candidate);
+  for (const vendor of vendors) {
+    const vendorCandidate = scored.find((candidate) => sourceVendorMatchScore(new URL(candidate.source), [vendor]) > 0);
+    if (vendorCandidate) add(vendorCandidate);
+  }
+  for (const candidate of scored.filter((entry) => entry.score >= 35).slice(0, 3)) add(candidate);
+  for (const candidate of scored) {
+    if (selectedSet.has(candidate.source)) continue;
+    const hostCount = hostCounts.get(candidate.hostname) ?? 0;
+    if (!supplied.has(candidate.source) && hostCount >= 4) continue;
+    add(candidate);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
 const unavailableEvidenceLabels: Record<NonNullable<EvidenceUrlResult["reason"]>, string> = {
   blocked_destination: "blocked because it resolves to a private or internal network",
   timeout: "timed out during the availability check",
@@ -2550,7 +2902,8 @@ function analysisOutputShape(vendors: string[], isHomeLoan = false, isElectricVe
       weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
         criterion, weight, score: 0, rationale: "",
         evidence: [{ sourceUrl: "", sourceTitle: "", sourcePublisher: "", sourceDate: "", retrievalDate: "",
-          exactClaim: "", rawMetricValue: 0, rawMetricUnit: "", sampleSize: 0,
+          exactClaim: "", metricKey: "", rawMetricValue: 0, rawMetricUnit: "",
+          normalizationDirection: "higher_is_better|lower_is_better", sampleSize: 0,
           evidenceKind: "quantitative|percentage|qualitative|analyst_judgment|unverified", supportDirection: "supports|contradicts|context|neutral",
           confidence: 0, normalizedScore: 0, criterionWeight: weight, weightedContribution: 0,
           normalizationMethod: "direct_percentage|qualitative_explicit|analyst_judgment|missing_evidence_neutral" }],
@@ -2709,7 +3062,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "Never treat search-result snippets, AI summaries, affiliate pages, anonymous posts, forums, or user-generated reviews as authoritative evidence.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
-      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
+      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. For every raw metric, provide a stable snake_case metricKey shared only by genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
     ].join(" ");
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
@@ -3068,7 +3421,13 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (vendorsWereResolved) input.vendors.splice(0, input.vendors.length, ...resolvedVendors);
     const normalizationFallback = vendorsWereResolved ? fallbackAnalysis(input) : fallback;
     const marketScopedUrls = filterSourcesForMarket(input.urls, researchMarket);
-    input.urls.splice(0, input.urls.length, ...marketScopedUrls);
+    const rankedUrls = rankEvidenceSources(
+      marketScopedUrls,
+      resolvedVendors,
+      researchMarket,
+      userSuppliedUrls,
+    );
+    input.urls.splice(0, input.urls.length, ...rankedUrls);
     const evidenceAvailability = await validateFinalEvidenceUrls(input.urls);
     const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
     const scoreVerifiedUrls = dedupeReferenceUrls(evidenceAvailability.reachable);
@@ -3093,6 +3452,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       citationUrls,
       scoreVerifiedUrls,
     );
+    const deterministicWeight = applyDeterministicQuantitativeScores(normalized);
     const reconciledDecision = reconcileRecommendationDecision(
       normalized.recommendation,
       normalized.score,
@@ -3134,6 +3494,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
+    assertSufficientComparisonEvidence(normalized, deterministicWeight);
+    await synthesizeValidatedDecision(client, input, researchMarket, normalized);
     if (!requiresVendorDiscovery) {
       input.onProgress?.("validating_comparison");
       assertCanonicalComparisonConsistency(resolvedVendors, normalized);
@@ -3146,6 +3508,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (error instanceof Error && (
       error.message === "Your input criteria can't be met across the products or services or brands chosen"
       || error.message.startsWith("Insufficient source coverage:")
+      || error.message.startsWith("Insufficient quantitative evidence:")
     )) {
       throw error;
     }

@@ -2,13 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addElectricVehicleMatrixEvidence,
+  applyDeterministicQuantitativeScores,
   assertCanonicalComparisonConsistency,
+  assertSufficientComparisonEvidence,
   type AnalysisPayload,
   buildComparisonIdentity,
   canonicalVendorScoreRows,
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
   electricVehicleFinalQualityIssues,
+  evidenceSufficiency,
   enforceIndianMgBaasFact,
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
@@ -36,6 +39,7 @@ import {
   reweightAnalysis,
   reconcileRecommendationDecision,
   reconcileRecommendationWithNarrative,
+  rankEvidenceSources,
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
   selectRecommendationLabel,
@@ -61,6 +65,116 @@ test("includes NPS in the 100-point weighted decision model", () => {
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("ranks authoritative local and product-specific sources before generic or stale pages", () => {
+  const market = inferResearchMarket("Compare home loans", ["Westpac", "ANZ"], "AU");
+  const ranked = rankEvidenceSources([
+    "https://example.com/archive/2021/general",
+    "https://www.anz.com.au/personal/home-loans/interest-rates",
+    "https://www.apra.gov.au/mortgage-lending-statistics",
+    "https://example.com/general",
+  ], ["Westpac", "ANZ"], market);
+
+  assert.equal(ranked[0], "https://www.anz.com.au/personal/home-loans/interest-rates");
+  assert.ok(ranked.indexOf("https://www.apra.gov.au/mortgage-lending-statistics") < ranked.indexOf("https://example.com/archive/2021/general"));
+});
+
+test("calculates comparable raw metrics deterministically instead of trusting model scores", () => {
+  const analysis = {
+    vendorScores: [
+      {
+        vendor: "Bank A",
+        score: 50,
+        weightedScores: [{
+          criterion: "Value for Money",
+          weight: 15,
+          score: 50,
+          rationale: "Model score",
+          evidence: [{
+            sourceUrl: "https://a.example/rates",
+            exactClaim: "Variable interest rate is 6 percent.",
+            metricKey: "variable_interest_rate",
+            rawMetricValue: 6,
+            rawMetricUnit: "percent",
+            normalizationDirection: "lower_is_better",
+            evidenceKind: "percentage",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizedScore: 94,
+            criterionWeight: 15,
+            weightedContribution: 14.1,
+            normalizationMethod: "inverse_percentage",
+          }],
+        }],
+      },
+      {
+        vendor: "Bank B",
+        score: 50,
+        weightedScores: [{
+          criterion: "Value for Money",
+          weight: 15,
+          score: 50,
+          rationale: "Model score",
+          evidence: [{
+            sourceUrl: "https://b.example/rates",
+            exactClaim: "Variable interest rate is 7 percent.",
+            metricKey: "variable_interest_rate",
+            rawMetricValue: 7,
+            rawMetricUnit: "percent",
+            normalizationDirection: "lower_is_better",
+            evidenceKind: "percentage",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizedScore: 93,
+            criterionWeight: 15,
+            weightedContribution: 13.95,
+            normalizationMethod: "inverse_percentage",
+          }],
+        }],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.equal(applyDeterministicQuantitativeScores(analysis), 20);
+  assert.equal(analysis.vendorScores[0].weightedScores?.[0].score, 100);
+  assert.equal(analysis.vendorScores[1].weightedScores?.[0].score, 30);
+  assert.equal(analysis.vendorScores[0].weightedScores?.[0].evidence?.reduce(
+    (total, evidence) => total + evidence.weightedContribution,
+    0,
+  ), 20);
+  assert.match(analysis.vendorScores[0].weightedScores?.[0].rationale ?? "", /comparable verified/);
+});
+
+test("rejects an all-neutral report without comparable verified evidence", () => {
+  const analysis = {
+    vendorScores: ["A", "B"].map((vendor) => ({
+      vendor,
+      score: 50,
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion,
+        weight,
+        score: 50,
+        rationale: "No evidence",
+        evidence: [{
+          exactClaim: "No verified evidence was returned for this criterion.",
+          evidenceKind: "unverified",
+          supportDirection: "neutral",
+          confidence: 0,
+          normalizedScore: 50,
+          criterionWeight: weight,
+          weightedContribution: 50 * weight / 100,
+          normalizationMethod: "missing_evidence_neutral",
+        }],
+      })),
+    })),
+  } as AnalysisPayload;
+
+  assert.equal(evidenceSufficiency(analysis).sufficient, false);
+  assert.throws(
+    () => assertSufficientComparisonEvidence(analysis),
+    /not enough comparable verified evidence/i,
+  );
 });
 
 test("allows ordinary comparison instructions containing select and from", () => {

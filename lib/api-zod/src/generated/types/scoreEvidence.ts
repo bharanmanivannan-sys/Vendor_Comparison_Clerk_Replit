@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ScoreEvidenceEvidenceKind } from './scoreEvidenceEvidenceKind';
+import type { ScoreEvidenceNormalizationDirection } from './scoreEvidenceNormalizationDirection';
 import type { ScoreEvidenceSupportDirection } from './scoreEvidenceSupportDirection';
 
 export interface ScoreEvidence {
@@ -24,8 +25,11 @@ export interface ScoreEvidence {
   sourceDate?: Date;
   retrievalDate: Date;
   exactClaim: string;
+  /** Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee. */
+  metricKey?: string;
   rawMetricValue?: number;
   rawMetricUnit?: string;
+  normalizationDirection?: ScoreEvidenceNormalizationDirection;
   /** @minimum 0 */
   sampleSize?: number;
   evidenceKind: ScoreEvidenceEvidenceKind;

@@ -15,11 +15,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[keyof typeof ComparisonJobStateErrorCode];
+export type ScoreEvidenceNormalizationDirection = typeof ScoreEvidenceNormalizationDirection[keyof typeof ScoreEvidenceNormalizationDirection];
 
 
-export const ComparisonJobStateErrorCode = {
-  research_failed: 'research_failed',
-  validation_failed: 'validation_failed',
-  insufficient_quantitative_evidence: 'insufficient_quantitative_evidence',
+export const ScoreEvidenceNormalizationDirection = {
+  higher_is_better: 'higher_is_better',
+  lower_is_better: 'lower_is_better',
 } as const;

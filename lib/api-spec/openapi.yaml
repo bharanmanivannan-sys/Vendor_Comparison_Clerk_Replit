@@ -1018,7 +1018,7 @@ components:
           type: string
         errorCode:
           type: string
-          enum: [research_failed, validation_failed]
+          enum: [research_failed, validation_failed, insufficient_quantitative_evidence]
       required: [status, stage, progress]
     ComparisonIdentity:
       type: object
@@ -1496,10 +1496,16 @@ components:
           format: date
         exactClaim:
           type: string
+        metricKey:
+          type: string
+          description: Stable measure identifier shared across vendors, such as variable_interest_rate or annual_fee.
         rawMetricValue:
           type: number
         rawMetricUnit:
           type: string
+        normalizationDirection:
+          type: string
+          enum: [higher_is_better, lower_is_better]
         sampleSize:
           type: integer
           minimum: 0

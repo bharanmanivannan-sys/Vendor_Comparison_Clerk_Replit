@@ -7,7 +7,7 @@ import {
   GetExternalUsageResponse,
 } from "@workspace/api-zod";
 import { comparisonsTable, db, tenantsTable, usageEventsTable } from "@workspace/db";
-import { buildAnalysis as buildAnalysisDefault, type AnalysisPayload } from "../lib/analysis";
+import { buildAnalysis as buildAnalysisDefault, comparisonFailureCode, type AnalysisPayload } from "../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../lib/security";
 import { authenticateApiKey as authenticateApiKeyDefault, type AuthenticatedApiKey } from "../services/apiKeys";
 import { beginIdempotency, completeIdempotency, failIdempotency, requestHash, startIdempotencyHeartbeat } from "../services/idempotency";
@@ -147,7 +147,13 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.a
   } catch (cause) {
     heartbeat.stop();
     await failIdempotency(key, idempotencyKey, ownershipToken);
-    error(res, 502, "comparison_failed", cause instanceof Error ? cause.message : "Product research could not be completed.");
+    const failureCode = comparisonFailureCode(cause);
+    error(
+      res,
+      502,
+      failureCode === "research_failed" ? "comparison_failed" : failureCode,
+      cause instanceof Error ? cause.message : "Product research could not be completed.",
+    );
     return;
   }
   let committed: { responseBody: unknown; responseHeaders: Record<string, string> };

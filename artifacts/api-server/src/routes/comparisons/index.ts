@@ -24,6 +24,7 @@ import { comparisonsTable, db } from "@workspace/db";
 import {
   buildAnalysis,
   buildComparisonIdentity,
+  comparisonFailureCode,
   MAX_COMPARISON_OPTIONS,
   parsePrompt,
   parsePromptWithIntent,
@@ -48,7 +49,7 @@ const comparisonJobs = new Map<string, {
   progress: { entities: string[]; subject: string };
   result?: unknown;
   message?: string;
-  errorCode?: "research_failed" | "validation_failed";
+  errorCode?: "research_failed" | "validation_failed" | "insufficient_quantitative_evidence";
   createdAt: number;
 }>();
 const GUEST_LIMIT = 12;
@@ -127,7 +128,10 @@ export function comparisonFailureMessage(error: unknown, prompt: string, vendors
     const missingVendor = message.match(/no official product source was found for (.+?)(?:\.|$)/i)?.[1];
     return missingVendor
       ? `The comparison options were understood, but an exact official product source could not be verified for ${missingVendor}. Remove general brand-homepage URLs and retry so research can find the current product page, or add an exact model page for that manufacturer.`
-      : "The comparison options were understood, but there was not enough independently reachable product evidence to complete a reliable result. Remove general brand-homepage URLs and retry, or add exact current product pages.";
+      : "There is not enough comparable verified evidence to rank these options reliably. Add exact current product pages or refine the options and criteria, then try again.";
+  }
+  if (/insufficient quantitative evidence/i.test(message)) {
+    return "There is not enough comparable verified evidence to rank these options reliably. Add exact current product pages or refine the options and criteria, then try again.";
   }
   if (/failed query|column .* does not exist|relation .* does not exist/i.test(message)) {
     return "The analysis finished, but the report could not be saved. Please try again shortly.";
@@ -223,9 +227,7 @@ function startComparisonJob(options: {
         status: "failed",
         stage: comparisonJobs.get(id)?.stage ?? "finding_official_sources",
         progress: { entities: options.vendors, subject: options.subject },
-        errorCode: error instanceof Error && /canonical comparison entity|comparison matrix/i.test(error.message)
-          ? "validation_failed"
-          : "research_failed",
+        errorCode: comparisonFailureCode(error),
         message: comparisonFailureMessage(error, options.input.prompt, options.vendors),
         createdAt: Date.now(),
       });
@@ -466,7 +468,7 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
       urls,
     });
   } catch (error) {
-    sendError(res, 502, "comparison_failed", error instanceof Error ? error.message : "Product research could not be completed.");
+    sendError(res, 502, comparisonFailureCode(error), comparisonFailureMessage(error, validated.input.prompt, validated.vendors));
     return;
   }
   res.json(CreateGuestComparisonResponse.parse({
@@ -539,7 +541,7 @@ router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promis
   try {
     analysis = await buildAnalysis({ ...input, vendors, criteria, urls });
   } catch (error) {
-    sendError(res, 502, "comparison_failed", error instanceof Error ? error.message : "Product research could not be completed.");
+    sendError(res, 502, comparisonFailureCode(error), comparisonFailureMessage(error, input.prompt, vendors));
     return;
   }
   const created = await persistComparisonAtomically({

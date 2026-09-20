@@ -86,6 +86,7 @@ export * from './reportSource';
 export * from './reportSourceStatus';
 export * from './scoreEvidence';
 export * from './scoreEvidenceEvidenceKind';
+export * from './scoreEvidenceNormalizationDirection';
 export * from './scoreEvidenceSupportDirection';
 export * from './serviceProductMapItem';
 export * from './stockHistory';
