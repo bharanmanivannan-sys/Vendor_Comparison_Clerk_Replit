@@ -26,3 +26,9 @@ Usage-priced ownership totals require explicit scenario assumptions and comparab
 **Why:** Partial evidence or mixed currencies can create a misleading one-sided winner.
 
 **How to apply:** If any option lacks comparable evidence, present the documented cost components as conditional instead of publishing a total or winner.
+
+Deterministic official-document recovery must run against canonical normalized option rows, and server-owned allowlisted sources may proceed to full secure retrieval when a lightweight availability probe is inconclusive.
+
+**Why:** Repaired model drafts can rename or omit score rows, and official pages can intermittently reject preliminary probes while remaining safely retrievable; either case can silently reduce all-option metric coverage.
+
+**How to apply:** Keep the normal availability gate for discovered or user-supplied URLs. For a bounded server-owned source set, retain full retrieval's SSRF, redirect, timeout, and size checks, then attach recovered metrics after option and criterion normalization before deterministic scoring.
