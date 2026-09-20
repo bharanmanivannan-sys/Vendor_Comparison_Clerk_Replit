@@ -25,3 +25,4 @@
 - [Compact official offer evidence](compact-offer-evidence.md) — deterministically extract verified offer metrics when official pages compress price and usage rate into one line.
 - [Portfolio-first product selection](portfolio-first-product-selection.md) — broad brand requests need portfolio screening, minimum comparability, holistic fit, and evidence readiness before ranking.
 - [Retrieved metric provenance](retrieved-metric-provenance.md) — evidence normalization must preserve verified document provenance so deterministic scoring can recognize recovered metrics.
+- [Parameter-first and evidence-limited decisions](parameter-first-decisions.md) — explicit user priorities control weights; uncertainty returns a brief with no exact winner, not a failed job.

@@ -288,6 +288,98 @@ export const WEIGHTED_CRITERIA = [
   { criterion: "Regulatory Compliance", weight: 3 },
 ] as const;
 
+export const SAFETY_FIRST_VEHICLE_WEIGHTS: ComparisonWeight[] = [
+  { criterion: "Meets Needs / Features", weight: 70 },
+  { criterion: "Quality & Reliability", weight: 20 },
+  { criterion: "Value for Money", weight: 5 },
+  { criterion: "Brand Reputation", weight: 0 },
+  { criterion: "Customer Advocacy / NPS", weight: 0 },
+  { criterion: "Innovation / Differentiation", weight: 0 },
+  { criterion: "Strategic Provider Role", weight: 0 },
+  { criterion: "Sustainability", weight: 0 },
+  { criterion: "Regulatory Compliance", weight: 5 },
+];
+
+export const UNVERIFIABLE_WINNER_NOTE = "Exact winner can't be determined as sources can't be clearly verified or validated. The choice is left to the user discretion as AI can sometimes provide incorrect results.";
+
+export function isSafetyFirstVehicleQuery(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const vehicleContext = /\b(?:cars?|vehicles?|suvs?|drive|driving|nexon|xuv|mahindra|tata|toyota|hyundai|kia|tesla|byd)\b/.test(normalized);
+  const safetyPriority = /\b(?:safest|safety[- ]first|safety (?:is |as )?(?:the )?(?:first|main|top|primary|highest) priority|better to drive safely|safer to drive|crash protection|occupant protection|ncap)\b/.test(normalized);
+  return vehicleContext && safetyPriority;
+}
+
+export function explicitDecisionPriorityProfile(prompt: string): {
+  label: string;
+  weights: ComparisonWeight[];
+} | null {
+  if (isSafetyFirstVehicleQuery(prompt)) {
+    return { label: "vehicle safety", weights: SAFETY_FIRST_VEHICLE_WEIGHTS };
+  }
+  const normalized = prompt.toLowerCase();
+  const explicitPriority = /\b(?:which (?:one|is).{0,36}(?:better|best)|better for|best for|priority|prioriti[sz]e|focus(?:ed)? on|based on|most important)\b/.test(normalized);
+  if (!explicitPriority) return null;
+  const profile = (label: string, primaryCriterion: string, secondaryCriterion: string): {
+    label: string;
+    weights: ComparisonWeight[];
+  } => {
+    const tertiaryCriterion = ["Regulatory Compliance", "Value for Money", "Innovation / Differentiation"]
+      .find((criterion) => criterion !== primaryCriterion && criterion !== secondaryCriterion)!;
+    return {
+      label,
+      weights: WEIGHTED_CRITERIA.map(({ criterion }) => ({
+        criterion,
+        weight: criterion === primaryCriterion ? 70 : criterion === secondaryCriterion ? 20 : criterion === tertiaryCriterion ? 10 : 0,
+      })),
+    };
+  };
+  if (/\b(?:price|pricing|cost|affordability|value for money|cheapest|lowest fee)\b/.test(normalized)) {
+    return profile("value for money", "Value for Money", "Meets Needs / Features");
+  }
+  if (/\b(?:reliability|quality|durability|uptime|failure rate)\b/.test(normalized)) {
+    return profile("quality and reliability", "Quality & Reliability", "Meets Needs / Features");
+  }
+  if (/\b(?:customer service|customer support|services and support|after[- ]sales|complaints?|nps)\b/.test(normalized)) {
+    return profile("customer service and support", "Customer Advocacy / NPS", "Quality & Reliability");
+  }
+  if (/\b(?:features?|capabilities|functionality|ease of use|performance)\b/.test(normalized)) {
+    return profile("features and capabilities", "Meets Needs / Features", "Quality & Reliability");
+  }
+  if (/\b(?:sustainability|environmental|emissions|carbon)\b/.test(normalized)) {
+    return profile("sustainability", "Sustainability", "Regulatory Compliance");
+  }
+  if (/\b(?:compliance|regulatory|security|privacy)\b/.test(normalized)) {
+    return profile("compliance and protections", "Regulatory Compliance", "Meets Needs / Features");
+  }
+  return null;
+}
+
+function applyInternalWeightProfile(analysis: AnalysisPayload, profile: ComparisonWeight[]): void {
+  const weights = new Map(profile.map(({ criterion, weight }) => [criterion, weight]));
+  for (const vendor of analysis.vendorScores) {
+    for (const criterion of vendor.weightedScores ?? []) {
+      const weight = weights.get(criterion.criterion);
+      if (weight === undefined) continue;
+      criterion.weight = weight;
+      for (const evidence of criterion.evidence ?? []) {
+        evidence.criterionWeight = weight;
+      }
+    }
+  }
+}
+
+export function annotateUnverifiableWinner(analysis: AnalysisPayload): void {
+  const options = (analysis.vendorScores ?? []).map((vendor) => vendor.vendor).join(" and ");
+  analysis.recommendation = "No exact winner";
+  analysis.score = 50;
+  analysis.executiveSummary = `The available comparable verified evidence was insufficient to establish a clear winner${options ? ` between ${options}` : ""}. Review the cited evidence, limitations, and trade-offs in this executive decision brief. NOTE: ${UNVERIFIABLE_WINNER_NOTE}`;
+  analysis.recommendationReason = `No option receives a verified winning recommendation because the available evidence did not meet the required comparability and validation standard. NOTE: ${UNVERIFIABLE_WINNER_NOTE}`;
+  analysis.insights ??= [];
+  if (!analysis.insights.includes(UNVERIFIABLE_WINNER_NOTE)) {
+    analysis.insights.push(UNVERIFIABLE_WINNER_NOTE);
+  }
+}
+
 export type ComparisonWeight = {
   criterion: string;
   weight: number;
@@ -628,6 +720,21 @@ export function inferResearchMarket(
 export function officialMarketSourcesFor(prompt: string, vendors: string[], market: ResearchMarket): string[] {
   const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
   const officialSources: string[] = [];
+  if (market.countryCode === "IN" && isSafetyFirstVehicleQuery(prompt)) {
+    officialSources.push("https://www.bncap.in/vehicle-safety-ratings");
+    if (/\b(?:tata\s+)?nexon\b/.test(normalized)) {
+      officialSources.push(
+        "https://www.bncap.in/vehicle/tata-nexon",
+        "https://www.bncap.in/wp-content/uploads/2024/10/4.-FACT-SHEET_Nexon.pdf",
+      );
+    }
+    if (/\b(?:mahindra\s+)?xuv\s*3xo\b/.test(normalized)) {
+      officialSources.push(
+        "https://www.bncap.in/vehicle/mahindra-xuv-3xo",
+        "https://auto.mahindra.com/hi-in/press-release/mahindra-sets-new-safety-benchmarks-as-thar-roxx-xuv-3xo-and-xuv400-earn-5-star-bharat-ncap-rating.html",
+      );
+    }
+  }
   if (
     market.countryCode === "IN"
     && /\bquick[ -]?commerce\b/.test(normalized)
@@ -2328,8 +2435,11 @@ function comparableMetric(entry: EvidenceRecord): {
  * Replace model-provided scores with deterministic relative scores whenever at
  * least two vendors expose comparable verified raw metrics for a criterion.
  */
-export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload): number {
-  const scoredCriteria = new Set<string>();
+export function applyDeterministicQuantitativeScores(
+  analysis: AnalysisPayload,
+  criterionWeights: readonly ComparisonWeight[] = WEIGHTED_CRITERIA,
+): number {
+  const scoredCriteria = new Map<string, number>();
   for (const { criterion, weight } of WEIGHTED_CRITERIA) {
     const comparableByVendor = analysis.vendorScores.map((vendor) => {
       const criterionScore = vendor.weightedScores?.find((entry) => entry.criterion === criterion);
@@ -2356,6 +2466,7 @@ export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload):
     const values = canonical.map((entry) => entry.selected.metric.value);
     const minimum = Math.min(...values);
     const maximum = Math.max(...values);
+    const criterionWeight = criterionWeights.find((entry) => entry.criterion === criterion)?.weight ?? weight;
     for (const entry of canonical) {
       const { metric } = entry.selected;
       const ratio = maximum === minimum
@@ -2369,16 +2480,16 @@ export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload):
       entry.criterionScore!.evidence = (entry.criterionScore!.evidence ?? []).map((evidence, evidenceIndex) => ({
         ...evidence,
         normalizedScore: evidenceIndex === entry.selected.evidenceIndex ? deterministicScore : evidence.normalizedScore,
-        criterionWeight: weight,
+        criterionWeight,
         weightedContribution: evidenceIndex === entry.selected.evidenceIndex
-          ? Number((deterministicScore * weight / 100).toFixed(2))
+          ? Number((deterministicScore * criterionWeight / 100).toFixed(2))
           : 0,
         normalizationMethod: evidenceIndex === entry.selected.evidenceIndex
           ? metric.lowerIsBetter ? "inverse_comparable_metric" : "direct_comparable_metric"
           : evidence.normalizationMethod,
       }));
     }
-    scoredCriteria.add(criterion);
+    scoredCriteria.set(criterion, criterionWeight);
   }
   for (const vendor of analysis.vendorScores) {
     for (const criterion of vendor.weightedScores ?? []) {
@@ -2399,9 +2510,7 @@ export function applyDeterministicQuantitativeScores(analysis: AnalysisPayload):
       0,
     ) / 100);
   }
-  return WEIGHTED_CRITERIA
-    .filter(({ criterion }) => scoredCriteria.has(criterion))
-    .reduce((total, { weight }) => total + weight, 0);
+  return Array.from(scoredCriteria.values()).reduce((total, weight) => total + weight, 0);
 }
 
 export function evidenceSufficiency(
@@ -3263,6 +3372,12 @@ const METRIC_REGISTRY: Record<string, MetricDefinition> = {
   customer_satisfaction_rate: { units: ["percent"], direction: "higher_is_better", label: /\b(?:customer )?satisfaction\b/i },
   complaint_rate: { units: ["percent"], direction: "lower_is_better", label: /\bcomplaint rate\b/i },
   failure_rate: { units: ["percent"], direction: "lower_is_better", label: /\bfailure rate\b/i },
+  ncap_star_rating: { units: ["stars"], direction: "higher_is_better", label: /\b(?:bharat|global)?\s*ncap.{0,36}\b(?:star|rating)|\b(?:star|rating).{0,36}\b(?:bharat|global)?\s*ncap\b/i },
+  adult_occupant_score: { units: ["points"], direction: "higher_is_better", label: /\badult occupant (?:protection )?(?:score|rating|points?)\b|\baop\b/i },
+  child_occupant_score: { units: ["points"], direction: "higher_is_better", label: /\bchild occupant (?:protection )?(?:score|rating|points?)\b|\bcop\b/i },
+  airbag_count: { units: ["airbags"], direction: "higher_is_better", label: /\bairbags?\b/i },
+  esc_compliance: { units: ["binary"], direction: "higher_is_better", label: /\b(?:electronic stability control|esc).{0,24}\b(?:standard|compliance|complies|equipped)\b/i },
+  adas_feature_count: { units: ["features"], direction: "higher_is_better", label: /\b(?:adas|advanced driver assistance).{0,24}\b(?:features?|functions?|systems?)\b/i },
 };
 
 const UNIT_PATTERNS: Record<string, RegExp> = {
@@ -3274,6 +3389,11 @@ const UNIT_PATTERNS: Record<string, RegExp> = {
   minutes: /^(?:\s{0,3})(?:min|mins|minutes?\b)/i,
   mm: /^(?:\s{0,3})(?:mm|millimet(?:er|re)s?\b)/i,
   years: /^(?:\s{0,3})(?:year|years|yr|yrs\b)/i,
+  stars: /^(?:\s{0,3})(?:stars?|\/\s*5\b)/i,
+  points: /^(?:\s{0,3})(?:points?|pts?|\/\s*(?:32|49)\b)/i,
+  airbags: /^(?:\s{0,3})(?:airbags?)\b/i,
+  features: /^(?:\s{0,3})(?:features?|functions?|systems?)\b/i,
+  binary: /^(?:\s{0,3})(?:binary|compliant|standard)\b/i,
   inr_per_km: /^(?:\s{0,3})(?:₹|INR|Rs\.?)?\s*(?:\/|per\s+)km\b/i,
   inr_lakh: /^(?:\s{0,3})(?:lakh|lakhs)\b/i,
   aud_per_km: /^(?:\s{0,3})(?:AUD|A\$)?\s*(?:\/|per\s+)km\b/i,
@@ -3399,6 +3519,24 @@ function metricBasis(metricKey: string, unit: string, claim: string): string | n
     const window = normalized.match(/\b\d{1,3}\s*%\s*(?:to|-|–|—)\s*\d{1,3}\s*%\b/)?.[0];
     if (!window) return null;
     qualifier = window.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey === "ncap_star_rating" || metricKey === "adult_occupant_score" || metricKey === "child_occupant_score") {
+    const protocol = normalized.match(/\b(?:bharat|global)\s*ncap\b/)?.[0]?.replace(/\s+/g, "_");
+    if (!protocol) return null;
+    const version = normalized.match(/\bais[- ]?197(?:\s+version[- ]?[a-z]+-\d{4})?\b/)?.[0]?.replace(/[^a-z0-9]+/g, "_")
+      ?? normalized.match(/\b(?:20\d{2})\s+protocol\b/)?.[0]?.replace(/\s+/g, "_")
+      ?? "published_protocol";
+    const scoreBasis = metricKey === "adult_occupant_score"
+      ? "adult_occupant_32"
+      : metricKey === "child_occupant_score"
+        ? "child_occupant_49"
+        : "five_star_scale";
+    qualifier = `${protocol}:${version}:${scoreBasis}`;
+  } else if (metricKey === "airbag_count") {
+    qualifier = "standard_fitment";
+  } else if (metricKey === "esc_compliance") {
+    qualifier = "standard_fitment";
+  } else if (metricKey === "adas_feature_count") {
+    qualifier = "like_for_like_variant";
   } else if (metricKey === "variable_interest_rate" || metricKey === "comparison_rate") {
     const lvr = normalized.match(
       /\b(?:lvrs?\s*(?:up to|above|over)?\s*\d{1,3}(?:\.\d+)?\s*%|(?:up to|maximum)\s*\d{1,3}(?:\.\d+)?\s*%\s*lvr|\d{1,3}(?:\.\d+)?\s*%\s*(?:or less|or below))/,
@@ -4780,6 +4918,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     }
     const context = validateComparisonContext(input.prompt, input.vendors);
     const researchMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
+    const isSafetyFirstVehicleDecision = isSafetyFirstVehicleQuery(input.prompt);
+    const explicitDecisionPriority = explicitDecisionPriorityProfile(input.prompt);
     const isPreOwnedVehicleComparison = /\b(?:pre[- ]?(?:owned|used)|used|second[- ]hand)\s+(?:cars?|vehicles?|autos?)\b/i.test(input.prompt);
     const isQuickCommerceComparison = researchMarket.countryCode === "IN"
       && /\bquick[ -]?commerce\b/i.test(input.prompt)
@@ -4800,7 +4940,13 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     for (const sourceUrl of officialMarketSourcesFor(input.prompt, input.vendors, researchMarket)) {
       if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
     }
+    const parameterPriorityInstructions = isSafetyFirstVehicleDecision
+      ? "The user's first and controlling decision parameter is vehicle safety. Use a safety-focused score profile rather than the generic vendor emphasis. Prioritize official manufacturer India pages and Bharat NCAP. Compare exact current models and applicable variants using ncap_star_rating (stars), adult_occupant_score (points), child_occupant_score (points), airbag_count (airbags), esc_compliance (binary), pedestrian protection, and adas_feature_count (features). Include the exact NCAP program, protocol/version, tested variant, applicability, publication year, and score denominator. Compare NCAP results only when the program, protocol/version, and denominator match. Keep an exact tie when authoritative same-protocol evidence does not establish a safety winner."
+      : explicitDecisionPriority
+        ? `The user's first and controlling decision parameter is ${explicitDecisionPriority.label}. Apply the supplied priority-focused weights rather than the generic vendor emphasis. Research and score directly comparable verified metrics for that parameter first. Keep an exact tie and explain the evidence limitation when the priority evidence does not establish a winner.`
+        : "";
     const marketResearchInstructions = [
+      parameterPriorityInstructions,
       userSuppliedSourceInstructions(input.prompt, userSuppliedUrls),
       `Treat ${researchMarket.country} as the user's market and present all comparable monetary values in ${researchMarket.currency}.`,
       userSuppliedUrls.length
@@ -4907,6 +5053,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       criteriaMet?: boolean;
       unmetCriteriaReason?: string;
     };
+    let sourceCoverageInsufficient = false;
     try {
       parsed = parseJsonObject(researchResponse.output_text);
     } catch (parseError) {
@@ -4995,7 +5142,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       addParsedSourceUrls(parsed.sources, correctedUrls);
       const stillMissing = missingCreditCardSourceVendors(input.vendors, correctedUrls);
       if (stillMissing.length) {
-        throw new Error(`Insufficient source coverage: no official product source was found for ${stillMissing.join(", ")}.`);
+        sourceCoverageInsufficient = true;
+        console.warn("Continuing with an evidence-limited credit-card brief", { missingOfficialSourcesFor: stillMissing });
       }
       input.urls.splice(0, input.urls.length, ...correctedUrls);
     }
@@ -5153,7 +5301,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.urls.splice(0, input.urls.length, ...correctedUrls);
       const stillMissingSources = missingElectricVehicleSourceVendors(input.vendors, input.urls, researchMarket);
       if (stillMissingSources.length) {
-        throw new Error(`Insufficient source coverage: no official product source was found for ${stillMissingSources.join(", ")}.`);
+        sourceCoverageInsufficient = true;
+        console.warn("Continuing with an evidence-limited electric-vehicle brief", { missingOfficialSourcesFor: stillMissingSources });
       }
       // Do not reject an incomplete model-authored matrix here. Exact official
       // product documents are retrieved and verified below, where deterministic
@@ -5267,8 +5416,16 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         retrievedDocuments,
       );
     }
-    const deterministicWeight = applyDeterministicQuantitativeScores(normalized);
-    applyProviderRoleTieBreak(normalized.vendorScores);
+    if (explicitDecisionPriority) {
+      applyInternalWeightProfile(normalized, explicitDecisionPriority.weights);
+    }
+    const deterministicWeight = applyDeterministicQuantitativeScores(
+      normalized,
+      explicitDecisionPriority?.weights ?? WEIGHTED_CRITERIA,
+    );
+    if (!explicitDecisionPriority) {
+      applyProviderRoleTieBreak(normalized.vendorScores);
+    }
     if (isElectricVehicleComparison) {
       for (const vendorScore of normalized.vendorScores) {
         const reliability = vendorScore.weightedScores?.find((criterion) => criterion.criterion === "Quality & Reliability");
@@ -5312,7 +5469,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         scoreVerifiedUrls,
       );
       if (qualityIssues.length) {
-        throw new Error(`Insufficient source coverage: ${qualityIssues.join("; ")}.`);
+        sourceCoverageInsufficient = true;
+        console.warn("Continuing with an evidence-limited electric-vehicle brief", { qualityIssues });
       }
     }
     if (isProviderLevelCreditCardDiscovery) {
@@ -5334,7 +5492,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       : isElectricVehicleModelSelection
         ? 35
         : 50;
-    assertSufficientComparisonEvidence(normalized, deterministicWeight, minimumDeterministicWeight);
+    const insufficientEvidence = sourceCoverageInsufficient || !evidenceSufficiency(
+      normalized,
+      deterministicWeight,
+      explicitDecisionPriority ? Math.max(...explicitDecisionPriority.weights.map(({ weight }) => weight)) : minimumDeterministicWeight,
+    ).sufficient;
     const protectedPortfolioInsights = normalized.insights.filter((insight) => (
       insight.startsWith("Model selection rationale —")
       || insight.startsWith("Alternative outside comparison —")
@@ -5353,6 +5515,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (!requiresVendorDiscovery) {
       input.onProgress?.("validating_comparison");
       assertCanonicalComparisonConsistency(resolvedVendors, normalized);
+    }
+    if (insufficientEvidence) {
+      annotateUnverifiableWinner(normalized);
     }
     return normalized;
   } catch (error) {

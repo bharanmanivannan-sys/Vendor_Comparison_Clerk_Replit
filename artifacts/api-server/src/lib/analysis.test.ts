@@ -9,6 +9,7 @@ import {
   addVerifiedQuickCommerceDeliveryEvidence,
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
+  annotateUnverifiableWinner,
   assertCanonicalComparisonConsistency,
   assertSufficientComparisonEvidence,
   type AnalysisPayload,
@@ -21,12 +22,14 @@ import {
   evidenceSufficiency,
   enforceBaasTotalCostAssumptions,
   enforceIndianMgBaasFact,
+  explicitDecisionPriorityProfile,
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
   hasFiveYearMarketHistoryCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
   isElectricVehiclePrompt,
+  isSafetyFirstVehicleQuery,
   isObjectivePhraseVendor,
   missingCreditCardSourceVendors,
   missingElectricVehicleSourceVendors,
@@ -57,6 +60,7 @@ import {
   selectRecommendationLabel,
   sourceMatchesResearchMarket,
   userSuppliedSourceInstructions,
+  UNVERIFIABLE_WINNER_NOTE,
   validateFinalEvidenceUrls,
   validateQuantitativeEvidenceAgainstDocuments,
   validateComparisonContext,
@@ -80,6 +84,147 @@ test("includes NPS in the 100-point weighted decision model", () => {
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("recognizes an explicit vehicle-safety priority without matching incidental safety text", () => {
+  assert.equal(
+    isSafetyFirstVehicleQuery("Compare TATA Nexon vs Mahindra XUV 3XO. Which is better to drive safely in India?"),
+    true,
+  );
+  assert.equal(
+    isSafetyFirstVehicleQuery("Compare two CRM platforms including security, support, and implementation safety."),
+    false,
+  );
+});
+
+test("uses the user's explicit comparison parameter as the primary weight profile", () => {
+  const support = explicitDecisionPriorityProfile("Spinny vs CarDekho: which one offers better customer service and support?");
+  const value = explicitDecisionPriorityProfile("Which laptop is better for value for money?");
+  const generic = explicitDecisionPriorityProfile("Compare two CRM platforms.");
+
+  assert.equal(support?.label, "customer service and support");
+  assert.equal(support?.weights.find(({ criterion }) => criterion === "Customer Advocacy / NPS")?.weight, 70);
+  assert.equal(support?.weights.reduce((total, { weight }) => total + weight, 0), 100);
+  assert.equal(value?.weights.find(({ criterion }) => criterion === "Value for Money")?.weight, 70);
+  assert.equal(value?.weights.reduce((total, { weight }) => total + weight, 0), 100);
+  assert.equal(generic, null);
+});
+
+test("seeds official Bharat NCAP sources for an India safety-first comparison", () => {
+  const market = inferResearchMarket("Compare Tata Nexon and Mahindra XUV 3XO safely in India", ["Tata Nexon", "Mahindra XUV 3XO"], "IN");
+  const sources = officialMarketSourcesFor(
+    "Compare Tata Nexon vs Mahindra XUV 3XO. Which is safer to drive in India?",
+    ["Tata Nexon", "Mahindra XUV 3XO"],
+    market,
+  );
+
+  assert.ok(sources.includes("https://www.bncap.in/vehicle/tata-nexon"));
+  assert.ok(sources.includes("https://www.bncap.in/vehicle/mahindra-xuv-3xo"));
+});
+
+test("uses the active safety-focused criterion weight for same-protocol NCAP scores", () => {
+  const basis = "adult_occupant_score:points:bharat_ncap:ais_197_september_2023:adult_occupant_32";
+  const analysis = {
+    executiveSummary: "",
+    recommendationReason: "",
+    insights: [],
+    vendorScores: [
+      ["Tata Nexon", 29.41],
+      ["Mahindra XUV 3XO", 29.36],
+    ].map(([vendor, value]) => ({
+      vendor,
+      score: 50,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 70,
+        score: 50,
+        rationale: "Bharat NCAP adult occupant protection",
+        evidence: [{
+          exactClaim: `${vendor} adult occupant protection is ${value} points out of 32 under Bharat NCAP AIS-197 September 2023.`,
+          evidenceKind: "quantitative",
+          supportDirection: "supports",
+          confidence: 1,
+          sourceUrl: `https://www.bncap.in/vehicle/${String(vendor).toLowerCase().replaceAll(" ", "-")}`,
+          metricKey: "adult_occupant_score",
+          rawMetricValue: value,
+          rawMetricUnit: "points",
+          normalizationDirection: "higher_is_better",
+          normalizationMethod: "retrieved_document_metric",
+          documentSha256: "a".repeat(64),
+          sourceTextStart: 0,
+          sourceTextEnd: 20,
+          metricSubject: vendor,
+          metricBasis: basis,
+          normalizedScore: 50,
+          criterionWeight: 70,
+          weightedContribution: 35,
+        }],
+      }],
+    })),
+  } as unknown as AnalysisPayload;
+
+  assert.equal(applyDeterministicQuantitativeScores(analysis, [{
+    criterion: "Meets Needs / Features",
+    weight: 70,
+  }]), 70);
+  assert.equal(analysis.vendorScores[0]?.weightedScores?.[0]?.evidence?.[0]?.criterionWeight, 70);
+  assert.notEqual(analysis.vendorScores[0]?.score, analysis.vendorScores[1]?.score);
+});
+
+test("does not compare NCAP scores from different protocols", () => {
+  const analysis = {
+    vendorScores: [
+      ["A", "adult_occupant_score:points:bharat_ncap:ais_197:adult_occupant_32"],
+      ["B", "adult_occupant_score:points:global_ncap:2022_protocol:adult_occupant_32"],
+    ].map(([vendor, basis]) => ({
+      vendor,
+      score: 50,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 70,
+        score: 50,
+        rationale: "Crash score",
+        evidence: [{
+          exactClaim: "Adult occupant score is 29 points.",
+          evidenceKind: "quantitative",
+          supportDirection: "supports",
+          confidence: 1,
+          sourceUrl: `https://example.com/${vendor}`,
+          metricKey: "adult_occupant_score",
+          rawMetricValue: 29,
+          rawMetricUnit: "points",
+          normalizationDirection: "higher_is_better",
+          normalizationMethod: "retrieved_document_metric",
+          documentSha256: "b".repeat(64),
+          sourceTextStart: 0,
+          sourceTextEnd: 20,
+          metricSubject: vendor,
+          metricBasis: basis,
+          normalizedScore: 50,
+          criterionWeight: 70,
+          weightedContribution: 35,
+        }],
+      }],
+    })),
+  } as unknown as AnalysisPayload;
+
+  assert.equal(applyDeterministicQuantitativeScores(analysis), 0);
+});
+
+test("adds the exact user-discretion note when no winner can be verified", () => {
+  const analysis = {
+    executiveSummary: "Both options remain plausible.",
+    recommendationReason: "The verified evidence does not separate them.",
+    insights: [],
+  } as unknown as AnalysisPayload;
+
+  annotateUnverifiableWinner(analysis);
+  annotateUnverifiableWinner(analysis);
+
+  assert.match(analysis.executiveSummary, new RegExp(UNVERIFIABLE_WINNER_NOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(analysis.insights.filter((item) => item === UNVERIFIABLE_WINNER_NOTE).length, 1);
+  assert.equal(analysis.recommendation, "No exact winner");
+  assert.equal(analysis.score, 50);
 });
 
 test("ranks authoritative local and product-specific sources before generic or stale pages", () => {
