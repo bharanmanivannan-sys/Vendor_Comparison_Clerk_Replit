@@ -151,7 +151,13 @@ export function comparisonFailureMessage(error: unknown, prompt: string, vendors
 function startComparisonJob(options: {
   owner: string;
   userId?: string;
-  input: { prompt: string; market?: "IN" | "AU" | "US" | "GB"; urls?: string[] };
+  input: {
+    prompt: string;
+    market?: "IN" | "AU" | "US" | "GB";
+    annualDistanceKm?: number;
+    ownershipPeriodYears?: number;
+    urls?: string[];
+  };
   vendors: string[];
   criteria: string[];
   subject: string;

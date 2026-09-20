@@ -1143,7 +1143,13 @@ class ComparisonJobError extends Error {
 }
 
 type ResearchMarketCode = 'IN' | 'AU' | 'US' | 'GB';
-type ComparisonRequest = { prompt: string; market: ResearchMarketCode; urls: string[] };
+type ComparisonRequest = {
+  prompt: string;
+  market: ResearchMarketCode;
+  urls: string[];
+  annualDistanceKm?: number;
+  ownershipPeriodYears?: number;
+};
 
 async function runComparisonJob(
   guest: boolean,
@@ -1189,6 +1195,9 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
   const [urls, setUrls] = useState<string[]>([]);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlError, setUrlError] = useState('');
+  const [annualDistanceKm, setAnnualDistanceKm] = useState('');
+  const [ownershipPeriodYears, setOwnershipPeriodYears] = useState('');
+  const isVehicleComparison = /\b(?:vehicle|car|suv|ev|electric vehicle|baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
 
   const addUrl = () => {
     const value = urlDraft.trim();
@@ -1216,7 +1225,13 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
       return;
     }
     setUrlError('');
-    onSubmit({ prompt: prompt.trim(), market, urls });
+    onSubmit({
+      prompt: prompt.trim(),
+      market,
+      urls,
+      ...(isVehicleComparison && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
+      ...(isVehicleComparison && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
+    });
   };
 
   const researchStages: Array<{ stage: ComparisonJobState['stage']; label: string }> = [
@@ -1283,11 +1298,63 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           </select>
         </div>
 
+        {isVehicleComparison && (
+          <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
+            <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
+              03 / Set a BaaS cost scenario <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
+            </p>
+            <p className={`mt-1 text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
+              Enter both values to calculate entry price plus verified per-kilometre battery charges. The report will list all excluded ownership costs.
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className={`text-[11px] font-bold ${guest ? 'text-[#d7dce7]' : 'text-[#566074]'}`}>
+                Annual driving distance
+                <div className="relative mt-1.5">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    max="500000"
+                    step="1"
+                    value={annualDistanceKm}
+                    onChange={(event) => setAnnualDistanceKm(event.target.value)}
+                    className={`focus-ring w-full rounded-lg border px-3 py-2.5 pr-12 text-sm ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c9c1ae] bg-white text-[#202840]'}`}
+                    placeholder="15000"
+                    data-testid="input-annual-distance-km"
+                  />
+                  <span className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] ${guest ? 'text-[#8d98ae]' : 'text-[#888b82]'}`}>km/year</span>
+                </div>
+              </label>
+              <label className={`text-[11px] font-bold ${guest ? 'text-[#d7dce7]' : 'text-[#566074]'}`}>
+                Ownership period
+                <div className="relative mt-1.5">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0.5"
+                    max="30"
+                    step="0.5"
+                    value={ownershipPeriodYears}
+                    onChange={(event) => setOwnershipPeriodYears(event.target.value)}
+                    className={`focus-ring w-full rounded-lg border px-3 py-2.5 pr-12 text-sm ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c9c1ae] bg-white text-[#202840]'}`}
+                    placeholder="5"
+                    data-testid="input-ownership-period-years"
+                  />
+                  <span className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] ${guest ? 'text-[#8d98ae]' : 'text-[#888b82]'}`}>years</span>
+                </div>
+              </label>
+            </div>
+            {Boolean(annualDistanceKm) !== Boolean(ownershipPeriodYears) && (
+              <p className="mt-2 text-[11px] font-bold text-[#b94d45]">Enter both values to include a scenario total.</p>
+            )}
+          </div>
+        )}
+
         <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
           <div className="flex items-center gap-2">
             <Link2 size={14} className={guest ? 'text-[#bde3d8]' : 'text-[#0f766e]'} />
             <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
-              03 / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
+              {isVehicleComparison ? '04' : '03'} / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
             </p>
           </div>
 
@@ -1342,7 +1409,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
             testId={guest ? 'button-guest-research' : 'button-research-comparison'}
           >
             {pending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
-            {pending ? 'Researching and scoring' : '04 / Research and compare'}
+            {pending ? 'Researching and scoring' : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
           </PrimaryButton>
         </div>
 

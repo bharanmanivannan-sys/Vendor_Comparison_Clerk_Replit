@@ -14,3 +14,9 @@ Matrix winner fields may name one canonical entity, an explicit tie made only fr
 **Why:** Evidence normalization can legitimately produce ties or no established winner. Rejecting those labels as unknown entities turns successful research into a late validation failure.
 
 **How to apply:** Keep recommendations strict—they must select one canonical entity—but validate matrix winners using the narrower entity/tie/neutral rule.
+
+Match exact normalized labels before applying lossy brand/model cleanup. Cleanup may remove meaningful short suffixes such as `EV`, so it is only a fallback for legacy aliases and must not replace an exact canonical match.
+
+**Why:** Exact EV score and matrix rows were discarded after cleanup changed their identity, which removed verified evidence and turned differentiated results into neutral ties.
+
+**How to apply:** For score rows, matrix value keys, and winners, try case-insensitive exact canonical matching first. Use cleanup only when exact matching fails, and always emit the original frozen canonical label.

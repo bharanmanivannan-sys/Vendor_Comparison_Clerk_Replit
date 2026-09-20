@@ -892,6 +892,17 @@ components:
           type: string
           description: Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.
           enum: [IN, AU, US, GB]
+        annualDistanceKm:
+          type: integer
+          minimum: 1
+          maximum: 500000
+          description: Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.
+        ownershipPeriodYears:
+          type: number
+          minimum: 0.5
+          maximum: 30
+          multipleOf: 0.5
+          description: Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.
         vendors:
           type: array
           minItems: 2

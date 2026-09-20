@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import {
+  canonicalEvidenceDocumentUrl,
   checkEvidenceUrls,
   createPublicLookup,
   normalizeRetrievedText,
@@ -233,6 +234,81 @@ test("retrieves bounded documents, removes unsafe HTML, hashes text, and reuses 
 
   currentTime += 1_001;
   await retrieveEvidenceDocuments(["https://example.com/model-alpha"], options);
+  assert.equal(requests, 2);
+});
+
+test("reuses a canonical redirect target and strips tracking parameters from document identity", async () => {
+  let requests = 0;
+  let currentTime = Date.parse("2026-09-20T00:00:00Z");
+  const cache = new Map();
+  const options = {
+    lookupHost: publicLookup,
+    cache,
+    cacheMs: 1_000,
+    maxCacheEntries: 1,
+    now: () => currentTime,
+    request: async (url: URL) => {
+      requests += 1;
+      if (url.pathname === "/old") {
+        return { status: 302, location: "https://example.com/current?utm_source=archive" };
+      }
+      return {
+        status: 200,
+        contentType: "text/plain",
+        body: Buffer.from("Current verified product terms."),
+      };
+    },
+  };
+
+  const [redirected] = await retrieveEvidenceDocuments(["https://example.com/old"], options);
+  assert.equal(redirected.document?.canonicalUrl, "https://example.com/current");
+  assert.equal(requests, 2);
+  assert.equal(cache.size, 1);
+
+  const [canonical] = await retrieveEvidenceDocuments(["https://example.com/current#rates"], options);
+  assert.equal(canonical.document?.canonicalUrl, "https://example.com/current");
+  assert.equal(canonical.url, "https://example.com/current#rates");
+  assert.equal(requests, 2);
+  assert.equal(cache.size, 1);
+  assert.equal(
+    canonicalEvidenceDocumentUrl("https://example.com/current/?utm_source=test&gclid=1#rates"),
+    "https://example.com/current",
+  );
+
+  currentTime += 1_001;
+  await retrieveEvidenceDocuments(["https://example.com/current"], options);
+  assert.equal(requests, 3);
+});
+
+test("rejects a cached canonical redirect target when DNS later resolves privately", async () => {
+  let requests = 0;
+  let targetBecamePrivate = false;
+  const cache = new Map();
+  const lookupHost = async () => targetBecamePrivate
+    ? [{ address: "127.0.0.1", family: 4 }]
+    : publicLookup();
+  const options = {
+    lookupHost,
+    cache,
+    request: async (url: URL) => {
+      requests += 1;
+      return url.pathname === "/old"
+        ? { status: 302, location: "https://example.com/current" }
+        : {
+            status: 200,
+            contentType: "text/plain",
+            body: Buffer.from("Current verified product terms."),
+          };
+    },
+  };
+
+  const [first] = await retrieveEvidenceDocuments(["https://example.com/old"], options);
+  assert.ok(first.document);
+  assert.equal(requests, 2);
+
+  targetBecamePrivate = true;
+  const [blocked] = await retrieveEvidenceDocuments(["https://example.com/old"], options);
+  assert.equal(blocked.reason, "blocked_destination");
   assert.equal(requests, 2);
 });
 

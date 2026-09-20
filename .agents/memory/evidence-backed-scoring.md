@@ -8,3 +8,21 @@ Validate and canonicalize source URLs before evidence affects a score or histori
 **Why:** A report can otherwise retain a high score or historical conclusion after its citation is rejected, cross-attribute one product's metric to another product on the same page, compare unlike rates or test standards, expose retrieved prompt injection to synthesis, confuse missing transaction research with a verified absence, expose invented private-company stock values, claim a different winner than the displayed matrix, reward a higher failure rate, or persist evidence contributions that exceed the criterion’s contribution.
 
 **How to apply:** Any scoring, retrieval, history, source-validation, normalization, UI evidence-labeling, or persistence change must preserve bounded retrieval, claim-local full identity, server-owned basis/direction, provenance requirements, winner canonicalization before scoring, pre-persistence URL validation, explicit unavailable states, private/non-listed stock nullability, distinct verified-versus-analyst labels, all-option comparability, canonical weights, neutral unsupported criteria, and exact contribution reconciliation across multiple sources. Do not publish a ranked recommendation unless deterministic comparable metrics cover a meaningful share of the weighted model and create real score separation.
+
+Model-authored matrix completeness is not an evidence gate when deterministic official-document recovery still runs later in the pipeline.
+
+**Why:** A draft can omit a required row even when exact official sources contain enough verified metrics; rejecting the draft early creates intermittent false failures.
+
+**How to apply:** Use incomplete drafts to trigger completion or explicit unavailable rows, then enforce completeness and score sufficiency only after deterministic retrieval, normalization, and recovery.
+
+Canonical redirect origins and final destinations must share one capacity-accounted document identity, with the final destination revalidated before every cached reuse. Final synthesis may receive only server-verified typed metrics with safe exact claims and complete quote/span/hash provenance; source-linked model assertions are not sufficient.
+
+**Why:** Counting aliases as documents defeats cache bounds, while passing plausible model-authored provenance or instruction-bearing source text can bypass the controlled-retrieval trust boundary.
+
+**How to apply:** Reserve retrieval coverage independently for each option plus shared authoritative context, reject foreign-market sources before download, and fail closed at the synthesis boundary when any required metric or provenance field is missing or unsafe.
+
+Usage-priced ownership totals require explicit scenario assumptions and comparable verified cost evidence in one currency across every option.
+
+**Why:** Partial evidence or mixed currencies can create a misleading one-sided winner.
+
+**How to apply:** If any option lacks comparable evidence, present the documented cost components as conditional instead of publishing a total or winner.

@@ -71,6 +71,7 @@ const MAX_DOCUMENT_BYTES = 512 * 1024;
 export type RetrievedEvidenceDocument = {
   url: string;
   finalUrl: string;
+  canonicalUrl?: string;
   contentType: string;
   text: string;
   sha256: string;
@@ -104,6 +105,37 @@ type RetrieveDocumentOptions = {
 };
 
 const documentCache = new Map<string, DocumentCacheEntry>();
+const documentCacheAliases = new WeakMap<Map<string, DocumentCacheEntry>, Map<string, string>>();
+
+function cacheAliases(cache: Map<string, DocumentCacheEntry>): Map<string, string> {
+  let aliases = documentCacheAliases.get(cache);
+  if (!aliases) {
+    aliases = new Map();
+    documentCacheAliases.set(cache, aliases);
+  }
+  return aliases;
+}
+
+function removeDocumentCacheEntry(
+  cache: Map<string, DocumentCacheEntry>,
+  aliases: Map<string, string>,
+  key: string,
+): void {
+  cache.delete(key);
+  for (const [alias, target] of aliases) {
+    if (alias === key || target === key) aliases.delete(alias);
+  }
+}
+
+export function canonicalEvidenceDocumentUrl(value: string): string {
+  const url = new URL(value);
+  url.hash = "";
+  for (const key of Array.from(url.searchParams.keys())) {
+    if (/^utm_/i.test(key) || /^(?:gclid|fbclid)$/i.test(key)) url.searchParams.delete(key);
+  }
+  if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+  return url.toString();
+}
 
 function withinDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   if (timeoutMs <= 0) return Promise.reject(new Error("timeout"));
@@ -373,12 +405,14 @@ async function retrieveOneEvidenceDocument(
   const request = options.request ?? requestDocumentOnce;
   const now = options.now ?? Date.now;
   const cache = options.cache ?? documentCache;
+  const aliases = cacheAliases(cache);
   const cacheMs = options.cacheMs ?? DOCUMENT_CACHE_MS;
-  const cacheKey = `document-v2:${new URL(originalUrl).toString()}`;
+  const cacheKey = `document-v3:${canonicalEvidenceDocumentUrl(originalUrl)}`;
   for (const [key, entry] of cache) {
-    if (entry.expiresAt <= now()) cache.delete(key);
+    if (entry.expiresAt <= now()) removeDocumentCacheEntry(cache, aliases, key);
   }
-  const cached = cache.get(cacheKey);
+  const resolvedCacheKey = aliases.get(cacheKey) ?? cacheKey;
+  const cached = cache.get(resolvedCacheKey);
   if (cached && cached.expiresAt > now()) {
     try {
       if (cached.result.document) {
@@ -387,18 +421,21 @@ async function retrieveOneEvidenceDocument(
           options.deadlineAt - Date.now(),
         );
       }
-      cache.delete(cacheKey);
-      cache.set(cacheKey, cached);
-      return structuredClone(cached.result);
+      cache.delete(resolvedCacheKey);
+      cache.set(resolvedCacheKey, cached);
+      const result = structuredClone(cached.result);
+      result.url = originalUrl;
+      if (result.document) result.document.url = originalUrl;
+      return result;
     } catch (error) {
-      cache.delete(cacheKey);
+      removeDocumentCacheEntry(cache, aliases, resolvedCacheKey);
       return {
         url: originalUrl,
         reason: error instanceof Error && /timeout/i.test(error.message) ? "timeout" : "blocked_destination",
       };
     }
   }
-  if (cached) cache.delete(cacheKey);
+  if (cached) removeDocumentCacheEntry(cache, aliases, resolvedCacheKey);
   let current: URL;
   try {
     current = new URL(originalUrl);
@@ -436,6 +473,7 @@ async function retrieveOneEvidenceDocument(
       const document: RetrievedEvidenceDocument = {
         url: originalUrl,
         finalUrl: current.toString(),
+        canonicalUrl: canonicalEvidenceDocumentUrl(current.toString()),
         contentType,
         text,
         sha256: createHash("sha256").update(text).digest("hex"),
@@ -445,12 +483,16 @@ async function retrieveOneEvidenceDocument(
       const result = { url: originalUrl, document };
       if (cacheMs > 0) {
         const maximum = options.maxCacheEntries ?? 32;
-        while (cache.size >= maximum) {
+        const canonicalKey = `document-v3:${document.canonicalUrl}`;
+        while (cache.size >= maximum && !cache.has(canonicalKey)) {
           const oldest = cache.keys().next().value;
           if (typeof oldest !== "string") break;
-          cache.delete(oldest);
+          removeDocumentCacheEntry(cache, aliases, oldest);
         }
-        cache.set(cacheKey, { result, expiresAt: now() + cacheMs });
+        const entry = { result, expiresAt: now() + cacheMs };
+        cache.delete(canonicalKey);
+        cache.set(canonicalKey, entry);
+        if (canonicalKey !== cacheKey) aliases.set(cacheKey, canonicalKey);
       }
       return structuredClone(result);
     } catch (error) {

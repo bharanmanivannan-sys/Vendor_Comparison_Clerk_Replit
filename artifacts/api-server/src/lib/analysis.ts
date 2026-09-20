@@ -162,6 +162,8 @@ export function normalizeEvidenceRecords(
 type AnalysisInput = {
   prompt: string;
   market?: ResearchMarketCode;
+  annualDistanceKm?: number;
+  ownershipPeriodYears?: number;
   vendors: string[];
   urls: string[];
   criteria: string[];
@@ -670,10 +672,9 @@ export function sourceMatchesResearchMarket(source: string, market: ResearchMark
     US: /\.(?:us|gov)$/i,
     GB: /\.(?:uk|co\.uk|gov\.uk|org\.uk)$/i,
   };
-  const clearlyRegionalDomain = /\.(?:ae|me|sa|qa|om|bh|kw|uk|co\.uk|au|com\.au|nz|co\.nz|za|co\.za|sg|com\.sg|my|com\.my|id|co\.id|th|co\.th)$/i;
   if (countryDomains[market.countryCode].test(host)) return true;
-  if (!clearlyRegionalDomain.test(host)) return true;
-  return false;
+  const topLevelDomain = host.split(".").at(-1) ?? "";
+  return topLevelDomain.length !== 2;
 }
 
 export function filterSourcesForMarket(sources: string[], market: ResearchMarket): string[] {
@@ -735,38 +736,173 @@ export function enforceIndianMgBaasFact(analysis: AnalysisPayload, vendors: stri
 export function enforceBaasTotalCostAssumptions(
   analysis: AnalysisPayload,
   prompt: string,
+  assumptions: { annualDistanceKm?: number; ownershipPeriodYears?: number } = {},
 ): void {
-  const hasDistance = /\b\d[\d,.]*\s*(?:km|kilomet(?:er|re)s?)\b/i.test(prompt);
-  const hasPeriod = /\b\d[\d,.]*\s*(?:months?|years?|yrs?)\b/i.test(prompt);
-  if (hasDistance && hasPeriod) return;
+  analysis.pricing = (analysis.pricing ?? []).filter((row) => !row.dimension.startsWith("BaaS scenario total"));
   const unsupportedClaim = /\b(?:total cost of ownership|TCO|lifetime ownership cost|whole[- ]of[- ]life cost)\b/i;
-  const replacement = "A total ownership cost cannot be established without both distance and ownership-period assumptions.";
-  const sanitize = (text: string): string => {
-    if (!unsupportedClaim.test(text)) return text;
-    const kept = text
-      .split(/(?<=[.!?])\s+/)
-      .filter((sentence) => !unsupportedClaim.test(sentence));
-    return [...kept, replacement].filter(Boolean).join(" ").trim();
-  };
-  const visit = (value: unknown): void => {
-    if (!value || typeof value !== "object") return;
-    if (Array.isArray(value)) {
-      for (let index = 0; index < value.length; index += 1) {
-        if (typeof value[index] === "string") value[index] = sanitize(value[index]);
-        else visit(value[index]);
+  const removeUnsupportedTotalClaims = (replacement: string): void => {
+    const sanitize = (text: string): string => {
+      if (!unsupportedClaim.test(text)) return text;
+      const kept = text
+        .split(/(?<=[.!?])\s+/)
+        .filter((sentence) => !unsupportedClaim.test(sentence));
+      return [...kept, replacement].filter(Boolean).join(" ").trim();
+    };
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+          if (typeof value[index] === "string") value[index] = sanitize(value[index]);
+          else visit(value[index]);
+        }
+        return;
       }
+      const record = value as Record<string, unknown>;
+      for (const [key, item] of Object.entries(record)) {
+        if (typeof item === "string" && key !== "sourceUrl" && key !== "exactClaim") {
+          record[key] = sanitize(item);
+        } else {
+          visit(item);
+        }
+      }
+    };
+    visit(analysis);
+  };
+  const resetScenarioContext = (): string[] => {
+    const contextAssumptions = (analysis.contextAssumptions ?? []).filter((item) => (
+      !item.startsWith("BaaS scenario:")
+      && !item.startsWith("BaaS scenario includes")
+      && !item.startsWith("BaaS scenario excludes")
+      && !item.startsWith("BaaS scenario total was not calculated")
+      && !item.startsWith("BaaS total-cost scope excludes")
+    ));
+    analysis.contextAssumptions = contextAssumptions;
+    return contextAssumptions;
+  };
+  const exclusionDisclosure = "BaaS total-cost scope excludes financing interest and fees, charging or electricity, insurance, tax and registration, maintenance, and termination or transfer charges.";
+  const parseNumber = (value: string | undefined): number | undefined => {
+    if (!value) return undefined;
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  };
+  const annualDistanceKm = assumptions.annualDistanceKm
+    ?? parseNumber(prompt.match(/\b(\d[\d,.]*)\s*(?:km|kilomet(?:er|re)s?)\s*(?:per|a|each)\s*(?:year|yr|annum)\b/i)?.[1]);
+  const periodMatch = prompt.match(/\b(\d[\d,.]*)\s*(months?|years?|yrs?)\b/i);
+  const parsedPeriod = parseNumber(periodMatch?.[1]);
+  const ownershipPeriodYears = assumptions.ownershipPeriodYears
+    ?? (parsedPeriod === undefined
+      ? undefined
+      : /^months?/i.test(periodMatch?.[2] ?? "") ? parsedPeriod / 12 : parsedPeriod);
+  if (annualDistanceKm && ownershipPeriodYears) {
+    const entryUnits: Record<string, { currency: string; multiplier: number }> = {
+      aud: { currency: "AUD", multiplier: 1 },
+      gbp: { currency: "GBP", multiplier: 1 },
+      inr: { currency: "INR", multiplier: 1 },
+      inr_lakh: { currency: "INR", multiplier: 100_000 },
+      usd: { currency: "USD", multiplier: 1 },
+    };
+    const usageUnits: Record<string, string> = {
+      aud_per_km: "AUD",
+      gbp_per_km: "GBP",
+      inr_per_km: "INR",
+      usd_per_km: "USD",
+    };
+    const verifiedNormalizationMethods = new Set([
+      "retrieved_document_metric",
+      "direct_comparable_metric",
+      "inverse_comparable_metric",
+    ]);
+    const verifiedMetric = (vendor: AnalysisPayload["vendorScores"][number], metricKey: string) => (
+      (vendor.weightedScores ?? [])
+        .flatMap((criterion) => criterion.evidence ?? [])
+        .find((evidence) => (
+          evidence.metricKey === metricKey
+          && verifiedNormalizationMethods.has(evidence.normalizationMethod)
+          && evidence.evidenceKind !== "unverified"
+          && evidence.evidenceKind !== "analyst_judgment"
+          && typeof evidence.rawMetricValue === "number"
+          && Number.isFinite(evidence.rawMetricValue)
+          && Boolean(evidence.sourceUrl)
+          && Boolean(evidence.exactClaim)
+          && Boolean(evidence.metricSubject)
+          && Boolean(evidence.metricBasis)
+          && Boolean(evidence.retrievalDate)
+          && evidence.normalizationDirection === "lower_is_better"
+          && Boolean(evidence.documentSha256?.match(/^[a-f0-9]{64}$/))
+          && Number.isInteger(evidence.sourceTextStart)
+          && Number.isInteger(evidence.sourceTextEnd)
+          && evidence.sourceTextStart! >= 0
+          && evidence.sourceTextEnd! > evidence.sourceTextStart!
+        ))
+    );
+    const totalDistanceKm = annualDistanceKm * ownershipPeriodYears;
+    const values: Record<string, string> = {};
+    const totals: Array<{ vendor: string; total: number }> = [];
+    let scenarioCurrency: string | undefined;
+    for (const vendor of analysis.vendorScores ?? []) {
+      const entry = verifiedMetric(vendor, "baas_upfront_price");
+      const usage = verifiedMetric(vendor, "usage_cost_per_km");
+      const entryUnit = entry?.rawMetricUnit ? entryUnits[entry.rawMetricUnit] : undefined;
+      const usageCurrency = usage?.rawMetricUnit ? usageUnits[usage.rawMetricUnit] : undefined;
+      if (!entry || !usage || !entryUnit || usageCurrency !== entryUnit.currency) {
+        removeUnsupportedTotalClaims("A total ownership cost cannot be established until every option has verified entry-price and per-kilometre evidence.");
+        resetScenarioContext().push(
+          "BaaS scenario total was not calculated because every option needs a verified entry price and matching per-kilometre rate.",
+          exclusionDisclosure,
+        );
+        return;
+      }
+      if (scenarioCurrency && scenarioCurrency !== entryUnit.currency) {
+        removeUnsupportedTotalClaims("A total ownership cost cannot be established when verified cost evidence uses different currencies across options.");
+        resetScenarioContext().push(
+          "BaaS scenario total was not calculated because every option needs verified cost evidence in one common currency.",
+          exclusionDisclosure,
+        );
+        return;
+      }
+      scenarioCurrency = entryUnit.currency;
+      const entryPrice = entry.rawMetricValue! * entryUnit.multiplier;
+      const usageTotal = usage.rawMetricValue! * totalDistanceKm;
+      const scenarioTotal = entryPrice + usageTotal;
+      const format = new Intl.NumberFormat(entryUnit.currency === "INR" ? "en-IN" : "en", {
+        style: "currency",
+        currency: entryUnit.currency,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      });
+      const formatRate = new Intl.NumberFormat(entryUnit.currency === "INR" ? "en-IN" : "en", {
+        style: "currency",
+        currency: entryUnit.currency,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      });
+      const formattedDistance = totalDistanceKm.toLocaleString("en", { maximumFractionDigits: 2 });
+      values[vendor.vendor] = `${format.format(scenarioTotal)} = ${format.format(entryPrice)} entry + ${formatRate.format(usage.rawMetricValue!)} per km × ${formattedDistance} km`;
+      totals.push({ vendor: vendor.vendor, total: scenarioTotal });
+    }
+    if (!totals.length) {
+      removeUnsupportedTotalClaims("A total ownership cost cannot be established without verified entry-price and per-kilometre evidence.");
+      resetScenarioContext().push(
+        "BaaS scenario total was not calculated because no complete verified cost pair was available.",
+        exclusionDisclosure,
+      );
       return;
     }
-    const record = value as Record<string, unknown>;
-    for (const [key, item] of Object.entries(record)) {
-      if (typeof item === "string" && key !== "sourceUrl" && key !== "exactClaim") {
-        record[key] = sanitize(item);
-      } else {
-        visit(item);
-      }
-    }
-  };
-  visit(analysis);
+    const dimension = `BaaS scenario total (${annualDistanceKm.toLocaleString("en")} km/year × ${ownershipPeriodYears} years)`;
+    analysis.pricing.push({
+      dimension,
+      values,
+      winner: totals.sort((a, b) => a.total - b.total)[0]?.vendor ?? "No verified total",
+    });
+    resetScenarioContext().push(
+      `BaaS scenario: ${annualDistanceKm.toLocaleString("en")} km per year for ${ownershipPeriodYears} years (${totalDistanceKm.toLocaleString("en", { maximumFractionDigits: 2 })} km total).`,
+      "BaaS scenario includes only the verified entry price and documented per-kilometre battery usage charge.",
+      exclusionDisclosure.replace("BaaS total-cost scope excludes", "BaaS scenario excludes"),
+    );
+    return;
+  }
+  removeUnsupportedTotalClaims("A total ownership cost cannot be established without both distance and ownership-period assumptions.");
+  resetScenarioContext().push(exclusionDisclosure);
 }
 
 function isPlaceholderVendor(value: string): boolean {
@@ -915,6 +1051,61 @@ export function reconcileRecommendationDecision(
     recommendation,
     score: Number.isFinite(recommendedScore) ? recommendedScore! : storedScore,
   };
+}
+
+export function alignOverallWinnerAssertions(
+  value: string,
+  recommendation: string,
+  vendors: string[],
+): string {
+  const vendorPattern = [...vendors]
+    .sort((left, right) => right.length - left.length)
+    .map((vendor) => vendor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  if (!vendorPattern) return value;
+  const selected = (vendor: string) => (
+    vendor.toLowerCase() === recommendation.toLowerCase() ? vendor : recommendation
+  );
+  return value
+    .replace(
+      new RegExp(
+        `(?<![\\p{L}\\p{N}])(${vendorPattern})(?![\\p{L}\\p{N}])`
+        + `(\\s+(?:(?:is|are|remains?|stands?\\s+out\\s+as|emerges?\\s+as)\\s+)?(?:the\\s+)?`
+        + `(?:strongest\\s+contender|best\\s+overall\\s+(?:option|choice)|recommended\\s+overall\\s+(?:option|choice)))`,
+        "giu",
+      ),
+      (_match, vendor: string, assertion: string) => `${selected(vendor)}${assertion}`,
+    )
+    .replace(
+      new RegExp(
+        `(\\b(?:the\\s+)?(?:strongest\\s+contender|best\\s+overall\\s+(?:option|choice)|overall\\s+recommendation)`
+        + `\\s+(?:is|remains?)\\s+)(${vendorPattern})(?![\\p{L}\\p{N}])`,
+        "giu",
+      ),
+      (_match, assertion: string, vendor: string) => `${assertion}${selected(vendor)}`,
+    );
+}
+
+export function reconcileFinalRecommendationNarrative(analysis: AnalysisPayload): void {
+  const decision = reconcileRecommendationDecision(
+    analysis.recommendation,
+    analysis.score,
+    analysis.vendorScores,
+    [
+      analysis.executiveSummary,
+      analysis.recommendationReason,
+      ...(analysis.nextSteps ?? []),
+    ].join(" "),
+  );
+  analysis.recommendation = decision.recommendation;
+  analysis.score = decision.score;
+  const align = (value: string) => alignOverallWinnerAssertions(
+    value,
+    decision.recommendation,
+    analysis.vendorScores.map((entry) => entry.vendor),
+  );
+  analysis.executiveSummary = align(analysis.executiveSummary);
+  analysis.recommendationReason = align(analysis.recommendationReason);
 }
 
 export function resolveComparisonVendors(
@@ -2124,13 +2315,8 @@ export function assertSufficientComparisonEvidence(
   );
 }
 
-async function synthesizeValidatedDecision(
-  client: OpenAI,
-  input: AnalysisInput,
-  market: ResearchMarket,
-  analysis: AnalysisPayload,
-): Promise<void> {
-  const evidenceDataset = analysis.vendorScores.map((vendor) => ({
+export function buildValidatedEvidenceDataset(analysis: AnalysisPayload) {
+  return analysis.vendorScores.map((vendor) => ({
     vendor: vendor.vendor,
     score: vendor.score,
     criteria: (vendor.weightedScores ?? []).map((criterion) => ({
@@ -2142,20 +2328,59 @@ async function synthesizeValidatedDecision(
           Boolean(evidence.sourceUrl)
           && evidence.evidenceKind !== "unverified"
           && evidence.evidenceKind !== "analyst_judgment"
+          && evidence.normalizationMethod === "retrieved_document_metric"
+          && Boolean(evidence.exactClaim)
+          && Boolean(evidence.metricKey)
+          && Boolean(evidence.metricSubject)
+          && Boolean(evidence.rawMetricUnit)
+          && Boolean(evidence.metricBasis)
+          && Boolean(evidence.retrievalDate)
+          && Boolean(evidence.documentSha256?.match(/^[a-f0-9]{64}$/))
+          && Number.isInteger(evidence.sourceTextStart)
+          && Number.isInteger(evidence.sourceTextEnd)
+          && evidence.sourceTextStart! >= 0
+          && evidence.sourceTextEnd! > evidence.sourceTextStart!
+          && typeof evidence.rawMetricValue === "number"
+          && Number.isFinite(evidence.rawMetricValue)
+          && METRIC_REGISTRY[evidence.metricKey!]?.units.includes(evidence.rawMetricUnit!)
+          && METRIC_REGISTRY[evidence.metricKey!]?.direction === evidence.normalizationDirection
+          && isSafeUserInput(evidence.exactClaim!)
         ))
         .map((evidence) => ({
-          sourceUrl: evidence.sourceUrl,
+          sourceUrl: canonicalDocumentKey(evidence.sourceUrl!),
+          exactClaim: evidence.exactClaim,
+          sourceTitle: evidence.sourceTitle,
           sourcePublisher: evidence.sourcePublisher,
           sourceDate: evidence.sourceDate,
+          retrievalDate: evidence.retrievalDate,
           metricKey: evidence.metricKey,
+          metricSubject: evidence.metricSubject,
           metricBasis: evidence.metricBasis,
           rawMetricValue: evidence.rawMetricValue,
           rawMetricUnit: evidence.rawMetricUnit,
+          normalizationDirection: evidence.normalizationDirection,
+          documentSha256: evidence.documentSha256,
+          sourceTextStart: evidence.sourceTextStart,
+          sourceTextEnd: evidence.sourceTextEnd,
+          evidenceKind: evidence.evidenceKind,
+          supportDirection: evidence.supportDirection,
           confidence: evidence.confidence,
+          normalizedScore: evidence.normalizedScore,
+          criterionWeight: evidence.criterionWeight,
+          weightedContribution: evidence.weightedContribution,
           normalizationMethod: evidence.normalizationMethod,
         })),
     })),
   }));
+}
+
+async function synthesizeValidatedDecision(
+  client: OpenAI,
+  input: AnalysisInput,
+  market: ResearchMarket,
+  analysis: AnalysisPayload,
+): Promise<void> {
+  const evidenceDataset = buildValidatedEvidenceDataset(analysis);
   const fallback = () => {
     const runnerUp = [...analysis.vendorScores].sort((a, b) => b.score - a.score)[1];
     analysis.executiveSummary = `${analysis.recommendation} ranks first on the validated weighted evidence with ${analysis.score}/100${runnerUp ? `, ahead of ${runnerUp.vendor} at ${runnerUp.score}/100` : ""}. The ranking uses only comparable evidence that passed source validation.`;
@@ -3540,10 +3765,12 @@ export function dedupeReferenceUrls(urls: string[]): string[] {
 
 function sourceVendorMatchScore(url: URL, vendors: string[]): number {
   const searchable = `${url.hostname} ${url.pathname}`.toLowerCase();
+  const genericTokens = new Set(["bank", "group", "company", "services", "service", "financial", "finance", "global"]);
   return vendors.some((vendor) => {
     const tokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? []);
     return tokens
       .filter((token: string) => token.length >= 3 || token === "zs")
+      .filter((token) => !genericTokens.has(token))
       .some((token) => searchable.includes(token));
   }) ? 30 : 0;
 }
@@ -3577,6 +3804,7 @@ export function rankEvidenceSources(
       || /\b(?:regulator|standards?|statistics|centralbank|reservebank)\b/.test(hostname)
       ? 35
       : 0;
+    const vendorMatch = sourceVendorMatchScore(url, vendors);
     const productSpecificity = /(?:price|pricing|rate|rates|fee|fees|spec|specification|product|plan|card|loan|warranty|support|report|disclosure)/.test(path)
       ? 16
       : 0;
@@ -3586,10 +3814,11 @@ export function rankEvidenceSources(
       source,
       hostname,
       index,
+      sharedContext: authority > 0 && vendorMatch === 0,
       score: (supplied.has(source) ? 100 : 0)
         + authority
         + sourceMarketScore(url, market)
-        + sourceVendorMatchScore(url, vendors)
+        + vendorMatch
         + productSpecificity
         - stalePenalty,
     };
@@ -3606,9 +3835,14 @@ export function rankEvidenceSources(
   };
   for (const candidate of scored.filter((entry) => supplied.has(entry.source))) add(candidate);
   for (const vendor of vendors) {
-    const vendorCandidate = scored.find((candidate) => sourceVendorMatchScore(new URL(candidate.source), [vendor]) > 0);
+    const vendorCandidate = scored.find((candidate) => (
+      !selectedSet.has(candidate.source)
+      && sourceVendorMatchScore(new URL(candidate.source), [vendor]) > 0
+    ));
     if (vendorCandidate) add(vendorCandidate);
   }
+  const sharedContextCandidate = scored.find((candidate) => candidate.sharedContext);
+  if (sharedContextCandidate) add(sharedContextCandidate);
   for (const candidate of scored.filter((entry) => entry.score >= 35).slice(0, 3)) add(candidate);
   for (const candidate of scored) {
     if (selectedSet.has(candidate.source)) continue;
@@ -4162,8 +4396,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
     ].join(" ");
+    const explicitBaasScenario = input.annualDistanceKm && input.ownershipPeriodYears
+      ? `Use exactly ${input.annualDistanceKm} km per year and ${input.ownershipPeriodYears} years for the user's scenario. `
+      : "";
     const batteryServiceInstructions = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|battery as service)\b/i.test(input.prompt)
-      ? "For Battery-as-a-Service comparisons, resolve each provider to an exact currently offered BaaS model and variant before ranking. Compare official BaaS entry price, battery usage or rental cost per kilometre, minimum usage assumptions, finance or subscription term, battery ownership, charger and installation inclusion, early termination, transfer conditions, warranty, certified range, charging, and ground clearance. If the user supplies distance and ownership period, calculate a transparent scenario total as upfront BaaS price plus documented usage cost times distance and state every excluded financing, charging, tax, insurance, and termination cost. If distance or period is absent, do not invent it: compare the documented per-kilometre rate and state that total cost depends on usage and contract terms. Prefer official provider terms; use recent independent automotive sources only to corroborate road suitability and never infer it from battery chemistry alone."
+      ? `For Battery-as-a-Service comparisons, resolve each provider to an exact currently offered BaaS model and variant before ranking. Compare official BaaS entry price, battery usage or rental cost per kilometre, minimum usage assumptions, finance or subscription term, battery ownership, charger and installation inclusion, early termination, transfer conditions, warranty, certified range, charging, and ground clearance. ${explicitBaasScenario}If the user supplies distance and ownership period, calculate a transparent scenario total as upfront BaaS price plus documented usage cost times distance and state every excluded financing, charging, tax, insurance, maintenance, and termination cost. If distance or period is absent, do not invent it: compare the documented per-kilometre rate and state that total cost depends on usage and contract terms. Prefer official provider terms; use recent independent automotive sources only to corroborate road suitability and never infer it from battery chemistry alone.`
       : "";
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
@@ -4652,11 +4889,15 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       || insight.startsWith("Alternative outside comparison —")
     ));
     await synthesizeValidatedDecision(client, input, researchMarket, normalized);
+    reconcileFinalRecommendationNarrative(normalized);
     for (const insight of [...protectedPortfolioInsights].reverse()) {
       if (!normalized.insights.includes(insight)) normalized.insights.unshift(insight);
     }
     if (batteryServiceInstructions) {
-      enforceBaasTotalCostAssumptions(normalized, input.prompt);
+      enforceBaasTotalCostAssumptions(normalized, input.prompt, {
+        annualDistanceKm: input.annualDistanceKm,
+        ownershipPeriodYears: input.ownershipPeriodYears,
+      });
     }
     if (!requiresVendorDiscovery) {
       input.onProgress?.("validating_comparison");

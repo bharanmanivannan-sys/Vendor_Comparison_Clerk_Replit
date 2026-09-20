@@ -25,6 +25,18 @@ export interface ComparisonInput {
   /** Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt. */
   market?: ComparisonInputMarket;
   /**
+     * Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.
+     * @minimum 1
+     * @maximum 500000
+     */
+  annualDistanceKm?: number;
+  /**
+     * Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.
+     * @minimum 0.5
+     * @maximum 30
+     */
+  ownershipPeriodYears?: number;
+  /**
      * @minItems 2
      * @maxItems 6
      * @items.minLength 1

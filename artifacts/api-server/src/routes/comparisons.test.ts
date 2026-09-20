@@ -24,7 +24,7 @@ test("submission uses resolved comparison players instead of the subject as a he
     }),
   );
 
-  assert.ok(!("error" in validated));
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
   if ("error" in validated) return;
   assert.deepEqual(validated.vendors, ["MG", "Mahindra"]);
   assert.ok(!validated.vendors.includes("BaaS"));
@@ -47,10 +47,35 @@ test("submission accepts the MG and Mahindra BaaS purchase when intent confidenc
     })),
   );
 
-  assert.ok(!("error" in validated));
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
   if ("error" in validated) return;
   assert.deepEqual(validated.vendors, ["MG", "Mahindra"]);
   assert.equal(validated.context.valid, true);
+});
+
+test("submission preserves bounded structured BaaS scenario assumptions", async () => {
+  const prompt = "Can you help me compare BaaS with MG and Mahindra for an Indian purchase decision?";
+  const validated = await validateComparisonInput({
+    prompt,
+    market: "IN",
+    annualDistanceKm: 15000,
+    ownershipPeriodYears: 5,
+    vendors: ["MG", "Mahindra"],
+  });
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+  if ("error" in validated) return;
+  assert.equal(validated.input.annualDistanceKm, 15000);
+  assert.equal(validated.input.ownershipPeriodYears, 5);
+
+  const invalid = await validateComparisonInput({
+    prompt,
+    market: "IN",
+    annualDistanceKm: 0,
+    ownershipPeriodYears: 31,
+    vendors: ["MG", "Mahindra"],
+  });
+  assert.ok("error" in invalid);
 });
 
 test("submission accepts six explicitly provided comparison options", async () => {

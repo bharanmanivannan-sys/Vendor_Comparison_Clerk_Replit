@@ -368,13 +368,14 @@ Collected URLs are:
 
 - Deduplicated.
 - Ranked by authority, market relevance, product specificity, and freshness.
+- Reserved so every named option has a product-specific retrieval candidate and the corpus retains a shared regulator, standards, or market-context source when available.
 - Filtered for the requested market.
 - Checked with absolute wall-clock deadlines and bounded redirects.
 - Rejected when they resolve to private or loopback destinations.
 - Classified as reachable, referenceable, restricted, or unavailable.
 - Retrieved with a text/HTML/JSON MIME allowlist and a 512 KiB body limit.
 - Revalidated after every redirect and before returning a cached redirect target.
-- Stored only in a bounded, expiring in-memory document cache.
+- Stored only in a bounded, expiring in-memory document cache keyed by canonical URL. Redirect origins and their safe final target share one cached document identity, while the final destination is revalidated before reuse.
 
 HTML is structurally parsed. Script, style, template, navigation, footer, form, iframe, hidden, and `aria-hidden` content is removed before normalization. Normalized visible text is hashed with SHA-256. Source availability alone does not make a claim scoreable: a quantitative claim must also match retrieved visible text and carry its document hash and exact text offsets.
 
@@ -390,7 +391,7 @@ The server owns the controlled metric registry, allowed units, and scoring direc
 - A metric-specific basis, such as WLTP/ARAI/EPA/NEDC range standard, usable/gross/nominal battery capacity, AC/DC charging, charge window, loan LVR/borrower/repayment type, market and period, population and period, or warranty coverage.
 - A retrieved-document normalization marker, SHA-256 hash, and valid source text range.
 
-Deterministic scoring groups values only when metric key, unit, direction, and complete basis match across every shortlisted option. Unknown metrics and incomplete bases fail closed. Raw retrieved source prose is not sent to the final decision synthesizer; it receives only validated structured fields.
+Deterministic scoring groups values only when metric key, unit, direction, and complete basis match across every shortlisted option. Unknown metrics and incomplete bases fail closed. Raw retrieved source prose and web-search output are not sent to the final decision synthesizer. Its corpus contains only validated typed records with an exact quote, metric identity, unit, basis, retrieval date, canonical source URL, document hash, text offsets, support direction, normalized score, and weighted contribution.
 
 Missing or non-comparable evidence receives 50/100, the neutral midpoint. This prevents missing evidence from creating an advantage or penalty and does not assert equal real-world performance. A ranked recommendation requires deterministic comparable metrics covering at least 50% of the canonical weighted model and actual score separation; otherwise the job fails with `insufficient_quantitative_evidence`.
 
@@ -416,7 +417,7 @@ The generic comparison pipeline has focused extensions for cases requiring addit
 
 These controls add quality requirements without allowing a domain-specific repair pass to replace the canonical entity set.
 
-Battery-as-a-Service and other usage-priced comparisons resolve exact current products and can verify entry price, usage cost per kilometre, ground clearance, range, charging, and warranty. The report must also disclose usage assumptions, contract term, battery ownership, charger inclusion, termination, and transfer conditions. Scenario totals are calculated only when the user supplies distance and ownership period; otherwise the report compares documented rates and explicitly leaves total cost conditional.
+Battery-as-a-Service and other usage-priced comparisons resolve exact current products and can verify entry price, usage cost per kilometre, ground clearance, range, charging, and warranty. The composer accepts optional annual distance and ownership period as bounded numeric contract fields. When both are present, the server deterministically calculates one scenario row from verified entry-price and per-kilometre evidence, records the total distance and formula, and identifies the lowest verified total. The report explicitly excludes financing, charging or electricity, insurance, tax and registration, maintenance, and termination or transfer charges. When either assumption or either verified cost component is missing, no total is invented. The report instead compares documented rates and leaves total cost conditional.
 
 ## 9. Persistence and Data Ownership
 

@@ -119,6 +119,12 @@ export const ListComparisonsResponse = zod.array(ListComparisonsResponseItem)
 export const createComparisonBodyPromptMin = 8;
 export const createComparisonBodyPromptMax = 2000;
 
+export const createComparisonBodyAnnualDistanceKmMax = 500000;
+
+export const createComparisonBodyOwnershipPeriodYearsMin = 0.5;
+export const createComparisonBodyOwnershipPeriodYearsMax = 30;
+export const createComparisonBodyOwnershipPeriodYearsMultipleOf = 0.5;
+
 export const createComparisonBodyVendorsItemMax = 120;
 
 export const createComparisonBodyVendorsMin = 2;
@@ -133,6 +139,8 @@ export const createComparisonBodyCriteriaMax = 8;
 export const CreateComparisonBody = zod.object({
   "prompt": zod.string().min(createComparisonBodyPromptMin).max(createComparisonBodyPromptMax),
   "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "annualDistanceKm": zod.number().int().min(1).max(createComparisonBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(createComparisonBodyOwnershipPeriodYearsMin).max(createComparisonBodyOwnershipPeriodYearsMax).multipleOf(createComparisonBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonBodyVendorsItemMax)).min(createComparisonBodyVendorsMin).max(createComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonBodyCriteriaItemMax)).max(createComparisonBodyCriteriaMax).optional()
@@ -367,6 +375,12 @@ export const CreateComparisonResponse = zod.object({
 export const createGuestComparisonBodyPromptMin = 8;
 export const createGuestComparisonBodyPromptMax = 2000;
 
+export const createGuestComparisonBodyAnnualDistanceKmMax = 500000;
+
+export const createGuestComparisonBodyOwnershipPeriodYearsMin = 0.5;
+export const createGuestComparisonBodyOwnershipPeriodYearsMax = 30;
+export const createGuestComparisonBodyOwnershipPeriodYearsMultipleOf = 0.5;
+
 export const createGuestComparisonBodyVendorsItemMax = 120;
 
 export const createGuestComparisonBodyVendorsMin = 2;
@@ -381,6 +395,8 @@ export const createGuestComparisonBodyCriteriaMax = 8;
 export const CreateGuestComparisonBody = zod.object({
   "prompt": zod.string().min(createGuestComparisonBodyPromptMin).max(createGuestComparisonBodyPromptMax),
   "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "annualDistanceKm": zod.number().int().min(1).max(createGuestComparisonBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(createGuestComparisonBodyOwnershipPeriodYearsMin).max(createGuestComparisonBodyOwnershipPeriodYearsMax).multipleOf(createGuestComparisonBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonBodyVendorsItemMax)).min(createGuestComparisonBodyVendorsMin).max(createGuestComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonBodyCriteriaItemMax)).max(createGuestComparisonBodyCriteriaMax).optional()
@@ -749,6 +765,12 @@ export const ParseGuestComparisonPromptResponse = zod.object({
 export const createComparisonJobBodyPromptMin = 8;
 export const createComparisonJobBodyPromptMax = 2000;
 
+export const createComparisonJobBodyAnnualDistanceKmMax = 500000;
+
+export const createComparisonJobBodyOwnershipPeriodYearsMin = 0.5;
+export const createComparisonJobBodyOwnershipPeriodYearsMax = 30;
+export const createComparisonJobBodyOwnershipPeriodYearsMultipleOf = 0.5;
+
 export const createComparisonJobBodyVendorsItemMax = 120;
 
 export const createComparisonJobBodyVendorsMin = 2;
@@ -763,6 +785,8 @@ export const createComparisonJobBodyCriteriaMax = 8;
 export const CreateComparisonJobBody = zod.object({
   "prompt": zod.string().min(createComparisonJobBodyPromptMin).max(createComparisonJobBodyPromptMax),
   "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "annualDistanceKm": zod.number().int().min(1).max(createComparisonJobBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(createComparisonJobBodyOwnershipPeriodYearsMin).max(createComparisonJobBodyOwnershipPeriodYearsMax).multipleOf(createComparisonJobBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonJobBodyVendorsItemMax)).min(createComparisonJobBodyVendorsMin).max(createComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonJobBodyCriteriaItemMax)).max(createComparisonJobBodyCriteriaMax).optional()
@@ -1501,6 +1525,12 @@ export const RegenerateComparisonResponse = zod.object({
 export const createGuestComparisonJobBodyPromptMin = 8;
 export const createGuestComparisonJobBodyPromptMax = 2000;
 
+export const createGuestComparisonJobBodyAnnualDistanceKmMax = 500000;
+
+export const createGuestComparisonJobBodyOwnershipPeriodYearsMin = 0.5;
+export const createGuestComparisonJobBodyOwnershipPeriodYearsMax = 30;
+export const createGuestComparisonJobBodyOwnershipPeriodYearsMultipleOf = 0.5;
+
 export const createGuestComparisonJobBodyVendorsItemMax = 120;
 
 export const createGuestComparisonJobBodyVendorsMin = 2;
@@ -1515,6 +1545,8 @@ export const createGuestComparisonJobBodyCriteriaMax = 8;
 export const CreateGuestComparisonJobBody = zod.object({
   "prompt": zod.string().min(createGuestComparisonJobBodyPromptMin).max(createGuestComparisonJobBodyPromptMax),
   "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "annualDistanceKm": zod.number().int().min(1).max(createGuestComparisonJobBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(createGuestComparisonJobBodyOwnershipPeriodYearsMin).max(createGuestComparisonJobBodyOwnershipPeriodYearsMax).multipleOf(createGuestComparisonJobBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyVendorsItemMax)).min(createGuestComparisonJobBodyVendorsMin).max(createGuestComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyCriteriaItemMax)).max(createGuestComparisonJobBodyCriteriaMax).optional()
@@ -2307,6 +2339,12 @@ export const ExternalCreateComparisonHeader = zod.object({
 export const externalCreateComparisonBodyPromptMin = 8;
 export const externalCreateComparisonBodyPromptMax = 2000;
 
+export const externalCreateComparisonBodyAnnualDistanceKmMax = 500000;
+
+export const externalCreateComparisonBodyOwnershipPeriodYearsMin = 0.5;
+export const externalCreateComparisonBodyOwnershipPeriodYearsMax = 30;
+export const externalCreateComparisonBodyOwnershipPeriodYearsMultipleOf = 0.5;
+
 export const externalCreateComparisonBodyVendorsItemMax = 120;
 
 export const externalCreateComparisonBodyVendorsMin = 2;
@@ -2321,6 +2359,8 @@ export const externalCreateComparisonBodyCriteriaMax = 8;
 export const ExternalCreateComparisonBody = zod.object({
   "prompt": zod.string().min(externalCreateComparisonBodyPromptMin).max(externalCreateComparisonBodyPromptMax),
   "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "annualDistanceKm": zod.number().int().min(1).max(externalCreateComparisonBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(externalCreateComparisonBodyOwnershipPeriodYearsMin).max(externalCreateComparisonBodyOwnershipPeriodYearsMax).multipleOf(externalCreateComparisonBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(externalCreateComparisonBodyVendorsItemMax)).min(externalCreateComparisonBodyVendorsMin).max(externalCreateComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(externalCreateComparisonBodyCriteriaItemMax)).max(externalCreateComparisonBodyCriteriaMax).optional()
