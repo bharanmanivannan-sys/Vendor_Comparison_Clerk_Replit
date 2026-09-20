@@ -127,7 +127,7 @@ export function comparisonFailureMessage(error: unknown, prompt: string, vendors
   if (/insufficient source coverage|fewer than three independently reachable/i.test(message)) {
     const missingVendor = message.match(/no official product source was found for (.+?)(?:\.|$)/i)?.[1];
     return missingVendor
-      ? `The comparison options were understood, but an exact official product source could not be verified for ${missingVendor}. Remove general brand-homepage URLs and retry so research can find the current product page, or add an exact model page for that manufacturer.`
+      ? `The comparison options were understood, but an exact official product source could not be verified for ${missingVendor}. Any 50/100 weighted score would be a neutral midpoint for missing evidence, not proof that the options are equal. On your next attempt, add an exact current model page for that option; irrelevant or outdated resources will not be used.`
       : "There is not enough comparable verified evidence to rank these options reliably. A 50/100 weighted score is the neutral midpoint used when evidence is missing, not proof that the options are equal. On your next attempt, add exact current URLs for each option; irrelevant or outdated resources will not be used.";
   }
   if (/insufficient quantitative evidence/i.test(message)) {

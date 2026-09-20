@@ -33,7 +33,8 @@ flowchart LR
     Web[DecisionIntel web app]
     API[DecisionIntel API]
     Clerk[Clerk identity]
-    OpenAI[OpenAI Responses API]
+    OpenAI[OpenAI research and synthesis APIs]
+    Retrieval[Deterministic document retriever]
     WebSources[Public web and official sources]
     Postgres[(PostgreSQL)]
 
@@ -45,7 +46,8 @@ flowchart LR
     API --> Clerk
     API --> OpenAI
     OpenAI --> WebSources
-    API -->|source validation| WebSources
+    API --> Retrieval
+    Retrieval -->|SSRF-safe bounded GET| WebSources
     API --> Postgres
 ```
 
@@ -259,8 +261,9 @@ Jobs expose stable high-level failure codes:
 
 - `research_failed`
 - `validation_failed`
+- `insufficient_quantitative_evidence`
 
-User-facing messages distinguish unsupported evidence from malformed comparison output where possible. Detailed errors are logged server-side without returning stack traces to the browser.
+`insufficient_quantitative_evidence` means the request and options were understood, but current relevant documents did not provide enough like-for-like verified metrics to create a reliable ranking. A neutral 50/100 score is the midpoint used for an unsupported criterion so missing evidence cannot favour or penalise an option; it is not proof that the options perform equally. Recovery guidance asks the user to provide exact current product or evidence URLs on the next attempt. Irrelevant and outdated resources remain excluded even when the user supplies them.
 
 ## 8. Research and Analysis Pipeline
 
@@ -276,8 +279,10 @@ flowchart TD
     Shortlist[Discover concrete shortlist]
     Research[Web-assisted structured research]
     Repair[Conditional structured-output repair]
-    URLs[Collect, market-filter, and validate URLs]
-    Normalize[Normalize evidence and weighted scores]
+    URLs[Rank and availability-check candidate URLs]
+    Retrieve[Retrieve bounded visible document text]
+    Verify[Verify controlled metrics and provenance]
+    Normalize[Calculate deterministic comparable scores]
     Domain[Apply domain-specific quality rules]
     Canonical[Validate canonical entity consistency]
     Result[Analysis payload]
@@ -291,7 +296,9 @@ flowchart TD
     Shortlist --> Research
     Research --> Repair
     Repair --> URLs
-    URLs --> Normalize
+    URLs --> Retrieve
+    Retrieve --> Verify
+    Verify --> Normalize
     Normalize --> Domain
     Domain --> Canonical
     Canonical --> Result
@@ -317,23 +324,39 @@ The pipeline prioritizes:
 2. Government, regulator, standards, and audited sources.
 3. Reputable local independent sources with identifiable methodology.
 
-Market-specific terms must not be replaced with another country’s pricing or product conditions. Non-official fallback evidence is freshness-limited. Search snippets, anonymous posts, affiliate pages, and unsupported AI summaries are not authoritative evidence.
+Market-specific terms must not be replaced with another country’s pricing or product conditions. Non-official fallback evidence is freshness-limited to the trailing year. Search snippets, anonymous posts, affiliate pages, unsupported AI summaries, irrelevant pages, and outdated resources are not authoritative evidence. User-provided URLs are candidates, not automatically trusted evidence.
 
 ### 8.3 Source validation
 
 Collected URLs are:
 
 - Deduplicated.
+- Ranked by authority, market relevance, product specificity, and freshness.
 - Filtered for the requested market.
-- Checked with bounded timeouts and redirects.
+- Checked with absolute wall-clock deadlines and bounded redirects.
 - Rejected when they resolve to private or loopback destinations.
 - Classified as reachable, referenceable, restricted, or unavailable.
+- Retrieved with a text/HTML/JSON MIME allowlist and a 512 KiB body limit.
+- Revalidated after every redirect and before returning a cached redirect target.
+- Stored only in a bounded, expiring in-memory document cache.
 
-Source availability affects evidence confidence and whether a source can support a score.
+HTML is structurally parsed. Script, style, template, navigation, footer, form, iframe, hidden, and `aria-hidden` content is removed before normalization. Normalized visible text is hashed with SHA-256. Source availability alone does not make a claim scoreable: a quantitative claim must also match retrieved visible text and carry its document hash and exact text offsets.
 
 ### 8.4 Scoring model
 
-Evidence rows carry normalized scores, criterion weights, confidence, support direction, and weighted contribution. Missing evidence becomes neutral, low-confidence evidence rather than a fabricated advantage.
+Evidence rows carry normalized scores, criterion weights, confidence, support direction, weighted contribution, document provenance, a server-derived metric subject, and a server-derived comparison basis. Model-proposed metrics are candidates only.
+
+The server owns the controlled metric registry, allowed units, and scoring direction. Verification requires:
+
+- One exact adjacent numeric value and allowed unit.
+- The full compared product identity near the matched claim, including numeric or one-character model identifiers.
+- A registered metric label near the matched value.
+- A metric-specific basis, such as WLTP/ARAI/EPA/NEDC range standard, usable/gross/nominal battery capacity, AC/DC charging, charge window, loan LVR/borrower/repayment type, market and period, population and period, or warranty coverage.
+- A retrieved-document normalization marker, SHA-256 hash, and valid source text range.
+
+Deterministic scoring groups values only when metric key, unit, direction, and complete basis match across every shortlisted option. Unknown metrics and incomplete bases fail closed. Raw retrieved source prose is not sent to the final decision synthesizer; it receives only validated structured fields.
+
+Missing or non-comparable evidence receives 50/100, the neutral midpoint. This prevents missing evidence from creating an advantage or penalty and does not assert equal real-world performance. A ranked recommendation requires deterministic comparable metrics covering at least 50% of the canonical weighted model and actual score separation; otherwise the job fails with `insufficient_quantitative_evidence`.
 
 Normalization distinguishes:
 
@@ -434,7 +457,12 @@ Current controls include:
 - Tenant API-key scopes and isolation.
 - Guest request rate limiting.
 - Private-network and loopback blocking during source checks.
-- Bounded redirects and timeouts.
+- DNS, redirect, request, and batch wall-clock deadlines.
+- Bounded document size, retrieval concurrency, and cache capacity.
+- Structural visible-text extraction before claim verification.
+- Server-owned metric identity, unit, direction, subject, and basis validation.
+- Exact document-hash and source-offset provenance for scoreable metrics.
+- Removal of raw web prose from final LLM synthesis.
 - API `no-store` responses and disabled ETags.
 - Query-string removal from structured request logs.
 - Pseudonymized visitor analytics with inactivity-based retention.
@@ -521,6 +549,18 @@ Deployment configuration must provide the production database, Clerk configurati
 
 **Reason:** The two channels have different ownership, retry, and metering requirements.
 
+### 14.7 Deterministic retrieval before scoring
+
+**Decision:** AI research output may propose sources and metrics, but only server-retrieved document text can verify a quantitative metric for scoring.
+
+**Reason:** URL presence and model citations do not prove that a source contains the claimed value, that the value belongs to the compared product, or that values share a comparable basis.
+
+### 14.8 Fail closed on metric semantics
+
+**Decision:** Metric identity, units, direction, subject, and basis are server-owned. Unknown or incomplete metrics remain neutral and cannot create a ranking.
+
+**Reason:** Inferring scoring semantics from model prose can reward adverse outcomes, compare unlike products or periods, and manufacture confidence from missing evidence.
+
 ## 15. Current Limitations and Risks
 
 ### 15.1 Volatile browser job storage
@@ -535,25 +575,31 @@ A browser retry creates a new job. The commercial path has stronger idempotency 
 
 **Recommended direction:** Add a client-generated submission key and server-side request hash for safe retry and resume.
 
-### 15.3 Combined web research and synthesis
+### 15.3 Closed quantitative metric registry
 
-The AI web-search request performs evidence discovery and structured synthesis in one provider operation. Backend stages are emitted at real code boundaries, but the provider does not expose fine-grained internal search progress.
+Quantitative scoring intentionally supports only registered metrics with explicit unit, direction, subject, and basis rules. A novel domain metric remains neutral until its semantics are added server-side.
 
-**Recommended direction:** If finer progress or deterministic retrieval is required, separate source acquisition from synthesis and persist the evidence set between stages.
+**Recommended direction:** Expand the registry through reviewed metric definitions and adversarial tests. Do not infer unknown metric direction or comparability from model output.
 
-### 15.4 Large frontend module
+### 15.4 Text-document retrieval scope
+
+Deterministic retrieval currently accepts HTML/XHTML, plain text, and JSON. PDF and other binary document formats are not used for score verification.
+
+**Recommended direction:** Add a bounded, sandboxed PDF extraction path with equivalent SSRF, size, timeout, structural, provenance, and injection controls before allowing PDF metrics to affect scores.
+
+### 15.5 Large frontend module
 
 The main UI is concentrated in `App.tsx`, which increases coupling between routing, views, exports, and job state.
 
 **Recommended direction:** Split by route and domain while preserving the generated API boundary and current user journeys.
 
-### 15.5 Legacy synchronous comparison routes
+### 15.6 Legacy synchronous comparison routes
 
 Synchronous browser comparison endpoints coexist with the preferred asynchronous job endpoints.
 
 **Recommended direction:** Confirm external dependencies, deprecate legacy browser usage, and retain only intentionally supported synchronous commercial behavior.
 
-### 15.6 Error-log sensitivity
+### 15.7 Error-log sensitivity
 
 Background failure logs include error messages and stacks. Although request query strings are removed from access logs, exceptions may still contain source or provider context.
 

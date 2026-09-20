@@ -473,6 +473,7 @@ function cleanVendorName(value: string): string {
     .replace(/^(?:the|a|an)\s+/i, "")
     .replace(/\s+(?:battery[- ]electric|electric|ev)\s+(?:cars?|vehicles?)\s*(?:\([^)]*\)?)?\s*$/i, "")
     .replace(/\s+(?:evs?|electric\s+vehicles?)\s*$/i, "")
+    .replace(/\s+available\s*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
   const knownProviders: Record<string, string> = {

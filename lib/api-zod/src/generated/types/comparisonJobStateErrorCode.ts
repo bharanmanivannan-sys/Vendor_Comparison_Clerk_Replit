@@ -15,6 +15,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
+ */
 export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[keyof typeof ComparisonJobStateErrorCode];
 
 

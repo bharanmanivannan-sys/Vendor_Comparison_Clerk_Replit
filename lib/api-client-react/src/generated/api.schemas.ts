@@ -322,6 +322,9 @@ export const ComparisonJobStateStatus = {
   failed: 'failed',
 } as const;
 
+/**
+ * Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
+ */
 export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[keyof typeof ComparisonJobStateErrorCode];
 
 
@@ -425,13 +428,24 @@ export interface ScoreEvidence {
   rawMetricValue?: number;
   rawMetricUnit?: string;
   normalizationDirection?: ScoreEvidenceNormalizationDirection;
-  /** @pattern ^[a-f0-9]{64}$ */
+  /**
+     * SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.
+     * @pattern ^[a-f0-9]{64}$
+     */
   documentSha256?: string;
-  /** @minimum 0 */
+  /**
+     * Zero-based start offset of the verified claim in normalized retrieved text.
+     * @minimum 0
+     */
   sourceTextStart?: number;
-  /** @minimum 1 */
+  /**
+     * Exclusive end offset of the verified claim in normalized retrieved text.
+     * @minimum 1
+     */
   sourceTextEnd?: number;
+  /** Product or provider identity derived from text structurally associated with the verified claim. */
   metricSubject?: string;
+  /** Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period. */
   metricBasis?: string;
   /** @minimum 0 */
   sampleSize?: number;
@@ -453,6 +467,7 @@ export interface ScoreEvidence {
      */
   criterionWeight: number;
   weightedContribution: number;
+  /** How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization. */
   normalizationMethod: string;
 }
 
@@ -773,7 +788,9 @@ export interface ComparisonJobState {
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   result?: Comparison | GuestComparison;
+  /** User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt. */
   message?: string;
+  /** Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking. */
   errorCode?: ComparisonJobStateErrorCode;
 }
 

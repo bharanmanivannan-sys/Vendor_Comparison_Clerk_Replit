@@ -766,6 +766,13 @@ test("accepts EV brand comparisons with long-term buy-versus-lease intent", () =
   assert.ok(parsed.criteria.includes("Long-term ownership cost"));
 });
 
+test("removes a trailing availability qualifier from a product name", () => {
+  const parsed = parsePrompt("Compare Tesla Model 3 and BYD Seal available in Australia for five-year ownership.");
+
+  assert.deepEqual(parsed.vendors, ["Tesla Model 3", "BYD Seal"]);
+  assert.equal(parsed.context.valid, true);
+});
+
 test("normalizes a descriptive BYD EV manufacturer label", async () => {
   const prompt = "Compare current electric vehicle models from BYD EV car and Tesla available in the requested market. Select the best-matching current model from each manufacturer.";
   const parsed = await parsePromptWithIntent(prompt, async () => {

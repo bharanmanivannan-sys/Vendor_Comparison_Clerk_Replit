@@ -221,11 +221,11 @@ export const CreateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -233,7 +233,7 @@ export const CreateComparisonResponse = zod.object({
   "normalizedScore": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -467,11 +467,11 @@ export const CreateGuestComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -479,7 +479,7 @@ export const CreateGuestComparisonResponse = zod.object({
   "normalizedScore": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -910,11 +910,11 @@ export const GetComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -922,7 +922,7 @@ export const GetComparisonJobResponse = zod.object({
   "normalizedScore": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -1100,11 +1100,11 @@ export const GetComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1112,7 +1112,7 @@ export const GetComparisonJobResponse = zod.object({
   "normalizedScore": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -1238,8 +1238,8 @@ export const GetComparisonJobResponse = zod.object({
   "decisionGate": zod.string()
 }))
 })]).optional(),
-  "message": zod.string().optional(),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional()
+  "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
 }).describe('Pollable state for asynchronous comparison research.')
 
 
@@ -1348,11 +1348,11 @@ export const RegenerateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1360,7 +1360,7 @@ export const RegenerateComparisonResponse = zod.object({
   "normalizedScore": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -1655,11 +1655,11 @@ export const GetGuestComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1667,7 +1667,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "normalizedScore": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -1845,11 +1845,11 @@ export const GetGuestComparisonJobResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -1857,7 +1857,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "normalizedScore": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -1983,8 +1983,8 @@ export const GetGuestComparisonJobResponse = zod.object({
   "decisionGate": zod.string()
 }))
 })]).optional(),
-  "message": zod.string().optional(),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional()
+  "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
 }).describe('Pollable state for asynchronous comparison research.')
 
 
@@ -2078,11 +2078,11 @@ export const GetComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -2090,7 +2090,7 @@ export const GetComparisonResponse = zod.object({
   "normalizedScore": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -2395,11 +2395,11 @@ export const ExternalCreateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -2407,7 +2407,7 @@ export const ExternalCreateComparisonResponse = zod.object({
   "normalizedScore": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
@@ -2626,11 +2626,11 @@ export const ExternalGetComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional(),
-  "sourceTextStart": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional(),
-  "sourceTextEnd": zod.number().int().min(1).optional(),
-  "metricSubject": zod.string().optional(),
-  "metricBasis": zod.string().optional(),
+  "documentSha256": zod.string().regex(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
   "sampleSize": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
@@ -2638,7 +2638,7 @@ export const ExternalGetComparisonResponse = zod.object({
   "normalizedScore": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
   "criterionWeight": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
-  "normalizationMethod": zod.string()
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),

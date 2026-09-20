@@ -98,6 +98,10 @@ test("reports missing official product evidence instead of blaming a valid refin
   assert.match(message, /comparison options were understood/i);
   assert.match(message, /exact official product source/i);
   assert.match(message, /BYD/);
+  assert.match(message, /50\/100 weighted score/i);
+  assert.match(message, /neutral midpoint/i);
+  assert.match(message, /next attempt, add an exact current model page/i);
+  assert.match(message, /irrelevant or outdated resources will not be used/i);
   assert.doesNotMatch(message, /try this phrase instead/i);
 });
 

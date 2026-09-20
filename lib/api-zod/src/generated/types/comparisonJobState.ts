@@ -29,6 +29,8 @@ export interface ComparisonJobState {
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   result?: Comparison | GuestComparison;
+  /** User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt. */
   message?: string;
+  /** Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking. */
   errorCode?: ComparisonJobStateErrorCode;
 }
