@@ -133,9 +133,32 @@ async function downloadComparisonPdf(comparison: any) {
   const pageSize: [number, number] = [595.28, 841.89];
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
-  const clean = (value: unknown) => String(value ?? 'Not established').replace(/[^\x20-\x7E]/g, ' ');
+  const clean = (value: unknown) => String(value ?? 'Not established')
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7E]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || 'Not established';
+  const toArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value : [];
+  const toTextList = (value: unknown): string[] => (
+    Array.isArray(value) ? value : value == null ? [] : [value]
+  ).map(clean);
   const wrap = (text: unknown, fontSize: number, maxWidth: number, font = regular) => {
-    const words = clean(text).split(/\s+/);
+    const words = clean(text).split(/\s+/).flatMap((word) => {
+      if (font.widthOfTextAtSize(word, fontSize) <= maxWidth) return [word];
+      const chunks: string[] = [];
+      let chunk = '';
+      for (const character of word) {
+        const candidate = chunk + character;
+        if (chunk && font.widthOfTextAtSize(candidate, fontSize) > maxWidth) {
+          chunks.push(chunk);
+          chunk = character;
+        } else {
+          chunk = candidate;
+        }
+      }
+      if (chunk) chunks.push(chunk);
+      return chunks;
+    });
     const lines: string[] = [];
     let line = '';
     for (const word of words) {
@@ -177,7 +200,7 @@ async function downloadComparisonPdf(comparison: any) {
   y -= 8;
   summary.drawText('WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 19;
-  (comparison.vendorScores || []).slice(0, 6).forEach((vendor: any) => {
+  toArray<any>(comparison.vendorScores).slice(0, 6).forEach((vendor: any) => {
     const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
     summary.drawText(clean(vendor.vendor), { x: margin, y, size: 8.5, font: bold, color: navy });
     summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290, height: 9, color: rgb(0.88, 0.86, 0.8) });
@@ -188,7 +211,7 @@ async function downloadComparisonPdf(comparison: any) {
   y -= 3;
   const keyRisk = comparison.functionalGaps?.find((gap: any) => ['critical', 'high'].includes(String(gap.severity).toLowerCase())) ?? comparison.functionalGaps?.[0];
   const firstGate = comparison.decisionGovernance?.[0];
-  const actions = (comparison.nextSteps || []).slice(0, 3);
+  const actions = toTextList(comparison.nextSteps).slice(0, 3);
   summary.drawText('C-SUITE FOCUS', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 16;
   y = drawLines(summary, `Strategic impact: ${comparison.recommendationReason}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
@@ -215,7 +238,8 @@ async function downloadComparisonPdf(comparison: any) {
     ensureSpace(46, title);
     appendixPage.drawText(title.toUpperCase(), { x: margin, y: appendixY, size: 10, font: bold, color: teal });
     appendixY -= 20;
-    if (!rows?.length) rows = [{ unavailable: 'No supported data was returned.' }];
+    rows = toArray<Record<string, unknown>>(rows);
+    if (!rows.length) rows = [{ unavailable: 'No supported data was returned.' }];
     rows.forEach((row, index) => {
       const fieldLines = fields.flatMap(([label, key]) => wrap(`${label}: ${row?.[key] ?? 'Not established'}`, 8.2, contentWidth - 24));
       const height = Math.max(42, fieldLines.length * 11 + 20);
@@ -233,18 +257,18 @@ async function downloadComparisonPdf(comparison: any) {
   const drawListSection = (title: string, items: unknown[]) => {
     drawSection(
       title,
-      (items || []).map((item, index) => ({ number: index + 1, item })),
+      toTextList(items).map((item, index) => ({ number: index + 1, item })),
       [['Item', 'item']],
     );
   };
-  const formatValues = (values: Record<string, unknown> | undefined) => Object.entries(values || {})
+  const formatValues = (values: Record<string, unknown> | undefined) => Object.entries(values && typeof values === 'object' && !Array.isArray(values) ? values : {})
     .map(([vendor, value]) => `${vendor}: ${clean(value)}`)
     .join(' | ');
   const drawDetailedScoreCharts = () => {
     newAppendixPage('Scorecard and weighted decision model');
     appendixPage.drawText('OVERALL WEIGHTED SCORES', { x: margin, y: appendixY, size: 10, font: bold, color: teal });
     appendixY -= 24;
-    (comparison.vendorScores || []).slice(0, 6).forEach((vendor: any) => {
+    toArray<any>(comparison.vendorScores).slice(0, 6).forEach((vendor: any) => {
       const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
       ensureSpace(48, 'Scorecard and weighted decision model');
       appendixPage.drawText(clean(vendor.vendor), { x: margin, y: appendixY, size: 9, font: bold, color: navy });
@@ -254,11 +278,11 @@ async function downloadComparisonPdf(comparison: any) {
       appendixY = drawLines(appendixPage, vendor.verdict, margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
       appendixY -= 12;
     });
-    (comparison.vendorScores || []).forEach((vendor: any) => {
+    toArray<any>(comparison.vendorScores).forEach((vendor: any) => {
       ensureSpace(70, 'Weighted criteria');
       appendixPage.drawText(clean(vendor.vendor).toUpperCase(), { x: margin, y: appendixY, size: 10, font: bold, color: teal });
       appendixY -= 20;
-      (vendor.weightedScores || []).forEach((criterion: any) => {
+      toArray<any>(vendor.weightedScores).forEach((criterion: any) => {
         ensureSpace(43, 'Weighted criteria');
         const score = Math.max(0, Math.min(100, Number(criterion.score) || 0));
         const label = `${clean(criterion.criterion)} (${Number(criterion.weight) || 0}% weight)`;
@@ -269,7 +293,7 @@ async function downloadComparisonPdf(comparison: any) {
         appendixY = drawLines(appendixPage, criterion.rationale, margin, appendixY - 25, { size: 7.6, lineHeight: 9.5, color: grey, maxLines: 3 });
         appendixY -= 9;
       });
-      if (vendor.switchConditions?.length) drawListSection(`When the recommendation could switch from ${vendor.vendor}`, vendor.switchConditions);
+      if (toTextList(vendor.switchConditions).length) drawListSection(`When the recommendation could switch from ${vendor.vendor}`, vendor.switchConditions);
     });
   };
   drawDetailedScoreCharts();
@@ -280,22 +304,23 @@ async function downloadComparisonPdf(comparison: any) {
   );
   drawSection(
     'Pricing analysis',
-    (comparison.pricing || []).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    toArray<any>(comparison.pricing).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
     [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
   );
   drawSection(
     'Feature and capability analysis',
-    (comparison.features || []).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    toArray<any>(comparison.features).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
     [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
   );
   drawSection(
     'SWOT, PESTLE, and SOAR findings',
-    Object.entries(comparison.swot || {}).map(([framework, findings]) => ({ framework, findings: (findings as unknown[]).map(clean).join(' | ') })),
+    Object.entries(comparison.swot && typeof comparison.swot === 'object' && !Array.isArray(comparison.swot) ? comparison.swot : {})
+      .map(([framework, findings]) => ({ framework, findings: toTextList(findings).join(' | ') })),
     [['Framework dimension', 'framework'], ['Findings', 'findings']],
   );
   drawSection(
     'VRIO assessment',
-    Object.entries(comparison.vrio || {}).map(([vendor, assessment]: [string, any]) => ({
+    Object.entries(comparison.vrio && typeof comparison.vrio === 'object' && !Array.isArray(comparison.vrio) ? comparison.vrio : {}).map(([vendor, assessment]: [string, any]) => ({
       vendor,
       value: `${assessment?.value?.status || 'Not established'} - ${assessment?.value?.rationale || ''}`,
       rarity: `${assessment?.rarity?.status || 'Not established'} - ${assessment?.rarity?.rationale || ''}`,
@@ -321,17 +346,17 @@ async function downloadComparisonPdf(comparison: any) {
   );
   drawSection(
     'Market history and trajectory',
-    (comparison.vendorScores || []).filter((v: any) => v.marketHistory).map((v: any) => {
+    toArray<any>(comparison.vendorScores).filter((v: any) => v.marketHistory).map((v: any) => {
       const h = v.marketHistory;
       return {
         vendor: v.vendor,
         trendSummary: h.trendSummary,
-        ownership: `${String(h.ownership?.status || 'Unknown').replace('_', ' ').toUpperCase()} - Parent: ${h.ownership?.ultimateParent || 'N/A'}${h.ownership?.majorShareholders?.length ? ` (Major: ${h.ownership.majorShareholders.join(', ')})` : ''}; as of: ${h.ownership?.asOf || 'unverified'}`,
+        ownership: `${String(h.ownership?.status || 'Unknown').replace('_', ' ').toUpperCase()} - Parent: ${h.ownership?.ultimateParent || 'N/A'}${toTextList(h.ownership?.majorShareholders).length ? ` (Major: ${toTextList(h.ownership?.majorShareholders).join(', ')})` : ''}; as of: ${h.ownership?.asOf || 'unverified'}`,
         stock: !h.stock || h.stock.applicability === 'not_applicable' || h.stock.applicability === 'private' || h.stock.applicability === 'unverified'
           ? `${String(h.stock?.applicability || 'Not applicable').replace('_', ' ')}; source: ${h.stock?.evidenceUrl || 'unverified'}`
-          : `${h.stock.ticker} (${h.stock.exchange}) - Latest: ${h.stock.latestPrice !== null ? `${h.stock.latestPrice} ${h.stock.currency}` : 'N/A'} (5y: ${h.stock.fiveYearChangePercent !== null ? `${h.stock.fiveYearChangePercent > 0 ? '+' : ''}${h.stock.fiveYearChangePercent}%` : 'N/A'}); annual closes: ${(h.stock.yearlyCloses || []).map((y: any) => `${y.year}: ${y.price ?? 'N/A'}`).join(', ') || 'unavailable'}; source: ${h.stock.evidenceUrl || 'unverified'}`,
-        transactions: (h.transactions || []).map((t: any) => `${t.date}: [${String(t.type || '').replace('_', ' ').toUpperCase()}] ${t.counterparty} - ${t.summary} (${t.impact}); source: ${t.evidenceUrl || 'unverified'}`).join(' | ') || 'Research unavailable',
-        yearlyTrends: (h.yearlyTrends || []).map((y: any) => `${y.year} [${String(y.trendDirection || '').toUpperCase()}]: ${y.productPerformance}; market: ${y.marketPosition}; event: ${y.notableEvent}; source: ${y.evidenceUrl || 'unverified'}`).join(' | ') || 'Research unavailable',
+          : `${h.stock.ticker} (${h.stock.exchange}) - Latest: ${h.stock.latestPrice !== null ? `${h.stock.latestPrice} ${h.stock.currency}` : 'N/A'} (5y: ${h.stock.fiveYearChangePercent !== null ? `${h.stock.fiveYearChangePercent > 0 ? '+' : ''}${h.stock.fiveYearChangePercent}%` : 'N/A'}); annual closes: ${toArray<any>(h.stock.yearlyCloses).map((y: any) => `${y.year}: ${y.price ?? 'N/A'}`).join(', ') || 'unavailable'}; source: ${h.stock.evidenceUrl || 'unverified'}`,
+        transactions: toArray<any>(h.transactions).map((t: any) => `${t.date}: [${String(t.type || '').replace('_', ' ').toUpperCase()}] ${t.counterparty} - ${t.summary} (${t.impact}); source: ${t.evidenceUrl || 'unverified'}`).join(' | ') || 'Research unavailable',
+        yearlyTrends: toArray<any>(h.yearlyTrends).map((y: any) => `${y.year} [${String(y.trendDirection || '').toUpperCase()}]: ${y.productPerformance}; market: ${y.marketPosition}; event: ${y.notableEvent}; source: ${y.evidenceUrl || 'unverified'}`).join(' | ') || 'Research unavailable',
         ownershipSource: h.ownership?.evidenceUrl || 'unverified',
       };
     }),
@@ -339,7 +364,7 @@ async function downloadComparisonPdf(comparison: any) {
   );
   drawListSection(
     'Key insights',
-    (comparison.insights || []).filter((insight: string) => !/^Evidence unavailable\b/i.test(insight.trim())),
+    toTextList(comparison.insights).filter((insight: string) => !/^Evidence unavailable\b/i.test(insight.trim())),
   );
   drawListSection('Opportunities', comparison.opportunities || []);
   drawListSection('Recommended next steps', comparison.nextSteps || []);
@@ -366,8 +391,8 @@ async function downloadComparisonPdf(comparison: any) {
       color: grey,
     });
   });
-  pdf.setTitle(`${comparison.category || 'Vendor comparison'} complete decision report`);
-  pdf.setSubject(comparison.prompt);
+  pdf.setTitle(clean(`${comparison.category || 'Vendor comparison'} complete decision report`));
+  pdf.setSubject(clean(comparison.prompt));
   pdf.setCreator('DecisionIntel');
   const pdfBytes = await pdf.save();
   const pdfBuffer = pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength) as ArrayBuffer;
