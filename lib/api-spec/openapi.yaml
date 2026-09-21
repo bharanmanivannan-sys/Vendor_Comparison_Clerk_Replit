@@ -172,6 +172,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/source-preflight:
+    post:
+      operationId: preflightComparisonSources
+      tags: [comparisons]
+      summary: Validate supplied sources before authenticated research
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourcePreflightInput"
+      responses:
+        "200":
+          description: Source-by-source validation results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourcePreflightResponse"
+        "400":
+          description: Invalid source validation input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
   /guest/comparisons/parse:
     post:
       operationId: parseGuestComparisonPrompt
@@ -192,6 +222,36 @@ paths:
                 $ref: "#/components/schemas/ParsedComparison"
         "400":
           description: Invalid prompt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "429":
+          description: Guest usage limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /guest/comparisons/source-preflight:
+    post:
+      operationId: preflightGuestComparisonSources
+      tags: [comparisons]
+      summary: Validate supplied sources before guest research
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourcePreflightInput"
+      responses:
+        "200":
+          description: Source-by-source validation results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourcePreflightResponse"
+        "400":
+          description: Invalid source validation input
           content:
             application/json:
               schema:
@@ -952,6 +1012,47 @@ components:
           minLength: 8
           maxLength: 2000
       required: [prompt]
+    SourcePreflightInput:
+      type: object
+      properties:
+        prompt:
+          type: string
+          minLength: 8
+          maxLength: 4000
+        market:
+          type: string
+          enum: [IN, AU, US, GB]
+        urls:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            type: string
+            format: uri
+      required: [prompt, market, urls]
+    SourcePreflightResult:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        state:
+          type: string
+          enum: [accepted, inaccessible, stale, wrong_market, unrelated]
+        reason:
+          type: string
+        replacementUrl:
+          type: string
+          format: uri
+      required: [url, state, reason]
+    SourcePreflightResponse:
+      type: object
+      properties:
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourcePreflightResult"
+      required: [sources]
     ParsedComparison:
       type: object
       description: |
@@ -1335,7 +1436,65 @@ components:
         replacementUrl:
           type: string
           format: uri
+        accessStatus:
+          type: string
+          enum: [ALLOWED, LICENSED, CUSTOMER_SUPPLIED, ACCESS_UNAVAILABLE, PROHIBITED]
+        accessMethod:
+          type: string
+          enum: [public_web, customer_url, api, feed, upload]
+        checkedAt:
+          type: string
+          format: date-time
+        primaryContext:
+          type: boolean
+        restrictions:
+          type: array
+          items:
+            type: string
+        registryDecision:
+          $ref: "#/components/schemas/SourceRegistryDecision"
       required: [url, status, reason]
+    SourceRegistryDecision:
+      type: object
+      properties:
+        domain:
+          type: string
+        decisionOrigin:
+          type: string
+          enum: [reviewed, automated]
+        pathScope:
+          type: string
+        sourceType:
+          type: string
+          enum: [publisher, official, regulator, standards, customer]
+        accessStatus:
+          type: string
+          enum: [ALLOWED, LICENSED, CUSTOMER_SUPPLIED, ACCESS_UNAVAILABLE, PROHIBITED]
+        accessMethod:
+          type: string
+          enum: [public_web, customer_url, api, feed, upload]
+        robotsResult:
+          type: string
+          enum: [allowed, disallowed, unavailable, not_applicable]
+        licenceOrTermsNotes:
+          type: string
+        owner:
+          type: string
+        reviewedAt:
+          type: string
+          format: date-time
+        reviewDueAt:
+          type: string
+          format: date-time
+        allowedUses:
+          type: array
+          items:
+            type: string
+        restrictions:
+          type: array
+          items:
+            type: string
+      required: [domain, decisionOrigin, sourceType, accessStatus, accessMethod, robotsResult, reviewedAt, reviewDueAt, allowedUses, restrictions]
     VendorScore:
       type: object
       properties:

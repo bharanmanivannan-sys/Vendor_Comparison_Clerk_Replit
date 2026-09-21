@@ -31,8 +31,52 @@ export type EvidenceUrlResult = {
   url: string;
   available: boolean;
   finalUrl?: string;
-  reason?: "blocked_destination" | "timeout" | "access_restricted" | "unreachable" | "too_many_redirects";
+  reason?: "blocked_destination" | "robots_disallowed" | "timeout" | "access_restricted" | "unreachable" | "too_many_redirects";
+  registryDecision?: PublisherPermissionSnapshot;
 };
+
+export type PublisherPermissionSnapshot = {
+  domain: string;
+  decisionOrigin: "reviewed" | "automated";
+  pathScope?: string;
+  sourceType: "publisher" | "official" | "regulator" | "standards" | "customer";
+  accessStatus: "ALLOWED" | "LICENSED" | "CUSTOMER_SUPPLIED" | "ACCESS_UNAVAILABLE" | "PROHIBITED";
+  accessMethod: "public_web" | "customer_url" | "api" | "feed" | "upload";
+  robotsResult: "allowed" | "disallowed" | "unavailable" | "not_applicable";
+  licenceOrTermsNotes?: string;
+  owner?: string;
+  reviewedAt: string;
+  reviewDueAt: string;
+  allowedUses: string[];
+  restrictions: string[];
+};
+
+export type PublisherPermissionRegistry = {
+  lookup(url: string, now: Date): Promise<PublisherPermissionSnapshot | null>;
+  record(url: string, result: EvidenceUrlResult, checkedAt: Date): Promise<PublisherPermissionSnapshot | null>;
+};
+
+function registryBlocksPublicWeb(decision: PublisherPermissionSnapshot | null): boolean {
+  return Boolean(
+    decision
+    && (
+      decision.accessStatus === "PROHIBITED"
+      || decision.accessStatus === "ACCESS_UNAVAILABLE"
+      || decision.accessMethod !== "public_web"
+      || !decision.allowedUses.includes("automated_retrieval")
+    )
+  );
+}
+
+function registryAuthorizesPublicWeb(decision: PublisherPermissionSnapshot | null): boolean {
+  return Boolean(
+    decision
+    && decision.decisionOrigin === "reviewed"
+    && ["ALLOWED", "LICENSED", "CUSTOMER_SUPPLIED"].includes(decision.accessStatus)
+    && decision.accessMethod === "public_web"
+    && decision.allowedUses.includes("automated_retrieval")
+  );
+}
 
 type LookupAddress = { address: string; family: number };
 type EvidenceResponse = { status: number; location?: string };
@@ -60,6 +104,7 @@ type EvidenceCheckOptions = {
   cache?: Map<string, EvidenceCacheEntry>;
   lookupHost?: (hostname: string) => Promise<LookupAddress[]>;
   request?: (url: URL, timeoutMs: number) => Promise<EvidenceResponse>;
+  permissionRegistry?: PublisherPermissionRegistry;
 };
 
 const evidenceCheckCache = new Map<string, EvidenceCacheEntry>();
@@ -67,6 +112,10 @@ const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const DOCUMENT_CACHE_MS = 15 * 60_000;
 const MAX_DOCUMENT_BYTES = 512 * 1024;
+const RESEARCH_BOT_NAME = "DecisionIntelResearchBot";
+const RESEARCH_USER_AGENT = `${RESEARCH_BOT_NAME}/1.0 (+https://vendor-comparison-workspace.replit.app)`;
+const robotsCache = new Map<string, { allowedByPath: Map<string, boolean>; expiresAt: number }>();
+const ROBOTS_CACHE_MS = 30 * 60_000;
 
 export type RetrievedEvidenceDocument = {
   url: string;
@@ -102,6 +151,7 @@ type RetrieveDocumentOptions = {
   cache?: Map<string, DocumentCacheEntry>;
   lookupHost?: (hostname: string) => Promise<LookupAddress[]>;
   request?: (url: URL, timeoutMs: number, maxBytes: number) => Promise<DocumentResponse>;
+  permissionRegistry?: PublisherPermissionRegistry;
 };
 
 const documentCache = new Map<string, DocumentCacheEntry>();
@@ -240,7 +290,7 @@ function requestOnce(url: URL, timeoutMs: number, method: "HEAD" | "GET"): Promi
       method,
       ...({ autoSelectFamily: false } as Record<string, unknown>),
       headers: {
-        "user-agent": "VendorCompare-EvidenceCheck/1.0",
+        "user-agent": RESEARCH_USER_AGENT,
         accept: "*/*",
         ...(method === "GET" ? { range: "bytes=0-0" } : {}),
       },
@@ -248,7 +298,7 @@ function requestOnce(url: URL, timeoutMs: number, method: "HEAD" | "GET"): Promi
     }, (response) => {
       settled = true;
       clearTimeout(absoluteTimer);
-      const result = {
+      const result: EvidenceResponse = {
         status: response.statusCode ?? 0,
         location: typeof response.headers.location === "string" ? response.headers.location : undefined,
       };
@@ -284,7 +334,7 @@ function requestDocumentOnce(url: URL, timeoutMs: number, maxBytes: number): Pro
       method: "GET",
       ...({ autoSelectFamily: false } as Record<string, unknown>),
       headers: {
-        "user-agent": "VendorCompare-EvidenceRetriever/1.0",
+        "user-agent": RESEARCH_USER_AGENT,
         accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.8",
         "accept-encoding": "identity",
       },
@@ -355,6 +405,76 @@ function decodeHtmlEntities(value: string): string {
   });
 }
 
+export function robotsAllows(robotsText: string, pathname: string, botName = RESEARCH_BOT_NAME): boolean {
+  const groups: Array<{ agents: string[]; rules: Array<{ allow: boolean; path: string }> }> = [];
+  let current: { agents: string[]; rules: Array<{ allow: boolean; path: string }> } | undefined;
+  for (const rawLine of robotsText.split(/\r?\n/)) {
+    const line = rawLine.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    const separator = line.indexOf(":");
+    if (separator < 0) continue;
+    const field = line.slice(0, separator).trim().toLowerCase();
+    const value = line.slice(separator + 1).trim();
+    if (field === "user-agent") {
+      if (!current || current.rules.length) {
+        current = { agents: [], rules: [] };
+        groups.push(current);
+      }
+      current.agents.push(value.toLowerCase());
+    } else if ((field === "allow" || field === "disallow") && current) {
+      if (field === "disallow" && !value) continue;
+      current.rules.push({ allow: field === "allow", path: value });
+    }
+  }
+  const normalizedBot = botName.toLowerCase();
+  const matching = groups.filter((group) => group.agents.some((agent) => agent === "*" || normalizedBot.includes(agent)));
+  const specific = matching.filter((group) => group.agents.some((agent) => agent !== "*" && normalizedBot.includes(agent)));
+  const rules = (specific.length ? specific : matching).flatMap((group) => group.rules)
+    .filter((rule) => pathname.startsWith(rule.path))
+    .sort((a, b) => b.path.length - a.path.length || Number(b.allow) - Number(a.allow));
+  return rules[0]?.allow ?? true;
+}
+
+async function assertRobotsAllowed(
+  url: URL,
+  timeoutMs: number,
+  lookupHost: (hostname: string) => Promise<LookupAddress[]>,
+): Promise<void> {
+  const origin = url.origin;
+  const now = Date.now();
+  const cached = robotsCache.get(origin);
+  const cachedPath = cached?.allowedByPath.get(url.pathname);
+  if (cached && cached.expiresAt > now && cachedPath !== undefined) {
+    if (!cachedPath) throw new Error("robots_disallowed");
+    return;
+  }
+  const robotsUrl = new URL("/robots.txt", origin);
+  await assertPublicDestination(robotsUrl, lookupHost);
+  let allowed = false;
+  try {
+    const response = await requestDocumentOnce(robotsUrl, timeoutMs, 64 * 1024);
+    if (response.status === 404 || response.status === 410) {
+      allowed = true;
+    } else if (response.status >= 200 && response.status < 300) {
+      allowed = robotsAllows((response.body ?? Buffer.alloc(0)).toString("utf8"), url.pathname);
+    } else if (response.status === 401 || response.status === 403 || response.status === 429) {
+      throw new Error("access_restricted");
+    } else {
+      throw new Error("robots_unavailable");
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "robots_disallowed" || message === "access_restricted") throw error;
+    throw new Error(/timeout/i.test(message) ? "timeout" : "robots_unavailable");
+  }
+  const entry = cached && cached.expiresAt > now
+    ? cached
+    : { allowedByPath: new Map<string, boolean>(), expiresAt: now + ROBOTS_CACHE_MS };
+  entry.allowedByPath.set(url.pathname, allowed);
+  robotsCache.set(origin, entry);
+  if (!allowed) throw new Error("robots_disallowed");
+}
+
 export function normalizeRetrievedText(body: string, contentType: string): string {
   let visibleText = body;
   if (/html|xhtml/.test(contentType)) {
@@ -398,16 +518,26 @@ export function normalizeRetrievedText(body: string, contentType: string): strin
 async function retrieveOneEvidenceDocument(
   originalUrl: string,
   options: Required<Pick<RetrieveDocumentOptions, "timeoutMs" | "maxRedirects" | "maxBytes">>
-    & Pick<RetrieveDocumentOptions, "lookupHost" | "request" | "now" | "cache" | "cacheMs" | "maxCacheEntries">
+    & Pick<RetrieveDocumentOptions, "lookupHost" | "request" | "now" | "cache" | "cacheMs" | "maxCacheEntries" | "permissionRegistry">
     & { deadlineAt: number },
 ): Promise<EvidenceDocumentResult> {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
   const request = options.request ?? requestDocumentOnce;
+  const enforceRobots = options.request === undefined;
   const now = options.now ?? Date.now;
   const cache = options.cache ?? documentCache;
   const aliases = cacheAliases(cache);
   const cacheMs = options.cacheMs ?? DOCUMENT_CACHE_MS;
   const cacheKey = `document-v3:${canonicalEvidenceDocumentUrl(originalUrl)}`;
+  const checkedAt = new Date(now());
+  let registered = await options.permissionRegistry?.lookup(originalUrl, checkedAt) ?? null;
+  if (registryBlocksPublicWeb(registered)) {
+    return {
+      url: originalUrl,
+      reason: registered?.robotsResult === "disallowed" ? "robots_disallowed" : "access_restricted",
+    };
+  }
+  const registryAllowsAutomatedRetrieval = () => registryAuthorizesPublicWeb(registered);
   for (const [key, entry] of cache) {
     if (entry.expiresAt <= now()) removeDocumentCacheEntry(cache, aliases, key);
   }
@@ -416,6 +546,15 @@ async function retrieveOneEvidenceDocument(
   if (cached && cached.expiresAt > now()) {
     try {
       if (cached.result.document) {
+        const cachedDestinationDecision = await options.permissionRegistry?.lookup(
+          cached.result.document.finalUrl,
+          checkedAt,
+        ) ?? null;
+        if (
+          registryBlocksPublicWeb(cachedDestinationDecision)
+        ) {
+          throw new Error(cachedDestinationDecision?.robotsResult === "disallowed" ? "robots_disallowed" : "access_restricted");
+        }
         await withinDeadline(
           assertPublicDestination(new URL(cached.result.document.finalUrl), lookupHost),
           options.deadlineAt - Date.now(),
@@ -440,16 +579,41 @@ async function retrieveOneEvidenceDocument(
   try {
     current = new URL(originalUrl);
     await withinDeadline(assertPublicDestination(current, lookupHost), options.deadlineAt - Date.now());
+    if (enforceRobots && !registryAllowsAutomatedRetrieval()) {
+      await withinDeadline(assertRobotsAllowed(current, options.timeoutMs, lookupHost), options.deadlineAt - Date.now());
+    }
   } catch (error) {
+    const reason = error instanceof Error && /timeout/i.test(error.message)
+      ? "timeout" as const
+      : error instanceof Error && error.message === "robots_disallowed"
+        ? "robots_disallowed" as const
+        : error instanceof Error && error.message === "access_restricted"
+          ? "access_restricted" as const
+          : "blocked_destination" as const;
+    await options.permissionRegistry?.record(originalUrl, {
+      url: originalUrl,
+      available: false,
+      reason,
+    }, checkedAt);
     return {
       url: originalUrl,
-      reason: error instanceof Error && /timeout/i.test(error.message) ? "timeout" : "blocked_destination",
+      reason,
     };
   }
   for (let redirects = 0; redirects <= options.maxRedirects; redirects += 1) {
     try {
       if (redirects > 0) {
+        registered = await options.permissionRegistry?.lookup(current.toString(), checkedAt) ?? null;
+        if (registryBlocksPublicWeb(registered)) {
+          return {
+            url: originalUrl,
+            reason: registered?.robotsResult === "disallowed" ? "robots_disallowed" : "access_restricted",
+          };
+        }
         await withinDeadline(assertPublicDestination(current, lookupHost), options.deadlineAt - Date.now());
+        if (enforceRobots && !registryAllowsAutomatedRetrieval()) {
+          await withinDeadline(assertRobotsAllowed(current, options.timeoutMs, lookupHost), options.deadlineAt - Date.now());
+        }
       }
       const remainingMs = Math.min(options.timeoutMs, options.deadlineAt - Date.now());
       if (remainingMs <= 0) return { url: originalUrl, reason: "timeout" };
@@ -461,7 +625,9 @@ async function retrieveOneEvidenceDocument(
         continue;
       }
       if (response.status === 401 || response.status === 403 || response.status === 429) {
-        return { url: originalUrl, reason: "access_restricted" };
+        const result = { url: originalUrl, reason: "access_restricted" as const };
+        await options.permissionRegistry?.record(originalUrl, { ...result, available: false }, checkedAt);
+        return result;
       }
       if (response.status < 200 || response.status >= 300) return { url: originalUrl, reason: "unreachable" };
       const contentType = response.contentType ?? "";
@@ -481,6 +647,11 @@ async function retrieveOneEvidenceDocument(
         truncated: Boolean(response.truncated),
       };
       const result = { url: originalUrl, document };
+      await options.permissionRegistry?.record(originalUrl, {
+        url: originalUrl,
+        available: true,
+        finalUrl: current.toString(),
+      }, checkedAt);
       if (cacheMs > 0) {
         const maximum = options.maxCacheEntries ?? 32;
         const canonicalKey = `document-v3:${document.canonicalUrl}`;
@@ -499,9 +670,9 @@ async function retrieveOneEvidenceDocument(
       const message = error instanceof Error ? error.message : "";
       return {
         url: originalUrl,
-        reason: message === "blocked_destination"
-          ? "blocked_destination"
-          : /timeout|timed out|abort/i.test(message) ? "timeout" : "unreachable",
+        reason: message === "blocked_destination" || message === "robots_disallowed"
+          ? message as "blocked_destination" | "robots_disallowed"
+          : /timeout|timed out|abort/i.test(message) ? "timeout" : message === "access_restricted" ? "access_restricted" : "unreachable",
       };
     }
   }
@@ -530,6 +701,7 @@ export async function retrieveEvidenceDocuments(
         cache: options.cache,
         cacheMs: options.cacheMs,
         maxCacheEntries: options.maxCacheEntries,
+      permissionRegistry: options.permissionRegistry,
         deadlineAt,
       });
     }
@@ -556,6 +728,7 @@ export async function checkEvidenceUrls(
   const cache = options.cache ?? evidenceCheckCache;
   const lookupHost = options.lookupHost ?? defaultLookupHost;
   const request = options.request ?? defaultRequest;
+  const enforceRobots = options.request === undefined;
 
   return Promise.all(urls.map(async (originalUrl): Promise<EvidenceUrlResult> => {
     const deadlineAt = Date.now() + timeoutMs * (maxRedirects + 1);
@@ -565,75 +738,121 @@ export async function checkEvidenceUrls(
     } catch {
       return { url: originalUrl, available: false, reason: "unreachable" };
     }
+    const checkedAt = new Date(now());
+    let registered = await options.permissionRegistry?.lookup(originalUrl, checkedAt) ?? null;
+    if (registryBlocksPublicWeb(registered)) {
+      return {
+        url: originalUrl,
+        available: false,
+        reason: registered?.robotsResult === "disallowed" ? "robots_disallowed" : "access_restricted",
+        registryDecision: registered ?? undefined,
+      };
+    }
+    const registryAllowsAutomatedRetrieval = () => registryAuthorizesPublicWeb(registered);
     try {
       await withinDeadline(assertPublicDestination(current, lookupHost), deadlineAt - Date.now());
+      if (enforceRobots && !registryAllowsAutomatedRetrieval()) {
+        await withinDeadline(assertRobotsAllowed(current, timeoutMs, lookupHost), deadlineAt - Date.now());
+      }
       const cached = cache.get(originalUrl);
       if (cached && cached.expiresAt > now()) {
         if (cached.result.finalUrl) {
+          const cachedDestinationDecision = await options.permissionRegistry?.lookup(
+            cached.result.finalUrl,
+            checkedAt,
+          ) ?? null;
+          if (
+            registryBlocksPublicWeb(cachedDestinationDecision)
+          ) {
+            return {
+              url: originalUrl,
+              available: false,
+              finalUrl: cached.result.finalUrl,
+              reason: cachedDestinationDecision?.robotsResult === "disallowed" ? "robots_disallowed" : "access_restricted",
+              registryDecision: cachedDestinationDecision ?? undefined,
+            };
+          }
+          registered = cachedDestinationDecision ?? registered;
           await withinDeadline(
             assertPublicDestination(new URL(cached.result.finalUrl), lookupHost),
             deadlineAt - Date.now(),
           );
         }
-        return { ...cached.result };
+        return registered ? { ...cached.result, registryDecision: registered } : { ...cached.result };
       }
       if (cached) cache.delete(originalUrl);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      return {
+      const result: EvidenceUrlResult = {
         url: originalUrl,
         available: false,
-        reason: message === "blocked_destination"
-          ? "blocked_destination"
-          : /timeout/i.test(message) ? "timeout" : "unreachable",
+        reason: message === "blocked_destination" || message === "robots_disallowed"
+          ? message as "blocked_destination" | "robots_disallowed"
+          : /timeout/i.test(message) ? "timeout" : message === "access_restricted" ? "access_restricted" : "unreachable",
       };
+      const registryDecision = await options.permissionRegistry?.record(originalUrl, result, checkedAt) ?? registered;
+      return registryDecision ? { ...result, registryDecision } : result;
     }
 
-    const cacheResult = (result: EvidenceUrlResult): EvidenceUrlResult => {
+    const cacheResult = async (result: EvidenceUrlResult): Promise<EvidenceUrlResult> => {
       if (result.reason !== "blocked_destination") {
         const lifetime = result.available ? successCacheMs : failureCacheMs;
         if (lifetime > 0) cache.set(originalUrl, { result: { ...result }, expiresAt: now() + lifetime });
       }
-      return result;
+      const registryDecision = await options.permissionRegistry?.record(originalUrl, result, checkedAt) ?? registered;
+      return registryDecision ? { ...result, registryDecision } : result;
     };
 
     for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
       try {
         if (redirects > 0) {
+          registered = await options.permissionRegistry?.lookup(current.toString(), checkedAt) ?? null;
+          if (registryBlocksPublicWeb(registered)) {
+            return {
+              url: originalUrl,
+              available: false,
+              finalUrl: current.toString(),
+              reason: registered?.robotsResult === "disallowed" ? "robots_disallowed" : "access_restricted",
+              registryDecision: registered ?? undefined,
+            };
+          }
           await withinDeadline(assertPublicDestination(current, lookupHost), deadlineAt - Date.now());
+          if (enforceRobots && !registryAllowsAutomatedRetrieval()) {
+            await withinDeadline(assertRobotsAllowed(current, timeoutMs, lookupHost), deadlineAt - Date.now());
+          }
         }
         const remainingMs = Math.min(timeoutMs, deadlineAt - Date.now());
         const response = await withinDeadline(request(current, remainingMs), remainingMs);
         if (response.status >= 300 && response.status < 400) {
           if (!response.location) {
-            return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" });
+            return await cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" });
           }
           if (redirects === maxRedirects) {
-            return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "too_many_redirects" });
+            return await cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "too_many_redirects" });
           }
           current = new URL(response.location, current);
           continue;
         }
         if (response.status === 401 || response.status === 403 || response.status === 429) {
-          return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "access_restricted" });
+          return await cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "access_restricted" });
         }
         if (response.status >= 200 && response.status < 400) {
-          return cacheResult({ url: originalUrl, available: true, finalUrl: current.toString() });
+          return await cacheResult({ url: originalUrl, available: true, finalUrl: current.toString() });
         }
-        return cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" });
+        return await cacheResult({ url: originalUrl, available: false, finalUrl: current.toString(), reason: "unreachable" });
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
-        return cacheResult({
+        return await cacheResult({
           url: originalUrl,
           available: false,
-          reason: message === "blocked_destination"
-            ? "blocked_destination"
+          reason: message === "blocked_destination" || message === "robots_disallowed"
+            ? message as "blocked_destination" | "robots_disallowed"
             : /timeout|timed out|abort/i.test(message)
               ? "timeout"
               : "unreachable",
         });
       }
     }
-    return cacheResult({ url: originalUrl, available: false, reason: "too_many_redirects" });
+    return await cacheResult({ url: originalUrl, available: false, reason: "too_many_redirects" });
   }));
 }

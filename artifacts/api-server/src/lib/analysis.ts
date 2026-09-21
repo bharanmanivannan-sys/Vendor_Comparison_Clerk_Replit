@@ -7,6 +7,7 @@ import {
   type EvidenceUrlResult,
   type RetrievedEvidenceDocument,
 } from "./security";
+import { publisherPermissionRegistry } from "../services/publisherPermissionRegistry";
 
 export type AnalysisPayload = Omit<
   InsertComparison,
@@ -2106,6 +2107,11 @@ export function normalizeMarketHistory(
     return candidate && allowedUrls.has(candidate) && verifiedUrls.has(candidate) ? candidate : undefined;
   };
   const numberOrNull = (input: unknown) => typeof input === "number" && Number.isFinite(input) ? input : null;
+  const dateTimeOrUndefined = (input: unknown) => {
+    if (typeof input !== "string") return undefined;
+    const parsed = new Date(input);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+  };
   const rawTrends = Array.isArray(row.yearlyTrends) ? row.yearlyTrends : fallback?.yearlyTrends ?? [];
   const suppliedTrends = rawTrends.map((item) => item as Record<string, unknown>)
     .filter((item) => Number.isInteger(Number(item.year)) && Number(item.year) >= firstYear && Number(item.year) <= currentYear)
@@ -2121,6 +2127,7 @@ export function normalizeMarketHistory(
           trendDirection: "unavailable" as const,
           notableEvent: "No verified event information",
           evidenceUrl: undefined,
+          gap: "missing_observation",
         };
       }
       const rawDirection = String(item.trendDirection ?? "").toLowerCase();
@@ -2134,8 +2141,37 @@ export function normalizeMarketHistory(
         trendDirection,
         notableEvent: normalizeTextField(item.notableEvent, "No material event identified"),
         evidenceUrl,
+        validTimeStart: normalizeDate(item.validTimeStart),
+        validTimeEnd: normalizeDate(item.validTimeEnd),
+        observedTime: dateTimeOrUndefined(item.observedTime),
+        metricKey: normalizeTextField(item.metricKey) || undefined,
+        unit: normalizeTextField(item.unit) || undefined,
+        methodology: normalizeTextField(item.methodology) || undefined,
+        eventType: normalizeTextField(item.eventType) || undefined,
+        gap: normalizeTextField(item.gap) || undefined,
       };
     });
+  const comparableRows = yearlyTrends.filter((item) => (
+    item.evidenceUrl
+    && item.validTimeStart
+    && item.validTimeEnd
+    && item.observedTime
+    && item.metricKey
+    && item.unit
+    && !item.gap
+  ));
+  const metricKeys = new Set(comparableRows.map((item) => item.metricKey));
+  const units = new Set(comparableRows.map((item) => item.unit));
+  const methodologies = new Set(comparableRows.map((item) => item.methodology).filter(Boolean));
+  const missingPeriods = yearlyTrends.filter((item) => !item.evidenceUrl || item.gap).map((item) => String(item.year));
+  const comparableHistory = comparableRows.length === yearlyTrends.length && metricKeys.size === 1 && units.size === 1;
+  const dataQuality = {
+    status: comparableHistory ? "complete" as const : comparableRows.length ? "partial" as const : "insufficient" as const,
+    comparable: comparableHistory,
+    missingPeriods,
+    methodologyChanges: methodologies.size > 1 ? ["Methodology differs across the historical window."] : [],
+    confidence: comparableHistory ? 90 : comparableRows.length ? Math.round(comparableRows.length / yearlyTrends.length * 70) : 0,
+  };
   const ownership = row.ownership && typeof row.ownership === "object"
     ? row.ownership as Record<string, unknown>
     : fallback?.ownership as unknown as Record<string, unknown> ?? {};
@@ -2174,6 +2210,20 @@ export function normalizeMarketHistory(
       ? normalizeTextField(row.trendSummary, fallback?.trendSummary ?? "Five-year comparable trend evidence was unavailable.")
       : "Five-year comparable trend evidence was unavailable or not independently verified.",
     yearlyTrends,
+    dataQuality,
+    forecast: {
+      status: "suppressed",
+      method: "none",
+      horizon: "not produced",
+      point: null,
+      lower: null,
+      upper: null,
+      assumptions: [],
+      confidence: 0,
+      suppressionReason: comparableHistory
+        ? "Forecasting is not enabled for this report."
+        : "Insufficient comparable historical observations.",
+    },
     ownership: {
       status: ownershipEvidenceUrl && ["public", "private", "subsidiary", "government", "mutual"].includes(rawOwnershipStatus)
         ? rawOwnershipStatus as "public" | "private" | "subsidiary" | "government" | "mutual"
@@ -2201,7 +2251,7 @@ export function normalizeMarketHistory(
         .sort((a, b) => a.year - b.year) : [],
       evidenceUrl: stockEvidenceUrl,
     },
-  };
+  } as unknown as NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["marketHistory"]>;
 }
 
 export function normalizeDecisionGovernance(
@@ -4406,6 +4456,7 @@ export function rankEvidenceSources(
 
 const unavailableEvidenceLabels: Record<NonNullable<EvidenceUrlResult["reason"]>, string> = {
   blocked_destination: "blocked because it resolves to a private or internal network",
+  robots_disallowed: "collection is prohibited by the publisher's robots policy",
   timeout: "timed out during the availability check",
   access_restricted: "requires authentication or denies automated access",
   unreachable: "could not be reached successfully",
@@ -4414,7 +4465,10 @@ const unavailableEvidenceLabels: Record<NonNullable<EvidenceUrlResult["reason"]>
 
 export async function validateFinalEvidenceUrls(
   urls: string[],
-  checker: typeof checkEvidenceUrls = checkEvidenceUrls,
+  checker: typeof checkEvidenceUrls = (values) => checkEvidenceUrls(values, {
+    permissionRegistry: publisherPermissionRegistry,
+  }),
+  customerSuppliedUrls: string[] = [],
 ): Promise<{
   reachable: string[];
   referenceable: string[];
@@ -4422,6 +4476,8 @@ export async function validateFinalEvidenceUrls(
   sourceAvailability: NonNullable<InsertComparison["sourceAvailability"]>;
 }> {
   const results = await checker(dedupeReferenceUrls(urls));
+  const supplied = new Set(dedupeReferenceUrls(customerSuppliedUrls));
+  const checkedAt = new Date().toISOString();
   const expandUrls = (result: EvidenceUrlResult) => result.finalUrl && result.finalUrl !== result.url
     ? [result.url, result.finalUrl]
     : [result.url];
@@ -4430,16 +4486,30 @@ export async function validateFinalEvidenceUrls(
       .filter((result) => result.available)
       .flatMap(expandUrls),
     referenceable: results
-      .filter((result) => result.available || result.reason !== "blocked_destination")
+      .filter((result) => result.available)
       .flatMap(expandUrls),
     unavailableInsights: results
       .filter((result) => !result.available)
-      .map((result) => result.reason === "access_restricted"
-        ? `Source availability check restricted — ${result.url}: the publisher denies automated access. The citation is preserved so it can be opened and verified directly.`
+      .map((result) => result.reason === "access_restricted" || result.reason === "robots_disallowed"
+        ? `Source access unavailable — ${result.url}: ${unavailableEvidenceLabels[result.reason]}. Use an authorised API, feed, licensed source, or customer-supplied document instead.`
         : `Evidence unavailable — ${result.url}: ${unavailableEvidenceLabels[result.reason ?? "unreachable"]}. Claims depending only on this source are unverified.`),
     sourceAvailability: results.map((result) => {
+      const accessStatus = result.reason === "robots_disallowed" || result.reason === "blocked_destination"
+        ? "PROHIBITED" as const
+        : result.available
+          ? supplied.has(result.url) ? "CUSTOMER_SUPPLIED" as const : "ALLOWED" as const
+          : "ACCESS_UNAVAILABLE" as const;
+      const governance = {
+        accessStatus,
+        accessMethod: supplied.has(result.url) ? "customer_url" as const : "public_web" as const,
+        checkedAt,
+        primaryContext: supplied.has(result.url),
+        restrictions: result.reason ? [unavailableEvidenceLabels[result.reason]] : [],
+        registryDecision: result.registryDecision,
+      };
       if (result.available && result.finalUrl && result.finalUrl !== result.url) {
         return {
+          ...governance,
           url: result.url,
           status: "superseded" as const,
           reason: "This source redirects to a newer or canonical location.",
@@ -4447,15 +4517,19 @@ export async function validateFinalEvidenceUrls(
         };
       }
       if (result.available) {
-        return { url: result.url, status: "reachable" as const, reason: "Source was reachable when this report was generated." };
+        return { ...governance, url: result.url, status: "reachable" as const, reason: "Source was reachable and permitted for public retrieval when this report was generated." };
       }
       if (result.reason === "access_restricted") {
-        return { url: result.url, status: "restricted" as const, reason: unavailableEvidenceLabels.access_restricted };
+        return { ...governance, url: result.url, status: "restricted" as const, reason: unavailableEvidenceLabels.access_restricted };
+      }
+      if (result.reason === "robots_disallowed") {
+        return { ...governance, url: result.url, status: "restricted" as const, reason: unavailableEvidenceLabels.robots_disallowed };
       }
       if (result.reason === "timeout") {
-        return { url: result.url, status: "timed_out" as const, reason: unavailableEvidenceLabels.timeout };
+        return { ...governance, url: result.url, status: "timed_out" as const, reason: unavailableEvidenceLabels.timeout };
       }
       return {
+        ...governance,
         url: result.url,
         status: "unavailable" as const,
         reason: unavailableEvidenceLabels[result.reason ?? "unreachable"],
@@ -4558,7 +4632,22 @@ function analysisOutputShape(vendors: string[], isHomeLoan = false, isElectricVe
       marketHistory: {
         lookbackYears: 5,
         trendSummary: "",
-        yearlyTrends: [{ year: new Date().getUTCFullYear(), productPerformance: "", marketPosition: "", trendDirection: "improving|stable|declining|mixed|unavailable", notableEvent: "", evidenceUrl: "" }],
+        yearlyTrends: [{
+          year: new Date().getUTCFullYear(),
+          productPerformance: "",
+          marketPosition: "",
+          trendDirection: "improving|stable|declining|mixed|unavailable",
+          notableEvent: "",
+          eventType: "launch|price_change|feature_change|review_shift|positioning_change|methodology_change|none",
+          evidenceUrl: "",
+          validTimeStart: "YYYY-MM-DD",
+          validTimeEnd: "YYYY-MM-DD",
+          observedTime: "ISO-8601 timestamp",
+          metricKey: "",
+          unit: "",
+          methodology: "",
+          gap: "",
+        }],
         ownership: { status: "public|private|subsidiary|government|mutual|unknown", ultimateParent: "", majorShareholders: [""], asOf: "", evidenceUrl: "" },
         transactions: [{ date: "", type: "merger|acquisition|divestiture|investment|restructure|none_found", counterparty: "", summary: "", impact: "", evidenceUrl: "" }],
         stock: { applicability: "listed|listed_parent|private|not_applicable|unverified", ticker: "", exchange: "", currency: "", latestPrice: null, latestPriceAsOf: "", fiveYearChangePercent: null, yearlyCloses: [{ year: new Date().getUTCFullYear(), price: null }], evidenceUrl: "" },
@@ -4932,7 +5021,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const vendorDiscoveryInstructions = vendorDiscoveryWasRequired
       ? "The shortlist was selected from the user's objective. Preserve these exact product names throughout the scorecard, tables, winners, and recommendation. Put other credible products only in insights as outside-shortlist alternatives; do not rank them. "
       : "";
-    const providerRoleInstructions = "For every ranked option, set providerRole to exactly one of accelerator, leader, core_provider, or expert. Use accelerator when it primarily speeds transformation or time-to-value; leader for broad, mature, market-leading capability; core_provider when it is suited as a foundational operating backbone; and expert for deep specialist capability. Explain the context-specific classification in providerRoleRationale. Complete marketHistory for the latest five calendar years: compare product or service performance and market position year by year, summarize the trend, identify the ultimate parent and major disclosed shareholders with an as-of date, list material mergers, acquisitions, divestitures, investments, or restructures, and provide ticker, exchange, currency, latest price, price date, five-year change, and annual closes only when the company or parent is publicly listed. Use private or not_applicable explicitly and null numeric prices when no listed stock exists. Cite exact source URLs for every historical subsection and never invent unavailable history. ";
+    const providerRoleInstructions = "For every ranked option, set providerRole to exactly one of accelerator, leader, core_provider, or expert. Use accelerator when it primarily speeds transformation or time-to-value; leader for broad, mature, market-leading capability; core_provider when it is suited as a foundational operating backbone; and expert for deep specialist capability. Explain the context-specific classification in providerRoleRationale. Complete marketHistory for the latest five calendar years using immutable time-stamped observations. Define one comparable metric, unit, population, geography, cadence, and methodology before constructing the series. For every year include validTimeStart, validTimeEnd, observedTime, metricKey, unit, methodology, eventType, and evidenceUrl. Use identical windows and definitions across options. Record missing observations with a gap reason and never interpolate them. Separate launches, price changes, feature changes, review shifts, positioning changes, acquisitions, rebrands, and methodology changes as events. Summarize the trend, identify the ultimate parent and major disclosed shareholders with an as-of date, list material mergers, acquisitions, divestitures, investments, or restructures, and provide ticker, exchange, currency, latest price, price date, five-year change, and annual closes only when the company or parent is publicly listed. Use private or not_applicable explicitly and null numeric prices when no listed stock exists. Cite exact source URLs for every historical subsection and never invent unavailable history or present a forecast as an observed fact. ";
     const currentDate = new Date().toISOString().slice(0, 10);
     const oldestFallbackDate = new Date();
     oldestFallbackDate.setUTCFullYear(oldestFallbackDate.getUTCFullYear() - 1);
@@ -5349,14 +5438,16 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.urls.length,
       ...dedupeReferenceUrls([...rankedUrls, ...requiredHomeLoanRateUrls]),
     );
-    const evidenceAvailability = await validateFinalEvidenceUrls(input.urls);
+    const evidenceAvailability = await validateFinalEvidenceUrls(input.urls, undefined, userSuppliedUrls);
     const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
     input.onProgress?.("building_evidence");
     const retrievalUrls = dedupeReferenceUrls([
       ...evidenceAvailability.reachable,
       ...requiredHomeLoanRateUrls,
     ]);
-    const retrievedResults = await retrieveEvidenceDocuments(retrievalUrls);
+    const retrievedResults = await retrieveEvidenceDocuments(retrievalUrls, {
+      permissionRegistry: publisherPermissionRegistry,
+    });
     const retrievedDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
     const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
       document.url,

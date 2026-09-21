@@ -3149,32 +3149,42 @@ test("rejects explanatory text disguised as an evidence URL", () => {
   ]);
 });
 
-test("keeps public citations for direct review while excluding blocked destinations from references", async () => {
+test("keeps only permitted reachable citations eligible for evidence and ranking", async () => {
+  const registryDecision = {
+    domain: "example.com",
+    decisionOrigin: "automated" as const,
+    pathScope: "/available",
+    sourceType: "publisher" as const,
+    accessStatus: "ALLOWED" as const,
+    accessMethod: "public_web" as const,
+    robotsResult: "allowed" as const,
+    reviewedAt: "2026-09-21T00:00:00.000Z",
+    reviewDueAt: "2026-09-21T06:00:00.000Z",
+    allowedUses: ["automated_retrieval", "comparison_evidence"],
+    restrictions: [],
+  };
   const result = await validateFinalEvidenceUrls([
     "https://example.com/available",
     "https://example.com/restricted",
     "https://example.com/missing",
   ], async (urls) => urls.map((url) => url.endsWith("/available")
-    ? { url, available: true, finalUrl: url }
+    ? { url, available: true, finalUrl: url, registryDecision }
     : {
         url,
         available: false,
         reason: url.endsWith("/restricted") ? "access_restricted" : "unreachable",
       }));
   assert.deepEqual(result.reachable, ["https://example.com/available"]);
-  assert.deepEqual(result.referenceable, [
-    "https://example.com/available",
-    "https://example.com/restricted",
-    "https://example.com/missing",
-  ]);
+  assert.deepEqual(result.referenceable, ["https://example.com/available"]);
   assert.equal(result.unavailableInsights.length, 2);
-  assert.match(result.unavailableInsights[0], /Source availability check restricted.*preserved.*verified directly/);
+  assert.match(result.unavailableInsights[0], /Source access unavailable.*denies automated access.*authorised API/);
   assert.match(result.unavailableInsights[1], /Evidence unavailable.*could not be reached.*unverified/);
   assert.deepEqual(result.sourceAvailability.map((source) => source.status), [
     "reachable",
     "restricted",
     "unavailable",
   ]);
+  assert.deepEqual(result.sourceAvailability[0]?.registryDecision, registryDecision);
 });
 
 test("seeds official variable and fixed home-loan sources for named banks", () => {

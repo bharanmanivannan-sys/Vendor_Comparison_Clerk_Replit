@@ -13,6 +13,26 @@ export const comparisonsTable = pgTable("comparisons", {
   sourceAvailability: jsonb("source_availability").$type<Array<{
     url: string;
     status: "reachable" | "restricted" | "timed_out" | "unavailable" | "superseded";
+    accessStatus?: "ALLOWED" | "LICENSED" | "CUSTOMER_SUPPLIED" | "ACCESS_UNAVAILABLE" | "PROHIBITED";
+    accessMethod?: "public_web" | "customer_url" | "api" | "feed" | "upload";
+    checkedAt?: string;
+    primaryContext?: boolean;
+    restrictions?: string[];
+    registryDecision?: {
+      domain: string;
+      decisionOrigin: "reviewed" | "automated";
+      pathScope?: string;
+      sourceType: "publisher" | "official" | "regulator" | "standards" | "customer";
+      accessStatus: "ALLOWED" | "LICENSED" | "CUSTOMER_SUPPLIED" | "ACCESS_UNAVAILABLE" | "PROHIBITED";
+      accessMethod: "public_web" | "customer_url" | "api" | "feed" | "upload";
+      robotsResult: "allowed" | "disallowed" | "unavailable" | "not_applicable";
+      licenceOrTermsNotes?: string;
+      owner?: string;
+      reviewedAt: string;
+      reviewDueAt: string;
+      allowedUses: string[];
+      restrictions: string[];
+    };
     reason: string;
     replacementUrl?: string;
   }>>().notNull().default([]),
@@ -71,7 +91,33 @@ export const comparisonsTable = pgTable("comparisons", {
          trendDirection: "improving" | "stable" | "declining" | "mixed" | "unavailable";
          notableEvent: string;
          evidenceUrl?: string;
+          validTimeStart?: string;
+          validTimeEnd?: string;
+          observedTime?: string;
+          metricKey?: string;
+          unit?: string;
+          methodology?: string;
+          eventType?: string;
+          gap?: string;
        }>;
+        dataQuality?: {
+          status: "complete" | "partial" | "insufficient";
+          comparable: boolean;
+          missingPeriods: string[];
+          methodologyChanges: string[];
+          confidence: number;
+        };
+        forecast?: {
+          status: "available" | "suppressed";
+          method: string;
+          horizon: string;
+          point: number | null;
+          lower: number | null;
+          upper: number | null;
+          assumptions: string[];
+          confidence: number;
+          suppressionReason?: string;
+        };
        ownership: {
          status: "public" | "private" | "subsidiary" | "government" | "mutual" | "unknown";
          ultimateParent: string;

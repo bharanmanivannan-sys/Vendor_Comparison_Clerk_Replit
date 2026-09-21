@@ -216,7 +216,27 @@ export const CreateComparisonResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -470,7 +490,27 @@ export const CreateGuestComparisonResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -707,6 +747,32 @@ export const ParseComparisonPromptResponse = zod.object({
 
 
 /**
+ * @summary Validate supplied sources before authenticated research
+ */
+export const preflightComparisonSourcesBodyPromptMin = 8;
+export const preflightComparisonSourcesBodyPromptMax = 4000;
+
+export const preflightComparisonSourcesBodyUrlsMax = 12;
+
+
+
+export const PreflightComparisonSourcesBody = zod.object({
+  "prompt": zod.string().min(preflightComparisonSourcesBodyPromptMin).max(preflightComparisonSourcesBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
+  "urls": zod.array(zod.string().url()).min(1).max(preflightComparisonSourcesBodyUrlsMax)
+})
+
+export const PreflightComparisonSourcesResponse = zod.object({
+  "sources": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+}))
+})
+
+
+/**
  * @summary Parse a guest comparison prompt
  */
 export const parseGuestComparisonPromptBodyPromptMin = 8;
@@ -772,6 +838,32 @@ export const ParseGuestComparisonPromptResponse = zod.object({
   "headline": zod.string()
 }).describe('Canonical comparison set used by every downstream label and recommendation.')
 }).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor.\n')
+
+
+/**
+ * @summary Validate supplied sources before guest research
+ */
+export const preflightGuestComparisonSourcesBodyPromptMin = 8;
+export const preflightGuestComparisonSourcesBodyPromptMax = 4000;
+
+export const preflightGuestComparisonSourcesBodyUrlsMax = 12;
+
+
+
+export const PreflightGuestComparisonSourcesBody = zod.object({
+  "prompt": zod.string().min(preflightGuestComparisonSourcesBodyPromptMin).max(preflightGuestComparisonSourcesBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
+  "urls": zod.array(zod.string().url()).min(1).max(preflightGuestComparisonSourcesBodyUrlsMax)
+})
+
+export const PreflightGuestComparisonSourcesResponse = zod.object({
+  "sources": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+}))
+})
 
 
 /**
@@ -933,7 +1025,27 @@ export const GetComparisonJobResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -1123,7 +1235,27 @@ export const GetComparisonJobResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -1376,7 +1508,27 @@ export const RegenerateComparisonResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -1703,7 +1855,27 @@ export const GetGuestComparisonJobResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -1893,7 +2065,27 @@ export const GetGuestComparisonJobResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -2131,7 +2323,27 @@ export const GetComparisonResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -2466,7 +2678,27 @@ export const ExternalCreateComparisonResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
@@ -2702,7 +2934,27 @@ export const ExternalGetComparisonResponse = zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
   "reason": zod.string(),
-  "replacementUrl": zod.string().url().optional()
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),

@@ -14,20 +14,8 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ReportSourceAccessMethod } from './reportSourceAccessMethod';
-import type { ReportSourceAccessStatus } from './reportSourceAccessStatus';
-import type { ReportSourceStatus } from './reportSourceStatus';
-import type { SourceRegistryDecision } from './sourceRegistryDecision';
+import type { SourcePreflightResult } from './sourcePreflightResult';
 
-export interface ReportSource {
-  url: string;
-  status: ReportSourceStatus;
-  reason: string;
-  replacementUrl?: string;
-  accessStatus?: ReportSourceAccessStatus;
-  accessMethod?: ReportSourceAccessMethod;
-  checkedAt?: Date;
-  primaryContext?: boolean;
-  restrictions?: string[];
-  registryDecision?: SourceRegistryDecision;
+export interface SourcePreflightResponse {
+  sources: SourcePreflightResult[];
 }

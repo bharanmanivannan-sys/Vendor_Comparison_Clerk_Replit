@@ -19,7 +19,8 @@
 - [Recommendation consistency](recommendation-consistency.md) — tied-score headlines must follow an explicit narrative winner, with preference phrases matched directionally.
 - [Canonical comparison identity](canonical-comparison-identity.md) — freeze the ordered entity set before research; model rows and recommendations cannot redefine it.
 - [Runtime error logging](runtime-error-logging.md) — serialize caught errors to primitive fields before logging; Node 24 inspection can crash on complex error objects.
-- [Five-year history visibility](five-year-history-visibility.md) — hide long-term performance sections unless every option has complete, evidence-backed five-year coverage.
+- [Historical evidence gaps](five-year-history-visibility.md) — show partial time series with explicit gaps; never interpolate or forecast from incomparable observations.
+- [Permission-aware evidence acquisition](permission-aware-evidence-acquisition.md) — check robots and access restrictions before retrieval; prohibited sources cannot remain ranking-eligible.
 - [Comparison option limit](comparison-option-limit.md) — support six options end to end and reject a seventh instead of silently truncating it.
 - [PostgreSQL idle-client errors](postgres-idle-client-errors.md) — handle pool error events so transient connection termination cannot kill active comparison jobs.
 - [Compact official offer evidence](compact-offer-evidence.md) — deterministically extract verified offer metrics when official pages compress price and usage rate into one line.

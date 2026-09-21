@@ -7,9 +7,268 @@ import {
   createPublicLookup,
   normalizeRetrievedText,
   retrieveEvidenceDocuments,
+  robotsAllows,
+  type PublisherPermissionSnapshot,
 } from "./security";
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+
+const prohibitedRegistryDecision: PublisherPermissionSnapshot = {
+  domain: "blocked.example",
+  decisionOrigin: "reviewed",
+  sourceType: "publisher",
+  accessStatus: "PROHIBITED",
+  accessMethod: "public_web",
+  robotsResult: "disallowed",
+  reviewedAt: "2026-09-21T00:00:00.000Z",
+  reviewDueAt: "2026-09-22T00:00:00.000Z",
+  allowedUses: [],
+  restrictions: ["Publisher robots policy disallows automated retrieval."],
+};
+
+test("consults a fresh prohibited registry decision before any evidence network request", async () => {
+  let lookups = 0;
+  let requests = 0;
+  const [result] = await checkEvidenceUrls(["https://blocked.example/report"], {
+    lookupHost: async () => {
+      lookups += 1;
+      return publicLookup();
+    },
+    request: async () => {
+      requests += 1;
+      return { status: 200 };
+    },
+    permissionRegistry: {
+      lookup: async () => prohibitedRegistryDecision,
+      record: async () => {
+        throw new Error("A current prohibited decision must not be replaced by a network observation.");
+      },
+    },
+  });
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "robots_disallowed");
+  assert.deepEqual(result.registryDecision, prohibitedRegistryDecision);
+  assert.equal(lookups, 0);
+  assert.equal(requests, 0);
+});
+
+test("does not use an API-only registry decision for public-web retrieval", async () => {
+  let requests = 0;
+  const apiOnlyDecision: PublisherPermissionSnapshot = {
+    ...prohibitedRegistryDecision,
+    domain: "api-only.example",
+    accessStatus: "LICENSED",
+    accessMethod: "api",
+    robotsResult: "not_applicable",
+    allowedUses: ["automated_retrieval", "comparison_evidence"],
+    restrictions: ["Use the licensed API only."],
+  };
+  const [result] = await checkEvidenceUrls(["https://api-only.example/report"], {
+    lookupHost: publicLookup,
+    request: async () => {
+      requests += 1;
+      return { status: 200 };
+    },
+    permissionRegistry: {
+      lookup: async () => apiOnlyDecision,
+      record: async () => {
+        throw new Error("A method-mismatched reviewed decision must not be replaced.");
+      },
+    },
+  });
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "access_restricted");
+  assert.deepEqual(result.registryDecision, apiOnlyDecision);
+  assert.equal(requests, 0);
+});
+
+test("consults the registry before document retrieval and records a permitted observation", async () => {
+  const events: string[] = [];
+  const allowedDecision: PublisherPermissionSnapshot = {
+    ...prohibitedRegistryDecision,
+    domain: "allowed.example",
+    accessStatus: "ALLOWED",
+    robotsResult: "allowed",
+    allowedUses: ["automated_retrieval", "comparison_evidence"],
+    restrictions: [],
+  };
+  const [result] = await retrieveEvidenceDocuments(["https://allowed.example/report"], {
+    lookupHost: async () => {
+      events.push("dns");
+      return publicLookup();
+    },
+    request: async () => {
+      events.push("request");
+      return {
+        status: 200,
+        contentType: "text/plain",
+        body: Buffer.from("Published comparison evidence."),
+      };
+    },
+    permissionRegistry: {
+      lookup: async () => {
+        events.push("registry");
+        return allowedDecision;
+      },
+      record: async () => {
+        events.push("record");
+        return allowedDecision;
+      },
+    },
+  });
+  assert.ok(result.document);
+  assert.deepEqual(events, ["registry", "dns", "request", "record"]);
+});
+
+test("blocks a prohibited redirect destination before availability probing it", async () => {
+  const requested: string[] = [];
+  const [result] = await checkEvidenceUrls(["https://allowed.example/old"], {
+    lookupHost: publicLookup,
+    request: async (url) => {
+      requested.push(url.toString());
+      return { status: 302, location: "https://blocked.example/report" };
+    },
+    permissionRegistry: {
+      lookup: async (url) => new URL(url).hostname === "blocked.example"
+        ? prohibitedRegistryDecision
+        : null,
+      record: async () => null,
+    },
+  });
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "robots_disallowed");
+  assert.equal(result.finalUrl, "https://blocked.example/report");
+  assert.deepEqual(result.registryDecision, prohibitedRegistryDecision);
+  assert.deepEqual(requested, ["https://allowed.example/old"]);
+});
+
+test("blocks a prohibited redirect destination before retrieving it", async () => {
+  const requested: string[] = [];
+  const [result] = await retrieveEvidenceDocuments(["https://allowed.example/old"], {
+    lookupHost: publicLookup,
+    request: async (url) => {
+      requested.push(url.toString());
+      return {
+        status: 302,
+        location: "https://blocked.example/report",
+      };
+    },
+    permissionRegistry: {
+      lookup: async (url) => new URL(url).hostname === "blocked.example"
+        ? prohibitedRegistryDecision
+        : null,
+      record: async () => null,
+    },
+  });
+  assert.equal(result.reason, "robots_disallowed");
+  assert.deepEqual(requested, ["https://allowed.example/old"]);
+});
+
+test("keeps automated availability permissions path-scoped in both request orders", async () => {
+  const decisions: Record<string, PublisherPermissionSnapshot> = {
+    "/public": {
+      ...prohibitedRegistryDecision,
+      domain: "mixed.example",
+      decisionOrigin: "automated",
+      pathScope: "/public",
+      accessStatus: "ALLOWED",
+      robotsResult: "allowed",
+      allowedUses: ["automated_retrieval", "comparison_evidence"],
+      restrictions: [],
+    },
+    "/private": {
+      ...prohibitedRegistryDecision,
+      domain: "mixed.example",
+      decisionOrigin: "automated",
+      pathScope: "/private",
+    },
+  };
+  for (const urls of [
+    ["https://mixed.example/public", "https://mixed.example/private"],
+    ["https://mixed.example/private", "https://mixed.example/public"],
+  ]) {
+    const requested: string[] = [];
+    const results = await checkEvidenceUrls(urls, {
+      cache: new Map(),
+      lookupHost: publicLookup,
+      request: async (url) => {
+        requested.push(url.pathname);
+        return { status: 200 };
+      },
+      permissionRegistry: {
+        lookup: async (url) => decisions[new URL(url).pathname] ?? null,
+        record: async (_url, result) => decisions[new URL(result.finalUrl ?? result.url).pathname] ?? null,
+      },
+    });
+    assert.equal(results.find((result) => result.url.endsWith("/public"))?.available, true);
+    assert.equal(results.find((result) => result.url.endsWith("/private"))?.reason, "robots_disallowed");
+    assert.deepEqual(requested, ["/public"]);
+  }
+});
+
+test("keeps automated document permissions path-scoped in both request orders", async () => {
+  const publicDecision: PublisherPermissionSnapshot = {
+    ...prohibitedRegistryDecision,
+    domain: "documents.example",
+    decisionOrigin: "automated",
+    pathScope: "/public",
+    accessStatus: "ALLOWED",
+    robotsResult: "allowed",
+    allowedUses: ["automated_retrieval", "comparison_evidence"],
+    restrictions: [],
+  };
+  const privateDecision: PublisherPermissionSnapshot = {
+    ...prohibitedRegistryDecision,
+    domain: "documents.example",
+    decisionOrigin: "automated",
+    pathScope: "/private",
+  };
+  const decisions = new Map([
+    ["/public", publicDecision],
+    ["/private", privateDecision],
+  ]);
+  for (const urls of [
+    ["https://documents.example/public", "https://documents.example/private"],
+    ["https://documents.example/private", "https://documents.example/public"],
+  ]) {
+    const requested: string[] = [];
+    const results = await retrieveEvidenceDocuments(urls, {
+      cache: new Map(),
+      lookupHost: publicLookup,
+      request: async (url) => {
+        requested.push(url.pathname);
+        return {
+          status: 200,
+          contentType: "text/plain",
+          body: Buffer.from("Permitted public evidence."),
+        };
+      },
+      permissionRegistry: {
+        lookup: async (url) => decisions.get(new URL(url).pathname) ?? null,
+        record: async (_url, result) => decisions.get(new URL(result.finalUrl ?? result.url).pathname) ?? null,
+      },
+    });
+    assert.ok(results.find((result) => result.url.endsWith("/public"))?.document);
+    assert.equal(results.find((result) => result.url.endsWith("/private"))?.reason, "robots_disallowed");
+    assert.deepEqual(requested, ["/public"]);
+  }
+});
+
+test("applies the most specific robots rule for the research bot", () => {
+  const policy = `
+    User-agent: *
+    Disallow: /private
+    Allow: /private/public
+
+    User-agent: DecisionIntelResearchBot
+    Disallow: /research/internal
+    Allow: /research/internal/summary
+  `;
+  assert.equal(robotsAllows(policy, "/private/report"), true);
+  assert.equal(robotsAllows(policy, "/research/internal/raw"), false);
+  assert.equal(robotsAllows(policy, "/research/internal/summary"), true);
+  assert.equal(robotsAllows(policy, "/public"), true);
+});
 
 test("uses Node's request lookup contract for public IPv4 and IPv6 addresses", async () => {
   const resolverCalls: Array<{ hostname: string; all: boolean | undefined }> = [];

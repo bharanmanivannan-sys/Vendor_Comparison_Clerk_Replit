@@ -377,9 +377,9 @@ async function downloadComparisonPdf(comparison: any) {
   drawSection(
     'Evidence sources',
     (comparison.sourceAvailability?.length
-      ? comparison.sourceAvailability
+      ? comparison.sourceAvailability.map((source: any) => ({ ...source, contextRole: source.primaryContext ? 'Primary context' : 'Supporting evidence' }))
       : (comparison.urls || []).map((url: string) => ({ url, status: 'reachable', reason: 'Legacy report' }))),
-    [['Source', 'url'], ['Availability', 'status'], ['Reason', 'reason']],
+    [['Source', 'url'], ['Role', 'contextRole'], ['Availability', 'status'], ['Reason', 'reason']],
   );
   const pages = pdf.getPages();
   pages.forEach((page, index) => {
@@ -407,6 +407,59 @@ async function downloadComparisonPdf(comparison: any) {
   window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
 }
 
+function computeDecisionQuality(comparison: any) {
+  const evidence = (comparison.vendorScores || []).flatMap((vendor: any) => (
+    (vendor.weightedScores || []).flatMap((criterion: any) => criterion.evidence || [])
+  ));
+  const verified = evidence.filter((item: any) => item.sourceUrl && !['unverified', 'analyst_judgment'].includes(item.evidenceKind));
+  const prohibitedUrls = new Set((comparison.sourceAvailability || []).filter((source: any) => source.accessStatus === 'PROHIBITED').map((source: any) => source.url));
+  const prohibitedEvidence = verified.filter((item: any) => prohibitedUrls.has(item.sourceUrl));
+  const unknown = evidence.filter((item: any) => item.evidenceKind === 'unverified');
+  const fresh = verified.filter((item: any) => {
+    const date = new Date(item.retrievalDate || item.sourceDate || '');
+    return !Number.isNaN(date.getTime()) && Date.now() - date.getTime() <= 366 * 24 * 60 * 60 * 1000;
+  });
+  const scoredCriteria = (comparison.vendorScores || []).flatMap((vendor: any) => vendor.weightedScores || []);
+  const comparable = scoredCriteria.filter((criterion: any) => !(criterion.evidence || []).every((item: any) => (
+    item.evidenceKind === 'unverified' || item.normalizationMethod === 'insufficient_comparable_evidence_neutral'
+  )));
+  const hostCounts = verified.reduce((counts: Record<string, number>, item: any) => {
+    try {
+      const host = new URL(item.sourceUrl).hostname;
+      counts[host] = (counts[host] || 0) + 1;
+    } catch {
+      counts.unknown = (counts.unknown || 0) + 1;
+    }
+    return counts;
+  }, {});
+  const metrics = {
+    citationCoverage: evidence.length ? Math.round(verified.length / evidence.length * 100) : 0,
+    freshnessCoverage: verified.length ? Math.round(fresh.length / verified.length * 100) : 0,
+    comparableCellCoverage: scoredCriteria.length ? Math.round(comparable.length / scoredCriteria.length * 100) : 0,
+    unknownRate: evidence.length ? Math.round(unknown.length / evidence.length * 100) : 100,
+    sourceConcentration: verified.length ? Math.round(Math.max(...Object.values(hostCounts) as number[]) / verified.length * 100) : 0,
+  };
+  const reasons: string[] = [];
+  if (prohibitedEvidence.length) reasons.push('A scored claim depends on a prohibited source.');
+  if (metrics.citationCoverage < 50) reasons.push('Less than half of evidence claims are independently source-verified.');
+  if (metrics.comparableCellCoverage < 50) reasons.push('Comparable evidence covers less than half of scored cells.');
+  if (metrics.unknownRate > 25) reasons.push('Material evidence gaps remain explicit in the scorecard.');
+  if (metrics.sourceConcentration > 70) reasons.push('Evidence is concentrated in one publisher or domain.');
+  const definitiveWinner = comparison.recommendation && comparison.recommendation !== 'No exact winner';
+  const decision = prohibitedEvidence.length || (definitiveWinner && metrics.citationCoverage < 50)
+    ? 'FAIL'
+    : reasons.length ? 'PASS_WITH_WARNINGS' : 'PASS';
+  return {
+    decision,
+    metrics,
+    reasons,
+    remediation: decision === 'PASS' ? [] : [
+      'Add authorised primary, partner, licensed, or customer-supplied evidence for missing cells.',
+      'Resolve incomparable definitions before using the report for commitment.',
+    ],
+  };
+}
+
 function downloadComparisonJson(comparison: any) {
   const evidenceRecords = (comparison.vendorScores || []).flatMap((vendor: any) => (
     (vendor.weightedScores || []).flatMap((criterion: any) => (
@@ -425,6 +478,7 @@ function downloadComparisonJson(comparison: any) {
     exportedAt: new Date().toISOString(),
     description: 'Complete DecisionIntel report and source-linked score evidence for independent validation.',
     comparison,
+    decisionQuality: computeDecisionQuality(comparison),
     evidenceRecords,
     sourceUrls: comparison.urls || [],
   };
@@ -1014,21 +1068,12 @@ function StrategicFrameworkSection({ title, eyebrow, description, entries, testI
   return <section className="mt-14" data-testid={testId}><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">{eyebrow}</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">{title}</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{description}</p><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{entries.map(([key, values]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={key}><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#b94d45]">{key}</p><ul className="mt-4 space-y-3">{values.map((value, index) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={`${key}-${index}`}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#d9ef66] ring-1 ring-[#8a9640]" />{value}</li>)}</ul></article>)}</div></section>;
 }
 
-function hasSufficientFiveYearMarketHistory(vendorScores: any[]): boolean {
-  return vendorScores.length > 0 && vendorScores.every((vendor) => {
-    const history = vendor.marketHistory;
-    if (!history || history.lookbackYears !== 5 || !history.trendSummary?.trim()) return false;
-    const years = new Set(
-      (history.yearlyTrends || [])
-        .filter((entry: any) => entry.evidenceUrl && entry.productPerformance?.trim() && entry.marketPosition?.trim())
-        .map((entry: any) => entry.year),
-    );
-    return years.size === 5;
-  });
+function hasAnyMarketHistory(vendorScores: any[]): boolean {
+  return vendorScores.some((vendor) => vendor.marketHistory?.yearlyTrends?.length);
 }
 
 function MarketHistorySection({ vendorScores = [] }: { vendorScores?: any[] }) {
-  if (!hasSufficientFiveYearMarketHistory(vendorScores)) return null;
+  if (!hasAnyMarketHistory(vendorScores)) return null;
 
   return (
     <section className="mt-14" data-testid="section-market-history">
@@ -1060,6 +1105,15 @@ function MarketHistorySection({ vendorScores = [] }: { vendorScores?: any[] }) {
               <div className="mb-5">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-[#85877f] mb-1.5">5-Year Summary</p>
                 <p className="text-xs leading-5 text-[#39435a]">{history.trendSummary || 'No summary available.'}</p>
+              </div>
+              <div className="mb-5 rounded-xl border border-[#d5cebd] bg-[#f2eee4] p-3 text-[11px] leading-5 text-[#566074]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <strong className="uppercase tracking-[.08em] text-[#202840]">History data quality</strong>
+                  <span className="rounded-full bg-[#e7e2d4] px-2 py-0.5 text-[9px] font-bold uppercase text-[#715d16]">{history.dataQuality?.status || 'legacy / unassessed'}</span>
+                </div>
+                <p className="mt-1">{history.dataQuality?.comparable ? 'Comparable five-year window.' : 'Partial history is shown with gaps; missing periods are never interpolated.'} Confidence: {history.dataQuality?.confidence ?? 0}%.</p>
+                {history.dataQuality?.missingPeriods?.length > 0 && <p>Missing periods: {history.dataQuality.missingPeriods.join(', ')}.</p>}
+                <p className="mt-1 font-semibold text-[#715d16]">Forecast {history.forecast?.status || 'suppressed'}: {history.forecast?.suppressionReason || 'No decision-grade forecast was produced.'}</p>
               </div>
 
               <div className="mb-5 grid gap-3 sm:grid-cols-2">
@@ -1149,8 +1203,9 @@ function MarketHistorySection({ vendorScores = [] }: { vendorScores?: any[] }) {
                               }`}>{year.trendDirection}</span>
                             </td>
                             <td className="px-3 py-2 text-[#556075] leading-snug align-top">
-                              <p className="font-medium text-[#39435a]">{year.productPerformance}</p>
+                              <p className="font-medium text-[#39435a]">{year.gap ? `Evidence gap — ${year.gap.replaceAll('_', ' ')}` : year.productPerformance}</p>
                               <p className="mt-1 text-[#687083]">{year.marketPosition}</p>
+                              {(year.validTimeStart || year.validTimeEnd || year.observedTime) && <p className="mt-1 text-[10px] text-[#85877f]">Valid: {year.validTimeStart || 'unknown'} to {year.validTimeEnd || 'unknown'} · Observed: {year.observedTime ? new Date(year.observedTime).toLocaleDateString() : 'unknown'}</p>}
                               {year.notableEvent && year.notableEvent !== 'None' && <p className="mt-1 text-[#687083] border-l-2 border-[#e7e2d4] pl-2">{year.notableEvent}</p>}
                               {year.evidenceUrl && <a className="mt-1 inline-block text-[10px] font-bold text-[#0f766e] underline-offset-2 hover:underline" href={year.evidenceUrl} target="_blank" rel="noreferrer">Year source</a>}
                             </td>
@@ -1253,6 +1308,13 @@ type ComparisonRequest = {
   ownershipPeriodYears?: number;
 };
 
+type SourcePreflightResult = {
+  url: string;
+  state: 'accepted' | 'inaccessible' | 'stale' | 'wrong_market' | 'unrelated';
+  reason: string;
+  replacementUrl?: string;
+};
+
 type PromptTypoReview = {
   original: string;
   revised: string;
@@ -1343,6 +1405,9 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
   const [urls, setUrls] = useState<string[]>([]);
   const [urlDraft, setUrlDraft] = useState('');
   const [urlError, setUrlError] = useState('');
+  const [sourcePreflight, setSourcePreflight] = useState<SourcePreflightResult[]>([]);
+  const [sourcePreflightKey, setSourcePreflightKey] = useState('');
+  const [sourcePreflightPending, setSourcePreflightPending] = useState(false);
   const [annualDistanceKm, setAnnualDistanceKm] = useState('');
   const [ownershipPeriodYears, setOwnershipPeriodYears] = useState('');
   const isVehicleComparison = /\b(?:vehicle|car|suv|ev|electric vehicle|baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
@@ -1355,6 +1420,8 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
       if (urls.includes(value)) return;
       setUrls((current) => [...current, value]);
+      setSourcePreflight([]);
+      setSourcePreflightKey('');
       setUrlDraft('');
       setUrlError('');
     } catch {
@@ -1362,13 +1429,39 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     }
   };
 
-  const startResearch = (confirmedPrompt: string) => {
-    if (pending || confirmedPrompt.length < 8 || !market) return;
+  const startResearch = async (confirmedPrompt: string) => {
+    if (pending || sourcePreflightPending || confirmedPrompt.length < 8 || !market) return;
     const listedOptions = confirmedPrompt.match(
       /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
     )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
     if (listedOptions.length > 6) {
       setUrlError('You can compare up to 6 products or vendors at a time. Remove one or more options and try again.');
+      return;
+    }
+    const preflightKey = JSON.stringify([confirmedPrompt, market, urls]);
+    if (urls.length > 0 && sourcePreflightKey !== preflightKey) {
+      setSourcePreflightPending(true);
+      setUrlError('');
+      try {
+        const response = await customFetch<{ sources: SourcePreflightResult[] }>(
+          guest ? '/api/guest/comparisons/source-preflight' : '/api/comparisons/source-preflight',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: confirmedPrompt, market, urls }),
+          },
+        );
+        setSourcePreflight(response.sources);
+        setSourcePreflightKey(preflightKey);
+      } catch (preflightError) {
+        setUrlError(comparisonErrorMessage(preflightError));
+      } finally {
+        setSourcePreflightPending(false);
+      }
+      return;
+    }
+    if (sourcePreflight.some((source) => source.state !== 'accepted')) {
+      setUrlError('Remove or replace rejected sources before research starts.');
       return;
     }
     setUrlError('');
@@ -1390,7 +1483,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
       setTypoReview(review);
       return;
     }
-    startResearch(trimmedPrompt);
+    void startResearch(trimmedPrompt);
   };
 
   const acceptTypoCorrection = () => {
@@ -1398,7 +1491,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     const revised = typoReview.revised;
     setPrompt(revised);
     setTypoReview(null);
-    startResearch(revised);
+    void startResearch(revised);
   };
 
   const editTypoCorrection = () => {
@@ -1480,7 +1573,11 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
             id={guest ? 'guest-research-market' : 'research-market'}
             required
             value={market}
-            onChange={(event) => setMarket(event.target.value as ResearchMarketCode | '')}
+            onChange={(event) => {
+              setMarket(event.target.value as ResearchMarketCode | '');
+              setSourcePreflight([]);
+              setSourcePreflightKey('');
+            }}
             className={`focus-ring mt-3 w-full rounded-lg border px-3 py-3 text-sm font-semibold ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c9c1ae] bg-white text-[#202840]'}`}
             data-testid={guest ? 'select-guest-market' : 'select-portal-market'}
           >
@@ -1579,15 +1676,32 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           {urlError && <p className="mt-2 text-xs font-bold text-[#df7b70]">{urlError}</p>}
 
           {urls.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {urls.map((url) => (
-                <span key={url} className={`inline-flex max-w-full items-center gap-2 rounded-lg px-3 py-2 text-[11px] ${guest ? 'bg-[#202840] text-[#c9cfdb]' : 'bg-white text-[#566074]'}`}>
-                  <span className="truncate">{url}</span>
-                  <button type="button" aria-label={`Remove ${url}`} onClick={() => setUrls((current) => current.filter((item) => item !== url))}>
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
+            <div className="mt-3 grid gap-2">
+              {urls.map((url) => {
+                const validation = sourcePreflight.find((source) => source.url === url);
+                const accepted = validation?.state === 'accepted';
+                return <div key={url} className={`max-w-full rounded-lg px-3 py-2 text-[11px] ${guest ? 'bg-[#202840] text-[#c9cfdb]' : 'bg-white text-[#566074]'}`} data-testid={`source-preflight-${validation?.state ?? 'pending'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">{url}</span>
+                    {validation && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${accepted ? 'bg-[#dcefe9] text-[#0f766e]' : 'bg-[#f7dfdc] text-[#9a3e38]'}`}>{accepted ? 'Primary context' : validation.state.replace('_', ' ')}</span>}
+                    <button type="button" aria-label={`Remove ${url}`} onClick={() => {
+                      setUrls((current) => current.filter((item) => item !== url));
+                      setSourcePreflight([]);
+                      setSourcePreflightKey('');
+                    }}>
+                      <X size={12} />
+                    </button>
+                  </div>
+                  {validation && <p className={`mt-1.5 leading-4 ${accepted ? 'text-[#4d766e]' : 'text-[#b94d45]'}`}>{validation.reason}</p>}
+                  {validation && !accepted && <button type="button" className="mt-1.5 font-bold text-[#0f766e] underline" onClick={() => {
+                    setUrlDraft(url);
+                    setUrls((current) => current.filter((item) => item !== url));
+                    setSourcePreflight([]);
+                    setSourcePreflightKey('');
+                    window.setTimeout(() => document.querySelector<HTMLInputElement>('[data-testid="input-composer-url"]')?.focus(), 0);
+                  }}>Replace source</button>}
+                </div>;
+              })}
             </div>
           )}
         </div>
@@ -1598,12 +1712,18 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           </p>
           <PrimaryButton
             type="submit"
-            disabled={pending || prompt.trim().length < 8 || !market}
+            disabled={pending || sourcePreflightPending || prompt.trim().length < 8 || !market}
             className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
             testId={guest ? 'button-guest-research' : 'button-research-comparison'}
           >
-            {pending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
-            {pending ? 'Researching and scoring' : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
+            {pending || sourcePreflightPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
+            {pending
+              ? 'Researching and scoring'
+              : sourcePreflightPending
+                ? 'Validating sources'
+                : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
+                  ? 'Validate supplied sources'
+                  : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
           </PrimaryButton>
         </div>
 
@@ -1851,6 +1971,7 @@ function AnalysisPage() {
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
   if (guest && !guestComparison) return <GuestShell><div className="mx-auto max-w-3xl px-5 py-20 text-center lg:px-10"><p className="mono text-xs uppercase tracking-[.2em] text-[#b94d45]">Guest result unavailable</p><h1 className="display mt-4 text-4xl font-bold tracking-[-.05em] text-[#202840]">That comparison has expired.</h1><p className="mt-4 text-sm leading-6 text-[#687083]">Run another guest comparison or create an account to keep a private 30-day history.</p><Link href="/guest" className="focus-ring mt-7 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]" data-testid="link-guest-result-restart"><ArrowLeft size={15} /> Run another comparison</Link></div></GuestShell>;
   const comparison = (guest ? guestComparison : data) as Comparison;
+  const decisionQuality = computeDecisionQuality(comparison);
   const exportPdf = async () => {
     if (pdfStatus === 'exporting') return;
     setPdfStatus('exporting');
@@ -1904,7 +2025,16 @@ function AnalysisPage() {
     setLocation(guest ? '/guest' : '/user-portal');
   };
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-8 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]"><p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">Recommended</p><div className="mt-5 flex items-center justify-between gap-4"><div><p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{comparison.recommendation}</p><p className="mt-2 text-xs text-[#a8b0c2]">Best overall fit</p></div><ScoreRing score={Math.round(comparison.score)} /></div><div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{comparison.recommendationReason}</div></div></div>
-        <ExecutiveDecisionBrief comparison={comparison} />
+         <ExecutiveDecisionBrief comparison={comparison} />
+         <section className={`mt-6 rounded-2xl border p-5 sm:p-6 ${decisionQuality.decision === 'PASS' ? 'border-[#9ebbb0] bg-[#dcefe9]' : decisionQuality.decision === 'FAIL' ? 'border-[#d6a39f] bg-[#f7dfdc]' : 'border-[#d7c47b] bg-[#f5edc8]'}`} data-testid="section-decision-quality-gate">
+           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+             <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#566074]">Release quality gate</p><h2 className="display mt-2 text-2xl font-bold text-[#202840]">{decisionQuality.decision.replaceAll('_', ' ')}</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#566074]">{decisionQuality.reasons.length ? decisionQuality.reasons.join(' ') : 'Evidence coverage, freshness, comparability, and access governance meet the release threshold.'}</p></div>
+             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+               {Object.entries(decisionQuality.metrics).slice(0, 4).map(([label, value]) => <div className="rounded-xl border border-black/10 bg-[#f8f4e8] px-3 py-2 text-center" key={label}><p className="mono text-[8px] uppercase tracking-[.08em] text-[#7b817e]">{label.replace(/([A-Z])/g, ' $1')}</p><p className="mt-1 text-sm font-bold text-[#202840]">{value}%</p></div>)}
+             </div>
+           </div>
+           {decisionQuality.decision !== 'PASS' && <p className="mt-4 border-t border-black/10 pt-3 text-[11px] leading-5 text-[#566074]"><strong>Remediation:</strong> {decisionQuality.remediation.join(' ')}</p>}
+         </section>
         <section className="mt-6 rounded-2xl border border-[#9ebbb0] bg-[#dcefe9] p-5 sm:p-6" data-testid="tile-evidence-dataset">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex gap-4">
@@ -1971,7 +2101,7 @@ function SourceAvailabilityList({ comparison }: { comparison: Comparison }) {
     unavailable: 'border-[#d6a39f] bg-[#f7dfdc] text-[#9a3e38]',
     superseded: 'border-[#b9b6d8] bg-[#e8e6f4] text-[#514d88]',
   };
-  return <section className="mt-14 border-t border-[#d9d1bf] pt-8" data-testid="section-source-availability"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Sources</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Citation availability</h2><div className="mt-4 grid gap-3">{sources.map((source: any) => { const verified = source.status === 'reachable'; return <article className={`rounded-xl border p-4 ${verified ? 'border-[#9ebbb0] bg-[#f8f4e8]' : 'border-[#d8cfc0] bg-[#f2eee4]'}`} key={`${source.url}-${source.status}`} data-testid={`source-${source.status}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><a className={`focus-ring inline-flex min-w-0 items-center gap-2 break-all text-xs ${verified ? 'font-bold text-[#0f766e] hover:underline' : 'text-[#566074] hover:text-[#202840]'}`} href={source.replacementUrl || source.url} target="_blank" rel="noreferrer" data-testid={`link-source-${source.url}`}><ExternalLink size={13} className="shrink-0" />{source.url}</a><span className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] ${styles[source.status] || styles.unavailable}`}>{String(source.status).replace('_', ' ')}</span></div><p className="mt-2 text-[11px] leading-5 text-[#687083]">{source.reason}</p>{source.replacementUrl && <p className="mt-1 text-[11px] text-[#514d88]">Current location: {source.replacementUrl}</p>}</article>; })}</div></section>;
+  return <section className="mt-14 border-t border-[#d9d1bf] pt-8" data-testid="section-source-availability"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Sources</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Citation availability</h2><div className="mt-4 grid gap-3">{sources.map((source: any) => { const verified = source.status === 'reachable'; return <article className={`rounded-xl border p-4 ${verified ? 'border-[#9ebbb0] bg-[#f8f4e8]' : 'border-[#d8cfc0] bg-[#f2eee4]'}`} key={`${source.url}-${source.status}`} data-testid={`source-${source.status}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><a className={`focus-ring inline-flex min-w-0 items-center gap-2 break-all text-xs ${verified ? 'font-bold text-[#0f766e] hover:underline' : 'text-[#566074] hover:text-[#202840]'}`} href={source.replacementUrl || source.url} target="_blank" rel="noreferrer" data-testid={`link-source-${source.url}`}><ExternalLink size={13} className="shrink-0" />{source.url}</a><div className="flex shrink-0 gap-2">{source.primaryContext && <span className="rounded-full border border-[#9ebbb0] bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">Primary context</span>}<span className={`rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] ${styles[source.status] || styles.unavailable}`}>{String(source.status).replace('_', ' ')}</span></div></div><p className="mt-2 text-[11px] leading-5 text-[#687083]">{source.reason}</p>{source.replacementUrl && <p className="mt-1 text-[11px] text-[#514d88]">Current location: {source.replacementUrl}</p>}</article>; })}</div></section>;
 }
 
 function AnalysisTable({ title, rows = [] }: { title: string; rows?: any[] }) {

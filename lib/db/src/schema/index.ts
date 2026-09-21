@@ -27,3 +27,4 @@ export * from "./idempotency";
 export * from "./usage";
 export * from "./audit";
 export * from "./visitor-sessions";
+export * from "./source-registry";

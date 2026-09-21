@@ -14,20 +14,14 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { ReportSourceAccessMethod } from './reportSourceAccessMethod';
-import type { ReportSourceAccessStatus } from './reportSourceAccessStatus';
-import type { ReportSourceStatus } from './reportSourceStatus';
-import type { SourceRegistryDecision } from './sourceRegistryDecision';
 
-export interface ReportSource {
-  url: string;
-  status: ReportSourceStatus;
-  reason: string;
-  replacementUrl?: string;
-  accessStatus?: ReportSourceAccessStatus;
-  accessMethod?: ReportSourceAccessMethod;
-  checkedAt?: Date;
-  primaryContext?: boolean;
-  restrictions?: string[];
-  registryDecision?: SourceRegistryDecision;
-}
+export type SourceRegistryDecisionAccessMethod = typeof SourceRegistryDecisionAccessMethod[keyof typeof SourceRegistryDecisionAccessMethod];
+
+
+export const SourceRegistryDecisionAccessMethod = {
+  public_web: 'public_web',
+  customer_url: 'customer_url',
+  api: 'api',
+  feed: 'feed',
+  upload: 'upload',
+} as const;

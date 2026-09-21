@@ -36,9 +36,79 @@ import {
 } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
+import { preflightSourceUrls } from "../../services/sourcePreflight";
 import { persistComparisonAtomically, updateComparisonWithEvidence } from "../../services/comparisonPersistence";
 
 const router: IRouter = Router();
+const guestPreflightWindows = new Map<string, { count: number; resetAt: number }>();
+const sourcePreflightApprovals = new Map<string, number>();
+const SOURCE_PREFLIGHT_APPROVAL_MS = 5 * 60_000;
+
+function sourcePreflightKey(owner: string, input: { prompt: string; market?: string; urls?: string[] }): string {
+  return JSON.stringify([owner, input.prompt, input.market ?? "", input.urls ?? []]);
+}
+
+function hasCurrentSourcePreflight(
+  owner: string,
+  input: { prompt: string; market?: string; urls?: string[] },
+): boolean {
+  if (!input.urls?.length) return true;
+  const key = sourcePreflightKey(owner, input);
+  const expiresAt = sourcePreflightApprovals.get(key) ?? 0;
+  if (expiresAt <= Date.now()) {
+    sourcePreflightApprovals.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function requireCurrentSourcePreflight(
+  owner: string,
+  input: { prompt: string; market?: string; urls?: string[] },
+  res: Response,
+): boolean {
+  if (hasCurrentSourcePreflight(owner, input)) return true;
+  sendError(
+    res,
+    400,
+    "source_preflight_required",
+    "Validate every supplied source for this exact comparison and remove or replace rejected pages before research starts.",
+  );
+  return false;
+}
+async function sendSourcePreflight(req: Request, res: Response, owner: string): Promise<void> {
+  const candidate = req.body as { prompt?: unknown; market?: unknown; urls?: unknown };
+  const prompt = typeof candidate?.prompt === "string" ? candidate.prompt : "";
+  const market = typeof candidate?.market === "string" ? candidate.market : "";
+  const urls = Array.isArray(candidate?.urls) && candidate.urls.every((url) => typeof url === "string")
+    ? candidate.urls as string[]
+    : [];
+  if (
+    prompt.length < 8
+    || prompt.length > 4_000
+    || !["IN", "AU", "US", "GB"].includes(market)
+    || urls.length < 1
+    || urls.length > 12
+    || !isSafeUserInput(prompt)
+    || !validateHttpUrls(urls)
+  ) {
+    sendError(res, 400, "invalid_source_preflight", "Provide a valid comparison, market, and HTTP or HTTPS source URLs.");
+    return;
+  }
+  const sources = await preflightSourceUrls({
+    prompt,
+    market,
+    urls,
+    vendors: parsePrompt(prompt).vendors,
+  });
+  if (sources.every((source) => source.state === "accepted")) {
+    sourcePreflightApprovals.set(
+      sourcePreflightKey(owner, { prompt, market, urls }),
+      Date.now() + SOURCE_PREFLIGHT_APPROVAL_MS,
+    );
+  }
+  res.json({ sources });
+}
 
 type AuthedRequest = Request & { userId?: string };
 const guestWindows = new Map<string, { count: number; resetAt: number }>();
@@ -305,6 +375,22 @@ function allowGuestRequest(req: Request, res: Response): boolean {
   return true;
 }
 
+function allowGuestPreflight(req: Request, res: Response, owner?: string): boolean {
+  const now = Date.now();
+  const key = owner ?? req.ip ?? req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() ?? "unknown";
+  const current = guestPreflightWindows.get(key);
+  if (!current || current.resetAt <= now) {
+    guestPreflightWindows.set(key, { count: 1, resetAt: now + GUEST_WINDOW_MS });
+    return true;
+  }
+  if (current.count >= 30) {
+    sendError(res, 429, "source_preflight_rate_limited", "Source validation is temporarily limited. Try again shortly.");
+    return false;
+  }
+  current.count += 1;
+  return true;
+}
+
 export async function validateComparisonInput(
   body: unknown,
   parseWithIntent = parsePromptWithIntent,
@@ -441,6 +527,11 @@ router.post("/guest/comparisons/parse", async (req: Request, res): Promise<void>
   res.json(ParseGuestComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
 });
 
+router.post("/guest/comparisons/source-preflight", async (req: Request, res): Promise<void> => {
+  if (!allowGuestPreflight(req, res)) return;
+  await sendSourcePreflight(req, res, `guest:${requestOwner(req)}`);
+});
+
 router.post("/guest/comparison-jobs", async (req: Request, res): Promise<void> => {
   if (!allowGuestRequest(req, res)) return;
   const validated = await validateComparisonInput(req.body);
@@ -449,6 +540,7 @@ router.post("/guest/comparison-jobs", async (req: Request, res): Promise<void> =
     return;
   }
   const owner = `guest:${requestOwner(req)}`;
+  if (!requireCurrentSourcePreflight(owner, validated.input, res)) return;
   const jobId = startComparisonJob({
     owner,
     input: validated.input,
@@ -483,6 +575,7 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
     sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
     return;
   }
+  if (!requireCurrentSourcePreflight(`guest:${requestOwner(req)}`, validated.input, res)) return;
   const urls = [...(validated.input.urls ?? [])];
   let analysis: AnalysisPayload;
   try {
@@ -520,6 +613,12 @@ router.post("/comparisons/parse", requireAuth, async (req: AuthedRequest, res): 
   res.json(ParseComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
 });
 
+router.post("/comparisons/source-preflight", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
+  const owner = `user:${req.userId as string}`;
+  if (!allowGuestPreflight(req, res, owner)) return;
+  await sendSourcePreflight(req, res, owner);
+});
+
 router.post("/comparison-jobs", requireAuth, async (req: AuthedRequest, res): Promise<void> => {
   const validated = await validateComparisonInput(req.body);
   if ("error" in validated) {
@@ -527,6 +626,7 @@ router.post("/comparison-jobs", requireAuth, async (req: AuthedRequest, res): Pr
     return;
   }
   const userId = req.userId as string;
+  if (!requireCurrentSourcePreflight(`user:${userId}`, validated.input, res)) return;
   const jobId = startComparisonJob({
     owner: `user:${userId}`,
     userId,
@@ -562,6 +662,7 @@ router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promis
     return;
   }
   const { input, vendors, criteria } = validated;
+  if (!requireCurrentSourcePreflight(`user:${req.userId as string}`, input, res)) return;
   const urls = [...(input.urls ?? [])];
   let analysis: AnalysisPayload;
   try {

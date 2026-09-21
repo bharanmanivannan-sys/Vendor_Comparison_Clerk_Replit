@@ -61,6 +61,8 @@ import type {
   RegenerateComparisonInput,
   RevokeTenantApiKeyHeaders,
   RotateTenantApiKeyHeaders,
+  SourcePreflightInput,
+  SourcePreflightResponse,
   Tenant,
   UnauthorizedResponse,
   UsageSummary
@@ -663,6 +665,94 @@ export const useParseComparisonPrompt = <TError = ErrorType<LegacyErrorResponse>
       return useMutation(getParseComparisonPromptMutationOptions(options));
     }
 
+export const getPreflightComparisonSourcesUrl = () => {
+
+
+
+
+  return `/api/comparisons/source-preflight`
+}
+
+/**
+ * @summary Validate supplied sources before authenticated research
+ */
+export const preflightComparisonSources = async (sourcePreflightInput: SourcePreflightInput, options?: Parameters<typeof customFetch>[1]): Promise<SourcePreflightResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<SourcePreflightResponse>(getPreflightComparisonSourcesUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(sourcePreflightInput)
+  }
+);}
+
+
+
+
+
+export const getPreflightComparisonSourcesMutationKey = () => ['preflightComparisonSources'] as const;
+
+export const getPreflightComparisonSourcesMutationOptions = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightComparisonSources>>, TError,PreflightComparisonSourcesMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof preflightComparisonSources>>, TError,PreflightComparisonSourcesMutationVariables, TContext> => {
+
+const mutationKey = getPreflightComparisonSourcesMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof preflightComparisonSources>>, PreflightComparisonSourcesMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  preflightComparisonSources(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreflightComparisonSourcesMutationResult = NonNullable<Awaited<ReturnType<typeof preflightComparisonSources>>>
+    export type PreflightComparisonSourcesMutationBody = BodyType<SourcePreflightInput>
+    export type PreflightComparisonSourcesMutationError = ErrorType<LegacyErrorResponse>
+    export type PreflightComparisonSourcesMutationVariables = {data: BodyType<SourcePreflightInput>}
+
+    /**
+ * @summary Validate supplied sources before authenticated research
+ */
+export const usePreflightComparisonSources = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightComparisonSources>>, TError,PreflightComparisonSourcesMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof preflightComparisonSources>>,
+        TError,
+        PreflightComparisonSourcesMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPreflightComparisonSourcesMutationOptions(options));
+    }
+
 export const getParseGuestComparisonPromptUrl = () => {
 
 
@@ -749,6 +839,94 @@ export const useParseGuestComparisonPrompt = <TError = ErrorType<LegacyErrorResp
         TContext
       > => {
       return useMutation(getParseGuestComparisonPromptMutationOptions(options));
+    }
+
+export const getPreflightGuestComparisonSourcesUrl = () => {
+
+
+
+
+  return `/api/guest/comparisons/source-preflight`
+}
+
+/**
+ * @summary Validate supplied sources before guest research
+ */
+export const preflightGuestComparisonSources = async (sourcePreflightInput: SourcePreflightInput, options?: Parameters<typeof customFetch>[1]): Promise<SourcePreflightResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<SourcePreflightResponse>(getPreflightGuestComparisonSourcesUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(sourcePreflightInput)
+  }
+);}
+
+
+
+
+
+export const getPreflightGuestComparisonSourcesMutationKey = () => ['preflightGuestComparisonSources'] as const;
+
+export const getPreflightGuestComparisonSourcesMutationOptions = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightGuestComparisonSources>>, TError,PreflightGuestComparisonSourcesMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof preflightGuestComparisonSources>>, TError,PreflightGuestComparisonSourcesMutationVariables, TContext> => {
+
+const mutationKey = getPreflightGuestComparisonSourcesMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof preflightGuestComparisonSources>>, PreflightGuestComparisonSourcesMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  preflightGuestComparisonSources(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreflightGuestComparisonSourcesMutationResult = NonNullable<Awaited<ReturnType<typeof preflightGuestComparisonSources>>>
+    export type PreflightGuestComparisonSourcesMutationBody = BodyType<SourcePreflightInput>
+    export type PreflightGuestComparisonSourcesMutationError = ErrorType<LegacyErrorResponse>
+    export type PreflightGuestComparisonSourcesMutationVariables = {data: BodyType<SourcePreflightInput>}
+
+    /**
+ * @summary Validate supplied sources before guest research
+ */
+export const usePreflightGuestComparisonSources = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightGuestComparisonSources>>, TError,PreflightGuestComparisonSourcesMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof preflightGuestComparisonSources>>,
+        TError,
+        PreflightGuestComparisonSourcesMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPreflightGuestComparisonSourcesMutationOptions(options));
     }
 
 export const getCreateComparisonJobUrl = () => {

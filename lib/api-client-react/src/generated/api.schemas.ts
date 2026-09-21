@@ -183,6 +183,52 @@ export interface ComparisonPromptInput {
   prompt: string;
 }
 
+export type SourcePreflightInputMarket = typeof SourcePreflightInputMarket[keyof typeof SourcePreflightInputMarket];
+
+
+export const SourcePreflightInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
+
+export interface SourcePreflightInput {
+  /**
+     * @minLength 8
+     * @maxLength 4000
+     */
+  prompt: string;
+  market: SourcePreflightInputMarket;
+  /**
+     * @minItems 1
+     * @maxItems 12
+     */
+  urls: string[];
+}
+
+export type SourcePreflightResultState = typeof SourcePreflightResultState[keyof typeof SourcePreflightResultState];
+
+
+export const SourcePreflightResultState = {
+  accepted: 'accepted',
+  inaccessible: 'inaccessible',
+  stale: 'stale',
+  wrong_market: 'wrong_market',
+  unrelated: 'unrelated',
+} as const;
+
+export interface SourcePreflightResult {
+  url: string;
+  state: SourcePreflightResultState;
+  reason: string;
+  replacementUrl?: string;
+}
+
+export interface SourcePreflightResponse {
+  sources: SourcePreflightResult[];
+}
+
 export interface ComparisonContext {
   valid: boolean;
   segment: string;
@@ -395,11 +441,106 @@ export const ReportSourceStatus = {
   superseded: 'superseded',
 } as const;
 
+export type ReportSourceAccessStatus = typeof ReportSourceAccessStatus[keyof typeof ReportSourceAccessStatus];
+
+
+export const ReportSourceAccessStatus = {
+  ALLOWED: 'ALLOWED',
+  LICENSED: 'LICENSED',
+  CUSTOMER_SUPPLIED: 'CUSTOMER_SUPPLIED',
+  ACCESS_UNAVAILABLE: 'ACCESS_UNAVAILABLE',
+  PROHIBITED: 'PROHIBITED',
+} as const;
+
+export type ReportSourceAccessMethod = typeof ReportSourceAccessMethod[keyof typeof ReportSourceAccessMethod];
+
+
+export const ReportSourceAccessMethod = {
+  public_web: 'public_web',
+  customer_url: 'customer_url',
+  api: 'api',
+  feed: 'feed',
+  upload: 'upload',
+} as const;
+
+export type SourceRegistryDecisionDecisionOrigin = typeof SourceRegistryDecisionDecisionOrigin[keyof typeof SourceRegistryDecisionDecisionOrigin];
+
+
+export const SourceRegistryDecisionDecisionOrigin = {
+  reviewed: 'reviewed',
+  automated: 'automated',
+} as const;
+
+export type SourceRegistryDecisionSourceType = typeof SourceRegistryDecisionSourceType[keyof typeof SourceRegistryDecisionSourceType];
+
+
+export const SourceRegistryDecisionSourceType = {
+  publisher: 'publisher',
+  official: 'official',
+  regulator: 'regulator',
+  standards: 'standards',
+  customer: 'customer',
+} as const;
+
+export type SourceRegistryDecisionAccessStatus = typeof SourceRegistryDecisionAccessStatus[keyof typeof SourceRegistryDecisionAccessStatus];
+
+
+export const SourceRegistryDecisionAccessStatus = {
+  ALLOWED: 'ALLOWED',
+  LICENSED: 'LICENSED',
+  CUSTOMER_SUPPLIED: 'CUSTOMER_SUPPLIED',
+  ACCESS_UNAVAILABLE: 'ACCESS_UNAVAILABLE',
+  PROHIBITED: 'PROHIBITED',
+} as const;
+
+export type SourceRegistryDecisionAccessMethod = typeof SourceRegistryDecisionAccessMethod[keyof typeof SourceRegistryDecisionAccessMethod];
+
+
+export const SourceRegistryDecisionAccessMethod = {
+  public_web: 'public_web',
+  customer_url: 'customer_url',
+  api: 'api',
+  feed: 'feed',
+  upload: 'upload',
+} as const;
+
+export type SourceRegistryDecisionRobotsResult = typeof SourceRegistryDecisionRobotsResult[keyof typeof SourceRegistryDecisionRobotsResult];
+
+
+export const SourceRegistryDecisionRobotsResult = {
+  allowed: 'allowed',
+  disallowed: 'disallowed',
+  unavailable: 'unavailable',
+  not_applicable: 'not_applicable',
+} as const;
+
+export interface SourceRegistryDecision {
+  domain: string;
+  decisionOrigin: SourceRegistryDecisionDecisionOrigin;
+  pathScope?: string;
+  sourceType: SourceRegistryDecisionSourceType;
+  accessStatus: SourceRegistryDecisionAccessStatus;
+  accessMethod: SourceRegistryDecisionAccessMethod;
+  robotsResult: SourceRegistryDecisionRobotsResult;
+  licenceOrTermsNotes?: string;
+  owner?: string;
+  reviewedAt: string;
+  reviewDueAt: string;
+  allowedUses: string[];
+  restrictions: string[];
+}
+
 export interface ReportSource {
   url: string;
   status: ReportSourceStatus;
   reason: string;
   replacementUrl?: string;
+  accessStatus?: ReportSourceAccessStatus;
+  accessMethod?: ReportSourceAccessMethod;
+  checkedAt?: string;
+  primaryContext?: boolean;
+  restrictions?: string[];
+  registryDecision?: SourceRegistryDecision;
 }
 
 /**

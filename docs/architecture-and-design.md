@@ -1,7 +1,7 @@
 # DecisionIntel Architecture and Design
 
 **Document status:** As-built reference  
-**Last updated:** 20 September 2026  
+**Last updated:** 21 September 2026  
 **System:** DecisionIntel vendor and product comparison platform
 
 ## 1. Purpose
@@ -14,7 +14,7 @@ This document describes the current implementation, its runtime boundaries, majo
 
 The implementation is designed around these goals:
 
-1. **Ground recommendations in public evidence.** Material claims and scores should be traceable to exact source URLs.
+1. **Ground recommendations in permitted evidence.** Material claims and scores must be traceable to directly validated customer-supplied, structured, licensed, official, syndicated, or permission-aware public sources.
 2. **Preserve comparison identity.** The entities accepted from the request remain the canonical ranked set throughout research, scoring, tables, and recommendations.
 3. **Keep long AI work off the browser request.** Browser comparison requests use submit-and-poll jobs rather than one long HTTP connection.
 4. **Report measured progress.** Progress comes from backend pipeline boundaries, not elapsed-time estimates.
@@ -24,6 +24,9 @@ The implementation is designed around these goals:
 8. **Keep scoring reproducible.** Weighted evidence contributions are normalized and reconciled with persisted totals.
 9. **Bound launch-market claims.** MVP research is limited to India, Australia, the United States, and the United Kingdom rather than implying reliable worldwide local coverage.
 10. **Target a sub-two-minute interactive result.** Verified portfolio paths avoid redundant AI stages and expose a 120-second service objective while preserving evidence gates.
+11. **Treat access restrictions as evidence gaps.** Robots policy, authentication, paywalls, publisher controls, and rate limits stop acquisition rather than trigger a workaround.
+12. **Release only decision-grade conclusions.** Every report exposes evidence-quality metrics and a `PASS`, `PASS_WITH_WARNINGS`, or `FAIL` decision; failed gates suppress definitive ranking.
+13. **Expose historical uncertainty.** Partial time series remain visible with explicit gaps and forecast suppression rather than being hidden or interpolated.
 
 ## 3. System Context
 
@@ -37,7 +40,7 @@ flowchart LR
     Clerk[Clerk identity]
     OpenAI[OpenAI research and synthesis APIs]
     Retrieval[Deterministic document retriever]
-    WebSources[Public web and official sources]
+    WebSources[Permitted source portfolio]
     Postgres[(PostgreSQL)]
 
     Guest --> Web
@@ -59,7 +62,7 @@ flowchart LR
 |---|---|
 | Clerk | Browser authentication, session validation, and user identity |
 | OpenAI | Intent extraction, web-assisted product research, structured analysis, and repair passes |
-| Public web sources | Official product pages, regulators, standards bodies, filings, and reputable local evidence |
+| Permitted source portfolio | Customer-supplied evidence, official sources, regulators, standards bodies, licensed data, authorised feeds, and permission-aware public evidence |
 | PostgreSQL | Persistent comparisons, evidence, users, tenants, API keys, usage, idempotency records, and visitor sessions |
 | Replit workflows and artifact routing | Development runtime, path-based preview routing, and deployment execution |
 
@@ -127,10 +130,13 @@ The frontend is responsible for:
 
 - Guest and authenticated navigation.
 - Prompt and optional source URL collection.
+- Per-source pre-research validation, rejection explanations, and remove or replace controls.
 - Asynchronous comparison job submission and polling.
 - Rendering measured backend progress.
 - Dashboard, history, and comparison detail views.
 - PDF and JSON export.
+- Release-quality gate rendering and remediation guidance.
+- Historical data-quality, missing-period, and forecast-suppression states.
 - Clerk sign-in and sign-up flows.
 - Session-scoped guest result and draft handling.
 
@@ -156,8 +162,15 @@ sequenceDiagram
     participant J as Background job
 
     U->>W: Submit prompt and optional URLs
+    alt Supplied URLs have not been approved for this exact request
+      W->>A: POST /comparisons/source-preflight
+      A->>A: Check access, freshness, market, and entity relevance
+      A-->>W: Per-source accepted or rejected states
+      W-->>U: Show reasons and remove or replace controls
+    end
+    U->>W: Confirm accepted source set
     W->>A: POST /comparison-jobs
-    A->>A: Validate and parse request
+    A->>A: Validate request and require exact current source approval
     A->>J: Register job and start work
     A-->>W: 202 jobId, entities, subject, initial stage
     loop Until complete or failed
@@ -181,6 +194,8 @@ returns server-measured `elapsedMs`. The current target is 120 seconds. This is
 an operational service objective, not an estimated progress percentage, hard
 deadline, or permission to bypass evidence validation.
 
+Supplied-source preflight is intentionally separate from prompt parsing and research execution. The browser submits the exact prompt, selected market, and ordered URL set for validation. Rejected pages stay in the composer with a specific state and explanation until removed or replaced. A successful preflight does not itself start research; the user submits again after reviewing the accepted set.
+
 ## 6. API Design
 
 ### 6.1 Middleware and route boundaries
@@ -201,7 +216,7 @@ Primary route groups include:
 |---|---|
 | Health | Runtime health checks |
 | Guest comparison routes | Rate-limited prompt parsing, job creation, polling, and guest results |
-| Authenticated comparison routes | Dashboard, history, persistent comparisons, jobs, and deletion |
+| Authenticated comparison routes | Dashboard, history, source preflight, persistent comparisons, jobs, and deletion |
 | Commercial `/v1` routes | Tenant-scoped API-key access, quota, usage, and idempotent comparison requests |
 | Management routes | Tenant and commercial account operations |
 
@@ -228,6 +243,8 @@ Browser comparison jobs are maintained in an in-process map keyed by UUID. Every
 - Creation timestamp.
 
 Jobs are owner-bound. An authenticated user cannot poll another user’s job, and guest ownership is tied to the server-derived guest request owner. Expired jobs are pruned after the configured retention window.
+
+When URLs are supplied, every guest and authenticated job or synchronous comparison endpoint requires an unexpired approval for the exact owner, prompt, market, and ordered URL set. Approval is recorded only when every source is accepted. Changing any request component, retaining a rejected source, or allowing the approval to expire fails closed before a job is registered. This API boundary prevents stale clients and direct callers from bypassing browser validation.
 
 ### 7.2 State machine
 
@@ -287,7 +304,8 @@ flowchart TD
     Shortlist[Discover concrete shortlist]
     Research[Web-assisted structured research]
     Repair[Conditional structured-output repair]
-    URLs[Rank and availability-check candidate URLs]
+    Governance[Classify permission, access method, and restrictions]
+    URLs[Rank and availability-check permitted URLs]
     Retrieve[Retrieve bounded visible document text]
     Verify[Verify controlled metrics and provenance]
     Normalize[Calculate deterministic comparable scores]
@@ -304,7 +322,8 @@ flowchart TD
     Portfolio --> Research
     Shortlist --> Research
     Research --> Repair
-    Repair --> URLs
+    Repair --> Governance
+    Governance --> URLs
     URLs --> Retrieve
     Retrieve --> Verify
     Verify --> Normalize
@@ -352,15 +371,16 @@ reattached after final synthesis so narrative generation cannot remove them.
 Evidence readiness is described as a decision constraint, never as proof that a
 selected model is universally the manufacturer’s best product.
 
-### 8.3 Evidence policy
+### 8.3 Evidence and source-portfolio policy
 
 The pipeline prioritizes:
 
-1. Official local product, pricing, warranty, subscription, finance, and support pages.
-2. Government, regulator, standards, and audited sources.
-3. Reputable local independent sources with identifiable methodology.
+1. Customer-supplied documents and URLs with retained lineage.
+2. Structured, licensed, official, regulatory, standards, audited, and first-party sources.
+3. Authorised APIs, feeds, and publisher syndication.
+4. Permission-aware public sources with identifiable methodology.
 
-Market-specific terms must not be replaced with another country’s pricing or product conditions. Non-official fallback evidence is freshness-limited to the trailing year. Search snippets, anonymous posts, affiliate pages, unsupported AI summaries, irrelevant pages, and outdated resources are not authoritative evidence. User-provided URLs are candidates, not automatically trusted evidence.
+Market-specific terms must not be replaced with another country’s pricing or product conditions. Non-official fallback evidence is freshness-limited to the trailing year. Search results may identify candidate sources, but claims must come from directly validated permitted documents. Search snippets, anonymous posts, affiliate pages, unsupported AI summaries, irrelevant pages, and outdated resources are not authoritative evidence. User-provided URLs are first-class candidates with retained lineage, but are not automatically trusted evidence.
 
 ### 8.4 Source validation
 
@@ -371,13 +391,34 @@ Collected URLs are:
 - Reserved so every named option has a product-specific retrieval candidate and the corpus retains a shared regulator, standards, or market-context source when available.
 - Filtered for the requested market.
 - Checked with absolute wall-clock deadlines and bounded redirects.
+- Checked against publisher robots policy before availability probing or content retrieval.
+- Requested with an identifiable DecisionIntel research user agent.
 - Rejected when they resolve to private or loopback destinations.
-- Classified as reachable, referenceable, restricted, or unavailable.
+- Classified with `ALLOWED`, `LICENSED`, `CUSTOMER_SUPPLIED`, `ACCESS_UNAVAILABLE`, or `PROHIBITED` access status and an acquisition method.
+- Excluded from evidence and ranking when robots-disallowed, authenticated, paywalled, rate-limited, prohibited, or otherwise unavailable.
 - Retrieved with a text/HTML/JSON MIME allowlist and a 512 KiB body limit.
 - Revalidated after every redirect and before returning a cached redirect target.
 - Stored only in a bounded, expiring in-memory document cache keyed by canonical URL. Redirect origins and their safe final target share one cached document identity, while the final destination is revalidated before reuse.
 
+User-supplied URLs pass through a pre-research classification stage before entering this portfolio:
+
+- `accepted` when the page is reachable, readable, current, market-compatible, and relevant to at least one canonical compared entity.
+- `inaccessible` when permission, network safety, timeout, redirect stability, authentication, rate limiting, or readable-content checks fail.
+- `stale` when URL or retrieved document metadata identifies material outside the current comparison window.
+- `wrong_market` when explicit host, currency, or market signals conflict with the selected market.
+- `unrelated` when retrieved visible text does not name a canonical compared entity or a distinctive entity alias.
+
+Entity matching preserves meaningful short brands and acronyms while excluding generic descriptors such as “model,” “service,” “platform,” or “cloud” as standalone relevance evidence. Preflight batches and document retrieval are concurrency-bounded, and both guest and authenticated callers are rate-limited.
+
+Accepted supplied pages retain `CUSTOMER_SUPPLIED` acquisition lineage and a `primaryContext` marker in persisted report source metadata. That marker is visible in completed reports and PDF evidence tables. It indicates that the user selected the page as decision context; it does not bypass claim-level evidence verification.
+
+Before DNS, availability probing, or retrieval, the runtime consults the persistent domain-level source registry. A current prohibited or access-unavailable decision stops network activity. A current allowed, licensed, or customer-supplied decision can authorise the configured collection method until its review date; expired decisions are checked again. Automated observations use short review windows, while reviewed licence and customer decisions retain their owner and terms context.
+
+The registry records domain, source type, access status and method, robots result, licence or terms notes, policy owner, review dates, allowed uses, and restrictions. Each report source retains an immutable snapshot of the governing registry decision so a later policy update does not rewrite the report's audit history. Legacy reports and clients remain valid because registry metadata is optional.
+
 HTML is structurally parsed. Script, style, template, navigation, footer, form, iframe, hidden, and `aria-hidden` content is removed before normalization. Normalized visible text is hashed with SHA-256. Source availability alone does not make a claim scoreable: a quantitative claim must also match retrieved visible text and carry its document hash and exact text offsets.
+
+Restrictions are data-availability conditions, not obstacles. The system never bypasses CAPTCHAs, paywalls, authentication, robots.txt, IP blocks, API limits, anti-bot controls, or publisher restrictions. An unavailable source remains in the report only as an auditable access record and cannot support a score. Recovery guidance asks for an authorised API, feed, licensed source, or customer-supplied document.
 
 ### 8.5 Scoring model
 
@@ -405,7 +446,23 @@ Normalization distinguishes:
 
 Persisted contributions must reconcile with reported score totals. Recommendation text is reconciled with the scorecard so tied scores and narrative winners do not contradict each other.
 
-### 8.6 Domain-specific controls
+### 8.6 Release quality gate
+
+The report workspace calculates and exports a machine-readable release assessment:
+
+- `PASS` when evidence coverage, freshness, comparability, access governance, and concentration meet the decision threshold.
+- `PASS_WITH_WARNINGS` when the report remains useful but material uncertainty or concentration requires explicit caution.
+- `FAIL` when a prohibited source affects scoring or a definitive recommendation lacks minimum verified coverage.
+
+The gate reports citation coverage, freshness coverage, comparable-cell coverage, unknown rate, source concentration, reasons, and remediation. A failed gate can still return an evidence-limited brief, but it must not be treated as a decision-grade winner.
+
+### 8.7 Historical observations and forecasting
+
+Historical analysis stores yearly observations with valid time, observed time, metric key, unit, methodology, event type, evidence URL, and an explicit gap reason where applicable. The UI displays partial histories instead of hiding them, lists missing periods, and does not interpolate absent observations.
+
+Comparable history requires the same metric definition, unit, geography, population, cadence, methodology, and window across options. Material events and methodology changes are distinct from observations. Forecasts remain suppressed unless a sufficiently complete comparable series supports a stated method, horizon, assumptions, interval, and confidence.
+
+### 8.8 Domain-specific controls
 
 The generic comparison pipeline has focused extensions for cases requiring additional evidence structure, including:
 
@@ -434,6 +491,7 @@ The PostgreSQL schema in `lib/db/src/schema` covers:
 - Usage events and billing periods.
 - Idempotency records.
 - Commercial account and retirement/audit data.
+- Publisher permission and source-use decisions with review dates.
 
 ### 9.2 Authenticated browser persistence
 
@@ -501,6 +559,9 @@ Current controls include:
 - Structural visible-text extraction before claim verification.
 - Server-owned metric identity, unit, direction, subject, and basis validation.
 - Exact document-hash and source-offset provenance for scoreable metrics.
+- Robots-policy enforcement before automated collection.
+- Explicit source access status, acquisition method, check time, and restriction records.
+- Exclusion of restricted and prohibited sources from evidence and ranking.
 - Removal of raw web prose from final LLM synthesis.
 - API `no-store` responses and disabled ETags.
 - Query-string removal from structured request logs.
@@ -510,6 +571,10 @@ Current controls include:
 ### Trust boundaries
 
 User prompts, supplied URLs, model output, and web content are all untrusted. Prompts and web pages are treated as data rather than instructions. Model output is parsed, normalized, source-checked, and validated before persistence.
+
+Publisher permission is a separate trust boundary from network reachability. A publicly resolvable URL is not automatically collectable or scoreable.
+
+Registry reuse is fail-closed: current prohibitions stop collection before any network request, expired entries do not grant access, and transient reachability failures receive a short recheck window rather than becoming permanent publisher policy.
 
 ## 12. Observability and Operations
 
@@ -609,6 +674,30 @@ model-based discovery, adjudication, and comparability correction.
 failure modes without improving a selection already bounded by current-model,
 comparability, and evidence-readiness rules.
 
+### 14.10 Permission before acquisition
+
+**Decision:** Determine robots and access permission before availability probing or content retrieval. Restricted sources remain audit records but cannot support ranking.
+
+**Reason:** Discoverability is not permission. Preserving a restricted citation as evidence can indirectly bypass publisher controls and create non-reproducible conclusions.
+
+### 14.11 Visible historical gaps
+
+**Decision:** Render partial historical series with explicit gaps and suppress unsupported forecasts.
+
+**Reason:** Hiding partial evidence conceals decision-relevant uncertainty, while interpolation creates false continuity.
+
+### 14.12 Machine-readable release quality
+
+**Decision:** Compute a report-level quality state with transparent metrics, reasons, and remediation, and include it in evidence exports.
+
+**Reason:** A weighted score alone does not disclose whether evidence coverage, freshness, comparability, source concentration, and acquisition permissions support a definitive decision.
+
+### 14.13 Exact supplied-source approval boundary
+
+**Decision:** Validate supplied URLs before research and authorize execution only for the exact owner, prompt, market, and ordered URL set that passed preflight.
+
+**Reason:** Browser-only validation can be bypassed by direct or stale clients. Exact short-lived server approval prevents rejected, altered, or expired source sets from entering research or being labelled as primary context.
+
 ## 15. Current Limitations and Risks
 
 ### 15.1 Volatile browser job storage
@@ -669,6 +758,10 @@ When changing this architecture:
 10. Update this document when a runtime boundary, data owner, major pipeline stage, or security assumption changes.
 11. Keep the 120-second target explicit in the OpenAPI job contract; optimize by removing redundant work, never by weakening evidence gates.
 12. Preserve portfolio-selection rationale and excluded alternatives across final synthesis and persistence.
+13. Check publisher permission before network collection and never preserve restricted sources as ranking evidence.
+14. Export a machine-readable release-quality result and suppress definitive rankings on failure.
+15. Show historical gaps explicitly; never interpolate missing periods or forecast from incomparable observations.
+16. Follow the repository-wide rules in `docs/rules.md`.
 
 ## 17. Primary Code References
 
@@ -685,3 +778,4 @@ When changing this architecture:
 | Generated server schemas | `lib/api-zod/src/generated` |
 | Database schema | `lib/db/src/schema` |
 | Workspace operating guidance | `replit.md` |
+| Engineering and product rules | `docs/rules.md` |
