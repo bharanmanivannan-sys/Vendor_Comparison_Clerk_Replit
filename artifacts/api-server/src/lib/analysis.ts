@@ -1091,17 +1091,49 @@ export function preserveConcreteDiscoveryOptions(
     exact: vendor.toLowerCase(),
     tokens: normalizedTokens(vendor),
   }));
-  const alternatives = discovered.filter((vendor) => (
-    !isObjectivePhraseVendor(vendor)
-    && !preserved.some((option) => (
+  const alternatives = discovered.filter((vendor) => {
+    if (isObjectivePhraseVendor(vendor)) return false;
+    const candidateTokens = normalizedTokens(vendor);
+    const candidateAcronym = candidateTokens.map((token) => token[0]).join("");
+    return !preserved.some((option) => (
       option.exact === vendor.toLowerCase()
       || (
         option.tokens.length >= 2
-        && option.tokens.every((token) => normalizedTokens(vendor).includes(token))
+        && option.tokens.every((token) => candidateTokens.includes(token))
       )
-    ))
-  ));
+      || (
+        candidateAcronym.length >= 2
+        && option.tokens.includes(candidateAcronym)
+        && option.tokens.some((token) => candidateTokens.includes(token))
+      )
+    ));
+  });
   return Array.from(new Set([...concrete, ...alternatives])).slice(0, requested.length);
+}
+
+export function hasRequiredDiscoveryLensCoverage(
+  prompt: string,
+  discovery: unknown,
+  vendors: string[],
+): boolean {
+  const requiresDxpAndDam = /\bDXP\b/i.test(prompt)
+    && /\b(?:DAM|digital asset management)\b/i.test(prompt)
+    && vendors.length >= 3;
+  if (!requiresDxpAndDam) return true;
+  if (!discovery || typeof discovery !== "object") return false;
+  const roles = (discovery as { selectionRoles?: unknown }).selectionRoles;
+  if (!Array.isArray(roles)) return false;
+  const selected = new Set(vendors.map((vendor) => vendor.toLowerCase()));
+  const validRoles = roles.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const vendor = typeof row.vendor === "string" ? row.vendor.trim() : "";
+    const lens = typeof row.lens === "string" ? row.lens.trim() : "";
+    const officialUrl = typeof row.officialUrl === "string" ? row.officialUrl.trim() : "";
+    if (!selected.has(vendor.toLowerCase()) || !/^https:\/\//i.test(officialUrl)) return [];
+    return [lens];
+  });
+  return validRoles.includes("broad_dxp") && validRoles.includes("standalone_dam");
 }
 
 export function selectRecommendationLabel(
@@ -4776,7 +4808,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                   ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
                   : isBrandLevelModelSelection
                     ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "product"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : ""}`
-                    : `Choose exactly ${requestedCount} products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
+                    : `Choose exactly ${requestedCount} unique products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. Never return an expanded name, acronym, edition, module, or alias of a preserved option as a competitor. Use web search to identify current alternatives and verify each exact product name from an official product page. When the request names multiple product lenses such as DXP and DAM, cover those lenses deliberately: include a broad platform peer and a focused specialist alternative when that produces the most decision-useful shortlist, and explain each option's role. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
                 shape: {
                   vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
                   candidatesByManufacturer: Object.fromEntries(input.vendors.map((vendor) => [
@@ -4788,6 +4820,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                     holisticFit: "",
                     comparabilityTradeOffs: "",
                   }],
+                  selectionRoles: Array.from({ length: requestedCount }, (_, index) => ({
+                    vendor: `Exact selected product ${index + 1} name`,
+                    lens: index === 0 ? "preserved" : index === 1 ? "broad_dxp" : "standalone_dam",
+                    officialUrl: "https://official-product-page",
+                  })),
                   selectionRationale: "Why the selected pairing is the most decision-useful match for this request",
                   alternatives: [{ name: "Exact alternative product name", rationale: "", tradeOffs: "" }],
                 },
@@ -4938,7 +4975,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             requestedManufacturers,
             normalizeDiscoveredVendors(rawDiscoveredVendors),
           );
-      if (discoveredVendors.length !== requestedCount) {
+      if (
+        discoveredVendors.length !== requestedCount
+        || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
+      ) {
         const repairResponse = await client.chat.completions.create({
           model: "gpt-4.1-mini",
           response_format: { type: "json_object" },
@@ -4947,7 +4987,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               role: "system",
               content: isBrandLevelModelSelection
                 ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
-                : "Repair the competitor-selection draft into one valid JSON object. Preserve every concrete option named by the user, replace generic competitor or objective phrases with exact current product names, and return exactly the requested number of unique comparable products. Never return categories, objectives, request text, placeholders, or duplicate products.",
+                : "Repair the search-backed competitor-selection draft into one valid JSON object. Preserve every concrete option named by the user, replace generic competitor or objective phrases with exact current product names verified from official product pages, and return exactly the requested number of unique comparable products. An acronym, expanded name, edition, module, or alias of a preserved product is the same product and cannot occupy a competitor slot. If the prompt asks about multiple lenses such as DXP and DAM, include a broad platform peer and a focused specialist alternative where appropriate. Never return categories, objectives, request text, placeholders, or duplicate products.",
             },
             {
               role: "user",
@@ -4968,6 +5008,13 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                         ),
                       ],
                   selectionRationale: "",
+                  selectionRoles: isBrandLevelModelSelection
+                    ? []
+                    : [
+                        { vendor: concreteRequestedOptions[0] ?? "Preserved exact option", lens: "preserved", officialUrl: "https://official-product-page" },
+                        { vendor: "Exact broad DXP competitor", lens: "broad_dxp", officialUrl: "https://official-product-page" },
+                        { vendor: "Exact standalone DAM competitor", lens: "standalone_dam", officialUrl: "https://official-product-page" },
+                      ].slice(0, requestedCount),
                   alternatives: [{ name: "", rationale: "", tradeOffs: "" }],
                 },
               }),
@@ -4987,7 +5034,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 normalizeDiscoveredVendors(rawDiscoveredVendors),
               );
         }
-        if (discoveredVendors.length !== requestedCount) {
+        if (
+          discoveredVendors.length !== requestedCount
+          || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
+        ) {
           throw new Error("Product discovery did not return a complete concrete shortlist.");
         }
       }

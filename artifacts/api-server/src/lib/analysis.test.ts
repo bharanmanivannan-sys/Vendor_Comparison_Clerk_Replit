@@ -26,6 +26,7 @@ import {
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
   hasFiveYearMarketHistoryCoverage,
+  hasRequiredDiscoveryLensCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
   isElectricVehiclePrompt,
@@ -2550,7 +2551,7 @@ test("treats generic AEM competitor wording as discovery objectives", () => {
   assert.deepEqual(
     preserveConcreteDiscoveryOptions(parsed.vendors, [
       "Sitecore Experience Platform",
-      "Adobe Experience Manager (AEM)",
+      "Adobe Experience Manager",
       "Acquia DXP",
     ]),
     ["Adobe AEM", "Sitecore Experience Platform", "Acquia DXP"],
@@ -2571,6 +2572,25 @@ test("keeps an explicit AEM and Sitecore comparison authoritative", () => {
     ]),
     ["Adobe AEM", "Sitecore Experience Platform"],
   );
+});
+
+test("requires search-backed DXP and standalone DAM roles for a combined AEM request", () => {
+  const prompt = "Compare Adobe AEM with competitors for DXP and DAM";
+  const vendors = ["Adobe AEM", "Sitecore Experience Platform", "Canto"];
+  assert.equal(hasRequiredDiscoveryLensCoverage(prompt, {
+    selectionRoles: [
+      { vendor: "Adobe AEM", lens: "preserved", officialUrl: "https://business.adobe.com/products/experience-manager/adobe-experience-manager.html" },
+      { vendor: "Sitecore Experience Platform", lens: "broad_dxp", officialUrl: "https://www.sitecore.com/products/experience-platform" },
+      { vendor: "Canto", lens: "standalone_dam", officialUrl: "https://www.canto.com/digital-asset-management/" },
+    ],
+  }, vendors), true);
+  assert.equal(hasRequiredDiscoveryLensCoverage(prompt, {
+    selectionRoles: [
+      { vendor: "Adobe AEM", lens: "preserved", officialUrl: "https://business.adobe.com/products/experience-manager/adobe-experience-manager.html" },
+      { vendor: "Sitecore Experience Platform", lens: "broad_dxp", officialUrl: "https://www.sitecore.com/products/experience-platform" },
+      { vendor: "Acquia DXP", lens: "broad_dxp", officialUrl: "https://www.acquia.com/products" },
+    ],
+  }, ["Adobe AEM", "Sitecore Experience Platform", "Acquia DXP"]), false);
 });
 
 test("never preserves an objective phrase as the recommendation label", () => {
