@@ -442,6 +442,8 @@ An all-tied complete capability matrix remains neutral at 50 for the feature com
 
 Comparison intake performs deterministic domain and market-availability checks before any research job is created. Product-specific banking requests reject non-banking entities, known cross-domain pairs reject unless the user explicitly requests a shared cross-sector criterion, and maintained entity-footprint rules reject options outside the selected geography with a corrective message.
 
+Open-ended competitor requests may name one concrete entity and one objective phrase such as “other e-commerce sites” or “leading competitors.” Intake treats the objective as a discovery slot rather than requiring a second named brand. The discovery stage preserves the concrete entity and replaces only the objective slot with an exact, locally available competitor verified from an official product or service page.
+
 Normalization distinguishes:
 
 - Direct percentages where higher is better.

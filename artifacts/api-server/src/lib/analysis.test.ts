@@ -2671,6 +2671,18 @@ test("treats generic AEM competitor wording as discovery objectives", () => {
   );
 });
 
+test("treats a domain brand plus other ecommerce sites as competitor discovery", () => {
+  const parsed = parsePrompt(
+    "Compare Cardekho.com with other e-commerce sites. Which one is a strong contender for cardekho.com?",
+  );
+
+  assert.deepEqual(parsed.vendors, ["Cardekho.com", "other e-commerce sites"]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[0]), false);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(inferResearchMarket(parsed.prompt, parsed.vendors).countryCode, "IN");
+});
+
 test("keeps an explicit AEM and Sitecore comparison authoritative", () => {
   const parsed = parsePrompt(
     "Compare Adobe AEM vs Sitecore Experience Platform for enterprise DXP and DAM",

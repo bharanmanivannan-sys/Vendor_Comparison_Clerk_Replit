@@ -117,6 +117,30 @@ test("routes generic AEM competitor wording into concrete option discovery", asy
   assert.equal(isObjectivePhraseVendor(validated.vendors[2]), true);
 });
 
+test("accepts one domain brand plus an open-ended competitor request", async () => {
+  const prompt = "Compare Cardekho.com with other e-commerce sites. Which one is a strong contender for cardekho.com?";
+  const validated = await validateComparisonInput(
+    { prompt, market: "IN", urls: [] },
+    (value) => parsePromptWithIntent(value, async () => ({
+      options: ["Cardekho.com"],
+      subject: "Automotive e-commerce marketplaces",
+      decisionType: "comparison",
+      category: "E-commerce marketplaces",
+      useCase: "India vehicle discovery",
+      qualifiers: ["India"],
+      decisionCriterion: "strongest competitor",
+      freshness: "current",
+      confidence: 0.9,
+      clarification: "",
+    })),
+  );
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+  if ("error" in validated) return;
+  assert.deepEqual(validated.vendors, ["Cardekho.com", "other e-commerce sites"]);
+  assert.equal(isObjectivePhraseVendor(validated.vendors[1]), true);
+});
+
 test("submission rejects a known provider outside the selected research market", async () => {
   const validated = await validateComparisonInput({
     prompt: "Compare Westpac and ANZ investment home loans.",

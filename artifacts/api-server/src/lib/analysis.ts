@@ -727,7 +727,7 @@ export function inferResearchMarket(
     };
   }
   const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
-  if (/\b(?:india|indian|inr|rupees?|₹|mahindra|tata motors?|jsw mg)\b/.test(normalized)) {
+  if (/\b(?:india|indian|inr|rupees?|₹|mahindra|tata motors?|jsw mg|cardekho(?:\.com)?)\b/.test(normalized)) {
     return { country: "India", countryCode: "IN", currency: "INR", timezone: "Asia/Kolkata", inferredFrom: "query location, currency, or strong local product cues" };
   }
   if (/\b(?:united kingdom|britain|british|uk|gbp|pounds?|£)\b/.test(normalized)) {
@@ -1124,6 +1124,7 @@ export function isObjectivePhraseVendor(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return isPlaceholderVendor(value)
     || /^(?:(?:it(?:'|’)?s|its|their|the|other|main|top|leading)\s+)?competitors?$/.test(normalized)
+    || /^(?:other|main|top|leading|strongest|best)\s+(?:e-?commerce\s+)?(?:sites?|platforms?|marketplaces?|providers?|services?|brands?)$/.test(normalized)
     || /^let\s+me\s+know\b.*\bwhere\b.*\bstands?\b/.test(normalized)
     || /^(?:across|among|within|for)\b/.test(normalized)
     || /\b(?:my|our|your|their)\s+(?:products?|services?|business|customers?|market|team|organisation|organization)\b/.test(normalized)
@@ -1512,6 +1513,9 @@ export function parsePrompt(prompt: string) {
   const withPair = normalized.match(
     /\bcompare\s+([^?.!]+?)\s+with\s+(.+?)(?=\s+for\s+(?:my|our|a|an|the)\b|[?.!,]|$)/i,
   );
+  const domainWithPair = normalized.match(
+    /\bcompare\s+((?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+)\s+with\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?!,]|\.\s|$)/i,
+  );
   const subjectWithPair = normalized.match(
     /\bcompare\s+(?:baas|battery[- ]as[- ]a[- ]service)\s+with\s+(.+?)\s+(?:&|and)\s+(.+?)(?=[?.!,]|$)/i,
   );
@@ -1535,7 +1539,7 @@ export function parsePrompt(prompt: string) {
   );
   const pair = purchaseChannelPair
     ? [purchaseChannelPair[0], purchaseChannelPair[2], purchaseChannelPair[3]]
-    : migrationPair ?? betweenPair ?? subjectWithPair ?? withPair ?? genericPair ?? choicePair ?? whichIsBetterPair ?? directPair;
+    : migrationPair ?? betweenPair ?? subjectWithPair ?? domainWithPair ?? withPair ?? genericPair ?? choicePair ?? whichIsBetterPair ?? directPair;
   const before = normalized.split(/\b(?:vs\.?|versus|or|and|against|againt)\b/i)[0] ?? normalized;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];
