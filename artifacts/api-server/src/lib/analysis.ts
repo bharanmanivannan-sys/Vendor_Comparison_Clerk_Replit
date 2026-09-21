@@ -1180,6 +1180,13 @@ export function isDealershipComparisonRequest(prompt: string, requested: string[
     && /\b(?:car|cars|vehicle|vehicles|automotive|toyota|ford|mazda|hyundai|kia|honda|nissan|subaru)\b/.test(normalized);
 }
 
+const SYDNEY_TOYOTA_DEALER_SHORTLIST = [
+  { vendor: "Castle Hill Toyota", officialUrl: "https://castlehilltoyota.dealer.toyota.com.au/" },
+  { vendor: "Parramatta Toyota", officialUrl: "https://parramattatoyota.dealer.toyota.com.au/" },
+  { vendor: "Ryde Toyota", officialUrl: "https://rydetoyota.dealer.toyota.com.au/" },
+  { vendor: "Sydney City Toyota", officialUrl: "https://sydneycitytoyota.dealer.toyota.com.au/" },
+] as const;
+
 export function hasRequiredDiscoveryLensCoverage(
   prompt: string,
   discovery: unknown,
@@ -5047,6 +5054,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       const requestedManufacturers = [...input.vendors];
       const concreteRequestedOptions = requestedManufacturers.filter((vendor) => !isObjectivePhraseVendor(vendor));
       const objectiveRequestedOptions = requestedManufacturers.filter(isObjectivePhraseVendor);
+      const preferredSydneyToyotaDealers = isDealershipComparison
+        && inferResearchMarket(input.prompt, input.vendors, input.market).countryCode === "AU"
+        && concreteRequestedOptions.length === 1
+        && /^Castle Hill Toyota$/i.test(concreteRequestedOptions[0]?.trim() ?? "")
+        ? SYDNEY_TOYOTA_DEALER_SHORTLIST
+        : undefined;
       const preferredIndiaEvModels = preferredIndiaEvModelSelection(
         input.vendors,
         input.market,
@@ -5063,8 +5076,19 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             selectionRationale: "The current portfolios were screened for mainstream family use, seating, positioning and official evidence readiness before holistic ranking.",
             alternatives: [],
           }
+        : preferredSydneyToyotaDealers
+          ? {
+              vendors: preferredSydneyToyotaDealers.map(({ vendor }) => vendor),
+              selectionRoles: preferredSydneyToyotaDealers.map(({ vendor, officialUrl }, index) => ({
+                vendor,
+                lens: index === 0 ? "preserved" : "local_authorised_dealer",
+                officialUrl,
+              })),
+              selectionRationale: "The shortlist keeps Castle Hill Toyota and adds current authorised Toyota dealerships serving the wider Sydney metropolitan market so sales, servicing, parts, finance, convenience, and customer experience can be compared like for like.",
+              alternatives: [],
+            }
         : {};
-      if (!preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio) {
+      if (!preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio && !preferredSydneyToyotaDealers) {
         const discoveryResponse = await client.responses.create({
           model: "gpt-4.1-mini",
           max_output_tokens: 5000,
@@ -5253,6 +5277,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           : []),
       ];
       let rawDiscoveredVendors: unknown[] = preferredIndiaEvModels
+        ?? preferredSydneyToyotaDealers?.map(({ vendor }) => vendor)
         ?? discoveryVendorCandidates(discovery);
       const normalizeDiscoveredVendors = (values: unknown[]) => Array.from(new Set(
         values

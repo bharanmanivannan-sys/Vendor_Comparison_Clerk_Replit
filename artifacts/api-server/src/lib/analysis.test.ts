@@ -2699,6 +2699,14 @@ test("recognizes an open Toyota dealer request as a dealership service compariso
   assert.equal(isDealershipComparisonRequest(prompt, parsed.vendors), true);
   assert.equal(discoveryTargetCount(parsed.vendors), 4);
   assert.equal(inferResearchMarket(prompt, parsed.vendors).countryCode, "AU");
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(
+      parsed.vendors,
+      ["Castle Hill Toyota", "Parramatta Toyota", "Ryde Toyota", "Sydney City Toyota"],
+      discoveryTargetCount(parsed.vendors),
+    ),
+    ["Castle Hill Toyota", "Parramatta Toyota", "Ryde Toyota", "Sydney City Toyota"],
+  );
 });
 
 test("permits a review-signal decision only with recent retrieved ratings from two independent domains per option", () => {
