@@ -434,7 +434,9 @@ The server owns the controlled metric registry, allowed units, and scoring direc
 
 Deterministic scoring groups values only when metric key, unit, direction, and complete basis match across every shortlisted option. Unknown metrics and incomplete bases fail closed. Raw retrieved source prose and web-search output are not sent to the final decision synthesizer. Its corpus contains only validated typed records with an exact quote, metric identity, unit, basis, retrieval date, canonical source URL, document hash, text offsets, support direction, normalized score, and weighted contribution.
 
-Missing or non-comparable evidence receives 50/100, the neutral midpoint. This prevents missing evidence from creating an advantage or penalty and does not assert equal real-world performance. A ranked recommendation requires deterministic comparable metrics covering at least 50% of the canonical weighted model and actual score separation; otherwise the job fails with `insufficient_quantitative_evidence`.
+Missing or non-comparable evidence receives 50/100, the neutral midpoint. This prevents missing evidence from creating an advantage or penalty and does not assert equal real-world performance. A ranked recommendation normally requires deterministic comparable metrics covering at least 50% of the canonical weighted model and actual score separation; otherwise the report is evidence-limited.
+
+Capability-led software requests have a narrow qualitative profile when the user did not request pricing. Pricing and every other unrequested generic criterion receive zero weight. The server assigns 85 percent to complete feature-matrix row wins and 15 percent to the context-specific strategic provider role. This profile requires at least four complete comparable rows, an exact vendor-owned official product URL for every option returned through the authorised search provider, and one unique weighted leader. Standalone specialist slots must bind to an exact specialist product page rather than a DXP, CMS, content hub, or module. These scores are explicitly analyst interpretation, not measured product facts, and the feature score is capped below 100.
 
 Normalization distinguishes:
 
@@ -453,6 +455,8 @@ The report workspace calculates and exports a machine-readable release assessmen
 - `PASS` when evidence coverage, freshness, comparability, access governance, and concentration meet the decision threshold.
 - `PASS_WITH_WARNINGS` when the report remains useful but material uncertainty or concentration requires explicit caution.
 - `FAIL` when a prohibited source affects scoring or a definitive recommendation lacks minimum verified coverage.
+
+Capability-led software reports using the qualitative profile are `PASS_WITH_WARNINGS`. They may retain a conditional winner only when every profile safeguard passes; incomplete rows, vendor/URL mismatches, a missing specialist role, or a tied weighted result suppress the winner.
 
 The gate reports citation coverage, freshness coverage, comparable-cell coverage, unknown rate, source concentration, historical-series comparability, reasons, and remediation. A failed gate returns an evidence-limited brief: browser and PDF outputs suppress winner labels, winner styling, score emphasis, and closest-alternative language.
 

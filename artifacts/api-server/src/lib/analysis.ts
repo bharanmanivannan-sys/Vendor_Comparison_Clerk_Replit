@@ -355,6 +355,27 @@ export function explicitDecisionPriorityProfile(prompt: string): {
   return null;
 }
 
+export function capabilityLedSoftwarePriorityProfile(prompt: string): {
+  label: string;
+  weights: ComparisonWeight[];
+} | null {
+  const combinedDxpDamScope = /\bDXP\b/i.test(prompt)
+    && /\b(?:DAM|digital asset management)\b/i.test(prompt);
+  const pricingRequested = /\b(?:price|pricing|cost|affordability|value for money|cheapest|lowest fee|tco|total cost)\b/i.test(prompt);
+  if (!combinedDxpDamScope || pricingRequested) return null;
+  return {
+    label: "combined DXP and DAM feature breadth",
+    weights: WEIGHTED_CRITERIA.map(({ criterion }) => ({
+      criterion,
+      weight: criterion === "Meets Needs / Features"
+        ? 85
+        : criterion === "Strategic Provider Role"
+          ? 15
+          : 0,
+    })),
+  };
+}
+
 function applyInternalWeightProfile(analysis: AnalysisPayload, profile: ComparisonWeight[]): void {
   const weights = new Map(profile.map(({ criterion, weight }) => [criterion, weight]));
   for (const vendor of analysis.vendorScores) {
@@ -1130,10 +1151,27 @@ export function hasRequiredDiscoveryLensCoverage(
     const vendor = typeof row.vendor === "string" ? row.vendor.trim() : "";
     const lens = typeof row.lens === "string" ? row.lens.trim() : "";
     const officialUrl = typeof row.officialUrl === "string" ? row.officialUrl.trim() : "";
-    if (!selected.has(vendor.toLowerCase()) || !/^https:\/\//i.test(officialUrl)) return [];
+    const vendorBrandToken = vendor.toLowerCase().match(/[a-z0-9]+/)?.[0] ?? "";
+    const roleMatchesSelected = selected.has(vendor.toLowerCase())
+      || (
+        lens === "preserved"
+        && vendors.some((selectedVendor) => selectedVendor.toLowerCase().match(/[a-z0-9]+/)?.[0] === vendorBrandToken)
+      );
+    if (!roleMatchesSelected || !/^https:\/\//i.test(officialUrl)) return [];
+    try {
+      if (vendorBrandToken.length < 4 || !new URL(officialUrl).hostname.toLowerCase().includes(vendorBrandToken)) return [];
+    } catch {
+      return [];
+    }
+    if (
+      lens === "standalone_dam"
+      && !/(?:\bdam\b|digital[-_/ ]asset[-_/ ]management)/i.test(officialUrl)
+    ) return [];
     return [lens];
   });
-  return validRoles.includes("broad_dxp") && validRoles.includes("standalone_dam");
+  return validRoles.length === vendors.length
+    && validRoles.includes("broad_dxp")
+    && validRoles.includes("standalone_dam");
 }
 
 export function selectRecommendationLabel(
@@ -3163,6 +3201,108 @@ export function addElectricVehicleMatrixEvidence(
   }
 }
 
+export function applySoftwareCapabilityMatrixDecision(
+  analysis: AnalysisPayload,
+  vendors: string[],
+  scoreVerifiedUrls: string[],
+  weights: ComparisonWeight[],
+): { sufficient: boolean; deterministicWeight: number } {
+  const features = Array.isArray(analysis.features) ? analysis.features : [];
+  const selected = new Set(vendors.map((vendor) => vendor.toLowerCase()));
+  const winnerFor = (winner: unknown, vendor: string) => (
+    typeof winner === "string" && winner.trim().toLowerCase() === vendor.trim().toLowerCase()
+  );
+  const officialSourceFor = (vendor: string) => {
+    const tokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((token) => token.length >= 4 && !["digital", "asset", "management", "experience", "platform", "manager"].includes(token));
+    return scoreVerifiedUrls.find((source) => {
+      try {
+        const url = new URL(source);
+        const hostname = url.hostname.toLowerCase();
+        return tokens.some((token) => hostname.includes(token));
+      } catch {
+        return false;
+      }
+    });
+  };
+  const completeRows = features.filter((row) => (
+    row
+    && typeof row.dimension === "string"
+    && vendors.every((vendor) => typeof row.values?.[vendor] === "string" && row.values[vendor]!.trim().length >= 3)
+  ));
+  for (const row of completeRows) {
+    row.winner = normalizeLensWinner(row.dimension, row.values ?? {}, vendors, row.winner);
+  }
+  const decidedRows = completeRows.filter((row) => (
+    typeof row.winner === "string" && selected.has(row.winner.trim().toLowerCase())
+  ));
+  const officialSources = new Map(vendors.map((vendor) => [vendor, officialSourceFor(vendor)]));
+  if (
+    decidedRows.length < 4
+    || vendors.some((vendor) => !officialSources.get(vendor))
+  ) {
+    return { sufficient: false, deterministicWeight: 0 };
+  }
+  const featureWeight = weights.find((entry) => entry.criterion === "Meets Needs / Features")?.weight ?? 0;
+  const roleWeight = weights.find((entry) => entry.criterion === "Strategic Provider Role")?.weight ?? 0;
+  const roleScores = {
+    leader: 100,
+    expert: 75,
+    accelerator: 65,
+    core_provider: 60,
+  } as const;
+  const totals: number[] = [];
+  for (const vendorScore of analysis.vendorScores) {
+    const wonRows = decidedRows.filter((row) => winnerFor(row.winner, vendorScore.vendor));
+    const featureScore = Math.round(45 + (wonRows.length / decidedRows.length) * 50);
+    const role = normalizeProviderRole(vendorScore.providerRole);
+    const roleScore = roleScores[role];
+    for (const criterion of vendorScore.weightedScores ?? []) {
+      criterion.weight = weights.find((entry) => entry.criterion === criterion.criterion)?.weight ?? 0;
+      if (criterion.criterion === "Meets Needs / Features") {
+        criterion.score = featureScore;
+        criterion.rationale = `${vendorScore.vendor} wins ${wonRows.length} of ${decidedRows.length} complete capability rows in the displayed feature matrix.`;
+        criterion.evidence = [{
+          sourceUrl: officialSources.get(vendorScore.vendor),
+          sourceTitle: `${vendorScore.vendor} official product information`,
+          exactClaim: `${vendorScore.vendor} is the displayed winner in ${wonRows.length} of ${decidedRows.length} complete capability rows.`,
+          retrievalDate: new Date().toISOString().slice(0, 10),
+          evidenceKind: "analyst_judgment",
+          supportDirection: wonRows.length ? "supports" : "context",
+          confidence: 25,
+          normalizedScore: featureScore,
+          criterionWeight: featureWeight,
+          weightedContribution: Number((featureScore * featureWeight / 100).toFixed(2)),
+          normalizationMethod: "verified_feature_matrix_winner_share",
+        }];
+      } else if (criterion.criterion === "Strategic Provider Role") {
+        criterion.score = roleScore;
+        criterion.rationale = `${vendorScore.vendor} is classified as ${role.replace("_", " ")} for this decision context.`;
+        criterion.evidence = [{
+          sourceUrl: officialSources.get(vendorScore.vendor),
+          sourceTitle: `${vendorScore.vendor} official product information`,
+          exactClaim: `${vendorScore.vendor} has the context-specific strategic provider role ${role.replace("_", " ")}.`,
+          retrievalDate: new Date().toISOString().slice(0, 10),
+          evidenceKind: "analyst_judgment",
+          supportDirection: "context",
+          confidence: 25,
+          normalizedScore: roleScore,
+          criterionWeight: roleWeight,
+          weightedContribution: Number((roleScore * roleWeight / 100).toFixed(2)),
+          normalizationMethod: "strategic_provider_role_profile",
+        }];
+      }
+    }
+    vendorScore.score = Math.round((featureScore * featureWeight + roleScore * roleWeight) / 100);
+    totals.push(vendorScore.score);
+  }
+  const highest = Math.max(...totals);
+  return {
+    sufficient: totals.filter((score) => score === highest).length === 1,
+    deterministicWeight: featureWeight + roleWeight,
+  };
+}
+
 export function mergeElectricVehicleResearch(
   initial: Partial<AnalysisPayload> & { sources?: unknown },
   completion: Partial<AnalysisPayload> & { sources?: unknown },
@@ -4763,6 +4903,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       || isBrandLevelModelSelection;
     let discoveredAlternativeInsights: string[] = [];
     let discoveredSelectionRationale = "";
+    let discoveredOfficialProductUrls: string[] = [];
     if (vendorDiscoveryWasRequired) {
       const requestedCount = input.vendors.length;
       const requestedManufacturers = [...input.vendors];
@@ -4808,7 +4949,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                   ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
                   : isBrandLevelModelSelection
                     ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "product"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : ""}`
-                    : `Choose exactly ${requestedCount} unique products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. Never return an expanded name, acronym, edition, module, or alias of a preserved option as a competitor. Use web search to identify current alternatives and verify each exact product name from an official product page. When the request names multiple product lenses such as DXP and DAM, cover those lenses deliberately: include a broad platform peer and a focused specialist alternative when that produces the most decision-useful shortlist, and explain each option's role. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
+                    : `Choose exactly ${requestedCount} unique products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. Never return an expanded name, acronym, edition, module, or alias of a preserved option as a competitor. Use web search to identify current alternatives and verify each exact product name from an official product page. When the request names multiple product lenses such as DXP and DAM, cover those lenses deliberately: include a broad platform peer and a focused specialist alternative when that produces the most decision-useful shortlist, and explain each option's role. A standalone DAM must be primarily marketed as a digital asset management product; do not label a DXP, CMS, content hub, or DAM module as the standalone DAM slot. Its officialUrl must be the vendor's exact DAM product page and contain DAM or digital-asset-management in the URL. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
                 shape: {
                   vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
                   candidatesByManufacturer: Object.fromEntries(input.vendors.map((vendor) => [
@@ -4979,49 +5120,63 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         discoveredVendors.length !== requestedCount
         || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
       ) {
-        const repairResponse = await client.chat.completions.create({
-          model: "gpt-4.1-mini",
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content: isBrandLevelModelSelection
-                ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
-                : "Repair the search-backed competitor-selection draft into one valid JSON object. Preserve every concrete option named by the user, replace generic competitor or objective phrases with exact current product names verified from official product pages, and return exactly the requested number of unique comparable products. An acronym, expanded name, edition, module, or alias of a preserved product is the same product and cannot occupy a competitor slot. If the prompt asks about multiple lenses such as DXP and DAM, include a broad platform peer and a focused specialist alternative where appropriate. Never return categories, objectives, request text, placeholders, or duplicate products.",
-            },
-            {
-              role: "user",
-              content: JSON.stringify({
-                prompt: input.prompt,
-                manufacturers: requestedManufacturers,
-                concreteOptionsToPreserve: concreteRequestedOptions,
-                objectivePhrasesToReplace: objectiveRequestedOptions,
-                malformedDiscovery: discovery,
-                requiredShape: {
-                  vendors: isBrandLevelModelSelection
-                    ? requestedManufacturers.map((manufacturer) => `${manufacturer} exact current model-family name`)
-                    : [
-                        ...concreteRequestedOptions,
-                        ...Array.from(
-                          { length: requestedCount - concreteRequestedOptions.length },
-                          (_, index) => `Exact current competitor ${index + 1} name`,
-                        ),
-                      ],
-                  selectionRationale: "",
-                  selectionRoles: isBrandLevelModelSelection
-                    ? []
-                    : [
-                        { vendor: concreteRequestedOptions[0] ?? "Preserved exact option", lens: "preserved", officialUrl: "https://official-product-page" },
-                        { vendor: "Exact broad DXP competitor", lens: "broad_dxp", officialUrl: "https://official-product-page" },
-                        { vendor: "Exact standalone DAM competitor", lens: "standalone_dam", officialUrl: "https://official-product-page" },
-                      ].slice(0, requestedCount),
-                  alternatives: [{ name: "", rationale: "", tradeOffs: "" }],
-                },
-              }),
-            },
-          ],
+        const repairSystem = isBrandLevelModelSelection
+          ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
+          : "Repair the search-backed competitor-selection draft into one valid JSON object. Preserve every concrete option named by the user, replace generic competitor or objective phrases with exact current product names verified from official product pages, and return exactly the requested number of unique comparable products. An acronym, expanded name, edition, module, or alias of a preserved product is the same product and cannot occupy a competitor slot. If the prompt asks about multiple lenses such as DXP and DAM, include a broad platform peer and a focused specialist alternative. The standalone DAM must be primarily marketed as a DAM product, not a DXP, CMS, content hub, or DAM module, and its officialUrl must be the vendor's exact DAM page containing DAM or digital-asset-management in the URL. Every officialUrl hostname must belong to the selected product's vendor. Never return categories, objectives, request text, placeholders, or duplicate products.";
+        const repairPayload = JSON.stringify({
+          prompt: input.prompt,
+          manufacturers: requestedManufacturers,
+          concreteOptionsToPreserve: concreteRequestedOptions,
+          objectivePhrasesToReplace: objectiveRequestedOptions,
+          malformedDiscovery: discovery,
+          requiredShape: {
+            vendors: isBrandLevelModelSelection
+              ? requestedManufacturers.map((manufacturer) => `${manufacturer} exact current model-family name`)
+              : [
+                  ...concreteRequestedOptions,
+                  ...Array.from(
+                    { length: requestedCount - concreteRequestedOptions.length },
+                    (_, index) => `Exact current competitor ${index + 1} name`,
+                  ),
+                ],
+            selectionRationale: "",
+            selectionRoles: isBrandLevelModelSelection
+              ? []
+              : [
+                  { vendor: concreteRequestedOptions[0] ?? "Preserved exact option", lens: "preserved", officialUrl: "https://official-vendor-product-page" },
+                  { vendor: "Exact broad DXP competitor", lens: "broad_dxp", officialUrl: "https://official-vendor-product-page" },
+                  { vendor: "Exact standalone DAM competitor", lens: "standalone_dam", officialUrl: "https://official-vendor/digital-asset-management" },
+                ].slice(0, requestedCount),
+            alternatives: [{ name: "", rationale: "", tradeOffs: "" }],
+          },
         });
-        const repairedContent = repairResponse.choices[0]?.message?.content;
+        let repairedContent: string | undefined;
+        if (isBrandLevelModelSelection) {
+          const repairResponse = await client.chat.completions.create({
+            model: "gpt-4.1-mini",
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: repairSystem },
+              { role: "user", content: repairPayload },
+            ],
+          });
+          repairedContent = repairResponse.choices[0]?.message?.content ?? undefined;
+        } else {
+          const repairResponse = await client.responses.create({
+            model: "gpt-4.1-mini",
+            max_output_tokens: 1800,
+            tools: [{
+              type: "web_search",
+              search_context_size: "medium",
+              external_web_access: true,
+            }],
+            input: [
+              { role: "system", content: `${repairSystem} Return only one valid JSON object.` },
+              { role: "user", content: repairPayload },
+            ],
+          });
+          repairedContent = repairResponse.status === "completed" ? repairResponse.output_text : undefined;
+        }
         if (repairedContent) {
           discovery = parseJsonObject(repairedContent);
           rawDiscoveredVendors = Array.isArray((discovery as { vendors?: unknown }).vendors)
@@ -5038,6 +5193,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           discoveredVendors.length !== requestedCount
           || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
         ) {
+          console.warn("Product discovery failed concrete shortlist validation", {
+            discoveredVendors: discoveredVendors.join(" | "),
+            selectionRoles: JSON.stringify((discovery as { selectionRoles?: unknown }).selectionRoles ?? []),
+          });
           throw new Error("Product discovery did not return a complete concrete shortlist.");
         }
       }
@@ -5089,6 +5248,26 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       discoveredSelectionRationale = typeof (discovery as { selectionRationale?: unknown }).selectionRationale === "string"
         ? (discovery as { selectionRationale: string }).selectionRationale.trim()
         : "";
+      const selectedNames = new Set(discoveredVendors.map((vendor) => vendor.toLowerCase()));
+      discoveredOfficialProductUrls = Array.isArray((discovery as { selectionRoles?: unknown }).selectionRoles)
+        ? (discovery as { selectionRoles: unknown[] }).selectionRoles.flatMap((item) => {
+            if (!item || typeof item !== "object") return [];
+            const row = item as Record<string, unknown>;
+            const vendor = typeof row.vendor === "string" ? row.vendor.trim().toLowerCase() : "";
+            const lens = typeof row.lens === "string" ? row.lens.trim() : "";
+            const officialUrl = typeof row.officialUrl === "string" ? row.officialUrl.trim() : "";
+            const roleBrandToken = vendor.match(/[a-z0-9]+/)?.[0] ?? "";
+            const roleMatchesSelected = selectedNames.has(vendor)
+              || (
+                lens === "preserved"
+                && discoveredVendors.some((selectedVendor) => selectedVendor.toLowerCase().match(/[a-z0-9]+/)?.[0] === roleBrandToken)
+              );
+            return roleMatchesSelected && /^https:\/\//i.test(officialUrl) ? [officialUrl] : [];
+          })
+        : [];
+      for (const officialUrl of discoveredOfficialProductUrls) {
+        if (!input.urls.includes(officialUrl)) input.urls.push(officialUrl);
+      }
       const rawAlternatives: unknown[] = Array.isArray((discovery as { alternatives?: unknown }).alternatives)
         ? (discovery as { alternatives: unknown[] }).alternatives
         : [];
@@ -5109,7 +5288,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const context = validateComparisonContext(input.prompt, input.vendors);
     const researchMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
     const isSafetyFirstVehicleDecision = isSafetyFirstVehicleQuery(input.prompt);
-    const explicitDecisionPriority = explicitDecisionPriorityProfile(input.prompt);
+    const capabilityLedSoftwarePriority = capabilityLedSoftwarePriorityProfile(input.prompt);
+    const explicitDecisionPriority = explicitDecisionPriorityProfile(input.prompt)
+      ?? capabilityLedSoftwarePriority;
     const isPreOwnedVehicleComparison = /\b(?:pre[- ]?(?:owned|used)|used|second[- ]hand)\s+(?:cars?|vehicles?|autos?)\b/i.test(input.prompt);
     const isQuickCommerceComparison = researchMarket.countryCode === "IN"
       && /\bquick[ -]?commerce\b/i.test(input.prompt)
@@ -5611,10 +5792,19 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (explicitDecisionPriority) {
       applyInternalWeightProfile(normalized, explicitDecisionPriority.weights);
     }
-    const deterministicWeight = applyDeterministicQuantitativeScores(
+    let deterministicWeight = applyDeterministicQuantitativeScores(
       normalized,
       explicitDecisionPriority?.weights ?? WEIGHTED_CRITERIA,
     );
+    const softwareCapabilityDecision = capabilityLedSoftwarePriority
+      ? applySoftwareCapabilityMatrixDecision(
+          normalized,
+          resolvedVendors,
+          [...discoveredOfficialProductUrls, ...citationUrls],
+          capabilityLedSoftwarePriority.weights,
+        )
+      : { sufficient: false, deterministicWeight: 0 };
+    deterministicWeight += softwareCapabilityDecision.deterministicWeight;
     if (!explicitDecisionPriority) {
       applyProviderRoleTieBreak(normalized.vendorScores);
     }
@@ -5684,11 +5874,14 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       : isElectricVehicleModelSelection
         ? 35
         : 50;
-    const insufficientEvidence = sourceCoverageInsufficient || !evidenceSufficiency(
-      normalized,
-      deterministicWeight,
-      explicitDecisionPriority ? Math.max(...explicitDecisionPriority.weights.map(({ weight }) => weight)) : minimumDeterministicWeight,
-    ).sufficient;
+    const insufficientEvidence = sourceCoverageInsufficient || (
+      !softwareCapabilityDecision.sufficient
+      && !evidenceSufficiency(
+        normalized,
+        deterministicWeight,
+        explicitDecisionPriority ? Math.max(...explicitDecisionPriority.weights.map(({ weight }) => weight)) : minimumDeterministicWeight,
+      ).sufficient
+    );
     const protectedPortfolioInsights = normalized.insights.filter((insight) => (
       insight.startsWith("Model selection rationale —")
       || insight.startsWith("Alternative outside comparison —")

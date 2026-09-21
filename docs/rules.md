@@ -99,6 +99,10 @@ Access unavailable never means a capability is not offered.
 9. A definitive winner requires sufficient verified comparable coverage and actual score separation.
 10. When evidence is insufficient, return an evidence-limited decision brief with no exact winner.
 11. Recommendation language must agree with the scorecard and tie-breaking rules.
+12. A criterion the user did not request must not influence the decision merely because it exists in the generic scorecard. For capability-led software comparisons, unrequested pricing has zero weight.
+13. A combined software-capability request may use a transparent feature-matrix decision profile: 85 percent complete capability-row wins and 15 percent strategic provider role.
+14. The feature-matrix profile requires at least four complete comparable rows, one exact official vendor-owned product URL for every option obtained through the authorised search provider, and one unique weighted leader. Search-provider claims remain analyst interpretation rather than observed facts, and the report must expose that limitation.
+15. If the capability rows are incomplete, the official URL hostname does not bind to the selected vendor, the standalone specialist is not verified from its exact product page, or the weighted result ties, suppress the winner.
 
 ## 7. Release Quality Gate
 
@@ -118,10 +122,14 @@ The gate must evaluate at least:
 - Conflicting claims.
 - Prohibited-source use.
 - Score and recommendation consistency.
+- Whether an unrequested criterion affected the decision.
+- Whether a capability-led software ranking met the complete-row, vendor-URL binding, role, and unique-leader requirements.
 
 A failed gate may return a useful evidence-limited brief, but it must suppress a definitive ranking. JSON exports must include the machine-readable gate result, reasons, metrics, and remediation.
 
 Browser reports and PDF exports must label failed-gate results as evidence-limited, hide winner styling and scores, and avoid closest-alternative language.
+
+A capability-led software report that relies on authorised search-provider evidence for the official product pages is `PASS_WITH_WARNINGS`, not `PASS`. It may show a conditional winner only when the feature-matrix safeguards in section 6 pass. It must label row-win scoring as analyst interpretation and must not represent restricted page content as directly retrieved evidence.
 
 ## 8. Historical Analysis and Forecasting
 

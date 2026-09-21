@@ -9,12 +9,14 @@ import {
   addVerifiedQuickCommerceDeliveryEvidence,
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
+  applySoftwareCapabilityMatrixDecision,
   annotateUnverifiableWinner,
   assertCanonicalComparisonConsistency,
   assertSufficientComparisonEvidence,
   type AnalysisPayload,
   buildComparisonIdentity,
   buildValidatedEvidenceDataset,
+  capabilityLedSoftwarePriorityProfile,
   canonicalVendorScoreRows,
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
@@ -227,6 +229,55 @@ test("adds the exact user-discretion note when no winner can be verified", () =>
   assert.equal(analysis.insights.filter((item) => item === UNVERIFIABLE_WINNER_NOTE).length, 1);
   assert.equal(analysis.recommendation, "No exact winner");
   assert.equal(analysis.score, 50);
+});
+
+test("uses feature breadth and provider role when DXP and DAM are requested without pricing", () => {
+  const profile = capabilityLedSoftwarePriorityProfile(
+    "Compare Adobe AEM with competitors for Digital Experience Platforms (DXP) and Digital Asset Management (DAM)",
+  );
+  assert.ok(profile);
+  assert.equal(profile.weights.find((entry) => entry.criterion === "Value for Money")?.weight, 0);
+  assert.equal(profile.weights.find((entry) => entry.criterion === "Meets Needs / Features")?.weight, 85);
+  assert.equal(profile.weights.find((entry) => entry.criterion === "Strategic Provider Role")?.weight, 15);
+
+  const vendors = ["Adobe AEM", "Sitecore Experience Manager", "Canto Digital Asset Management"];
+  const analysis = {
+    features: Array.from({ length: 6 }, (_, index) => ({
+      dimension: `Capability ${index + 1}`,
+      values: Object.fromEntries(vendors.map((vendor) => [vendor, `${vendor} capability detail`])),
+      winner: index < 5 ? "Adobe AEM" : "Canto Digital Asset Management",
+    })),
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 50,
+      providerRole: vendor === "Adobe AEM" ? "leader" : "core_provider",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion,
+        weight,
+        score: 50,
+        rationale: "Neutral",
+        evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+
+  const result = applySoftwareCapabilityMatrixDecision(
+    analysis,
+    vendors,
+    [
+      "https://business.adobe.com/products/experience-manager/adobe-experience-manager.html",
+      "https://www.sitecore.com/products/experience-manager",
+      "https://www.canto.com/digital-asset-management/",
+    ],
+    profile.weights,
+  );
+
+  assert.equal(result.sufficient, true);
+  assert.equal(result.deterministicWeight, 100);
+  assert.deepEqual(
+    analysis.vendorScores.map((vendor) => [vendor.vendor, vendor.score]),
+    [["Adobe AEM", 89], ["Sitecore Experience Manager", 47], ["Canto Digital Asset Management", 54]],
+  );
 });
 
 test("ranks authoritative local and product-specific sources before generic or stale pages", () => {
@@ -2591,6 +2642,20 @@ test("requires search-backed DXP and standalone DAM roles for a combined AEM req
       { vendor: "Acquia DXP", lens: "broad_dxp", officialUrl: "https://www.acquia.com/products" },
     ],
   }, ["Adobe AEM", "Sitecore Experience Platform", "Acquia DXP"]), false);
+  assert.equal(hasRequiredDiscoveryLensCoverage(prompt, {
+    selectionRoles: [
+      { vendor: "Adobe AEM", lens: "preserved", officialUrl: "https://business.adobe.com/products/experience-manager/adobe-experience-manager.html" },
+      { vendor: "Sitecore Experience Platform", lens: "broad_dxp", officialUrl: "https://www.sitecore.com/products/experience-platform" },
+      { vendor: "Kentico Xperience", lens: "standalone_dam", officialUrl: "https://www.kentico.com/xperience" },
+    ],
+  }, ["Adobe AEM", "Sitecore Experience Platform", "Kentico Xperience"]), false);
+  assert.equal(hasRequiredDiscoveryLensCoverage(prompt, {
+    selectionRoles: [
+      { vendor: "Adobe AEM", lens: "preserved", officialUrl: "https://www.acquia.com/compare/acquia-dam-vs-adobe" },
+      { vendor: "Sitecore Experience Platform", lens: "broad_dxp", officialUrl: "https://www.sitecore.com/products/experience-platform" },
+      { vendor: "Canto", lens: "standalone_dam", officialUrl: "https://www.canto.com/digital-asset-management/" },
+    ],
+  }, ["Adobe AEM", "Sitecore Experience Platform", "Canto"]), false);
 });
 
 test("never preserves an objective phrase as the recommendation label", () => {

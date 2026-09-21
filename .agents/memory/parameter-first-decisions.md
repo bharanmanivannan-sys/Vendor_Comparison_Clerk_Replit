@@ -14,3 +14,7 @@ Insufficient deterministic evidence, incomplete source coverage, or an exact sco
 **Why:** A failed job hides useful verified evidence and pressures the system to invent score separation. Returning an evidence-limited brief preserves transparency without presenting neutral 50 scores as proof of equality.
 
 **How to apply:** Keep unsupported criteria neutral, do not use arbitrary tie-breaks for explicit-priority decisions, and clearly distinguish an unresolved decision from a validated winner.
+
+For capability-led software comparisons, do not give unrequested pricing decision weight. A search-backed, complete feature matrix can support a conditional winner when official evidence covers every option and the transparent row-win calculation has one unique leader.
+
+**Why:** Quantitative-only gates can suppress a clear software capability result even when the requested feature matrix is complete and one option consistently leads.
