@@ -1083,7 +1083,40 @@ function StrategicFrameworkSection({ title, eyebrow, description, entries, testI
 }
 
 function hasAnyMarketHistory(vendorScores: any[]): boolean {
-  return vendorScores.some((vendor) => vendor.marketHistory?.yearlyTrends?.length);
+  const meaningful = (value: unknown) => {
+    const text = String(value ?? '').trim();
+    return Boolean(text)
+      && !/^(?:unknown|unverified|unavailable|not available|not verified|n\/?a|none)$/i.test(text)
+      && !/evidence unavailable|no verified|no comparable evidence|research unavailable/i.test(text);
+  };
+  return vendorScores.some((vendor) => {
+    const history = vendor.marketHistory;
+    if (!history) return false;
+    const trends = Array.isArray(history.yearlyTrends) ? history.yearlyTrends : [];
+    const transactions = Array.isArray(history.transactions) ? history.transactions : [];
+    const yearlyCloses = Array.isArray(history.stock?.yearlyCloses) ? history.stock.yearlyCloses : [];
+    const hasObservedTrend = trends.some((trend: any) => (
+      Boolean(trend?.evidenceUrl)
+      && trend?.trendDirection !== 'unavailable'
+      && meaningful(trend?.productPerformance || trend?.marketPosition || trend?.notableEvent)
+    ));
+    const hasVerifiedOwnership = Boolean(history.ownership?.evidenceUrl)
+      && meaningful(history.ownership?.status)
+      && history.ownership.status !== 'unknown'
+      && meaningful(history.ownership?.ultimateParent);
+    const hasVerifiedTransaction = transactions.some((transaction: any) => (
+      Boolean(transaction?.evidenceUrl)
+      && transaction?.type !== 'none_found'
+      && meaningful(transaction?.summary)
+    ));
+    const hasVerifiedStockHistory = Boolean(history.stock?.evidenceUrl)
+      && ['listed', 'listed_parent'].includes(history.stock?.applicability)
+      && (
+        Number.isFinite(history.stock?.fiveYearChangePercent)
+        || yearlyCloses.some((entry: any) => Number.isFinite(entry?.price))
+      );
+    return hasObservedTrend || hasVerifiedOwnership || hasVerifiedTransaction || hasVerifiedStockHistory;
+  });
 }
 
 function MarketHistorySection({ vendorScores = [] }: { vendorScores?: any[] }) {

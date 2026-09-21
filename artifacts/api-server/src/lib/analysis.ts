@@ -2862,6 +2862,16 @@ export function normalizeLensWinner(
   vendors: string[],
   suppliedWinner = "",
 ): string {
+  const suppliedTie = suppliedWinner.match(/^Tie:\s*(.+)$/i)?.[1]
+    ?.split(",")
+    .map((vendor) => vendor.trim())
+    .filter(Boolean);
+  if (
+    suppliedTie?.length === vendors.length
+    && vendors.every((vendor) => suppliedTie.some((candidate) => candidate.toLowerCase() === vendor.toLowerCase()))
+  ) {
+    return `Tie: ${vendors.join(", ")}`;
+  }
   const entries = vendors.map((vendor) => ({
     vendor,
     value: values[vendor] ?? "",
@@ -3228,17 +3238,38 @@ export function applySoftwareCapabilityMatrixDecision(
   const completeRows = features.filter((row) => (
     row
     && typeof row.dimension === "string"
-    && vendors.every((vendor) => typeof row.values?.[vendor] === "string" && row.values[vendor]!.trim().length >= 3)
+    && vendors.every((vendor) => {
+      const value = typeof row.values?.[vendor] === "string" ? row.values[vendor]!.trim() : "";
+      return value.length >= 2 && !/^(?:unknown|unverified|n\/?a|not available)$/i.test(value);
+    })
   ));
   for (const row of completeRows) {
     row.winner = normalizeLensWinner(row.dimension, row.values ?? {}, vendors, row.winner);
   }
-  const decidedRows = completeRows.filter((row) => (
-    typeof row.winner === "string" && selected.has(row.winner.trim().toLowerCase())
+  const allVendorTie = (winner: unknown) => {
+    if (typeof winner !== "string") return false;
+    const tied = winner.match(/^Tie:\s*(.+)$/i)?.[1]
+      ?.split(",")
+      .map((vendor) => vendor.trim().toLowerCase())
+      .filter(Boolean);
+    return tied?.length === vendors.length
+      && vendors.every((vendor) => tied.includes(vendor.toLowerCase()));
+  };
+  const evaluatedRows = completeRows.filter((row) => (
+    typeof row.winner === "string"
+    && (selected.has(row.winner.trim().toLowerCase()) || allVendorTie(row.winner))
   ));
+  const allFeatureCriteriaNeutral = analysis.vendorScores.every((vendorScore) => (
+    vendorScore.weightedScores?.find((criterion) => criterion.criterion === "Meets Needs / Features")?.score === 50
+  ));
+  const scoringRows = evaluatedRows.length >= 4
+    ? evaluatedRows
+    : allFeatureCriteriaNeutral && completeRows.length >= 4
+      ? completeRows
+      : [];
   const officialSources = new Map(vendors.map((vendor) => [vendor, officialSourceFor(vendor)]));
   if (
-    decidedRows.length < 4
+    scoringRows.length < 4
     || vendors.some((vendor) => !officialSources.get(vendor))
   ) {
     return { sufficient: false, deterministicWeight: 0 };
@@ -3253,19 +3284,26 @@ export function applySoftwareCapabilityMatrixDecision(
   } as const;
   const totals: number[] = [];
   for (const vendorScore of analysis.vendorScores) {
-    const wonRows = decidedRows.filter((row) => winnerFor(row.winner, vendorScore.vendor));
-    const featureScore = Math.round(45 + (wonRows.length / decidedRows.length) * 50);
+    const wonRows = scoringRows.filter((row) => winnerFor(row.winner, vendorScore.vendor));
+    const tiedRows = scoringRows.filter((row) => allVendorTie(row.winner) || !selected.has(String(row.winner).trim().toLowerCase()));
+    const featureScore = Math.round(scoringRows.reduce((total, row) => (
+      total + (winnerFor(row.winner, vendorScore.vendor)
+        ? 95
+        : allVendorTie(row.winner) || !selected.has(String(row.winner).trim().toLowerCase())
+          ? 50
+          : 45)
+    ), 0) / scoringRows.length);
     const role = normalizeProviderRole(vendorScore.providerRole);
     const roleScore = roleScores[role];
     for (const criterion of vendorScore.weightedScores ?? []) {
       criterion.weight = weights.find((entry) => entry.criterion === criterion.criterion)?.weight ?? 0;
       if (criterion.criterion === "Meets Needs / Features") {
         criterion.score = featureScore;
-        criterion.rationale = `${vendorScore.vendor} wins ${wonRows.length} of ${decidedRows.length} complete capability rows in the displayed feature matrix.`;
+        criterion.rationale = `${vendorScore.vendor} wins ${wonRows.length} of ${scoringRows.length} complete capability rows; ${tiedRows.length} rows are neutral ties.`;
         criterion.evidence = [{
           sourceUrl: officialSources.get(vendorScore.vendor),
           sourceTitle: `${vendorScore.vendor} official product information`,
-          exactClaim: `${vendorScore.vendor} is the displayed winner in ${wonRows.length} of ${decidedRows.length} complete capability rows.`,
+          exactClaim: `${vendorScore.vendor} is the displayed winner in ${wonRows.length} of ${scoringRows.length} complete capability rows, with ${tiedRows.length} tied rows scored neutrally.`,
           retrievalDate: new Date().toISOString().slice(0, 10),
           evidenceKind: "analyst_judgment",
           supportDirection: wonRows.length ? "supports" : "context",

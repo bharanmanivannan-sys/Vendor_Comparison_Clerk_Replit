@@ -280,6 +280,51 @@ test("uses feature breadth and provider role when DXP and DAM are requested with
   );
 });
 
+test("uses the unique strategic leader when every complete software capability row is tied", () => {
+  const profile = capabilityLedSoftwarePriorityProfile(
+    "Compare Adobe AEM with competitors for Digital Experience Platforms (DXP) and Digital Asset Management (DAM)",
+  );
+  assert.ok(profile);
+  const vendors = ["Adobe AEM", "Sitecore Experience Platform", "Bynder Digital Asset Management"];
+  const analysis = {
+    features: Array.from({ length: 6 }, (_, index) => ({
+      dimension: `Capability ${index + 1}`,
+      values: Object.fromEntries(vendors.map((vendor) => [vendor, "50"])),
+      winner: `Tie: ${vendors.join(", ")}`,
+    })),
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 50,
+      providerRole: vendor === "Adobe AEM" ? "leader" : vendor.startsWith("Bynder") ? "expert" : "core_provider",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion,
+        weight,
+        score: 50,
+        rationale: "Neutral",
+        evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+
+  const result = applySoftwareCapabilityMatrixDecision(
+    analysis,
+    vendors,
+    [
+      "https://business.adobe.com/products/experience-manager/adobe-experience-manager.html",
+      "https://www.sitecore.com/products/experience-platform",
+      "https://www.bynder.com/en/digital-asset-management/",
+    ],
+    profile.weights,
+  );
+
+  assert.equal(result.sufficient, true);
+  assert.deepEqual(
+    analysis.vendorScores.map((vendor) => [vendor.vendor, vendor.score]),
+    [["Adobe AEM", 58], ["Sitecore Experience Platform", 52], ["Bynder Digital Asset Management", 54]],
+  );
+  assert.equal(analysis.features?.every((row) => row.winner?.startsWith("Tie:")), true);
+});
+
 test("ranks authoritative local and product-specific sources before generic or stale pages", () => {
   const market = inferResearchMarket("Compare home loans", ["Westpac", "ANZ"], "AU");
   const ranked = rankEvidenceSources([

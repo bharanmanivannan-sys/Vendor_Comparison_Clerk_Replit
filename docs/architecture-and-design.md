@@ -438,6 +438,8 @@ Missing or non-comparable evidence receives 50/100, the neutral midpoint. This p
 
 Capability-led software requests have a narrow qualitative profile when the user did not request pricing. Pricing and every other unrequested generic criterion receive zero weight. The server assigns 85 percent to complete feature-matrix row wins and 15 percent to the context-specific strategic provider role. This profile requires at least four complete comparable rows, an exact vendor-owned official product URL for every option returned through the authorised search provider, and one unique weighted leader. Standalone specialist slots must bind to an exact specialist product page rather than a DXP, CMS, content hub, or module. These scores are explicitly analyst interpretation, not measured product facts, and the feature score is capped below 100.
 
+An all-tied complete capability matrix remains neutral at 50 for the feature component. The strategic provider-role component then selects a winner only when exactly one option is the leader; otherwise the report remains tied.
+
 Normalization distinguishes:
 
 - Direct percentages where higher is better.
