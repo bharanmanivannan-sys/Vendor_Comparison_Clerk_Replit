@@ -115,6 +115,20 @@ test("rejects cross-market research involving unsupported Gulf countries before 
   assert.deepEqual(validated, { error: OUTSIDE_RESEARCH_SCOPE_MESSAGE });
 });
 
+test("rejects a generic weather request before research registration", async () => {
+  const validated = await validateComparisonInput(
+    { prompt: "What is the weather in Sydney tomorrow?", market: "AU", urls: [] },
+    async () => ({
+      vendors: [],
+      criteria: [],
+      context: { valid: true, segment: "Weather", message: "" },
+    }) as never,
+  );
+  assert.deepEqual(validated, {
+    error: "Enter a comparison with at least two named products, services, brands, or providers.",
+  });
+});
+
 test("submission rejects a seventh comparison option", async () => {
   const validated = await validateComparisonInput({
     prompt: "Compare seven enterprise software vendors.",

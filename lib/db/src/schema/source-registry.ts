@@ -29,7 +29,7 @@ export const sourceRegistryTable = pgTable("source_registry", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 }, (table) => [
-  uniqueIndex("source_registry_domain_unique").on(table.domain),
+  uniqueIndex("source_registry_domain_path_unique").on(table.domain, table.pathScope),
 ]);
 
 export const insertSourceRegistrySchema = createInsertSchema(sourceRegistryTable).omit({

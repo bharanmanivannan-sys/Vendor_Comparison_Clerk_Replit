@@ -421,6 +421,11 @@ export async function validateComparisonInput(
     return { error: `You can compare up to ${MAX_COMPARISON_OPTIONS} products or vendors at a time. Remove one or more options and try again.` } as const;
   }
   const vendors = hasProvidedVendors ? input.vendors as string[] : parsedPrompt.vendors;
+  if (vendors.length < 2 && !/\b(?:against|versus|vs\.?|benchmark)\b/i.test(input.prompt)) {
+    return {
+      error: "Enter a comparison with at least two named products, services, brands, or providers.",
+    } as const;
+  }
   const criteria = input.criteria?.length ? input.criteria : parsedPrompt.criteria;
   const context = hasProvidedVendors
     ? validateComparisonContext(input.prompt, vendors)

@@ -1,4 +1,4 @@
-import { and, eq, inArray, notInArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   db,
   sourceRegistryTable,
@@ -75,13 +75,21 @@ function automatedObservationValue(snapshot: PublisherPermissionSnapshot) {
   };
 }
 
-async function findRegistryEntry(domain: string): Promise<SourceRegistryEntry | null> {
-  const [entry] = await db
+async function findRegistryEntry(domain: string, pathScope: string): Promise<SourceRegistryEntry | null> {
+  const [exact] = await db
     .select()
     .from(sourceRegistryTable)
-    .where(eq(sourceRegistryTable.domain, domain))
+    .where(and(
+      eq(sourceRegistryTable.domain, domain),
+      eq(sourceRegistryTable.pathScope, pathScope),
+    ))
     .limit(1);
-  return entry ?? null;
+  if (exact) return exact;
+  const entries = await db
+    .select()
+    .from(sourceRegistryTable)
+    .where(eq(sourceRegistryTable.domain, domain));
+  return entries.find((entry) => entry.pathScope == null || entry.pathScope === "/") ?? null;
 }
 
 export const publisherPermissionRegistry: PublisherPermissionRegistry = {
@@ -92,7 +100,7 @@ export const publisherPermissionRegistry: PublisherPermissionRegistry = {
     } catch {
       return null;
     }
-    const entry = await findRegistryEntry(domain);
+    const entry = await findRegistryEntry(domain, registryPath(url));
     if (!entry) return null;
     return currentRegistrySnapshot(entry, now, registryPath(url));
   },
@@ -104,31 +112,29 @@ export const publisherPermissionRegistry: PublisherPermissionRegistry = {
     } catch {
       return null;
     }
-    const existing = await findRegistryEntry(domain);
+    const pathScope = registryPath(result.finalUrl ?? url);
+    const existing = await findRegistryEntry(domain, pathScope);
     // Automated public-web observations never rewrite reviewed licence or
     // customer-supplied policy. Expiry stops that decision authorising a
     // request, but a human must review and replace its terms and ownership.
-    if (existing && (existing.accessStatus === "LICENSED" || existing.accessStatus === "CUSTOMER_SUPPLIED")) {
+    if (existing?.decisionOrigin === "reviewed") {
       if (existing.reviewDueAt > checkedAt) return snapshot(existing);
-      const observation = observationSnapshot(domain, registryPath(result.finalUrl ?? url), result, checkedAt);
+      const observation = observationSnapshot(domain, pathScope, result, checkedAt);
       await db
         .update(sourceRegistryTable)
         .set({
           automatedObservation: automatedObservationValue(observation),
           updatedAt: checkedAt,
         })
-        .where(and(
-          eq(sourceRegistryTable.domain, domain),
-          inArray(sourceRegistryTable.accessStatus, ["LICENSED", "CUSTOMER_SUPPLIED"]),
-        ));
+        .where(eq(sourceRegistryTable.id, existing.id));
       return observation;
     }
 
-    const observation = observationSnapshot(domain, registryPath(result.finalUrl ?? url), result, checkedAt);
+    const observation = observationSnapshot(domain, pathScope, result, checkedAt);
     const values = {
       domain,
       decisionOrigin: "automated" as const,
-      pathScope: registryPath(result.finalUrl ?? url),
+      pathScope,
       sourceType: existing?.sourceType ?? "publisher" as const,
       accessStatus: observation.accessStatus,
       accessMethod: "public_web" as const,
@@ -146,9 +152,9 @@ export const publisherPermissionRegistry: PublisherPermissionRegistry = {
       .insert(sourceRegistryTable)
       .values(values)
       .onConflictDoUpdate({
-        target: sourceRegistryTable.domain,
+        target: [sourceRegistryTable.domain, sourceRegistryTable.pathScope],
         set: values,
-        setWhere: notInArray(sourceRegistryTable.accessStatus, ["LICENSED", "CUSTOMER_SUPPLIED"]),
+        setWhere: eq(sourceRegistryTable.decisionOrigin, "automated"),
       })
       .returning();
     if (stored) return snapshot(stored);
@@ -159,8 +165,8 @@ export const publisherPermissionRegistry: PublisherPermissionRegistry = {
         updatedAt: checkedAt,
       })
       .where(and(
-        eq(sourceRegistryTable.domain, domain),
-        inArray(sourceRegistryTable.accessStatus, ["LICENSED", "CUSTOMER_SUPPLIED"]),
+          eq(sourceRegistryTable.domain, domain),
+          eq(sourceRegistryTable.pathScope, pathScope),
       ));
     return observation;
   },

@@ -26,7 +26,7 @@ export function currentRegistrySnapshot(
 ): PublisherPermissionSnapshot | null {
   if (
     entry.reviewDueAt > now
-    && (entry.decisionOrigin === "reviewed" || entry.pathScope === pathname)
+    && (entry.pathScope == null || entry.pathScope === "/" || entry.pathScope === pathname)
   ) return reviewedRegistrySnapshot(entry);
   const observation = entry.automatedObservation;
   if (

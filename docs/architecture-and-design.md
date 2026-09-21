@@ -412,7 +412,7 @@ Entity matching preserves meaningful short brands and acronyms while excluding g
 
 Accepted supplied pages retain `CUSTOMER_SUPPLIED` acquisition lineage and a `primaryContext` marker in persisted report source metadata. That marker is visible in completed reports and PDF evidence tables. It indicates that the user selected the page as decision context; it does not bypass claim-level evidence verification.
 
-Before DNS, availability probing, or retrieval, the runtime consults the persistent domain-level source registry. A current prohibited or access-unavailable decision stops network activity. A current allowed, licensed, or customer-supplied decision can authorise the configured collection method until its review date; expired decisions are checked again. Automated observations use short review windows, while reviewed licence and customer decisions retain their owner and terms context.
+Before DNS, availability probing, or retrieval, the runtime consults the persistent domain-and-path source registry. Exact path decisions take precedence; only an explicit root scope is domain-wide. A current prohibited or access-unavailable decision stops network activity. A current allowed, licensed, or customer-supplied decision can authorise the configured collection method until its review date; expired decisions are checked again. Automated observations use short review windows and may be stored alongside reviewed policy, but never overwrite reviewed status, ownership, terms, allowed uses, or restrictions.
 
 The registry records domain, source type, access status and method, robots result, licence or terms notes, policy owner, review dates, allowed uses, and restrictions. Each report source retains an immutable snapshot of the governing registry decision so a later policy update does not rewrite the report's audit history. Legacy reports and clients remain valid because registry metadata is optional.
 
@@ -454,13 +454,13 @@ The report workspace calculates and exports a machine-readable release assessmen
 - `PASS_WITH_WARNINGS` when the report remains useful but material uncertainty or concentration requires explicit caution.
 - `FAIL` when a prohibited source affects scoring or a definitive recommendation lacks minimum verified coverage.
 
-The gate reports citation coverage, freshness coverage, comparable-cell coverage, unknown rate, source concentration, reasons, and remediation. A failed gate can still return an evidence-limited brief, but it must not be treated as a decision-grade winner.
+The gate reports citation coverage, freshness coverage, comparable-cell coverage, unknown rate, source concentration, historical-series comparability, reasons, and remediation. A failed gate returns an evidence-limited brief: browser and PDF outputs suppress winner labels, winner styling, score emphasis, and closest-alternative language.
 
 ### 8.7 Historical observations and forecasting
 
 Historical analysis stores yearly observations with valid time, observed time, metric key, unit, methodology, event type, evidence URL, and an explicit gap reason where applicable. The UI displays partial histories instead of hiding them, lists missing periods, and does not interpolate absent observations.
 
-Comparable history requires the same metric definition, unit, geography, population, cadence, methodology, and window across options. Material events and methodology changes are distinct from observations. Forecasts remain suppressed unless a sufficiently complete comparable series supports a stated method, horizon, assumptions, interval, and confidence.
+Comparable history requires the same metric definition, unit, geography, population, cadence, methodology, and exact valid-time window across options. A standalone complete series is still non-comparable when its cross-option signature differs. Material events and methodology changes are distinct from observations. Forecasts remain suppressed unless a sufficiently complete comparable series supports a stated method, horizon, assumptions, interval, and confidence.
 
 ### 8.8 Domain-specific controls
 

@@ -84,3 +84,28 @@ test("automated robots decisions are reusable only for the exact checked path", 
   assert.equal(currentRegistrySnapshot(publicAllowed, now, "/public")?.accessStatus, "ALLOWED");
   assert.equal(currentRegistrySnapshot(publicAllowed, now, "/private"), null);
 });
+
+test("reviewed decisions are reusable only for their reviewed path scope", () => {
+  const reviewed = {
+    id: 3,
+    domain: "publisher.example",
+    decisionOrigin: "reviewed",
+    pathScope: "/licensed",
+    sourceType: "publisher",
+    accessStatus: "ALLOWED",
+    accessMethod: "public_web",
+    robotsResult: "allowed",
+    licenceOrTermsNotes: "Reviewed for one product area.",
+    owner: "Research governance",
+    reviewedAt: new Date("2026-09-21T00:00:00.000Z"),
+    reviewDueAt: new Date("2026-09-22T00:00:00.000Z"),
+    allowedUses: ["comparison_evidence"],
+    restrictions: [],
+    automatedObservation: null,
+    createdAt: new Date("2026-09-21T00:00:00.000Z"),
+    updatedAt: new Date("2026-09-21T00:00:00.000Z"),
+  } satisfies SourceRegistryEntry;
+  const now = new Date("2026-09-21T01:00:00.000Z");
+  assert.equal(currentRegistrySnapshot(reviewed, now, "/licensed")?.owner, "Research governance");
+  assert.equal(currentRegistrySnapshot(reviewed, now, "/other"), null);
+});

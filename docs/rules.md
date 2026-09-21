@@ -56,6 +56,7 @@ Search results may identify candidates, but scoreable claims must come from dire
 8. Revalidate redirect destinations and cached destinations against private-network controls.
 9. Bound supplied-source validation by per-owner request limits and global retrieval concurrency.
 10. Derive source relevance from the canonical compared entities. Generic product descriptors must not independently make an unrelated page eligible.
+11. Scope publisher decisions by domain and normalized path. Automated observations must never overwrite reviewed status, ownership, terms, allowed uses, or restrictions.
 
 ## 5. Evidence Normalisation
 
@@ -120,6 +121,8 @@ The gate must evaluate at least:
 
 A failed gate may return a useful evidence-limited brief, but it must suppress a definitive ranking. JSON exports must include the machine-readable gate result, reasons, metrics, and remediation.
 
+Browser reports and PDF exports must label failed-gate results as evidence-limited, hide winner styling and scores, and avoid closest-alternative language.
+
 ## 8. Historical Analysis and Forecasting
 
 1. Historical observations are immutable, dated records.
@@ -131,6 +134,7 @@ A failed gate may return a useful evidence-limited brief, but it must suppress a
 7. Do not present forecasts as observed facts.
 8. Suppress forecasts unless the historical series is sufficiently complete and comparable.
 9. Forecasts must state method, horizon, assumptions, interval, and confidence.
+10. Treat cross-option metric, unit, methodology, or valid-time mismatches as non-comparable even when each option has a complete standalone series.
 
 ## 9. API and Data Contracts
 
