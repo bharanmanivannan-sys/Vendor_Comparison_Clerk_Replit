@@ -49,6 +49,7 @@ import {
   parsePrompt,
   parsePromptWithIntent,
   preferredIndiaEvModelSelection,
+  preserveConcreteDiscoveryOptions,
   reweightAnalysis,
   reconcileRecommendationDecision,
   reconcileFinalRecommendationNarrative,
@@ -2531,6 +2532,45 @@ test("treats open-ended legacy migration fragments as discovery objectives", asy
     { vendor: "Kobble" },
     { vendor: "Change Financial" },
   ]), ["Kobble", "Change Financial"]);
+});
+
+test("treats generic AEM competitor wording as discovery objectives", () => {
+  const parsed = parsePrompt(
+    "Compare Adobe AEM against it's competitors and let me know where it stands",
+  );
+
+  assert.deepEqual(parsed.vendors, [
+    "Adobe AEM",
+    "it's competitors",
+    "let me know where it stands",
+  ]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[0]), false);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[2]), true);
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(parsed.vendors, [
+      "Sitecore Experience Platform",
+      "Adobe Experience Manager (AEM)",
+      "Acquia DXP",
+    ]),
+    ["Adobe AEM", "Sitecore Experience Platform", "Acquia DXP"],
+  );
+});
+
+test("keeps an explicit AEM and Sitecore comparison authoritative", () => {
+  const parsed = parsePrompt(
+    "Compare Adobe AEM vs Sitecore Experience Platform for enterprise DXP and DAM",
+  );
+
+  assert.deepEqual(parsed.vendors, ["Adobe AEM", "Sitecore Experience Platform"]);
+  assert.equal(parsed.vendors.some(isObjectivePhraseVendor), false);
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(parsed.vendors, [
+      "Acquia DXP",
+      "Optimizely One",
+    ]),
+    ["Adobe AEM", "Sitecore Experience Platform"],
+  );
 });
 
 test("never preserves an objective phrase as the recommendation label", () => {

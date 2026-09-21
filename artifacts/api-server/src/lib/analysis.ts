@@ -1070,11 +1070,38 @@ function isPlaceholderVendor(value: string): boolean {
 export function isObjectivePhraseVendor(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return isPlaceholderVendor(value)
+    || /^(?:(?:it(?:'|’)?s|its|their|the|other|main|top|leading)\s+)?competitors?$/.test(normalized)
+    || /^let\s+me\s+know\b.*\bwhere\b.*\bstands?\b/.test(normalized)
     || /^(?:across|among|within|for)\b/.test(normalized)
     || /\b(?:my|our|your|their)\s+(?:products?|services?|business|customers?|market|team|organisation|organization)\b/.test(normalized)
     || /^(?:products?|services?|features?|capabilities?|requirements?|objectives?|use cases?)\s+(?:for|across|within|in|to|that|which)\b/.test(normalized)
     || /\b(?:legacy systems?|modern platforms?|anything exists?|would help|could help)\b/.test(normalized)
     || /^(?:do|help|what|which|how|if|whether)\b/.test(normalized);
+}
+
+export function preserveConcreteDiscoveryOptions(
+  requested: string[],
+  discovered: string[],
+): string[] {
+  const concrete = requested.filter((vendor) => !isObjectivePhraseVendor(vendor));
+  const normalizedTokens = (value: string): string[] => value
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
+  const preserved = concrete.map((vendor) => ({
+    exact: vendor.toLowerCase(),
+    tokens: normalizedTokens(vendor),
+  }));
+  const alternatives = discovered.filter((vendor) => (
+    !isObjectivePhraseVendor(vendor)
+    && !preserved.some((option) => (
+      option.exact === vendor.toLowerCase()
+      || (
+        option.tokens.length >= 2
+        && option.tokens.every((token) => normalizedTokens(vendor).includes(token))
+      )
+    ))
+  ));
+  return Array.from(new Set([...concrete, ...alternatives])).slice(0, requested.length);
 }
 
 export function selectRecommendationLabel(
@@ -4707,6 +4734,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (vendorDiscoveryWasRequired) {
       const requestedCount = input.vendors.length;
       const requestedManufacturers = [...input.vendors];
+      const concreteRequestedOptions = requestedManufacturers.filter((vendor) => !isObjectivePhraseVendor(vendor));
+      const objectiveRequestedOptions = requestedManufacturers.filter(isObjectivePhraseVendor);
       const preferredIndiaEvModels = preferredIndiaEvModelSelection(
         input.vendors,
         input.market,
@@ -4747,7 +4776,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                   ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
                   : isBrandLevelModelSelection
                     ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "product"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : ""}`
-                    : `Choose exactly ${requestedCount} products that best fit the stated decision. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
+                    : `Choose exactly ${requestedCount} products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
                 shape: {
                   vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
                   candidatesByManufacturer: Object.fromEntries(input.vendors.map((vendor) => [
@@ -4903,7 +4932,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           .map((vendor) => isBrandLevelModelSelection ? normalizeCurrentModelSelectionName(vendor) : vendor)
           .filter((vendor) => vendor && !isObjectivePhraseVendor(vendor)),
       ));
-      let discoveredVendors = normalizeDiscoveredVendors(rawDiscoveredVendors);
+      let discoveredVendors = isBrandLevelModelSelection
+        ? normalizeDiscoveredVendors(rawDiscoveredVendors)
+        : preserveConcreteDiscoveryOptions(
+            requestedManufacturers,
+            normalizeDiscoveredVendors(rawDiscoveredVendors),
+          );
       if (discoveredVendors.length !== requestedCount) {
         const repairResponse = await client.chat.completions.create({
           model: "gpt-4.1-mini",
@@ -4911,16 +4945,28 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           messages: [
             {
               role: "system",
-              content: "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft.",
+              content: isBrandLevelModelSelection
+                ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
+                : "Repair the competitor-selection draft into one valid JSON object. Preserve every concrete option named by the user, replace generic competitor or objective phrases with exact current product names, and return exactly the requested number of unique comparable products. Never return categories, objectives, request text, placeholders, or duplicate products.",
             },
             {
               role: "user",
               content: JSON.stringify({
                 prompt: input.prompt,
                 manufacturers: requestedManufacturers,
+                concreteOptionsToPreserve: concreteRequestedOptions,
+                objectivePhrasesToReplace: objectiveRequestedOptions,
                 malformedDiscovery: discovery,
                 requiredShape: {
-                  vendors: requestedManufacturers.map((manufacturer) => `${manufacturer} exact current model-family name`),
+                  vendors: isBrandLevelModelSelection
+                    ? requestedManufacturers.map((manufacturer) => `${manufacturer} exact current model-family name`)
+                    : [
+                        ...concreteRequestedOptions,
+                        ...Array.from(
+                          { length: requestedCount - concreteRequestedOptions.length },
+                          (_, index) => `Exact current competitor ${index + 1} name`,
+                        ),
+                      ],
                   selectionRationale: "",
                   alternatives: [{ name: "", rationale: "", tradeOffs: "" }],
                 },
@@ -4934,7 +4980,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           rawDiscoveredVendors = Array.isArray((discovery as { vendors?: unknown }).vendors)
             ? (discovery as { vendors: unknown[] }).vendors
             : [];
-          discoveredVendors = normalizeDiscoveredVendors(rawDiscoveredVendors);
+          discoveredVendors = isBrandLevelModelSelection
+            ? normalizeDiscoveredVendors(rawDiscoveredVendors)
+            : preserveConcreteDiscoveryOptions(
+                requestedManufacturers,
+                normalizeDiscoveredVendors(rawDiscoveredVendors),
+              );
         }
         if (discoveredVendors.length !== requestedCount) {
           throw new Error("Product discovery did not return a complete concrete shortlist.");

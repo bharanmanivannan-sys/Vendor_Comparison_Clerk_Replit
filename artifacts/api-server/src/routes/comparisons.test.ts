@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parsePromptWithIntent } from "../lib/analysis";
+import { isObjectivePhraseVendor, parsePromptWithIntent } from "../lib/analysis";
 import {
   comparisonFailureMessage,
   comparisonJobElapsedMs,
@@ -90,6 +90,31 @@ test("submission accepts six explicitly provided comparison options", async () =
   assert.ok(!("error" in validated));
   if ("error" in validated) return;
   assert.deepEqual(validated.vendors, vendors);
+});
+
+test("routes generic AEM competitor wording into concrete option discovery", async () => {
+  const prompt = "Compare Adobe AEM against it's competitors and let me know where it stands";
+  const validated = await validateComparisonInput(
+    { prompt, market: "AU", urls: [] },
+    (value) => parsePromptWithIntent(value, async () => ({
+      options: ["Adobe AEM"],
+      subject: "Digital experience platforms",
+      decisionType: "comparison",
+      category: "Digital experience platforms",
+      useCase: "Enterprise DXP and DAM",
+      qualifiers: [],
+      decisionCriterion: "market position and capability",
+      freshness: "current",
+      confidence: 0.9,
+      clarification: "",
+    })),
+  );
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+  if ("error" in validated) return;
+  assert.equal(validated.vendors[0], "Adobe AEM");
+  assert.equal(isObjectivePhraseVendor(validated.vendors[1]), true);
+  assert.equal(isObjectivePhraseVendor(validated.vendors[2]), true);
 });
 
 test("submission preserves the user-selected research market while URLs remain optional", async () => {
