@@ -5060,7 +5060,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       if (!preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio) {
         const discoveryResponse = await client.responses.create({
           model: "gpt-4.1-mini",
-          max_output_tokens: 2000,
+          max_output_tokens: 5000,
           tools: [{
             type: "web_search",
             search_context_size: "medium",
@@ -5107,7 +5107,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         if (discoveryResponse.status !== "completed" || !discoveryResponse.output_text) {
           throw new Error("Product discovery returned no shortlist.");
         }
-        discovery = parseJsonObject(discoveryResponse.output_text);
+        try {
+          discovery = parseJsonObject(discoveryResponse.output_text);
+        } catch {
+          discovery = {};
+        }
       }
       if (isBrandLevelModelSelection && !preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio) {
         const adjudicationResponse = await client.chat.completions.create({
@@ -5296,7 +5300,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         } else {
           const repairResponse = await client.responses.create({
             model: "gpt-4.1-mini",
-            max_output_tokens: 1800,
+            max_output_tokens: 3500,
             tools: [{
               type: "web_search",
               search_context_size: "medium",
