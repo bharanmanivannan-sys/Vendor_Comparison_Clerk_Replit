@@ -442,7 +442,9 @@ An all-tied complete capability matrix remains neutral at 50 for the feature com
 
 Comparison intake performs deterministic domain and market-availability checks before any research job is created. Product-specific banking requests reject non-banking entities, known cross-domain pairs reject unless the user explicitly requests a shared cross-sector criterion, and maintained entity-footprint rules reject options outside the selected geography with a corrective message.
 
-Open-ended competitor requests may name one concrete entity and one objective phrase such as “other e-commerce sites” or “leading competitors.” Intake treats the objective as a discovery slot rather than requiring a second named brand. The discovery stage preserves the concrete entity and replaces only the objective slot with an exact, locally available competitor verified from an official product or service page.
+Open-ended competitor requests may name one concrete entity and one objective phrase such as “other e-commerce sites” or “leading competitors.” Intake treats the objective as discovery intent rather than requiring a second named brand. The discovery stage targets four total options, preserves the concrete entity, and fills up to three slots with exact, locally available competitors verified from official product or service pages.
+
+If official claims cannot separate the shortlist, research may use a review-signal fallback. It requires retrieved, comparable evidence for every option and records multiple independent sources, recency, publisher or reviewer credibility, structured rating and scale, review count, balanced detail, and incentive risk. The report explains the calculation and labels the result as review-based. Missing or unverifiable review evidence cannot produce a winner.
 
 Normalization distinguishes:
 

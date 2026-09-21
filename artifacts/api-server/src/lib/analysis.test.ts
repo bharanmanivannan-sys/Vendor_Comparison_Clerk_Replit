@@ -20,6 +20,7 @@ import {
   canonicalVendorScoreRows,
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
+  discoveryTargetCount,
   electricVehicleFinalQualityIssues,
   evidenceSufficiency,
   enforceBaasTotalCostAssumptions,
@@ -28,6 +29,7 @@ import {
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
   hasFiveYearMarketHistoryCoverage,
+  hasVerifiedIndependentReviewCoverage,
   hasRequiredDiscoveryLensCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
@@ -2681,6 +2683,50 @@ test("treats a domain brand plus other ecommerce sites as competitor discovery",
   assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
   assert.equal(parsed.context.valid, true);
   assert.equal(inferResearchMarket(parsed.prompt, parsed.vendors).countryCode, "IN");
+  assert.equal(discoveryTargetCount(parsed.vendors), 4);
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(parsed.vendors, ["Cars24", "CarTrade", "CarWale", "Droom"], 4),
+    ["Cardekho.com", "Cars24", "CarTrade", "CarWale"],
+  );
+});
+
+test("permits a review-signal decision only with recent retrieved ratings from two independent domains per option", () => {
+  const vendors = ["Cardekho.com", "Cars24"];
+  const analysis = {
+    vendorScores: vendors.map((vendor, vendorIndex) => ({
+      vendor,
+      weightedScores: [{
+        criterion: "Customer Advocacy / NPS",
+        weight: 10,
+        score: 70 - vendorIndex * 5,
+        rationale: "Independent review signal.",
+        evidence: ["reviews.example", "ratings.example"].map((hostname, sourceIndex) => ({
+          sourceUrl: `https://${hostname}/${vendorIndex}/${sourceIndex}`,
+          sourceDate: "2026-09-01",
+          retrievalDate: "2026-09-21",
+          exactClaim: `${vendor} has a structured review rating.`,
+          metricKey: "review_rating",
+          rawMetricValue: 4.2 - vendorIndex * 0.2,
+          rawMetricUnit: "stars/5",
+          sampleSize: 100,
+          evidenceKind: "quantitative" as const,
+          supportDirection: "supports" as const,
+          confidence: 75,
+          normalizedScore: 84 - vendorIndex * 4,
+          criterionWeight: 10,
+          weightedContribution: 8.4 - vendorIndex * 0.4,
+          normalizationMethod: "retrieved_document_metric",
+          documentSha256: String(sourceIndex + vendorIndex + 1).repeat(64),
+          sourceTextStart: 0,
+          sourceTextEnd: 20,
+        })),
+      }],
+    })),
+  } as unknown as AnalysisPayload;
+
+  assert.equal(hasVerifiedIndependentReviewCoverage(analysis, vendors, new Date("2026-09-21T00:00:00Z")), true);
+  analysis.vendorScores[0].weightedScores![0].evidence![1].sampleSize = 5;
+  assert.equal(hasVerifiedIndependentReviewCoverage(analysis, vendors, new Date("2026-09-21T00:00:00Z")), false);
 });
 
 test("keeps an explicit AEM and Sitecore comparison authoritative", () => {

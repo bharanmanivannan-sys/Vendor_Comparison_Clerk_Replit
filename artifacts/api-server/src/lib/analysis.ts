@@ -1136,6 +1136,7 @@ export function isObjectivePhraseVendor(value: string): boolean {
 export function preserveConcreteDiscoveryOptions(
   requested: string[],
   discovered: string[],
+  targetCount = requested.length,
 ): string[] {
   const concrete = requested.filter((vendor) => !isObjectivePhraseVendor(vendor));
   const normalizedTokens = (value: string): string[] => value
@@ -1162,7 +1163,15 @@ export function preserveConcreteDiscoveryOptions(
       )
     ));
   });
-  return Array.from(new Set([...concrete, ...alternatives])).slice(0, requested.length);
+  return Array.from(new Set([...concrete, ...alternatives])).slice(0, targetCount);
+}
+
+export function discoveryTargetCount(requested: string[]): number {
+  const concreteCount = requested.filter((vendor) => !isObjectivePhraseVendor(vendor)).length;
+  const objectiveCount = requested.length - concreteCount;
+  return concreteCount === 1 && objectiveCount >= 1
+    ? Math.min(4, MAX_COMPARISON_OPTIONS)
+    : requested.length;
 }
 
 export function hasRequiredDiscoveryLensCoverage(
@@ -2748,6 +2757,42 @@ export function evidenceSufficiency(
     comparableCriteria,
     allScoresNeutral,
   };
+}
+
+export function hasVerifiedIndependentReviewCoverage(
+  analysis: AnalysisPayload,
+  vendors: string[],
+  asOf = new Date(),
+): boolean {
+  const oldest = new Date(asOf);
+  oldest.setUTCFullYear(oldest.getUTCFullYear() - 1);
+  const normalizedVendor = (value: string) => value.toLowerCase().match(/[a-z0-9]+/g)?.filter((token) => token.length >= 4) ?? [];
+  return vendors.every((vendor) => {
+    const vendorScore = analysis.vendorScores.find((row) => row.vendor.toLowerCase() === vendor.toLowerCase());
+    if (!vendorScore) return false;
+    const vendorTokens = normalizedVendor(vendor);
+    const reviewRows = (vendorScore.weightedScores ?? []).flatMap((criterion) => criterion.evidence ?? []).filter((evidence) => {
+      if (
+        evidence.metricKey !== "review_rating"
+        || typeof evidence.rawMetricValue !== "number"
+        || !evidence.sourceUrl
+        || !evidence.sourceDate
+        || !evidence.documentSha256
+        || evidence.normalizationMethod !== "retrieved_document_metric"
+        || (evidence.sampleSize ?? 0) < 20
+      ) return false;
+      const sourceDate = new Date(`${evidence.sourceDate}T00:00:00Z`);
+      if (Number.isNaN(sourceDate.getTime()) || sourceDate < oldest || sourceDate > asOf) return false;
+      try {
+        const hostname = new URL(evidence.sourceUrl).hostname.toLowerCase();
+        return !vendorTokens.some((token) => hostname.includes(token));
+      } catch {
+        return false;
+      }
+    });
+    const independentDomains = new Set(reviewRows.map((evidence) => new URL(evidence.sourceUrl!).hostname.toLowerCase()));
+    return independentDomains.size >= 2;
+  });
 }
 
 export function assertSufficientComparisonEvidence(
@@ -4991,7 +5036,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     let discoveredSelectionRationale = "";
     let discoveredOfficialProductUrls: string[] = [];
     if (vendorDiscoveryWasRequired) {
-      const requestedCount = input.vendors.length;
+      const requestedCount = discoveryTargetCount(input.vendors);
       const requestedManufacturers = [...input.vendors];
       const concreteRequestedOptions = requestedManufacturers.filter((vendor) => !isObjectivePhraseVendor(vendor));
       const objectiveRequestedOptions = requestedManufacturers.filter(isObjectivePhraseVendor);
@@ -5201,6 +5246,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         : preserveConcreteDiscoveryOptions(
             requestedManufacturers,
             normalizeDiscoveredVendors(rawDiscoveredVendors),
+            requestedCount,
           );
       if (
         discoveredVendors.length !== requestedCount
@@ -5273,6 +5319,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             : preserveConcreteDiscoveryOptions(
                 requestedManufacturers,
                 normalizeDiscoveredVendors(rawDiscoveredVendors),
+                requestedCount,
               );
         }
         if (
@@ -5416,6 +5463,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "Never treat search-result snippets, AI summaries, affiliate pages, anonymous posts, forums, or user-generated reviews as authoritative evidence.",
       "Treat user-provided URLs as primary context sources, but not automatically valid evidence. Use them only when they are directly relevant to the named option, criterion, market, and requested time period. Exclude irrelevant pages and outdated resources; never use an old source merely to fill an evidence gap.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
+      "When official product claims cannot establish a winner, evaluate independent review signals only from retrieved public pages. Use at least two independent sources per option where available; record review or update date, publisher, reviewer or methodology credibility, structured rating and scale, sample size or review count, balanced pros and cons, and any incentive or affiliate disclosure. Prefer recent named-methodology reviews and structured ratings. Penalize stale, one-sided, low-sample, anonymous, incentivized, or affiliate evidence. Never treat a search snippet or an unverified review summary as evidence. Explain the review-signal calculation and confidence. Declare a review-based winner only when comparable retrieved review evidence covers every ranked option and produces a meaningful score separation; otherwise keep 'No exact winner'. Use metricKey review_rating for comparable ratings and review_count for sample size.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
     ].join(" ");
@@ -5951,7 +5999,15 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         );
       }
     }
-    const minimumDeterministicWeight = batteryServiceInstructions || isProviderLevelHomeLoanDiscovery
+    const hasReviewSignalCoverage = hasVerifiedIndependentReviewCoverage(normalized, resolvedVendors);
+    if (hasReviewSignalCoverage) {
+      normalized.insights.unshift(
+        "Review-signal basis — The ranking uses comparable retrieved ratings from at least two recent independent domains per option, each with a disclosed sample of at least 20 reviews. Official claims did not establish the ordering; review recency, source independence, sample size, balanced detail, and incentive risk determine confidence.",
+      );
+    }
+    const minimumDeterministicWeight = hasReviewSignalCoverage
+      ? 10
+      : batteryServiceInstructions || isProviderLevelHomeLoanDiscovery
       ? 20
       : isPreOwnedVehicleComparison && userSuppliedUrls.length
         ? 20
@@ -5971,9 +6027,13 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const protectedPortfolioInsights = normalized.insights.filter((insight) => (
       insight.startsWith("Model selection rationale —")
       || insight.startsWith("Alternative outside comparison —")
+      || insight.startsWith("Review-signal basis —")
     ));
     await synthesizeValidatedDecision(client, input, researchMarket, normalized);
     reconcileFinalRecommendationNarrative(normalized);
+    if (hasReviewSignalCoverage && !insufficientEvidence && normalized.recommendation !== "No exact winner") {
+      normalized.recommendationReason = `Review-signal winner: ${normalized.recommendation} leads on comparable recent independent review ratings with verified multi-source coverage. ${normalized.recommendationReason}`;
+    }
     for (const insight of [...protectedPortfolioInsights].reverse()) {
       if (!normalized.insights.includes(insight)) normalized.insights.unshift(insight);
     }

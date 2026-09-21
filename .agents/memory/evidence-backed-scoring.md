@@ -38,3 +38,9 @@ Strategic provider role has a fixed 2% allocation removed from Innovation, and i
 **Why:** Equal evidence scores need a transparent, contract-visible decision rule rather than a hidden recommendation-only tie break.
 
 **How to apply:** Normalize the 98% evidence criteria to a 100-point base score. Award two points only when one tied leader has uniquely higher role precedence; expose base and bonus, and do not choose arbitrarily between equal roles.
+
+Independent review ratings may establish a review-signal winner only when every option has recent retrieved ratings from at least two non-vendor domains, with document provenance and meaningful samples. Explain the basis and confidence.
+
+**Why:** Official claims may not provide comparable outcomes, but a single review site, snippet, stale rating, or model-authored summary is too easy to manipulate or misattribute.
+
+**How to apply:** Require comparable rating scales, source dates within the freshness window, at least 20 reviews per observation, distinct independent domains, and retrieved hash/span provenance. Otherwise keep the result neutral.

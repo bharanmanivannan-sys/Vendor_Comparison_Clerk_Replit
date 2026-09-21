@@ -11,6 +11,8 @@ When a prompt describes an objective without naming real options, resolve the sh
 
 When a prompt names one concrete option and asks for its competitors, preserve the named option exactly and replace only the generic competitor phrases. Remove aliases of the preserved option from discovered competitor slots; fail closed if repair still cannot fill every slot with a unique concrete product.
 
+When no competitor is explicitly named, target a four-option shortlist: the preserved option plus up to three concrete local competitors.
+
 **Why:** A discovery model can return both an acronym and expanded name for the same product, creating the appearance of multiple competitors while ranking the same product twice.
 
 Multi-lens requests must fill the shortlist across the named lenses, not with several near-identical peers. Require explicit search-backed roles and official product URLs for each slot, then fail closed if the role mix is incomplete.
