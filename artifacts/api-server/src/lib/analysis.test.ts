@@ -33,6 +33,7 @@ import {
   hasRequiredDiscoveryLensCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
+  isDealershipComparisonRequest,
   isElectricVehiclePrompt,
   isSafetyFirstVehicleQuery,
   isObjectivePhraseVendor,
@@ -2688,6 +2689,16 @@ test("treats a domain brand plus other ecommerce sites as competitor discovery",
     preserveConcreteDiscoveryOptions(parsed.vendors, ["Cars24", "CarTrade", "CarWale", "Droom"], 4),
     ["Cardekho.com", "Cars24", "CarTrade", "CarWale"],
   );
+});
+
+test("recognizes an open Toyota dealer request as a dealership service comparison", () => {
+  const prompt = "Can you compare Castle Hill Toyota against it's competitors? Are they good dealers for Toyota vehicle?";
+  const parsed = parsePrompt(prompt);
+
+  assert.deepEqual(parsed.vendors, ["Castle Hill Toyota", "it's competitors"]);
+  assert.equal(isDealershipComparisonRequest(prompt, parsed.vendors), true);
+  assert.equal(discoveryTargetCount(parsed.vendors), 4);
+  assert.equal(inferResearchMarket(prompt, parsed.vendors).countryCode, "AU");
 });
 
 test("permits a review-signal decision only with recent retrieved ratings from two independent domains per option", () => {

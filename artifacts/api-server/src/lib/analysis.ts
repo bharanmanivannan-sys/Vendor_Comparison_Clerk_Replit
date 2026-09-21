@@ -1174,6 +1174,12 @@ export function discoveryTargetCount(requested: string[]): number {
     : requested.length;
 }
 
+export function isDealershipComparisonRequest(prompt: string, requested: string[]): boolean {
+  const normalized = `${prompt} ${requested.join(" ")}`.toLowerCase();
+  return /\b(?:dealer|dealers|dealership|dealerships|authorised dealer|authorized dealer)\b/.test(normalized)
+    && /\b(?:car|cars|vehicle|vehicles|automotive|toyota|ford|mazda|hyundai|kia|honda|nissan|subaru)\b/.test(normalized);
+}
+
 export function hasRequiredDiscoveryLensCoverage(
   prompt: string,
   discovery: unknown,
@@ -5032,6 +5038,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor)
       || isBrandLevelBaasComparison
       || isBrandLevelModelSelection;
+    const isDealershipComparison = isDealershipComparisonRequest(input.prompt, input.vendors);
     let discoveredAlternativeInsights: string[] = [];
     let discoveredSelectionRationale = "";
     let discoveredOfficialProductUrls: string[] = [];
@@ -5076,7 +5083,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               content: JSON.stringify({
                 prompt: input.prompt,
                 numberOfProducts: requestedCount,
-                instructions: isBrandLevelBaasComparison
+                instructions: isDealershipComparison
+                  ? `Choose exactly ${requestedCount} unique authorised motor-vehicle dealerships that are genuinely comparable for this local buying-and-servicing decision. Preserve these named dealerships exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only the generic competitor phrases with current dealerships serving the same metropolitan area and selling or servicing the same vehicle brand, Toyota in this request. Compare dealership businesses and their sales, service, parts, finance, warranty support, customer experience, and location convenience—not Toyota vehicle models, manufacturers, marketplaces, or unrelated dealer groups. Verify every selected dealership using its official local dealer website or the manufacturer's official dealer locator. Return the official dealership homepage in selectionRoles.`
+                  : isBrandLevelBaasComparison
                   ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
                   : isBrandLevelModelSelection
                     ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "product"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : ""}`
@@ -5266,6 +5275,8 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       ) {
         const repairSystem = isBrandLevelModelSelection
           ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
+          : isDealershipComparison
+            ? "Repair the search-backed dealership shortlist into one valid JSON object. Preserve every dealership named by the user and return exactly the requested number of unique, current, comparable authorised dealerships in the same metropolitan market. Every competitor must sell or service the same vehicle brand and must have an official local dealer website or manufacturer dealer-locator page. Return dealership businesses, not vehicle models, manufacturers, marketplaces, generic dealer groups, categories, objectives, or placeholders."
           : "Repair the search-backed competitor-selection draft into one valid JSON object. Preserve every concrete option named by the user, replace generic competitor or objective phrases with exact current product names verified from official product pages, and return exactly the requested number of unique comparable products. An acronym, expanded name, edition, module, or alias of a preserved product is the same product and cannot occupy a competitor slot. If the prompt asks about multiple lenses such as DXP and DAM, include a broad platform peer and a focused specialist alternative. The standalone DAM must be primarily marketed as a DAM product, not a DXP, CMS, content hub, or DAM module, and its officialUrl must be the vendor's exact DAM page containing DAM or digital-asset-management in the URL. Every officialUrl hostname must belong to the selected product's vendor. Never return categories, objectives, request text, placeholders, or duplicate products.";
         const repairPayload = JSON.stringify({
           prompt: input.prompt,
@@ -5322,15 +5333,20 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           repairedContent = repairResponse.status === "completed" ? repairResponse.output_text : undefined;
         }
         if (repairedContent) {
-          discovery = parseJsonObject(repairedContent);
-          rawDiscoveredVendors = discoveryVendorCandidates(discovery);
-          discoveredVendors = isBrandLevelModelSelection
-            ? normalizeDiscoveredVendors(rawDiscoveredVendors)
-            : preserveConcreteDiscoveryOptions(
-                requestedManufacturers,
-                normalizeDiscoveredVendors(rawDiscoveredVendors),
-                requestedCount,
-              );
+          try {
+            const repairedDiscovery = parseJsonObject(repairedContent);
+            discovery = repairedDiscovery;
+            rawDiscoveredVendors = discoveryVendorCandidates(discovery);
+            discoveredVendors = isBrandLevelModelSelection
+              ? normalizeDiscoveredVendors(rawDiscoveredVendors)
+              : preserveConcreteDiscoveryOptions(
+                  requestedManufacturers,
+                  normalizeDiscoveredVendors(rawDiscoveredVendors),
+                  requestedCount,
+                );
+          } catch {
+            // Keep any valid candidates recovered from the first search response.
+          }
         }
         if (
           discoveredVendors.length !== requestedCount
@@ -5486,6 +5502,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const quickCommerceInstructions = isQuickCommerceComparison
       ? "For this Zepto and Blinkit quick-commerce comparison, preserve the exact provider names. Compare product assortment, item and delivery pricing, promised or observed delivery time, and product quality or freshness. Use the supplied current India sources before searching for more. Record numeric evidence as product_count (products), delivery_time (minutes), delivery_within_target_rate (percent), delivery_fee (INR), or price (INR) only when the source states the exact value and basis. Do not compare unlike baskets, cities, time periods, or thresholds as equivalent. Keep quality neutral when no comparable named-methodology measure exists. "
       : "";
+    const dealershipInstructions = isDealershipComparison
+      ? `This is a dealership service comparison, not a comparison of vehicle models or manufacturers. Compare the exact shortlisted authorised dealerships for buying and owning a ${/\btoyota\b/i.test(input.prompt) ? "Toyota" : "vehicle"} in the user's local metropolitan market. Assess official sales inventory and ordering support, servicing and parts, opening hours and location convenience, finance and trade-in services, manufacturer warranty and recall support, facilities, customer communication, complaint handling, and independently verified customer-review signals. Separate manufacturer-standard vehicle and warranty facts from dealer-specific service performance. Use the manufacturer's official dealer locator and each dealer's official local pages for identity and offered services. Use recent independent review evidence only under the multi-source review gate; do not infer dealer quality from the Toyota brand or from a single rating.`
+      : "";
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
     const isProviderLevelHomeLoanDiscovery = context.segment === "Home loans";
     const requiresFiveYearHomeLoanTrend = requestsFiveYearHomeLoanTrend(input.prompt);
@@ -5542,7 +5561,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               shape: analysisOutputShape(researchShapeVendors, isProviderLevelHomeLoanDiscovery, isElectricVehicleComparison),
               marketResearchInstructions,
               batteryServiceInstructions,
-              researchScope: `${quickCommerceInstructions}First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.`,
+              researchScope: `${dealershipInstructions}${quickCommerceInstructions}First establish the contextual business requirements: industry, objective, current and target arrangement, regulatory and security requirements, customer-experience goals, operational and budget constraints, time to market, integration landscape, data migration, and technical maturity. Explicitly label missing details as assumptions. Assess strategic fit, functional and technical capability, vendor maturity, commercial TCO, migration effort, lock-in, delivery, security, compliance, continuity, and future readiness. Emphasize like-for-like product equivalency, functional gaps, business-service-to-product arrangements, migration sequencing, and decision governance. Research customer outcomes, reliability, value, reputation, support, innovation, roadmap, scalability, APIs, performance, partner ecosystem, and credible outside-shortlist options. Never recommend solely on cost; prioritize long-term value, risk reduction, and strategic alignment.`,
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? `${providerRoleInstructions}Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official ${researchMarket.country} card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs.`
                 : isProviderLevelHomeLoanDiscovery

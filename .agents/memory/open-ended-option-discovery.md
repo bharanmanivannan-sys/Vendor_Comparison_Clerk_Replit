@@ -13,6 +13,8 @@ When a prompt names one concrete option and asks for its competitors, preserve t
 
 When no competitor is explicitly named, target a four-option shortlist: the preserved option plus up to three concrete local competitors.
 
+Treat explicit dealer/dealership requests as service-provider discovery. Discover same-brand authorised dealers in the same metropolitan market; never substitute vehicle models, manufacturers, or marketplaces.
+
 **Why:** A discovery model can return both an acronym and expanded name for the same product, creating the appearance of multiple competitors while ranking the same product twice.
 
 Multi-lens requests must fill the shortlist across the named lenses, not with several near-identical peers. Require explicit search-backed roles and official product URLs for each slot, then fail closed if the role mix is incomplete.
