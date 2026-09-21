@@ -5233,10 +5233,18 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           }
         }
       }
+      const discoveryVendorCandidates = (value: Record<string, unknown>): unknown[] => [
+        ...(Array.isArray(value.vendors) ? value.vendors : []),
+        ...(Array.isArray(value.selectionRoles)
+          ? value.selectionRoles.flatMap((role) => (
+              role && typeof role === "object" && typeof (role as { vendor?: unknown }).vendor === "string"
+                ? [(role as { vendor: string }).vendor]
+                : []
+            ))
+          : []),
+      ];
       let rawDiscoveredVendors: unknown[] = preferredIndiaEvModels
-        ?? (Array.isArray((discovery as { vendors?: unknown }).vendors)
-          ? (discovery as { vendors: unknown[] }).vendors
-          : []);
+        ?? discoveryVendorCandidates(discovery);
       const normalizeDiscoveredVendors = (values: unknown[]) => Array.from(new Set(
         values
           .map((vendor) => typeof vendor === "string"
@@ -5315,9 +5323,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         }
         if (repairedContent) {
           discovery = parseJsonObject(repairedContent);
-          rawDiscoveredVendors = Array.isArray((discovery as { vendors?: unknown }).vendors)
-            ? (discovery as { vendors: unknown[] }).vendors
-            : [];
+          rawDiscoveredVendors = discoveryVendorCandidates(discovery);
           discoveredVendors = isBrandLevelModelSelection
             ? normalizeDiscoveredVendors(rawDiscoveredVendors)
             : preserveConcreteDiscoveryOptions(
