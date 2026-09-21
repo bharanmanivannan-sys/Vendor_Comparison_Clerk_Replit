@@ -117,17 +117,40 @@ test("routes generic AEM competitor wording into concrete option discovery", asy
   assert.equal(isObjectivePhraseVendor(validated.vendors[2]), true);
 });
 
-test("submission preserves the user-selected research market while URLs remain optional", async () => {
+test("submission rejects a known provider outside the selected research market", async () => {
   const validated = await validateComparisonInput({
     prompt: "Compare Westpac and ANZ investment home loans.",
     market: "IN",
     vendors: ["Westpac", "ANZ"],
   });
 
-  assert.ok(!("error" in validated));
+  assert.ok("error" in validated);
+  if (!("error" in validated)) return;
+  assert.match(String(validated.error), /Westpac does not offer.*India/i);
+});
+
+test("submission rejects unrelated entities before registering research", async () => {
+  const validated = await validateComparisonInput({
+    prompt: "Compare Cardekho.com and Westpac for banking products.",
+    market: "IN",
+    vendors: ["Cardekho.com", "Westpac"],
+  });
+
+  assert.ok("error" in validated);
+  if (!("error" in validated)) return;
+  assert.match(String(validated.error), /not in the same product or service segment|banking segment/i);
+});
+
+test("submission still accepts Westpac products in an available market", async () => {
+  const validated = await validateComparisonInput({
+    prompt: "Compare Westpac and ANZ investment home loans.",
+    market: "AU",
+    vendors: ["Westpac", "ANZ"],
+  });
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
   if ("error" in validated) return;
-  assert.equal(validated.input.market, "IN");
-  assert.deepEqual(validated.input.urls ?? [], []);
+  assert.equal(validated.input.market, "AU");
 });
 
 test("rejects cross-market research involving unsupported Gulf countries before analysis", async () => {

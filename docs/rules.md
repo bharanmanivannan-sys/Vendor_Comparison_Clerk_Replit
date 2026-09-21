@@ -104,6 +104,7 @@ Access unavailable never means a capability is not offered.
 14. The feature-matrix profile requires at least four complete comparable rows, one exact official vendor-owned product URL for every option obtained through the authorised search provider, and one unique weighted leader. Search-provider claims remain analyst interpretation rather than observed facts, and the report must expose that limitation.
 15. If the capability rows are incomplete, the official URL hostname does not bind to the selected vendor, the standalone specialist is not verified from its exact product page, or the weighted result ties, suppress the winner.
 16. When every complete capability row is a genuine tie, keep those rows neutral and use the strategic provider-role weight to select a winner only if exactly one option is the leader.
+17. Reject unrelated entity domains and known market-availability conflicts during intake, before creating a research job. Explain which option or segment is incompatible and how to correct it.
 
 ## 7. Release Quality Gate
 

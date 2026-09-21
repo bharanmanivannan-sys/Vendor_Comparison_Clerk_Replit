@@ -1749,6 +1749,23 @@ test("rejects product-specific comparisons across unrelated brands", () => {
   assert.equal(parsed.context.valid, false);
 });
 
+test("rejects an automotive marketplace and a bank for banking products", () => {
+  const parsed = parsePrompt("Compare Cardekho.com and Westpac for banking products.");
+  assert.deepEqual(parsed.vendors, ["Cardekho.com", "Westpac"]);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /not in the same product or service segment|banking segment/i);
+});
+
+test("rejects Westpac products in India before research", () => {
+  const context = validateComparisonContext(
+    "Compare Westpac and ANZ banking products in India.",
+    ["Westpac", "ANZ"],
+    "IN",
+  );
+  assert.equal(context.valid, false);
+  assert.match(context.message, /Westpac does not offer.*India/i);
+});
+
 test("allows a shared service criterion across different brand segments", () => {
   const parsed = parsePrompt("Compare after sales support between Apple and Westpac.");
   assert.deepEqual(parsed.vendors, ["Apple", "Westpac"]);

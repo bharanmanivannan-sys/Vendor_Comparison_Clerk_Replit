@@ -739,6 +739,38 @@ export function inferResearchMarket(
   return { country: "Australia", countryCode: "AU", currency: "AUD", timezone: "Australia/Sydney", inferredFrom: "application default or Australian query cues" };
 }
 
+const ENTITY_MARKET_AVAILABILITY: Array<{
+  entity: RegExp;
+  availableIn: ResearchMarketCode[];
+  footprint: string;
+}> = [
+  {
+    entity: /^westpac(?:\s+banking corporation)?$/i,
+    availableIn: ["AU", "US", "GB"],
+    footprint: "Australia, New Zealand, the United States, the United Kingdom, Fiji, and Papua New Guinea",
+  },
+  {
+    entity: /^(?:car\s*dekho|cardekho)(?:\.com)?$/i,
+    availableIn: ["IN"],
+    footprint: "India",
+  },
+];
+
+export function comparisonMarketAvailabilityIssue(
+  prompt: string,
+  vendors: string[],
+  selectedMarket?: ResearchMarketCode,
+): string | undefined {
+  const market = inferResearchMarket(prompt, vendors, selectedMarket);
+  for (const vendor of vendors) {
+    const rule = ENTITY_MARKET_AVAILABILITY.find(({ entity }) => entity.test(vendor.trim()));
+    if (rule && !rule.availableIn.includes(market.countryCode)) {
+      return `${vendor} does not offer the requested products or services in ${market.country}. Its known operating footprint is ${rule.footprint}. Choose an option available in ${market.country} or change the research market.`;
+    }
+  }
+  return undefined;
+}
+
 export function officialMarketSourcesFor(prompt: string, vendors: string[], market: ResearchMarket): string[] {
   const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
   const officialSources: string[] = [];
@@ -1805,13 +1837,18 @@ export async function parsePromptWithIntent(
   };
 }
 
-export function validateComparisonContext(prompt: string, vendors: string[]): ComparisonContext {
+export function validateComparisonContext(
+  prompt: string,
+  vendors: string[],
+  selectedMarket?: ResearchMarketCode,
+): ComparisonContext {
   const normalized = prompt.toLowerCase();
   const hasVehicleBrandPair = /\b(?:tesla|byd)\b/.test(normalized)
     && vendors.some((vendor) => /\b(?:tesla|byd)\b/i.test(vendor));
   const hasBroadMarketInsightIntent = /\b(?:market insights?|market analysis|share prices?|market performance)\b/.test(normalized);
   const segmentMatches = [
     { label: "Credit cards", pattern: /\b(?:credit cards?|card products?|balance transfers?|rewards cards?)\b/ },
+    { label: "Banking products", pattern: /\b(?:banking products?|bank accounts?|transaction accounts?|savings accounts?|term deposits?)\b/ },
     { label: "Insurance", pattern: /\b(?:car|auto|vehicle|home|travel|health)?\s*insurance\b/ },
     { label: "Home loans", pattern: /\b(?:home loans?|mortgages?|housing loans?|owner.?occupier loans?)\b/ },
     { label: "Battery as a Service", pattern: /\b(?:baas|battery[- ]as[- ]a[- ]service)\b/ },
@@ -1838,8 +1875,8 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
   const isInsuranceDecision = /\b(?:insurance|insurer|premium|excess|policy|claims?)\b/.test(normalized);
   const namesAustralianInsurer = /\b(?:youi|allianz|aami|nrma|qbe|budget direct|toyota insurance)\b/.test(normalized);
   const namesAustralianBank = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz)\b/.test(normalized);
-  const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank)\b/i;
-  const automotiveBrands = /\b(?:tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra)\b/i;
+  const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank|bank|credit union)\b/i;
+  const automotiveBrands = /\b(?:car\s*dekho|cardekho(?:\.com)?|tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra)\b/i;
   const technologyBrands = /\b(?:apple|hp|microsoft|google|samsung|dell|lenovo|asus|acer)\b/i;
   const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon)\b/i;
   const investmentBrands = /\b(?:vanguard|betashares|ishares)\b/i;
@@ -1907,12 +1944,15 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
       message: "The selected brands are not in the same product or service segment for this request. Compare like-for-like offerings, or specify a shared criterion such as after-sales support or market insights.",
     };
   }
-  if (segment === "Credit cards" && vendorDomains.some((domain) => domain !== "banking" && domain !== "unknown")) {
+  if (
+    ["Credit cards", "Home loans", "Banking products"].includes(segment)
+    && vendorDomains.some((domain) => domain !== "banking")
+  ) {
     return {
       valid: false,
       segment,
       industry,
-      message: "Credit card comparisons must use providers that offer credit card products. Replace unrelated brands or change the comparison criterion.",
+      message: `${segment} comparisons must use providers that offer products in that banking segment. Replace unrelated brands or change the comparison criterion.`,
     };
   }
   if (segmentMatches.length === 0 && !fallbackSegment) {
@@ -1920,6 +1960,10 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
   }
   if (segmentMatches.length > 1) {
     return { valid: false, segment, industry, message: `Keep the comparison focused on one primary segment. We found ${segmentMatches.join(" and ")}.` };
+  }
+  const availabilityIssue = comparisonMarketAvailabilityIssue(prompt, vendors, selectedMarket);
+  if (availabilityIssue) {
+    return { valid: false, segment, industry, message: availabilityIssue };
   }
   if (!industry) {
     return { valid: true, segment, industry: "General market", message: `Comparing options in ${segment}. Add a market or use case for a more tailored result.` };

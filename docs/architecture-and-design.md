@@ -440,6 +440,8 @@ Capability-led software requests have a narrow qualitative profile when the user
 
 An all-tied complete capability matrix remains neutral at 50 for the feature component. The strategic provider-role component then selects a winner only when exactly one option is the leader; otherwise the report remains tied.
 
+Comparison intake performs deterministic domain and market-availability checks before any research job is created. Product-specific banking requests reject non-banking entities, known cross-domain pairs reject unless the user explicitly requests a shared cross-sector criterion, and maintained entity-footprint rules reject options outside the selected geography with a corrective message.
+
 Normalization distinguishes:
 
 - Direct percentages where higher is better.
