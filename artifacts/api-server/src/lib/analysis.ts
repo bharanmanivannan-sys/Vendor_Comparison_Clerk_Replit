@@ -5726,32 +5726,147 @@ export function sanitizeOutsideAlternativeInsights(
   });
 }
 
+type VehicleBodyStyle = "three-row SUV" | "SUV" | "sedan" | "hatchback";
+type VehicleDrivetrain = "electric" | "diesel" | "petrol" | "hybrid";
+
+type VerifiedVehicleAlternative = {
+  name: string;
+  market: ResearchMarketCode;
+  bodyStyle: VehicleBodyStyle;
+  drivetrains: VehicleDrivetrain[];
+  officialUrl: string;
+  availableThrough: string;
+};
+
+const VERIFIED_VEHICLE_ALTERNATIVES: VerifiedVehicleAlternative[] = [
+  { name: "Hyundai Alcazar", market: "IN", bodyStyle: "three-row SUV", drivetrains: ["diesel", "petrol"], officialUrl: "https://www.hyundai.com/in/en/find-a-car/alcazar/highlights", availableThrough: "2026-12-31" },
+  { name: "Jeep Meridian", market: "IN", bodyStyle: "three-row SUV", drivetrains: ["diesel"], officialUrl: "https://www.jeep-india.com/meridian.html", availableThrough: "2026-12-31" },
+  { name: "MG Hector Plus", market: "IN", bodyStyle: "three-row SUV", drivetrains: ["diesel", "petrol"], officialUrl: "https://www.mgmotor.co.in/vehicles/mghectorplus", availableThrough: "2026-12-31" },
+  { name: "Toyota Fortuner", market: "IN", bodyStyle: "three-row SUV", drivetrains: ["diesel", "petrol"], officialUrl: "https://www.toyotabharat.com/showroom/fortuner/", availableThrough: "2026-12-31" },
+  { name: "Mahindra XUV700", market: "IN", bodyStyle: "three-row SUV", drivetrains: ["diesel", "petrol"], officialUrl: "https://auto.mahindra.com/suv/xuv700", availableThrough: "2026-12-31" },
+  { name: "Tata Nexon.ev", market: "IN", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://ev.tatamotors.com/nexon/ev.html", availableThrough: "2026-12-31" },
+  { name: "Hyundai Creta Electric", market: "IN", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.hyundai.com/in/en/find-a-car/creta-electric/highlights", availableThrough: "2026-12-31" },
+  { name: "Mahindra BE 6", market: "IN", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.mahindraelectricsuv.com/esuv/be6", availableThrough: "2026-12-31" },
+  { name: "MG ZS EV", market: "IN", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.mgmotor.co.in/vehicles/mgzsev", availableThrough: "2026-12-31" },
+  { name: "Mahindra XUV400 EV", market: "IN", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.mahindraelectricsuv.com/xuv400", availableThrough: "2026-12-31" },
+  { name: "Toyota RAV4", market: "AU", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.toyota.com.au/rav4", availableThrough: "2026-12-31" },
+  { name: "Hyundai Tucson", market: "AU", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.hyundai.com/au/en/cars/suvs/tucson", availableThrough: "2026-12-31" },
+  { name: "Kia Sportage", market: "AU", bodyStyle: "SUV", drivetrains: ["diesel", "hybrid", "petrol"], officialUrl: "https://www.kia.com/au/cars/sportage.html", availableThrough: "2026-12-31" },
+  { name: "Honda CR-V", market: "AU", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.honda.com.au/cars/cr-v", availableThrough: "2026-12-31" },
+  { name: "Tesla Model Y", market: "AU", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.tesla.com/en_au/modely", availableThrough: "2026-12-31" },
+  { name: "Kia EV5", market: "AU", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.kia.com/au/cars/ev5.html", availableThrough: "2026-12-31" },
+  { name: "BYD Sealion 7", market: "AU", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://bydautomotive.com.au/sealion-7", availableThrough: "2026-12-31" },
+  { name: "Hyundai IONIQ 5", market: "AU", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.hyundai.com/au/en/cars/eco/ioniq5", availableThrough: "2026-12-31" },
+  { name: "Tesla Model 3", market: "AU", bodyStyle: "sedan", drivetrains: ["electric"], officialUrl: "https://www.tesla.com/en_au/model3", availableThrough: "2026-12-31" },
+  { name: "BYD Seal", market: "AU", bodyStyle: "sedan", drivetrains: ["electric"], officialUrl: "https://bydautomotive.com.au/seal", availableThrough: "2026-12-31" },
+  { name: "Hyundai IONIQ 6", market: "AU", bodyStyle: "sedan", drivetrains: ["electric"], officialUrl: "https://www.hyundai.com/au/en/cars/eco/ioniq6", availableThrough: "2026-12-31" },
+  { name: "BMW i4", market: "AU", bodyStyle: "sedan", drivetrains: ["electric"], officialUrl: "https://www.bmw.com.au/en-au/models/bmw-i/i4/bmw-i4-gran-coupe.html", availableThrough: "2026-12-31" },
+  { name: "Toyota RAV4", market: "US", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.toyota.com/rav4/", availableThrough: "2026-12-31" },
+  { name: "Honda CR-V", market: "US", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://automobiles.honda.com/cr-v", availableThrough: "2026-12-31" },
+  { name: "Hyundai Tucson", market: "US", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.hyundaiusa.com/us/en/vehicles/tucson", availableThrough: "2026-12-31" },
+  { name: "Kia Sportage", market: "US", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.kia.com/us/en/sportage", availableThrough: "2026-12-31" },
+  { name: "Tesla Model Y", market: "US", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.tesla.com/modely", availableThrough: "2026-12-31" },
+  { name: "Ford Mustang Mach-E", market: "US", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.ford.com/suvs/mach-e/", availableThrough: "2026-12-31" },
+  { name: "Hyundai IONIQ 5", market: "US", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.hyundaiusa.com/us/en/vehicles/ioniq-5", availableThrough: "2026-12-31" },
+  { name: "Kia EV9", market: "US", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.kia.com/us/en/ev9", availableThrough: "2026-12-31" },
+  { name: "Toyota RAV4", market: "GB", bodyStyle: "SUV", drivetrains: ["hybrid"], officialUrl: "https://www.toyota.co.uk/new-cars/rav4", availableThrough: "2026-12-31" },
+  { name: "Honda CR-V", market: "GB", bodyStyle: "SUV", drivetrains: ["hybrid"], officialUrl: "https://www.honda.co.uk/cars/new/cr-v-hybrid-suv/overview.html", availableThrough: "2026-12-31" },
+  { name: "Kia Sportage", market: "GB", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.kia.com/uk/new-cars/sportage/", availableThrough: "2026-12-31" },
+  { name: "Hyundai Tucson", market: "GB", bodyStyle: "SUV", drivetrains: ["hybrid", "petrol"], officialUrl: "https://www.hyundai.com/uk/en/models/tucson.html", availableThrough: "2026-12-31" },
+  { name: "Tesla Model Y", market: "GB", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.tesla.com/en_gb/modely", availableThrough: "2026-12-31" },
+  { name: "Kia EV6", market: "GB", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.kia.com/uk/new-cars/ev6/", availableThrough: "2026-12-31" },
+  { name: "Hyundai IONIQ 5", market: "GB", bodyStyle: "SUV", drivetrains: ["electric"], officialUrl: "https://www.hyundai.com/uk/en/models/ioniq5.html", availableThrough: "2026-12-31" },
+];
+
+function requestedVehicleProfile(prompt: string, comparedOptions: string[]): {
+  bodyStyle?: VehicleBodyStyle;
+  drivetrain?: VehicleDrivetrain;
+} {
+  const context = `${prompt} ${comparedOptions.join(" ")}`;
+  const knownCompared = VERIFIED_VEHICLE_ALTERNATIVES.filter((candidate) => (
+    comparedOptions.some((option) => comparisonOptionNamesOverlap(candidate.name, option))
+  ));
+  const knownBodyStyles = new Set(knownCompared.map((candidate) => candidate.bodyStyle));
+  const knownDrivetrains = new Set(knownCompared.flatMap((candidate) => candidate.drivetrains));
+  const bodyStyle: VehicleBodyStyle | undefined = /\b(?:three[ -]?row|7[ -]?seat|seven[ -]?seat|safari|alcazar|meridian|hector plus|xuv700|fortuner)\b/i.test(context)
+    ? "three-row SUV"
+    : /\b(?:suv|crossover)\b/i.test(context)
+      ? "SUV"
+      : /\bsedan\b/i.test(context)
+        ? "sedan"
+        : /\bhatchback\b/i.test(context)
+          ? "hatchback"
+          : knownBodyStyles.size === 1
+            ? [...knownBodyStyles][0]
+            : undefined;
+  const drivetrain: VehicleDrivetrain | undefined = /\b(?:battery[- ]electric|electric|ev)\b/i.test(context)
+    ? "electric"
+    : /\bdiesel\b/i.test(context)
+      ? "diesel"
+      : /\b(?:hybrid|phev|plug-in)\b/i.test(context)
+        ? "hybrid"
+        : /\bpetrol\b/i.test(context)
+          ? "petrol"
+          : knownDrivetrains.size === 1
+            ? [...knownDrivetrains][0]
+            : undefined;
+  return { bodyStyle, drivetrain };
+}
+
+export function ensureVehicleOutsideAlternatives(
+  analysis: { insights?: unknown },
+  comparedOptions: string[],
+  marketCode: ResearchMarketCode | undefined,
+  prompt: string,
+  currentDate = new Date().toISOString().slice(0, 10),
+): void {
+  const existingInsights = Array.isArray(analysis.insights)
+    ? analysis.insights.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const nonAlternatives = existingInsights.filter((entry) => !entry.startsWith(ALTERNATIVE_INSIGHT_PREFIX));
+  if (!marketCode) {
+    analysis.insights = nonAlternatives;
+    return;
+  }
+  const profile = requestedVehicleProfile(prompt, comparedOptions);
+  const bodyStyle = profile.bodyStyle;
+  const drivetrain = profile.drivetrain;
+  const eligible = bodyStyle && drivetrain
+    ? VERIFIED_VEHICLE_ALTERNATIVES.filter((candidate) => (
+    candidate.market === marketCode
+    && candidate.availableThrough >= currentDate
+    && Boolean(candidate.officialUrl)
+    && !comparedOptions.some((option) => comparisonOptionNamesOverlap(candidate.name, option))
+    && candidate.bodyStyle === bodyStyle
+    && candidate.drivetrains.includes(drivetrain)
+      ))
+    : [];
+  const existingByName = new Map(existingInsights.flatMap((insight) => {
+    const name = alternativeInsightName(insight);
+    return name ? [[normalizeComparisonOptionName(name), insight] as const] : [];
+  }));
+  const alternatives = eligible.slice(0, 2).map((candidate) => (
+    existingByName.get(normalizeComparisonOptionName(candidate.name))
+    ?? `${ALTERNATIVE_INSIGHT_PREFIX} ${candidate.name}: Verified as a current ${candidate.market}-market ${candidate.bodyStyle} with ${candidate.drivetrains.join("/")} availability on its official local product page (${candidate.officialUrl}). Compare the exact current variant, price, safety, reliability, and service evidence before ranking.`
+  ));
+  analysis.insights = alternatives.length >= 2
+    ? sanitizeOutsideAlternativeInsights([...nonAlternatives, ...alternatives], comparedOptions, 2)
+    : [
+        ...nonAlternatives,
+        "Outside-alternative coverage — Two market-, body-style-, drivetrain-, and availability-matched alternatives could not be verified from current official local product evidence, so no model names were invented.",
+      ];
+}
+
 export function ensureIndiaSafariOutsideAlternatives(
   analysis: { insights?: unknown },
   comparedOptions: string[],
   marketCode: ResearchMarketCode | undefined,
 ): void {
-  if (
-    marketCode !== "IN"
-    || !comparedOptions.some((option) => /\btata\s+safari\b/i.test(option))
-    || !comparedOptions.some((option) => /\bmahindra\b/i.test(option))
-  ) return;
-  const existingInsights = Array.isArray(analysis.insights)
-    ? analysis.insights.filter((entry): entry is string => typeof entry === "string")
-    : [];
-  const sanitized = sanitizeOutsideAlternativeInsights(existingInsights, comparedOptions);
-  const existingAlternativeCount = sanitized.filter((entry) => entry.startsWith(ALTERNATIVE_INSIGHT_PREFIX)).length;
-  if (existingAlternativeCount >= 2) {
-    analysis.insights = sanitized;
-    return;
-  }
-  const fallbackAlternatives = [
-    "Alternative outside comparison — Hyundai Alcazar diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
-    "Alternative outside comparison — Jeep Meridian diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
-  ];
-  analysis.insights = sanitizeOutsideAlternativeInsights(
-    [...sanitized, ...fallbackAlternatives],
+  ensureVehicleOutsideAlternatives(
+    analysis,
     comparedOptions,
+    marketCode,
+    `${comparedOptions.join(" ")} India three-row diesel SUV`,
   );
 }
 
@@ -6963,8 +7078,16 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       }
       parsed.insights = existingInsights;
     }
-    ensureIndiaSafariOutsideAlternatives(parsed, input.vendors, researchMarket.countryCode);
-    parsed.insights = sanitizeOutsideAlternativeInsights(parsed.insights, input.vendors);
+    if (isVehicleComparison) {
+      ensureVehicleOutsideAlternatives(
+        parsed,
+        input.vendors,
+        researchMarket.countryCode,
+        input.prompt,
+      );
+    } else {
+      parsed.insights = sanitizeOutsideAlternativeInsights(parsed.insights, input.vendors);
+    }
     if (discoveredSelectionRationale) {
       const existingInsights = Array.isArray(parsed.insights) ? parsed.insights : [];
       const insight = `Model selection rationale — ${discoveredSelectionRationale}`;
@@ -7186,10 +7309,20 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         explicitDecisionPriority ? Math.max(...explicitDecisionPriority.weights.map(({ weight }) => weight)) : minimumDeterministicWeight,
       ).sufficient
     );
-    normalized.insights = sanitizeOutsideAlternativeInsights(normalized.insights, resolvedVendors);
+    if (isVehicleComparison) {
+      ensureVehicleOutsideAlternatives(
+        normalized,
+        resolvedVendors,
+        researchMarket.countryCode,
+        input.prompt,
+      );
+    } else {
+      normalized.insights = sanitizeOutsideAlternativeInsights(normalized.insights, resolvedVendors);
+    }
     const protectedPortfolioInsights = normalized.insights.filter((insight) => (
       insight.startsWith("Model selection rationale —")
       || insight.startsWith("Alternative outside comparison —")
+      || insight.startsWith("Outside-alternative coverage —")
       || insight.startsWith("Review-signal basis —")
     ));
     await synthesizeValidatedDecision(client, input, researchMarket, normalized);

@@ -31,6 +31,7 @@ import {
   enforceIndianMgBaasFact,
   explicitDecisionPriorityProfile,
   ensureIndiaSafariOutsideAlternatives,
+  ensureVehicleOutsideAlternatives,
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
   hasFiveYearMarketHistoryCoverage,
@@ -3435,10 +3436,73 @@ test("adds outside diesel SUV alternatives when a compared Tata Safari alias is 
 
   ensureIndiaSafariOutsideAlternatives(analysis, ["Mahindra", "Tata Safari diesel AT"], "IN");
 
-  assert.deepEqual(analysis.insights, [
-    "Alternative outside comparison — Hyundai Alcazar diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
-    "Alternative outside comparison — Jeep Meridian diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
-  ]);
+  assert.equal(analysis.insights.length, 2);
+  assert.match(analysis.insights[0]!, /Hyundai Alcazar/);
+  assert.match(analysis.insights[1]!, /Jeep Meridian/);
+  assert.doesNotMatch(analysis.insights.join(" "), /Tata Safari/);
+});
+
+test("replenishes two market- and drivetrain-matched alternatives for a general vehicle comparison", () => {
+  const analysis = {
+    insights: [
+      "Alternative outside comparison — MG ZS EV: This repeats the compared option.",
+      "Alternative outside comparison — Toyota RAV4: Wrong market and drivetrain.",
+      "Keep the verified ownership insight.",
+    ],
+  };
+
+  ensureVehicleOutsideAlternatives(
+    analysis,
+    ["MG ZS EV", "Mahindra XUV400 EV"],
+    "IN",
+    "Compare these electric SUVs in India and include outside alternatives.",
+  );
+
+  const alternatives = analysis.insights.filter((insight) => insight.startsWith("Alternative outside comparison —"));
+  assert.equal(alternatives.length, 2);
+  assert.ok(alternatives.every((insight) => /current IN-market SUV with electric availability/i.test(insight)));
+  assert.ok(alternatives.every((insight) => !/MG ZS EV|Mahindra XUV400 EV/i.test(insight)));
+  assert.ok(analysis.insights.includes("Keep the verified ownership insight."));
+});
+
+test("does not invent vehicle alternatives when segment and drivetrain cannot both be verified", () => {
+  const analysis = {
+    insights: [
+      "Alternative outside comparison — Mystery Motors X1: Suggested without official local validation.",
+    ],
+  };
+
+  ensureVehicleOutsideAlternatives(
+    analysis,
+    ["Example One", "Example Two"],
+    "AU",
+    "Compare these vehicles and include outside alternatives.",
+  );
+
+  assert.equal(analysis.insights.some((insight) => insight.startsWith("Alternative outside comparison —")), false);
+  assert.match(analysis.insights.join(" "), /no model names were invented/i);
+});
+
+test("filters compared aliases and mismatched model suggestions before vehicle alternatives are displayed", () => {
+  const analysis = {
+    insights: [
+      "Alternative outside comparison — Tesla Model Y Performance: Compared alias.",
+      "Alternative outside comparison — Toyota RAV4: Wrong drivetrain.",
+      "Alternative outside comparison — Ford Mustang Mach-E: Eligible official-market option.",
+    ],
+  };
+
+  ensureVehicleOutsideAlternatives(
+    analysis,
+    ["Tesla Model Y", "Hyundai IONIQ 5"],
+    "US",
+    "Compare these electric SUVs in the United States and show outside alternatives.",
+  );
+
+  const combined = analysis.insights.join(" ");
+  assert.doesNotMatch(combined, /Model Y Performance|Toyota RAV4/);
+  assert.match(combined, /Ford Mustang Mach-E/);
+  assert.equal(analysis.insights.filter((insight) => insight.startsWith("Alternative outside comparison —")).length, 2);
 });
 
 test("requires separate variable and fixed home-loan rates plus an alternative", () => {

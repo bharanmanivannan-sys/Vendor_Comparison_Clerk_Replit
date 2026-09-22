@@ -33,3 +33,4 @@
 - [Customer-facing terminology](customer-facing-terminology.md) — avoid “signal” in visible product copy; use evidence, fit, score, or comparison language instead.
 - [Research repair boundaries](research-repair-boundaries.md) — model feasibility flags are advisory; repaired analyses must regain every required response field.
 - [Report regeneration semantics](report-regeneration-semantics.md) — preserve raw evidence scores, persist custom factors, and refresh all weight-derived report content.
+- [Vehicle outside alternatives](vehicle-outside-alternatives.md) — name alternatives only when market, body style, drivetrain, alias exclusion, and current availability all validate.
