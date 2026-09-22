@@ -167,12 +167,32 @@ export interface ComparisonWeight {
   weight: number;
 }
 
+export interface AdditionalComparisonWeight {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  criterion: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  weight: number;
+  /**
+     * @minItems 1
+     * @maxItems 2
+     */
+  mappedCriteria: string[];
+}
+
 export interface RegenerateComparisonInput {
   /**
      * @minItems 9
      * @maxItems 9
      */
   weights: ComparisonWeight[];
+  /** @maxItems 8 */
+  additionalWeights?: AdditionalComparisonWeight[];
 }
 
 export interface ComparisonPromptInput {
@@ -887,6 +907,8 @@ export type Comparison = ComparisonSummary & {
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  /** @maxItems 8 */
+  weightAdjustments?: AdditionalComparisonWeight[];
   vendorScores: VendorScore[];
   pricing: AnalysisRow[];
   features: AnalysisRow[];

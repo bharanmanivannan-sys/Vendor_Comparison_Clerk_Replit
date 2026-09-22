@@ -133,7 +133,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const pageSize: [number, number] = [595.28, 841.89];
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
-  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL';
+  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL' && !hasAdjustedTopScoreTie(comparison);
   const clean = (value: unknown) => String(value ?? 'Not established')
     .normalize('NFKD')
     .replace(/[^\x20-\x7E]/g, ' ')
@@ -499,6 +499,18 @@ export function computeDecisionQuality(comparison: any) {
       'Resolve incomparable definitions before using the report for commitment.',
     ],
   };
+}
+
+export function hasAdjustedTopScoreTie(comparison: any): boolean {
+  const adjusted = Array.isArray(comparison?.insights)
+    && comparison.insights.some((insight: unknown) => (
+      typeof insight === 'string' && insight.startsWith('Adjusted decision model —')
+    ));
+  if (!adjusted || !Array.isArray(comparison?.vendorScores) || comparison.vendorScores.length < 2) return false;
+  const scores = comparison.vendorScores.map((vendor: any) => Number(vendor.score)).filter(Number.isFinite);
+  if (scores.length < 2) return false;
+  const topScore = Math.max(...scores);
+  return scores.filter((score: number) => score === topScore).length > 1;
 }
 
 export function evidenceBackedLensWinner(comparison: any): {
@@ -1014,14 +1026,15 @@ function ScoreRing({ score, size = 'large' }: { score: number; size?: 'large' | 
 
 export function DecisionRecommendationCard({ comparison }: { comparison: any }) {
   const decisionQuality = computeDecisionQuality(comparison);
+  const decisionUsable = decisionQuality.decision !== 'FAIL' && !hasAdjustedTopScoreTie(comparison);
   return <div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]" data-testid="card-recommended">
-    <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionQuality.decision === 'FAIL' ? 'Evidence-limited result' : 'Recommended'}</p>
+    <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionUsable ? 'Recommended' : 'Evidence-limited result'}</p>
     <div className="mt-5 flex items-center justify-between gap-4">
       <div>
-        <p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{decisionQuality.decision === 'FAIL' ? 'No definitive winner' : comparison.recommendation}</p>
-        <p className="mt-2 text-xs text-[#a8b0c2]">{decisionQuality.decision === 'FAIL' ? 'Resolve quality issues before commitment' : 'Best overall fit'}</p>
+        <p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p>
+        <p className="mt-2 text-xs text-[#a8b0c2]">{decisionUsable ? 'Best overall fit' : hasAdjustedTopScoreTie(comparison) ? 'The adjusted model remains tied' : 'Resolve quality issues before commitment'}</p>
       </div>
-      {decisionQuality.decision !== 'FAIL' && <ScoreRing score={Math.round(comparison.score)} />}
+      {decisionUsable && <ScoreRing score={Math.round(comparison.score)} />}
     </div>
     {decisionQuality.decision === 'FAIL' && <div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{decisionQuality.reasons.join(' ')}</div>}
   </div>;
@@ -1034,6 +1047,12 @@ function overallVendorScore(vendor: any): number {
     ? baseScore + (Number.isFinite(tieBreakBonus) ? tieBreakBonus : 0)
     : Number(vendor?.score);
   return Math.max(0, Math.min(100, Math.round(Number.isFinite(overallScore) ? overallScore : 0)));
+}
+
+export function weightedCriterionImpact(score: unknown, weight: unknown): number {
+  const normalizedScore = Math.max(0, Math.min(100, Number(score) || 0));
+  const normalizedWeight = Math.max(0, Math.min(100, Number(weight) || 0));
+  return Number((normalizedScore * normalizedWeight / 100).toFixed(1));
 }
 
 function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
@@ -1066,6 +1085,51 @@ const defaultCriterionMatches = (criterion: string) => {
   return ['Meets Needs / Features'];
 };
 
+function mappedCriteriaForAdjustment(adjustment: AdditionalWeight): string[] {
+  return adjustment.mappedCriteria?.length
+    && (!adjustment.mappedCriteriaSource || adjustment.mappedCriteriaSource === adjustment.criterion)
+    ? adjustment.mappedCriteria
+    : defaultCriterionMatches(adjustment.criterion);
+}
+
+export function weightsIncludingAdditional(
+  baseWeights: Record<string, number>,
+  additionalWeights: AdditionalWeight[],
+): Record<string, number> {
+  const effective = { ...baseWeights };
+  additionalWeights.forEach((item) => {
+    const targets = mappedCriteriaForAdjustment(item);
+    let remainder = item.weight;
+    targets.forEach((target, index) => {
+      const share = index === targets.length - 1
+        ? remainder
+        : Math.floor(item.weight / Math.max(1, targets.length));
+      effective[target] = (effective[target] || 0) + share;
+      remainder -= share;
+    });
+  });
+  return effective;
+}
+
+export function weightsBeforeAdditional(
+  effectiveWeights: Record<string, number>,
+  additionalWeights: AdditionalWeight[],
+): Record<string, number> {
+  const baseWeights = { ...effectiveWeights };
+  additionalWeights.forEach((item) => {
+    const targets = mappedCriteriaForAdjustment(item);
+    let remainder = item.weight;
+    targets.forEach((target, index) => {
+      const share = index === targets.length - 1
+        ? remainder
+        : Math.floor(item.weight / Math.max(1, targets.length));
+      baseWeights[target] = Math.max(0, (baseWeights[target] || 0) - share);
+      remainder -= share;
+    });
+  });
+  return baseWeights;
+}
+
 function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?: string[]; vendorScores?: any[] }) {
   if (!criteria.length || !vendorScores.length) return null;
   const rows = criteria.map((criterion) => {
@@ -1096,7 +1160,7 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 }
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
-  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL';
+  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL' && !hasAdjustedTopScoreTie(comparison);
   const decisionReason = stripDecisionNote(comparison.recommendationReason);
   const decisionNote = extractDecisionNote(comparison.recommendationReason);
   const runnerUp = [...(comparison.vendorScores || [])]
@@ -1108,7 +1172,7 @@ export function ExecutiveDecisionBrief({ comparison, compact = false }: { compar
       <span className="mono text-[10px] uppercase text-[#85877f]">Prepared {new Date(comparison.createdAt || Date.now()).toLocaleDateString()}</span>
     </div>
     <div className="mt-5 grid gap-4 md:grid-cols-3">
-      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionUsable ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
+      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionUsable ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
       <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(comparison.executiveSummary)}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}</article>
       <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
      </div>
@@ -1136,7 +1200,86 @@ function validSwitchConditions(value: unknown): string[] {
     : [];
 }
 
-function reweightGuestComparison(comparison: any, weights: Record<string, number>) {
+type AdditionalWeight = {
+  id: number;
+  criterion: string;
+  weight: number;
+  mappedCriteria?: string[];
+  mappedCriteriaSource?: string;
+};
+
+function reweightedReportNarrative(
+  comparison: any,
+  vendorScores: any[],
+  recommendation: string,
+  topScore: number,
+  weights: Record<string, number>,
+  additionalWeights: AdditionalWeight[],
+) {
+  const activeWeights = WEIGHTED_CRITERIA
+    .map((criterion) => ({ criterion, weight: weights[criterion] ?? 0 }))
+    .filter((entry) => entry.weight > 0)
+    .sort((left, right) => right.weight - left.weight);
+  const weightSummary = activeWeights.slice(0, 4).map((entry) => `${entry.criterion} ${entry.weight}%`).join(', ');
+  const additionalSummary = additionalWeights
+    .filter((entry) => entry.criterion.trim() && entry.weight > 0)
+    .map((entry) => `${entry.criterion.trim()} ${entry.weight}% → ${mappedCriteriaForAdjustment(entry).join(' + ')}`)
+    .join('; ');
+  const recommendedVendor = vendorScores.find((vendor: any) => vendor.vendor === recommendation);
+  const allCriterionScoresIdentical = WEIGHTED_CRITERIA.every((criterion) => (
+    new Set(vendorScores.map((vendor: any) => vendor.weightedScores?.find((entry: any) => entry.criterion === criterion)?.score ?? 50)).size <= 1
+  ));
+  const hasTopScoreTie = vendorScores.filter((vendor: any) => vendor.score === topScore).length > 1;
+  const refreshedVendorScores = vendorScores.map((vendor: any) => {
+    const weightedAdvantages = (vendor.weightedScores || []).flatMap((criterion: any) => {
+      const recommendedCriterion = recommendedVendor?.weightedScores?.find((entry: any) => entry.criterion === criterion.criterion);
+      if (!recommendedCriterion || criterion.weight <= 0) return [];
+      const delta = Number((
+        criterion.score * criterion.weight / 100
+        - recommendedCriterion.score * recommendedCriterion.weight / 100
+      ).toFixed(1));
+      return delta > 0 ? [{ criterion: criterion.criterion, delta, weight: criterion.weight }] : [];
+    }).sort((left: any, right: any) => right.delta - left.delta);
+    return {
+      ...vendor,
+      verdict: hasTopScoreTie
+        ? `${vendor.vendor} finishes at ${vendor.score}/100 in the tied adjusted model; the current evidence does not support a definitive winner.`
+        : vendor.vendor === recommendation
+        ? `${vendor.vendor} leads the adjusted decision model at ${vendor.score}/100 under ${weightSummary || 'the selected weights'}.`
+        : allCriterionScoresIdentical
+          ? `${vendor.vendor} remains tied on the underlying criterion scores; changing weights alone cannot create evidence separation.`
+          : `${vendor.vendor} scores ${vendor.score}/100 under the adjusted decision model.${weightedAdvantages.length ? ` Its strongest weighted advantage is ${weightedAdvantages[0].criterion}.` : ''}`,
+      switchConditions: vendor.vendor === recommendation
+        ? []
+        : weightedAdvantages.slice(0, 2).map((entry: any) => `Prefer ${vendor.vendor} when ${entry.criterion} is decisive; it gains ${entry.delta} weighted points under the active ${entry.weight}% allocation.`),
+    };
+  });
+  const evidenceLimitation = allCriterionScoresIdentical
+    ? ' The available underlying criterion scores are identical across the options, so changing weights does not create a new evidence-backed separation.'
+    : '';
+  const executiveSummary = hasTopScoreTie
+    ? `This report was regenerated using your adjusted decision model. The options remain tied at ${topScore}/100, so the current evidence does not support a definitive winner. The strongest active emphasis is ${weightSummary || 'your selected criteria'}.${additionalSummary ? ` Your custom factors are ${additionalSummary}.` : ''}${evidenceLimitation}`
+    : `This report was regenerated using your adjusted decision model. ${recommendation} has the highest resulting score at ${topScore}/100. The strongest active emphasis is ${weightSummary || 'your selected criteria'}.${additionalSummary ? ` Your custom factors are ${additionalSummary}.` : ''}${evidenceLimitation}`;
+  const recommendationReason = hasTopScoreTie
+    ? `The adjusted weights produce a tie at ${topScore}/100, so no option has an evidence-backed lead. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || 'your selected criteria'}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ''}${evidenceLimitation}`
+    : `Based on your adjusted weights, ${recommendation} leads the weighted score at ${topScore}/100. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || 'your selected criteria'}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ''}${evidenceLimitation}`;
+  return {
+    vendorScores: refreshedVendorScores,
+    executiveSummary,
+    recommendationReason,
+    weightAdjustments: additionalWeights.map((entry) => ({
+      criterion: entry.criterion.trim(),
+      weight: entry.weight,
+      mappedCriteria: mappedCriteriaForAdjustment(entry),
+    })),
+    insights: [
+      `Adjusted decision model — ${weightSummary || 'selected criteria'}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ''}`,
+      ...(comparison.insights || []).filter((insight: string) => !insight.startsWith('Adjusted decision model —')),
+    ],
+  };
+}
+
+function reweightGuestComparison(comparison: any, weights: Record<string, number>, additionalWeights: AdditionalWeight[]) {
   const vendorScores = (comparison.vendorScores || []).map((vendor: any) => {
     const weightedScores = WEIGHTED_CRITERIA.map((criterion) => {
       const source = (vendor.weightedScores || []).find((entry: any) => entry.criterion === criterion);
@@ -1192,17 +1335,16 @@ function reweightGuestComparison(comparison: any, weights: Record<string, number
   const recommendation = tied.some((vendor: any) => vendor.vendor === comparison.recommendation)
     ? comparison.recommendation
     : tied[0]?.vendor ?? comparison.recommendation;
+  const narrative = reweightedReportNarrative(comparison, vendorScores, recommendation, topScore, weights, additionalWeights);
   return {
     ...comparison,
-    vendorScores,
+    ...narrative,
     score: topScore,
-    recommendation,
-    recommendationReason: `Based on your adjusted weights, ${recommendation} leads the weighted score at ${topScore}/100. The underlying evidence and criterion scores were retained.`,
+    recommendation: tied.length > 1 ? 'No definitive winner' : recommendation,
   };
 }
 
 function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest: boolean; onUpdated: (comparison: any) => void }) {
-  type AdditionalWeight = { id: number; criterion: string; weight: number };
   const standardWeights: Record<string, number> = {
     'Meets Needs / Features': 25,
     'Quality & Reliability': 20,
@@ -1214,6 +1356,17 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
     Sustainability: 5,
     'Regulatory Compliance': 3,
   };
+  const initialAdditionalWeights = (): AdditionalWeight[] => (
+    Array.isArray(comparison.weightAdjustments)
+      ? comparison.weightAdjustments.map((entry: any, index: number) => ({
+        id: index + 1,
+        criterion: String(entry.criterion || ''),
+        weight: Number(entry.weight || 0),
+        mappedCriteria: Array.isArray(entry.mappedCriteria) ? entry.mappedCriteria : undefined,
+        mappedCriteriaSource: String(entry.criterion || ''),
+      }))
+      : []
+  );
   const initialWeights = () => {
     const roleWeight = 2;
     const variableTotal = 100 - roleWeight;
@@ -1236,40 +1389,32 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
         remainder -= value;
       });
     }
-    return normalized;
+    return weightsBeforeAdditional(normalized, initialAdditionalWeights());
   };
   const [weights, setWeights] = useState<Record<string, number>>(initialWeights);
-  const [additionalWeights, setAdditionalWeights] = useState<AdditionalWeight[]>([]);
+  const [additionalWeights, setAdditionalWeights] = useState<AdditionalWeight[]>(initialAdditionalWeights);
   const [newAdditionalCriterion, setNewAdditionalCriterion] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const comparisonWeightSignature = JSON.stringify(
-    WEIGHTED_CRITERIA.map((criterion) => (
-      comparison.vendorScores?.[0]?.weightedScores?.find((entry: any) => entry.criterion === criterion)?.weight
-      ?? standardWeights[criterion]
-    )),
+    [
+      ...WEIGHTED_CRITERIA.map((criterion) => (
+        comparison.vendorScores?.[0]?.weightedScores?.find((entry: any) => entry.criterion === criterion)?.weight
+        ?? standardWeights[criterion]
+      )),
+      comparison.weightAdjustments || [],
+    ],
   );
   const fixedRoleWeight = Math.max(0, Math.min(100, Math.round(weights['Strategic Provider Role'] ?? 2)));
-  const effectiveWeights = (() => {
-    const effective: Record<string, number> = { ...weights, 'Strategic Provider Role': fixedRoleWeight };
-    additionalWeights.forEach((item) => {
-      const targets = defaultCriterionMatches(item.criterion);
-      let remainder = item.weight;
-      targets.forEach((target, index) => {
-        const share = index === targets.length - 1
-          ? remainder
-          : Math.floor(item.weight / Math.max(1, targets.length));
-        effective[target] = (effective[target] || 0) + share;
-        remainder -= share;
-      });
-    });
-    return effective;
-  })();
+  const effectiveWeights = weightsIncludingAdditional(
+    { ...weights, 'Strategic Provider Role': fixedRoleWeight },
+    additionalWeights,
+  );
   const total = Object.values(effectiveWeights).reduce((sum, weight) => sum + (Number(weight) || 0), 0);
   const weightValidationMessage = weightTotalValidationMessage(total);
   useEffect(() => {
     setWeights(initialWeights());
-    setAdditionalWeights([]);
+    setAdditionalWeights(initialAdditionalWeights());
     setNewAdditionalCriterion('');
     setError('');
   }, [comparison.id, comparison.createdAt, comparisonWeightSignature]);
@@ -1290,12 +1435,19 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
     setError('');
     try {
       if (guest) {
-        onUpdated(reweightGuestComparison(comparison, effectiveWeights));
+        onUpdated(reweightGuestComparison(comparison, effectiveWeights, additionalWeights));
       } else {
         const updated = await customFetch<any>(`/api/comparisons/${comparison.id}/regenerate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ weights: WEIGHTED_CRITERIA.map((criterion) => ({ criterion, weight: effectiveWeights[criterion] })) }),
+          body: JSON.stringify({
+            weights: WEIGHTED_CRITERIA.map((criterion) => ({ criterion, weight: effectiveWeights[criterion] })),
+            additionalWeights: additionalWeights.map((item) => ({
+              criterion: item.criterion.trim(),
+              weight: item.weight,
+              mappedCriteria: mappedCriteriaForAdjustment(item),
+            })),
+          }),
         });
         onUpdated(updated);
       }
@@ -1375,7 +1527,8 @@ function PricingFeatureLensPanel({ comparison }: { comparison: any }) {
   </section>;
 }
 
-function HeadToHead({ comparison }: { comparison: any }) {
+export function HeadToHead({ comparison }: { comparison: any }) {
+  const adjustedTie = hasAdjustedTopScoreTie(comparison);
   const recommendation = comparison.vendorScores?.find((vendor: any) => vendor.vendor === comparison.recommendation)
     ?? comparison.vendorScores?.[0];
   const alternatives = (comparison.vendorScores || []).filter((vendor: any) => vendor.vendor !== recommendation?.vendor);
@@ -1385,12 +1538,24 @@ function HeadToHead({ comparison }: { comparison: any }) {
   const switchConditions = validSwitchConditions(selected.switchConditions);
   const rows = (recommendation.weightedScores || []).map((criterion: any) => {
     const challenger = selected.weightedScores?.find((item: any) => item.criterion === criterion.criterion);
-    return { criterion: criterion.criterion, recommended: criterion.score, challenger: challenger?.score ?? 0, delta: (challenger?.score ?? 0) - criterion.score };
+    const weight = Number(criterion.weight || 0);
+    const recommended = weightedCriterionImpact(criterion.score, weight);
+    const challengerImpact = weightedCriterionImpact(challenger?.score ?? 0, weight);
+    return {
+      criterion: criterion.criterion,
+      weight,
+      recommended,
+      challenger: challengerImpact,
+      recommendedRaw: Number(criterion.score ?? 50),
+      challengerRaw: Number(challenger?.score ?? 50),
+      delta: Number((challengerImpact - recommended).toFixed(1)),
+    };
   });
   const stronger = rows.filter((row: any) => row.delta > 0).sort((a: any, b: any) => b.delta - a.delta);
+  const underlyingScoresIdentical = rows.every((row: any) => row.recommendedRaw === row.challengerRaw);
   return <section className="mt-14 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 sm:p-7" data-testid="section-head-to-head">
     <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
-      <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">Decision switch</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#687083]">Pick any shortlisted option to compare directly with {recommendation.vendor}. This does not change the evidence—it shows which preferences could change the recommendation.</p></div>
+      <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">Decision switch</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#687083]">{adjustedTie ? underlyingScoresIdentical ? `Compare the tied options directly. The table shows weighted contribution, while new differentiated evidence is needed to establish a winner.` : `Compare the tied options directly. Their criterion scores differ, so changing the allocation can separate the current weighted tie.` : `Pick any shortlisted option to compare directly with ${recommendation.vendor}. This does not change the evidence—it shows which preferences could change the recommendation.`}</p></div>
       <label className="text-xs font-bold text-[#556075]">Compare {recommendation.vendor} with
         <select value={selected.vendor} onChange={(event) => setSelectedName(event.target.value)} className="focus-ring mt-2 block min-w-56 rounded-xl border border-[#c9c1ae] bg-white px-3 py-2.5 text-sm text-[#202840]" data-testid="select-head-to-head">
           {alternatives.map((vendor: any) => <option key={vendor.vendor} value={vendor.vendor}>{vendor.vendor}</option>)}
@@ -1399,9 +1564,9 @@ function HeadToHead({ comparison }: { comparison: any }) {
     </div>
        <div className="mt-7 grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
        <div className="rounded-xl bg-[#202840] p-5 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">Prefer {selected.vendor} when</p><ul className="mt-4 space-y-3">{switchConditions.map((condition: string) => <li className="flex gap-2 text-xs leading-5 text-[#d6dbe5]" key={condition}><Check size={14} className="mt-0.5 shrink-0 text-[#d9ef66]" />{condition}</li>)}</ul>{!switchConditions.length && <p className="mt-4 text-xs text-[#a8b0c2]">No specific switch condition was supported by the available evidence.</p>}</div>
-      <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-left text-xs"><thead><tr className="border-b border-[#ddd5c5] text-[10px] uppercase tracking-[.1em] text-[#85877f]"><th className="pb-3">Criterion</th><th className="pb-3">{recommendation.vendor}</th><th className="pb-3">{selected.vendor}</th><th className="pb-3">Difference</th></tr></thead><tbody>{rows.map((row: any) => <tr className="border-b border-[#ece6d9] last:border-0" key={row.criterion}><td className="py-3 font-bold text-[#202840]">{row.criterion}</td><td className="py-3 text-[#687083]">{row.recommended}</td><td className="py-3 text-[#687083]">{row.challenger}</td><td className={`py-3 font-bold ${row.delta > 0 ? 'text-[#0f766e]' : row.delta < 0 ? 'text-[#b94d45]' : 'text-[#85877f]'}`}>{row.delta > 0 ? '+' : ''}{row.delta}</td></tr>)}</tbody></table></div>
+      <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-left text-xs"><thead><tr className="border-b border-[#ddd5c5] text-[10px] uppercase tracking-[.1em] text-[#85877f]"><th className="pb-3">Criterion / active weight</th><th className="pb-3">{recommendation.vendor}</th><th className="pb-3">{selected.vendor}</th><th className="pb-3">Weighted difference</th></tr></thead><tbody>{rows.map((row: any) => <tr className="border-b border-[#ece6d9] last:border-0" key={row.criterion}><td className="py-3 font-bold text-[#202840]">{row.criterion}<span className="ml-2 text-[9px] font-normal text-[#85877f]">{row.weight}%</span></td><td className="py-3 text-[#687083]">{row.recommended.toFixed(1)} pts</td><td className="py-3 text-[#687083]">{row.challenger.toFixed(1)} pts</td><td className={`py-3 font-bold ${row.delta > 0 ? 'text-[#0f766e]' : row.delta < 0 ? 'text-[#b94d45]' : 'text-[#85877f]'}`}>{row.delta > 0 ? '+' : ''}{row.delta.toFixed(1)}</td></tr>)}</tbody></table></div>
      </div>
-     <p className="mt-5 text-xs leading-5 text-[#687083]">{stronger.length ? `${selected.vendor} scores higher on ${stronger.map((row: any) => row.criterion).join(', ')}. Use the weight editor above to give those factors more influence if they are non-negotiable.` : `${recommendation.vendor} remains stronger across the current weighted criteria. Choose ${selected.vendor} only when its specific operating conditions matter more than the aggregate score.`}</p>
+     <p className="mt-5 text-xs leading-5 text-[#687083]">{adjustedTie ? underlyingScoresIdentical ? `${recommendation.vendor} and ${selected.vendor} remain tied under the adjusted model. Changing weights alone cannot separate options with identical underlying scores.` : `${recommendation.vendor} and ${selected.vendor} remain tied under this allocation. Their underlying criterion scores differ, so a different valid weighting can separate them.` : stronger.length ? `${selected.vendor} scores higher on ${stronger.map((row: any) => row.criterion).join(', ')}. Use the weight editor above to give those factors more influence if they are non-negotiable.` : `${recommendation.vendor} remains stronger across the current weighted criteria. Choose ${selected.vendor} only when its specific operating conditions matter more than the aggregate score.`}</p>
   </section>;
 }
 
@@ -2552,9 +2717,12 @@ function AnalysisPage() {
            guest={guest}
            onUpdated={(updated) => {
              if (guest) {
+                window.sessionStorage.setItem('vendor-compare-guest-result', JSON.stringify(updated));
                setGuestComparison(updated);
              } else {
                queryClient.setQueryData(getGetComparisonQueryKey(id), updated);
+                queryClient.invalidateQueries({ queryKey: getListComparisonsQueryKey() });
+                queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
              }
            }}
          />

@@ -554,6 +554,12 @@ export type ComparisonWeight = {
   weight: number;
 };
 
+export type AdditionalComparisonWeight = {
+  criterion: string;
+  weight: number;
+  mappedCriteria: string[];
+};
+
 const INVALID_SWITCH_CONDITION = /^(?:none|n\/?a|not available|not applicable|unknown|-)$/i;
 
 function meaningfulSwitchConditions(value: unknown): string[] {
@@ -611,9 +617,18 @@ function reweightEvidence(
 export function reweightAnalysis(
   analysis: AnalysisPayload,
   requestedWeights: ComparisonWeight[],
+  additionalWeights: AdditionalComparisonWeight[] = [],
 ): AnalysisPayload {
   const weights = normalizedWeightMap(requestedWeights);
-  const vendorScores = (analysis.vendorScores ?? []).map((vendor) => {
+  const canonicalCriteria = new Set<string>(WEIGHTED_CRITERIA.map(({ criterion }) => criterion));
+  const validAdditionalWeights = additionalWeights
+    .map((entry) => ({
+      criterion: entry.criterion.trim(),
+      weight: Math.max(0, Math.min(100, Math.round(entry.weight))),
+      mappedCriteria: entry.mappedCriteria.filter((criterion) => canonicalCriteria.has(criterion)),
+    }))
+    .filter((entry) => entry.criterion && entry.weight > 0 && entry.mappedCriteria.length);
+  let vendorScores = (analysis.vendorScores ?? []).map((vendor) => {
     const weightedScores = WEIGHTED_CRITERIA.map(({ criterion }) => {
       const existing = vendor.weightedScores?.find((entry) => entry.criterion.toLowerCase() === criterion.toLowerCase());
       const score = Math.max(0, Math.min(100, Math.round(existing?.score ?? 50)));
@@ -639,16 +654,69 @@ export function reweightAnalysis(
   const recommendation = tiedLeaders.some((vendor) => vendor.vendor === analysis.recommendation)
     ? analysis.recommendation
     : tiedLeaders[0]?.vendor ?? analysis.recommendation;
-  const weightSummary = WEIGHTED_CRITERIA
-    .filter(({ criterion }) => (weights.get(criterion) ?? 0) >= 20)
-    .map(({ criterion, weight }) => `${criterion} ${weights.get(criterion) ?? weight}%`)
+  const activeWeights = WEIGHTED_CRITERIA
+    .map(({ criterion }) => ({ criterion, weight: weights.get(criterion) ?? 0 }))
+    .filter((entry) => entry.weight > 0)
+    .sort((left, right) => right.weight - left.weight);
+  const weightSummary = activeWeights
+    .slice(0, 4)
+    .map(({ criterion, weight }) => `${criterion} ${weight}%`)
     .join(", ");
+  const additionalSummary = validAdditionalWeights
+    .map((entry) => `${entry.criterion} ${entry.weight}% → ${entry.mappedCriteria.join(" + ")}`)
+    .join("; ");
+  const recommendationVendor = vendorScores.find((vendor) => vendor.vendor === recommendation);
+  const allCriterionScoresIdentical = WEIGHTED_CRITERIA.every(({ criterion }) => {
+    const scores = vendorScores.map((vendor) => vendor.weightedScores?.find((entry) => entry.criterion === criterion)?.score ?? 50);
+    return new Set(scores).size <= 1;
+  });
+  const hasTopScoreTie = tiedLeaders.length > 1;
+  vendorScores = vendorScores.map((vendor) => {
+    const weightedAdvantages = (vendor.weightedScores ?? []).flatMap((criterion) => {
+      const recommendedCriterion = recommendationVendor?.weightedScores?.find((entry) => entry.criterion === criterion.criterion);
+      if (!recommendedCriterion || criterion.weight <= 0) return [];
+      const impact = criterion.score * criterion.weight / 100;
+      const recommendedImpact = recommendedCriterion.score * recommendedCriterion.weight / 100;
+      const delta = Number((impact - recommendedImpact).toFixed(1));
+      return delta > 0 ? [{ criterion: criterion.criterion, delta, weight: criterion.weight }] : [];
+    }).sort((left, right) => right.delta - left.delta);
+    const switchConditions = vendor.vendor === recommendation
+      ? []
+      : weightedAdvantages.slice(0, 2).map((entry) => (
+        `Prefer ${vendor.vendor} when ${entry.criterion} is decisive; it gains ${entry.delta} weighted points under the active ${entry.weight}% allocation.`
+      ));
+    const verdict = hasTopScoreTie
+      ? `${vendor.vendor} finishes at ${vendor.score}/100 in the tied adjusted model; the current evidence does not support a definitive winner.`
+      : vendor.vendor === recommendation
+      ? `${vendor.vendor} leads the adjusted decision model at ${vendor.score}/100 under ${weightSummary || "the selected weights"}.`
+      : allCriterionScoresIdentical
+        ? `${vendor.vendor} remains tied on the underlying criterion scores; changing weights alone cannot create evidence separation.`
+        : `${vendor.vendor} scores ${vendor.score}/100 under the adjusted decision model.${weightedAdvantages.length ? ` Its strongest weighted advantage is ${weightedAdvantages[0]!.criterion}.` : ""}`;
+    return { ...vendor, verdict, switchConditions };
+  });
+  const modelInsight = `Adjusted decision model — ${weightSummary || "selected criteria"}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ""}`;
+  const evidenceLimitation = allCriterionScoresIdentical
+    ? " The available underlying criterion scores are identical across the options, so changing weights does not create a new evidence-backed separation."
+    : "";
+  const insights = [
+    modelInsight,
+    ...(analysis.insights ?? []).filter((insight) => !insight.startsWith("Adjusted decision model —")),
+  ];
+  const executiveSummary = hasTopScoreTie
+    ? `This report was regenerated using your adjusted decision model. The options remain tied at ${topScore}/100, so the current evidence does not support a definitive winner. The strongest active emphasis is ${weightSummary || "your selected criteria"}.${additionalSummary ? ` Your custom factors are ${additionalSummary}.` : ""}${evidenceLimitation}`
+    : `This report was regenerated using your adjusted decision model. ${recommendation} has the highest resulting score at ${topScore}/100. The strongest active emphasis is ${weightSummary || "your selected criteria"}.${additionalSummary ? ` Your custom factors are ${additionalSummary}.` : ""}${evidenceLimitation}`;
+  const recommendationReason = hasTopScoreTie
+    ? `The adjusted weights produce a tie at ${topScore}/100, so no option has an evidence-backed lead. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || "your selected criteria"}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ""}${evidenceLimitation}`
+    : `Based on your adjusted weights, ${recommendation} leads the weighted score at ${topScore}/100. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || "your selected criteria"}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ""}${evidenceLimitation}`;
   return {
     ...analysis,
     vendorScores,
-    recommendation,
+    recommendation: hasTopScoreTie ? "No definitive winner" : recommendation,
     score: topScore,
-    recommendationReason: `Based on your adjusted weights, ${recommendation} leads the weighted score at ${topScore}/100. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || "your selected criteria"}.`,
+    executiveSummary,
+    recommendationReason,
+    weightAdjustments: validAdditionalWeights,
+    insights,
   };
 }
 

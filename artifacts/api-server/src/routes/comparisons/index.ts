@@ -454,12 +454,16 @@ export async function validateComparisonInput(
 }
 
 export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
-  const decision = reconcileRecommendationDecision(
-    row.recommendation,
-    row.score,
-    row.vendorScores,
-    `${row.executiveSummary} ${row.recommendationReason}`,
-  );
+  const adjustedTopScoreTie = row.insights.some((insight) => insight.startsWith("Adjusted decision model —"))
+    && row.vendorScores.filter((vendor) => vendor.score === Math.max(...row.vendorScores.map((entry) => entry.score))).length > 1;
+  const decision = adjustedTopScoreTie
+    ? { recommendation: "No definitive winner", score: Math.max(...row.vendorScores.map((vendor) => vendor.score), row.score) }
+    : reconcileRecommendationDecision(
+      row.recommendation,
+      row.score,
+      row.vendorScores,
+      `${row.executiveSummary} ${row.recommendationReason}`,
+    );
   return {
     id: row.id,
     prompt: row.prompt,
@@ -481,6 +485,7 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     criteria: row.criteria,
     executiveSummary: row.executiveSummary,
     recommendationReason: row.recommendationReason,
+    weightAdjustments: row.weightAdjustments,
     vendorScores: row.vendorScores,
     pricing: row.pricing,
     features: row.features,
@@ -749,7 +754,7 @@ router.post("/comparisons/:id/regenerate", requireAuth, async (req: AuthedReques
   }
   let reweighted: AnalysisPayload;
   try {
-    reweighted = reweightAnalysis(row, body.data.weights);
+    reweighted = reweightAnalysis(row, body.data.weights, body.data.additionalWeights);
   } catch (error) {
     sendError(res, 400, "invalid_weights", error instanceof Error ? error.message : "The criterion weights are invalid.");
     return;
@@ -760,6 +765,9 @@ router.post("/comparisons/:id/regenerate", requireAuth, async (req: AuthedReques
       score: reweighted.score,
       recommendation: reweighted.recommendation,
       recommendationReason: reweighted.recommendationReason,
+      executiveSummary: reweighted.executiveSummary,
+      insights: reweighted.insights,
+      weightAdjustments: reweighted.weightAdjustments,
       vendorScores: reweighted.vendorScores,
     });
   } catch (error) {

@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './additionalComparisonWeight';
 export * from './analysisRow';
 export * from './analysisRowValues';
 export * from './apiKeyCreated';

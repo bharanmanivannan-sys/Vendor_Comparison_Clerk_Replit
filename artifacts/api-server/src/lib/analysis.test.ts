@@ -4154,11 +4154,21 @@ test("reweights an existing evidence-backed report without changing criterion sc
     { criterion: "Strategic Provider Role", weight: 2 },
     { criterion: "Sustainability", weight: 3 },
     { criterion: "Regulatory Compliance", weight: 2 },
-  ]);
+  ], [{
+    criterion: "Long-term resale value",
+    weight: 10,
+    mappedCriteria: ["Value for Money"],
+  }]);
   assert.equal(result.recommendation, "MG");
   assert.equal(result.score, 76);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score, 90);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 35);
+  assert.match(result.executiveSummary, /regenerated using your adjusted decision model/i);
+  assert.match(result.executiveSummary, /Long-term resale value 10%/);
+  assert.match(result.recommendationReason, /Meets Needs \/ Features 35%/);
+  assert.match(result.insights?.[0] ?? "", /^Adjusted decision model —/);
+  assert.match(result.vendorScores?.find((vendor) => vendor.vendor === "MG")?.verdict ?? "", /adjusted decision model/i);
+  assert.match(result.vendorScores?.find((vendor) => vendor.vendor === "Mahindra")?.switchConditions?.[0] ?? "", /Value for Money/i);
 });
 
 test("rejects adjusted weights that do not total 100", () => {
@@ -4172,5 +4182,60 @@ test("rejects adjusted weights that do not total 100", () => {
       weight: criterion === "Value for Money" ? weight + 1 : weight,
     }))),
     /must total 100%/,
+  );
+});
+
+test("explains when adjusted weights cannot separate identical underlying scores", () => {
+  const analysis = {
+    recommendation: "Mahindra diesel",
+    score: 50,
+    recommendationReason: "Original recommendation.",
+    executiveSummary: "Original summary.",
+    insights: [],
+    vendorScores: ["Mahindra diesel", "Tata Safari diesel vehicle"].map((vendor) => ({
+      vendor,
+      score: 50,
+      color: "#1c7c78",
+      verdict: "Original verdict.",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion,
+        weight,
+        score: criterion === "Strategic Provider Role" ? 0 : 50,
+        rationale: "Neutral because comparable evidence is unavailable.",
+        evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+
+  const result = reweightAnalysis(analysis, WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+    criterion,
+    weight,
+  })), [{
+    criterion: "Twenty-year ownership",
+    weight: 15,
+    mappedCriteria: ["Quality & Reliability", "Value for Money"],
+  }]);
+
+  assert.match(result.executiveSummary, /underlying criterion scores are identical/i);
+  assert.match(result.executiveSummary, /Twenty-year ownership 15%/);
+  assert.equal(result.recommendation, "No definitive winner");
+  assert.doesNotMatch(result.executiveSummary, /highest resulting score|leads/i);
+  assert.doesNotMatch(result.recommendationReason, /leads/i);
+  assert.deepEqual(result.weightAdjustments, [{
+    criterion: "Twenty-year ownership",
+    weight: 15,
+    mappedCriteria: ["Quality & Reliability", "Value for Money"],
+  }]);
+  assert.deepEqual(
+    result.vendorScores?.find((vendor) => vendor.vendor === "Tata Safari diesel vehicle")?.switchConditions,
+    [],
+  );
+  assert.match(
+    result.vendorScores?.find((vendor) => vendor.vendor === "Tata Safari diesel vehicle")?.verdict ?? "",
+    /does not support a definitive winner/i,
+  );
+  assert.doesNotMatch(
+    result.vendorScores?.find((vendor) => vendor.vendor === "Mahindra diesel")?.verdict ?? "",
+    /leads/i,
   );
 });

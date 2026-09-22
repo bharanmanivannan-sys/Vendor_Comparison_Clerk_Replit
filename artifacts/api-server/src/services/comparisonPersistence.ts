@@ -85,7 +85,10 @@ export function persistComparisonAtomically(values: InsertComparison) {
 export async function updateComparisonWithEvidence(
   comparisonId: number,
   userId: string,
-  values: Pick<InsertComparison, "score" | "recommendation" | "recommendationReason" | "vendorScores">,
+  values: Pick<
+    InsertComparison,
+    "score" | "recommendation" | "recommendationReason" | "executiveSummary" | "insights" | "weightAdjustments" | "vendorScores"
+  >,
 ) {
   return db.transaction(async (tx) => {
     const [updated] = await tx

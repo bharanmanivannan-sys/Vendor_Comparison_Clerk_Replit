@@ -14,6 +14,7 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { AdditionalComparisonWeight } from './additionalComparisonWeight';
 import type { AnalysisRow } from './analysisRow';
 import type { ComparisonSummary } from './comparisonSummary';
 import type { ComparisonSwot } from './comparisonSwot';
@@ -32,6 +33,8 @@ export type Comparison = ComparisonSummary & {
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  /** @maxItems 8 */
+  weightAdjustments?: AdditionalComparisonWeight[];
   vendorScores: VendorScore[];
   pricing: AnalysisRow[];
   features: AnalysisRow[];

@@ -9,10 +9,15 @@ import {
   computeDecisionQuality,
   DecisionRecommendationCard,
   ExecutiveDecisionBrief,
+  HeadToHead,
+  hasAdjustedTopScoreTie,
   hasOptionSpecificFrameworkEvidence,
   isVisibleSourceInList,
   pricingFeatureLensModel,
   shouldDisplayMarketHistory,
+  weightedCriterionImpact,
+  weightsBeforeAdditional,
+  weightsIncludingAdditional,
   weightTotalValidationMessage,
 } from './App';
 
@@ -156,6 +161,82 @@ test('warns and blocks regeneration totals above or below 100 percent', () => {
   assert.match(weightTotalValidationMessage(110), /exceed 100% by 10%/i);
   assert.match(weightTotalValidationMessage(90), /Add 10%/i);
   assert.equal(weightTotalValidationMessage(100), '');
+});
+
+test('calculates the visible weighted impact from criterion score and adjusted weight', () => {
+  assert.equal(weightedCriterionImpact(80, 35), 28);
+  assert.equal(weightedCriterionImpact(50, 63), 31.5);
+  assert.equal(weightedCriterionImpact(120, 10), 10);
+});
+
+test('restores persisted custom factors without adding their allocation twice', () => {
+  const effective = {
+    'Meets Needs / Features': 35,
+    'Quality & Reliability': 10,
+    'Value for Money': 20,
+    'Strategic Provider Role': 2,
+  };
+  const adjustments = [{
+    id: 1,
+    criterion: 'Long-term resale value',
+    weight: 10,
+    mappedCriteria: ['Value for Money'],
+  }];
+  const base = weightsBeforeAdditional(effective, adjustments);
+
+  assert.equal(base['Value for Money'], 10);
+  assert.deepEqual(weightsIncludingAdditional(base, adjustments), effective);
+
+  const renamed = [{
+    ...adjustments[0],
+    criterion: 'Reliability over twenty years',
+    mappedCriteriaSource: 'Long-term resale value',
+  }];
+  const renamedEffective = weightsIncludingAdditional(base, renamed);
+  assert.equal(renamedEffective['Value for Money'], 10);
+  assert.equal(renamedEffective['Quality & Reliability'], 20);
+});
+
+test('renders no definitive winner after adjusted weights leave the top options tied', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.score = 50;
+  comparison.vendorScores.forEach((vendor: any) => {
+    vendor.score = 50;
+  });
+  comparison.insights = ['Adjusted decision model — Value for Money 63%.'];
+  comparison.recommendationReason = 'The adjusted weights produce a tie at 50/100, so no option has an evidence-backed lead.';
+
+  const html = renderToStaticMarkup(<>
+    <DecisionRecommendationCard comparison={comparison} />
+    <ExecutiveDecisionBrief comparison={comparison} />
+    <HeadToHead comparison={comparison} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+
+  assert.equal(hasAdjustedTopScoreTie(comparison), true);
+  assert.match(html, /No definitive winner/);
+  assert.doesNotMatch(html, /Best overall fit/);
+  assert.match(html, /remain tied under this allocation/i);
+  assert.doesNotMatch(html, /remains stronger across the current weighted criteria/i);
+  assert.match(html, /different valid weighting can separate them/i);
+  assert.doesNotMatch(html, /identical underlying scores/i);
+  assert.match(pdfText, /No definitive winner/);
+  assert.doesNotMatch(pdfText, /RECOMMENDED OPTION/);
+});
+
+test('explains when identical underlying scores cannot be separated by reweighting', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.score = 50;
+  comparison.vendorScores.forEach((vendor: any) => {
+    vendor.score = 50;
+    vendor.weightedScores[0].score = 50;
+  });
+  comparison.insights = ['Adjusted decision model — Customer Advocacy / NPS 50%.'];
+
+  const html = renderToStaticMarkup(<HeadToHead comparison={comparison} />);
+
+  assert.match(html, /identical underlying scores/i);
+  assert.match(html, /new differentiated evidence is needed/i);
 });
 
 function comparisonFixture({ mismatchedHistory = false } = {}) {

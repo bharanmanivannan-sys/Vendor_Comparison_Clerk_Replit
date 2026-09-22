@@ -43,6 +43,11 @@ export const comparisonsTable = pgTable("comparisons", {
   status: text("status").notNull().default("complete"),
   executiveSummary: text("executive_summary").notNull(),
   recommendationReason: text("recommendation_reason").notNull(),
+  weightAdjustments: jsonb("weight_adjustments").$type<Array<{
+    criterion: string;
+    weight: number;
+    mappedCriteria: string[];
+  }>>().notNull().default([]),
   vendorScores: jsonb("vendor_scores").$type<Array<{
     vendor: string;
     score: number;

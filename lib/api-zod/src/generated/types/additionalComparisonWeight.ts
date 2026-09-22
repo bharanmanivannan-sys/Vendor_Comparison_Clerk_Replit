@@ -14,15 +14,21 @@
  *
  * OpenAPI spec version: 0.1.0
  */
-import type { AdditionalComparisonWeight } from './additionalComparisonWeight';
-import type { ComparisonWeight } from './comparisonWeight';
 
-export interface RegenerateComparisonInput {
+export interface AdditionalComparisonWeight {
   /**
-     * @minItems 9
-     * @maxItems 9
+     * @minLength 1
+     * @maxLength 100
      */
-  weights: ComparisonWeight[];
-  /** @maxItems 8 */
-  additionalWeights?: AdditionalComparisonWeight[];
+  criterion: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  weight: number;
+  /**
+     * @minItems 1
+     * @maxItems 2
+     */
+  mappedCriteria: string[];
 }

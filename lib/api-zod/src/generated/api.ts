@@ -167,6 +167,15 @@ export const createComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 export const createComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const createComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const createComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const createComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
+export const createComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const createComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const createComparisonResponseTwoWeightAdjustmentsMax = 8;
+
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -241,6 +250,11 @@ export const CreateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "weightAdjustments": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(createComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(createComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(createComparisonResponseTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(createComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+})).max(createComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number().int(),
@@ -941,6 +955,15 @@ export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMa
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
 
+export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin = 0;
+export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const getComparisonJobResponseResultOneTwoWeightAdjustmentsMax = 8;
+
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -1050,6 +1073,11 @@ export const GetComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "weightAdjustments": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax)
+})).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number().int(),
@@ -1439,13 +1467,27 @@ export const regenerateComparisonBodyWeightsItemWeightMax = 100;
 export const regenerateComparisonBodyWeightsMin = 9;
 export const regenerateComparisonBodyWeightsMax = 9;
 
+export const regenerateComparisonBodyAdditionalWeightsItemCriterionMax = 100;
+
+export const regenerateComparisonBodyAdditionalWeightsItemWeightMin = 0;
+export const regenerateComparisonBodyAdditionalWeightsItemWeightMax = 100;
+
+export const regenerateComparisonBodyAdditionalWeightsItemMappedCriteriaMax = 2;
+
+export const regenerateComparisonBodyAdditionalWeightsMax = 8;
+
 
 
 export const RegenerateComparisonBody = zod.object({
   "weights": zod.array(zod.object({
   "criterion": zod.string(),
   "weight": zod.number().int().min(regenerateComparisonBodyWeightsItemWeightMin).max(regenerateComparisonBodyWeightsItemWeightMax)
-})).min(regenerateComparisonBodyWeightsMin).max(regenerateComparisonBodyWeightsMax)
+})).min(regenerateComparisonBodyWeightsMin).max(regenerateComparisonBodyWeightsMax),
+  "additionalWeights": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(regenerateComparisonBodyAdditionalWeightsItemCriterionMax),
+  "weight": zod.number().int().min(regenerateComparisonBodyAdditionalWeightsItemWeightMin).max(regenerateComparisonBodyAdditionalWeightsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(regenerateComparisonBodyAdditionalWeightsItemMappedCriteriaMax)
+})).max(regenerateComparisonBodyAdditionalWeightsMax).optional()
 })
 
 export const regenerateComparisonResponseOneVendorsMax = 6;
@@ -1458,6 +1500,15 @@ export const regenerateComparisonResponseOneComparisonIdentityEntityCountMax = 6
 
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const regenerateComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
+export const regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const regenerateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const regenerateComparisonResponseTwoWeightAdjustmentsMax = 8;
 
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1533,6 +1584,11 @@ export const RegenerateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "weightAdjustments": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(regenerateComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(regenerateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+})).max(regenerateComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number().int(),
@@ -1771,6 +1827,15 @@ export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCo
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
 
+export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsMax = 8;
+
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -1880,6 +1945,11 @@ export const GetGuestComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "weightAdjustments": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax)
+})).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number().int(),
@@ -2274,6 +2344,15 @@ export const getComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 export const getComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const getComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const getComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
+export const getComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const getComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const getComparisonResponseTwoWeightAdjustmentsMax = 8;
+
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -2348,6 +2427,11 @@ export const GetComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "weightAdjustments": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(getComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(getComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(getComparisonResponseTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(getComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+})).max(getComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number().int(),
@@ -2629,6 +2713,15 @@ export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax
 export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const externalCreateComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
+export const externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const externalCreateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const externalCreateComparisonResponseTwoWeightAdjustmentsMax = 8;
+
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -2703,6 +2796,11 @@ export const ExternalCreateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "weightAdjustments": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+})).max(externalCreateComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number().int(),
@@ -2885,6 +2983,15 @@ export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const externalGetComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
+export const externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const externalGetComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const externalGetComparisonResponseTwoWeightAdjustmentsMax = 8;
+
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -2959,6 +3066,11 @@ export const ExternalGetComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "weightAdjustments": zod.array(zod.object({
+  "criterion": zod.string().min(1).max(externalGetComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(externalGetComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+})).max(externalGetComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number().int(),
