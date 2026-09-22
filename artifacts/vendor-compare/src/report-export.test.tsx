@@ -7,6 +7,7 @@ import {
   additionalWeightRelevanceError,
   actionableSoarEntries,
   buildComparisonPdf,
+  canAddAlternativeToComparison,
   comparisonOptionNamesOverlap,
   computeDecisionQuality,
   DecisionRecommendationCard,
@@ -156,6 +157,21 @@ test('does not add the same alternative twice', () => {
   const prompt = expandedAlternativeComparisonPrompt(comparison, 'gamma');
 
   assert.equal((prompt.match(/\bgamma\b/gi) || []).length, 1);
+});
+
+test('keeps the six-option maximum when adding an outside alternative', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendors = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'];
+
+  assert.equal(canAddAlternativeToComparison(comparison, 'Zeta'), true);
+  assert.match(expandedAlternativeComparisonPrompt(comparison, 'Zeta'), /^Compare Alpha vs Beta vs Gamma vs Delta vs Epsilon vs Zeta\./);
+
+  comparison.vendors.push('Zeta');
+  assert.equal(canAddAlternativeToComparison(comparison, 'Eta'), false);
+  assert.throws(
+    () => expandedAlternativeComparisonPrompt(comparison, 'Eta'),
+    /up to 6 options/i,
+  );
 });
 
 test('hides framework entries that explicitly use an unverified planning fallback', () => {

@@ -7,4 +7,4 @@ Support up to six products or vendors in one comparison, and reject a seventh ra
 
 **Why:** The user explicitly chose six as the product limit. Parser extraction, API validation, generated contracts, progress payloads, reports, and exports must preserve the same option set.
 
-**How to apply:** Keep the six-option ceiling synchronized across deterministic parsing, model schemas, OpenAPI constraints, generated clients, frontend validation, and export rendering.
+**How to apply:** Keep the six-option ceiling synchronized across deterministic parsing, model schemas, OpenAPI constraints, generated clients, frontend validation, alternative expansion, and export rendering. A five-option shortlist may add one alternative; a six-option shortlist must explain the limit and require removing an option instead of silently dropping one.
