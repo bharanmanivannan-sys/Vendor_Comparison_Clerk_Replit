@@ -68,6 +68,7 @@ import {
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
   requestsCurrentModelSelection,
+  sanitizeOutsideAlternativeInsights,
   selectRecommendationLabel,
   selectOpenEndedElectricVehicleShortlist,
   sourceMatchesResearchMarket,
@@ -3363,6 +3364,26 @@ test("keeps explicit requested vendors and excludes alternatives from ranked opt
   assert.deepEqual(resolved, ["Salesforce", "Microsoft"]);
   assert.equal(resolved.includes("Oracle"), false);
   assert.equal(resolved.includes("SuiteCRM"), false);
+});
+
+test("keeps at most three alternatives and excludes names overlapping compared vehicle options", () => {
+  const insights = sanitizeOutsideAlternativeInsights([
+    "Alternative outside comparison — Tata: This is the compared parent brand.",
+    "Alternative outside comparison — Tata Safari diesel AT: This is the compared model.",
+    "Alternative outside comparison — Mahindra XUV700: This overlaps the compared Mahindra option.",
+    "Alternative outside comparison — Hyundai Alcazar: Comparable three-row diesel SUV.",
+    "Alternative outside comparison — MG Hector Plus: Comparable three-row SUV.",
+    "Alternative outside comparison — Jeep Meridian: Comparable diesel SUV.",
+    "Alternative outside comparison — Toyota Fortuner: Fourth valid alternative.",
+    "Keep this non-alternative insight.",
+  ], ["Mahindra", "Tata Safari diesel AT"]);
+
+  assert.deepEqual(insights, [
+    "Alternative outside comparison — Hyundai Alcazar: Comparable three-row diesel SUV.",
+    "Alternative outside comparison — MG Hector Plus: Comparable three-row SUV.",
+    "Alternative outside comparison — Jeep Meridian: Comparable diesel SUV.",
+    "Keep this non-alternative insight.",
+  ]);
 });
 
 test("requires separate variable and fixed home-loan rates plus an alternative", () => {

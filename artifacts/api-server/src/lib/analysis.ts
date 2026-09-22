@@ -5470,11 +5470,65 @@ function frameworkAdherenceInstructions(vendors: string[]): string {
   const optionList = vendors.join(", ");
   return [
     `PESTLE and SOAR must assess each compared option separately: ${optionList}.`,
-    "Do not return only generic market commentary shared by the shortlist.",
+    "Do not return generic market commentary, industry trends, or framework definitions that are not tied to a named compared option.",
     "For every PESTLE dimension (Political, Economic, Social, Technological, Legal, Environmental) and every SOAR dimension (Strengths, Opportunities, Aspirations, Results), return one concise array entry per option.",
     "Each entry must begin with the exact option name followed by a colon, for example `Option name: Adherence assessment — evidence, exposure or gap, and the practical implication`.",
-    "Explain how that specific brand, service, product, edition, plan, or variant is adhering to or addressing the framework dimension. Separate verified evidence from assumptions and say `not verified` when evidence is missing.",
+    "Name the exact product, edition, plan, or variant in the assessment, not only its parent brand.",
+    "Explain whether and how that specific option is adhering to or addressing the framework dimension, cite the supporting product-level evidence already gathered, and state the decision implication.",
+    "If option-specific evidence is missing, omit that option-dimension entry instead of replacing it with generic commentary or a placeholder.",
+    "Any insight beginning `Alternative outside comparison —` must name an option that does not equal, contain, or reduce to any compared option above; return no more than three such alternatives.",
   ].join(" ");
+}
+
+const ALTERNATIVE_INSIGHT_PREFIX = "Alternative outside comparison —";
+
+function normalizeComparisonOptionName(value: string): string {
+  return cleanVendorName(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function comparisonOptionNamesOverlap(left: string, right: string): boolean {
+  const normalizedLeft = normalizeComparisonOptionName(left);
+  const normalizedRight = normalizeComparisonOptionName(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  return normalizedLeft === normalizedRight
+    || normalizedLeft.startsWith(`${normalizedRight} `)
+    || normalizedRight.startsWith(`${normalizedLeft} `);
+}
+
+function alternativeInsightName(insight: string): string {
+  if (!insight.startsWith(ALTERNATIVE_INSIGHT_PREFIX)) return "";
+  return cleanVendorName(insight.slice(ALTERNATIVE_INSIGHT_PREFIX.length).split(":")[0]?.trim() || "");
+}
+
+export function sanitizeOutsideAlternativeInsights(
+  insights: unknown,
+  comparedOptions: string[],
+  limit = 3,
+): string[] {
+  if (!Array.isArray(insights)) return [];
+  const seenAlternatives = new Set<string>();
+  let alternativeCount = 0;
+  return insights.flatMap((entry) => {
+    if (typeof entry !== "string") return [];
+    const insight = entry.trim();
+    if (!insight.startsWith(ALTERNATIVE_INSIGHT_PREFIX)) return insight ? [insight] : [];
+    const name = alternativeInsightName(insight);
+    const key = normalizeComparisonOptionName(name);
+    if (
+      !name
+      || alternativeCount >= Math.max(0, limit)
+      || seenAlternatives.has(key)
+      || comparedOptions.some((option) => comparisonOptionNamesOverlap(name, option))
+    ) {
+      return [];
+    }
+    seenAlternatives.add(key);
+    alternativeCount += 1;
+    return [insight];
+  });
 }
 
 function analysisOutputShape(vendors: string[], isHomeLoan = false, isElectricVehicle = false) {
@@ -5622,6 +5676,54 @@ function analysisOutputShape(vendors: string[], isHomeLoan = false, isElectricVe
     migrationSequence: [{ phase: "", objective: "", dependencies: "", exitCriteria: "", risk: "low|medium|high|critical" }],
     decisionGovernance: [{ decision: "", owner: "", approvers: "", evidenceRequired: "", decisionGate: "" }],
     sources: ["Include every HTTP/HTTPS URL consulted or cited in the analysis; do not limit this list."],
+  };
+}
+
+function compactAnalysisOutputShape(vendors: string[]) {
+  const values = Object.fromEntries(vendors.map((vendor) => [vendor, ""]));
+  return {
+    category: "",
+    recommendation: "",
+    executiveSummary: "",
+    recommendationReason: "",
+    criteriaMet: true,
+    unmetCriteriaReason: "",
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 0,
+      verdict: "",
+      providerRole: "leader|core_provider|expert|accelerator",
+      providerRoleRationale: "",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion,
+        weight,
+        score: 0,
+        rationale: "",
+        evidence: [{
+          sourceUrl: "",
+          sourceTitle: "",
+          exactClaim: "",
+          evidenceKind: "quantitative|percentage|qualitative|analyst_judgment|unverified",
+          supportDirection: "supports|contradicts|context|neutral",
+          confidence: 0,
+          normalizedScore: 0,
+        }],
+      })),
+      switchConditions: ["", ""],
+      marketPosition: { market: "", evidence: "" },
+    })),
+    pricing: [
+      { dimension: "Product, variant and ownership cost", values, winner: "" },
+      { dimension: "Warranty, service and maintenance", values, winner: "" },
+    ],
+    features: [
+      { dimension: "Performance and measurable specifications", values, winner: "" },
+      { dimension: "Safety features and protections", values, winner: "" },
+      { dimension: "Reliability and maintenance evidence", values, winner: "" },
+    ],
+    insights: [""],
+    nextSteps: [""],
+    sources: [""],
   };
 }
 
@@ -6196,12 +6298,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           if (!item || typeof item !== "object") return [];
           const row = item as { name?: unknown; rationale?: unknown; tradeOffs?: unknown };
           const name = typeof row.name === "string" ? cleanVendorName(row.name) : "";
-          if (!name || discoveredVendors.some((vendor) => vendor.toLowerCase() === name.toLowerCase())) return [];
+          if (!name || discoveredVendors.some((vendor) => comparisonOptionNamesOverlap(name, vendor))) return [];
           const rationale = typeof row.rationale === "string" ? row.rationale.trim() : "";
           const tradeOffs = typeof row.tradeOffs === "string" ? row.tradeOffs.trim() : "";
           return [`Alternative outside comparison — ${name}: ${rationale || "A credible option for the stated objective."} Trade-offs: ${tradeOffs || "Validate product fit, implementation effort, and total cost against the shortlist."}`];
         })
-        .slice(0, 2);
+        .slice(0, 3);
       input.vendors.splice(0, input.vendors.length, ...discoveredVendors);
       fallback = fallbackAnalysis(input);
     }
@@ -6372,9 +6474,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 criteria: input.criteria,
                 researchMarket,
                 currentDate,
-                shape: analysisOutputShape(input.vendors, isProviderLevelHomeLoanDiscovery, isElectricVehicleComparison),
+                shape: compactAnalysisOutputShape(input.vendors),
                 draft: researchResponse.output_text,
-                instructions: `Preserve supported facts and complete missing fields concisely. ${marketResearchInstructions} Return criteriaMet and unmetCriteriaReason. Use 0–100 scores and the supplied weights.${isProviderLevelCreditCardDiscovery ? " Recommend one exact card product by full name. State the minimum credit limit or explicitly say it was unavailable. Include annual-fee trade-offs and one or two outside-card alternatives as insights beginning exactly 'Alternative outside comparison — <name>:'." : ""}${isElectricVehicleComparison ? " Compare only the exact named EV models. Fill every EV pricing and specification row with product-level values and units. Include official product, price, brochure/specification, and warranty URLs for each model plus named-methodology safety or reliability evidence. Explain evidence-backed differentiated scores and a conditional recommendation; do not default to 50/50." : ""}`,
+                instructions: `Preserve supported facts and complete the compact shape concisely. Omitted framework, market-history, migration, and governance fields will be filled by the server normalizer; do not add them. ${marketResearchInstructions} Return criteriaMet and unmetCriteriaReason. Use 0–100 scores and the supplied weights.${isProviderLevelCreditCardDiscovery ? " Recommend one exact card product by full name. State the minimum credit limit or explicitly say it was unavailable. Include annual-fee trade-offs and one or two outside-card alternatives as insights beginning exactly 'Alternative outside comparison — <name>:'." : ""}${isElectricVehicleComparison ? " Compare only the exact named EV models. Fill every EV pricing and specification row with product-level values and units. Include official product, price, brochure/specification, and warranty URLs for each model plus named-methodology safety or reliability evidence. Explain evidence-backed differentiated scores and a conditional recommendation; do not default to 50/50." : ""}`,
               }),
             },
           ],
@@ -6617,6 +6719,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       }
       parsed.insights = existingInsights;
     }
+    parsed.insights = sanitizeOutsideAlternativeInsights(parsed.insights, input.vendors);
     if (discoveredSelectionRationale) {
       const existingInsights = Array.isArray(parsed.insights) ? parsed.insights : [];
       const insight = `Model selection rationale — ${discoveredSelectionRationale}`;
@@ -6838,6 +6941,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         explicitDecisionPriority ? Math.max(...explicitDecisionPriority.weights.map(({ weight }) => weight)) : minimumDeterministicWeight,
       ).sufficient
     );
+    normalized.insights = sanitizeOutsideAlternativeInsights(normalized.insights, resolvedVendors);
     const protectedPortfolioInsights = normalized.insights.filter((insight) => (
       insight.startsWith("Model selection rationale —")
       || insight.startsWith("Alternative outside comparison —")
@@ -6851,6 +6955,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     for (const insight of [...protectedPortfolioInsights].reverse()) {
       if (!normalized.insights.includes(insight)) normalized.insights.unshift(insight);
     }
+    normalized.insights = sanitizeOutsideAlternativeInsights(normalized.insights, resolvedVendors);
     if (batteryServiceInstructions) {
       enforceBaasTotalCostAssumptions(normalized, input.prompt, {
         annualDistanceKm: input.annualDistanceKm,
