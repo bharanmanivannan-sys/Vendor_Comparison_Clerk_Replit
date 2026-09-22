@@ -45,6 +45,40 @@ test("does not send a prohibited source to the browser-rendered provider", async
   assert.equal(fetchCalls, 0);
 });
 
+test("requires explicit comparison-evidence permission before rendered retrieval", async () => {
+  let fetchCalls = 0;
+  const [result] = await retrieveEvidenceDocumentsWithScrapyAi(
+    ["https://permitted.example/product"],
+    {
+      env: { SCRAPY_AI_ENABLED: "true", ZYTE_API_KEY: "test-key" },
+      preflight: async () => [{
+        url: "https://permitted.example/product",
+        available: true,
+        registryDecision: {
+          domain: "permitted.example",
+          decisionOrigin: "automated",
+          pathScope: "/product",
+          sourceType: "publisher",
+          accessStatus: "ALLOWED",
+          accessMethod: "public_web",
+          robotsResult: "allowed",
+          reviewedAt: new Date().toISOString(),
+          reviewDueAt: new Date(Date.now() + 60_000).toISOString(),
+          allowedUses: ["automated_retrieval"],
+          restrictions: [],
+        },
+      }],
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("must not be called");
+      },
+    },
+  );
+  assert.equal(result?.document, undefined);
+  assert.equal(result?.reason, "access_restricted");
+  assert.equal(fetchCalls, 0);
+});
+
 test("records rendered HTML provenance after a permitted browser extraction", async () => {
   const records: Array<{ url: string; result: { available: boolean; finalUrl?: string } }> = [];
   const [result] = await retrieveEvidenceDocumentsWithScrapyAi(
@@ -54,6 +88,19 @@ test("records rendered HTML provenance after a permitted browser extraction", as
       preflight: async () => [{
         url: "https://permitted.example/product",
         available: true,
+        registryDecision: {
+          domain: "permitted.example",
+          decisionOrigin: "automated",
+          pathScope: "/product",
+          sourceType: "publisher",
+          accessStatus: "ALLOWED",
+          accessMethod: "public_web",
+          robotsResult: "allowed",
+          reviewedAt: new Date().toISOString(),
+          reviewDueAt: new Date(Date.now() + 60_000).toISOString(),
+          allowedUses: ["automated_retrieval", "comparison_evidence"],
+          restrictions: [],
+        },
       }],
       fetchImpl: async () => new Response(JSON.stringify({
         url: "https://permitted.example/product",

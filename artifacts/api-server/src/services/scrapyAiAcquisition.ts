@@ -40,6 +40,19 @@ function failureReason(status: number): EvidenceUrlResult["reason"] {
   return "unreachable";
 }
 
+function permitsRenderedEvidence(result: EvidenceUrlResult): boolean {
+  const decision = result.registryDecision;
+  return Boolean(
+    result.available
+    && decision
+    && ["ALLOWED", "LICENSED", "CUSTOMER_SUPPLIED"].includes(decision.accessStatus)
+    && decision.accessMethod === "public_web"
+    && decision.robotsResult === "allowed"
+    && decision.allowedUses.includes("automated_retrieval")
+    && decision.allowedUses.includes("comparison_evidence"),
+  );
+}
+
 async function extractRenderedHtml(
   url: string,
   apiKey: string,
@@ -126,10 +139,10 @@ export async function retrieveEvidenceDocumentsWithScrapyAi(
       const index = cursor;
       cursor += 1;
       const preflightResult = preflightResults[index]!;
-      if (!preflightResult.available) {
+      if (!permitsRenderedEvidence(preflightResult)) {
         results[index] = {
           url: urls[index]!,
-          reason: preflightResult.reason ?? "unreachable",
+          reason: preflightResult.reason ?? "access_restricted",
         };
         continue;
       }

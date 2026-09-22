@@ -45,3 +45,6 @@ packages = ["freetype", "gumbo", "harfbuzz", "jbig2dec", "libjpeg_turbo", "mupdf
 
 [userenv]
 SUPPORTED_NODE_MAJORS = "20,22,24"
+
+[userenv.production]
+SCRAPY_AI_ENABLED = "true"
