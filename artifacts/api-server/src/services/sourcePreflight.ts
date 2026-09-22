@@ -119,7 +119,8 @@ function regexEscape(value: string): string {
 export function sourceLooksUnrelated(text: string, prompt: string, vendors: string[] = []): boolean {
   const vendorTerms = vendors.flatMap((vendor) => {
     const fullName = vendor.toLowerCase().trim().replace(/\s+/g, " ");
-    const distinctiveTokens = (fullName.match(/[a-z0-9][a-z0-9+.-]*/g) ?? [])
+    const matchedTokens: string[] = fullName.match(/[a-z0-9][a-z0-9+.-]*/g) ?? [];
+    const distinctiveTokens = matchedTokens
       .filter((term) => term.length >= 2 && !GENERIC_ENTITY_TOKENS.has(term));
     return [fullName, ...distinctiveTokens];
   }).filter((term) => term.length >= 2);

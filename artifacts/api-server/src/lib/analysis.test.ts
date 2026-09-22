@@ -71,6 +71,7 @@ import {
   selectRecommendationLabel,
   selectOpenEndedElectricVehicleShortlist,
   sourceMatchesResearchMarket,
+  uniqueHighestDeterministicWeightedVendor,
   userSuppliedSourceInstructions,
   UNVERIFIABLE_WINNER_NOTE,
   validateFinalEvidenceUrls,
@@ -96,6 +97,47 @@ test("includes NPS in the 100-point weighted decision model", () => {
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("recovers a unique evidence-backed winner when rounded totals appear tied", () => {
+  const criterion = "Meets Needs / Features";
+  const evidence = (score: number) => [{
+    exactClaim: "Verified comparable metric",
+    sourceUrl: "https://official.example/product",
+    documentSha256: "a".repeat(64),
+    sourceTextStart: 0,
+    sourceTextEnd: 25,
+    metricKey: "capability_score",
+    metricSubject: "product",
+    metricBasis: "same test basis",
+    rawMetricValue: score,
+    rawMetricUnit: "points",
+    normalizationDirection: "higher_is_better" as const,
+    evidenceKind: "quantitative" as const,
+    supportDirection: "supports" as const,
+    confidence: 90,
+    normalizedScore: score,
+    normalizationMethod: "direct_comparable_metric" as const,
+    criterionWeight: 25,
+    weightedContribution: score * 0.25,
+    retrievalDate: "2026-09-22",
+  }];
+  const vendorScores = ["Option A", "Option B"].map((vendor, index) => ({
+    vendor,
+    score: 50,
+    weightedScores: WEIGHTED_CRITERIA.map(({ criterion: name, weight }) => ({
+      criterion: name,
+      weight,
+      score: name === criterion && index === 0 ? 51 : 50,
+      rationale: "Verified comparable evidence.",
+      evidence: name === criterion ? evidence(index === 0 ? 51 : 50) : [],
+    })),
+  })) as unknown as AnalysisPayload["vendorScores"];
+
+  assert.deepEqual(
+    uniqueHighestDeterministicWeightedVendor({ vendorScores }),
+    { vendor: "Option A", score: 50 },
+  );
 });
 
 test("recognizes an explicit vehicle-safety priority without matching incidental safety text", () => {

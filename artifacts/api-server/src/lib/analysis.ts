@@ -8,6 +8,10 @@ import {
   type RetrievedEvidenceDocument,
 } from "./security";
 import { publisherPermissionRegistry } from "../services/publisherPermissionRegistry";
+import {
+  isScrapyAiAcquisitionConfigured,
+  retrieveEvidenceDocumentsWithScrapyAi,
+} from "../services/scrapyAiAcquisition";
 
 export type AnalysisPayload = Omit<
   InsertComparison,
@@ -498,7 +502,8 @@ function applyInternalWeightProfile(analysis: AnalysisPayload, profile: Comparis
 }
 
 export function annotateUnverifiableWinner(analysis: AnalysisPayload): void {
-  const scoreDecision = uniqueHighestScoreVendor(analysis.vendorScores ?? []);
+  const deterministicDecision = uniqueHighestDeterministicWeightedVendor(analysis);
+  const scoreDecision = deterministicDecision ?? uniqueHighestScoreVendor(analysis.vendorScores ?? []);
   const lensDecision = selectEvidenceBackedLensWinner(
     analysis.pricing,
     analysis.features,
@@ -512,7 +517,7 @@ export function annotateUnverifiableWinner(analysis: AnalysisPayload): void {
     )?.score;
     analysis.score = Number.isFinite(winnerScore) ? winnerScore! : 50;
     const conclusion = scoreDecision
-      ? `${winner} emerges as the winner because it has the highest available weighted score of ${scoreDecision.score}/100. The other parameters were insufficient to establish a clear winner.`
+      ? `${winner} emerges as the winner because it has the highest available weighted score of ${scoreDecision.score}/100${deterministicDecision ? " after preserving the exact ordering from comparable retrieved-document metrics" : ""}. The other parameters were insufficient to establish a clear winner.`
       : `${winner} emerges as a winner based on the available information with respect to the pricing and feature lenses, winning ${lensDecision!.wins} of ${lensDecision!.decidedRows} decided dimensions (${lensDecision!.pricingWins} pricing and ${lensDecision!.featureWins} feature). The other parameters were insufficient to establish a clear winner.`;
     const lensRationale = lensDecision && lensDecision.winner.toLowerCase() === winner.toLowerCase()
       ? ` It also led the available ${lensDecision.pricingWins && lensDecision.featureWins
@@ -1482,6 +1487,44 @@ export function uniqueHighestScoreVendor(
   return leaders.length === 1 ? { vendor: leaders[0].vendor, score: leaders[0].score } : null;
 }
 
+/**
+ * Recover a deterministic decision when rounded vendor scores hide a small
+ * lead created by comparable retrieved-document metrics. Unsupported
+ * criteria remain neutral, so this never turns missing evidence into an
+ * advantage.
+ */
+export function uniqueHighestDeterministicWeightedVendor(
+  analysis: Pick<AnalysisPayload, "vendorScores">,
+): { vendor: string; score: number } | null {
+  const rows = analysis.vendorScores ?? [];
+  const deterministicCriteria = new Set(
+    WEIGHTED_CRITERIA
+      .map(({ criterion }) => criterion)
+      .filter((criterion) => rows.every((vendor) => (
+        vendor.weightedScores?.some((entry) => (
+          entry.criterion === criterion
+          && (entry.evidence ?? []).some((evidence) => (
+            evidence.normalizationMethod === "direct_comparable_metric"
+            || evidence.normalizationMethod === "inverse_comparable_metric"
+          ))
+        ))
+      ))),
+  );
+  if (!deterministicCriteria.size) return null;
+  const ranked = rows.map((vendor) => {
+    const total = WEIGHTED_CRITERIA.reduce((sum, { criterion, weight }) => {
+      const score = deterministicCriteria.has(criterion)
+        ? vendor.weightedScores?.find((entry) => entry.criterion === criterion)?.score ?? 50
+        : 50;
+      return sum + score * weight;
+    }, 0);
+    return { vendor: vendor.vendor, total, score: Math.round(total / 100) };
+  }).sort((left, right) => right.total - left.total);
+  const leader = ranked[0];
+  if (!leader || ranked.filter((entry) => entry.total === leader.total).length !== 1) return null;
+  return { vendor: leader.vendor, score: leader.score };
+}
+
 function recommendationAliasPattern(vendor: string): string {
   const parts = vendor
     .split(/\s*(?:\+|&|,|\band\b)\s*/i)
@@ -1628,7 +1671,8 @@ export function reconcileFinalRecommendationNarrative(analysis: AnalysisPayload)
         (entry) => entry.vendor.toLowerCase() === lensDecision.winner.toLowerCase(),
       )?.score
     : undefined;
-  const scoreDecision = uniqueHighestScoreVendor(analysis.vendorScores);
+  const deterministicDecision = uniqueHighestDeterministicWeightedVendor(analysis);
+  const scoreDecision = deterministicDecision ?? uniqueHighestScoreVendor(analysis.vendorScores);
   const decision = scoreDecision
     ? {
         recommendation: scoreDecision.vendor,
@@ -6611,7 +6655,24 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const retrievedResults = await retrieveEvidenceDocuments(retrievalUrls, {
       permissionRegistry: publisherPermissionRegistry,
     });
-    const retrievedDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
+    const directDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
+    let retrievedDocuments = directDocuments;
+    if (isScrapyAiAcquisitionConfigured()) {
+      const directByUrl = new Map(directDocuments.map((document) => [document.url, document]));
+      const browserCandidates = retrievalUrls.filter((url) => {
+        const document = directByUrl.get(url);
+        return !document || document.text.length < 180;
+      });
+      if (browserCandidates.length) {
+        input.onProgress?.("building_evidence");
+        const renderedResults = await retrieveEvidenceDocumentsWithScrapyAi(browserCandidates, {
+          permissionRegistry: publisherPermissionRegistry,
+        });
+        const renderedDocuments = renderedResults.flatMap((result) => result.document ? [result.document] : []);
+        const renderedByUrl = new Map(renderedDocuments.map((document) => [document.url, document]));
+        retrievedDocuments = retrievalUrls.flatMap((url) => renderedByUrl.get(url) ?? directByUrl.get(url) ?? []);
+      }
+    }
     const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
       document.url,
       document.finalUrl,

@@ -126,6 +126,8 @@ export type RetrievedEvidenceDocument = {
   sha256: string;
   retrievedAt: string;
   truncated: boolean;
+  retrievalMethod?: "direct_http" | "scrapy_zyte_browser_html";
+  parserVersion?: string;
 };
 
 export type EvidenceDocumentResult = {
@@ -645,6 +647,8 @@ async function retrieveOneEvidenceDocument(
         sha256: createHash("sha256").update(text).digest("hex"),
         retrievedAt: new Date(now()).toISOString(),
         truncated: Boolean(response.truncated),
+        retrievalMethod: "direct_http",
+        parserVersion: "security-html-v1",
       };
       const result = { url: originalUrl, document };
       await options.permissionRegistry?.record(originalUrl, {
