@@ -1085,6 +1085,44 @@ const defaultCriterionMatches = (criterion: string) => {
   return ['Meets Needs / Features'];
 };
 
+const RECOGNIZED_ADDITIONAL_FACTOR = /\b(?:accuracy|advocacy|availability|brand|budget|capabilit|catalog|charging|claims?|compliance|condition|context window|cost|coverage|customer|delivery|deposit|depreciation|differentiation|ease|excess|features?|fees?|freshness|fuel|ground clearance|hallucination|implementation|innovation|integration|interest|latency|lifecycle|lvr|maintenance|multimodal|nps|ownership|performance|premium|price|pricing|privacy|quality|range|reasoning|regulation|reliability|reputation|resale|safety|scalability|security|selection|service|speed|support|sustainability|throughput|time|token|towing|trade-in|usability|value|warranty)\b/i;
+const DURABLE_ASSET_CONTEXT = /\b(?:appliances?|automotive|cars?|computers?|devices?|equipment|hardware|laptops?|machinery|motorcycles?|phones?|property|real estate|trucks?|vehicles?)\b/i;
+const VEHICLE_CONTEXT = /\b(?:automotive|cars?|evs?|motorcycles?|suvs?|trucks?|vehicles?)\b/i;
+const AI_CONTEXT = /\b(?:ai models?|artificial intelligence|chatgpt|claude|gemini|gpt|large language models?|llama|llm|mistral|openai|anthropic)\b/i;
+const FINANCE_CONTEXT = /\b(?:bank|banking|credit card|finance|home loan|lender|loan|mortgage)\b/i;
+const INSURANCE_CONTEXT = /\b(?:insurance|insurer|policy)\b/i;
+
+export function additionalWeightRelevanceError(criterion: string, comparison: any): string {
+  const factor = criterion.trim();
+  if (!factor) return 'Enter a named factor before adding a weight.';
+  const context = [
+    comparison?.prompt,
+    comparison?.category,
+    ...(comparison?.vendors || []),
+    ...(comparison?.criteria || []),
+  ].filter(Boolean).join(' ');
+  const label = String(comparison?.category || 'this comparison');
+  if (/\b(?:resale|depreciation|trade-in|retained value)\b/i.test(factor) && !DURABLE_ASSET_CONTEXT.test(context)) {
+    return `"${factor}" is not relevant to ${label}. Resale and depreciation apply only to durable assets such as vehicles, equipment, and devices.`;
+  }
+  if (/\b(?:charging|fuel economy|ground clearance|towing|driving range|seating capacity)\b/i.test(factor) && !VEHICLE_CONTEXT.test(context)) {
+    return `"${factor}" is vehicle-specific and is not relevant to ${label}.`;
+  }
+  if (/\b(?:context window|hallucination|multimodal|token cost|tokens? per|reasoning quality)\b/i.test(factor) && !AI_CONTEXT.test(context)) {
+    return `"${factor}" is AI-model-specific and is not relevant to ${label}.`;
+  }
+  if (/\b(?:deposit|interest rate|lvr|loan term|repayment)\b/i.test(factor) && !FINANCE_CONTEXT.test(context)) {
+    return `"${factor}" is lending-specific and is not relevant to ${label}.`;
+  }
+  if (/\b(?:insurance premium|policy excess|claims? handling|coverage limit)\b/i.test(factor) && !INSURANCE_CONTEXT.test(context)) {
+    return `"${factor}" is insurance-specific and is not relevant to ${label}.`;
+  }
+  if (!RECOGNIZED_ADDITIONAL_FACTOR.test(factor)) {
+    return `"${factor}" cannot be mapped to a supported, evidence-backed comparison dimension.`;
+  }
+  return '';
+}
+
 function mappedCriteriaForAdjustment(adjustment: AdditionalWeight): string[] {
   return adjustment.mappedCriteria?.length
     && (!adjustment.mappedCriteriaSource || adjustment.mappedCriteriaSource === adjustment.criterion)
@@ -1412,6 +1450,9 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
   );
   const total = Object.values(effectiveWeights).reduce((sum, weight) => sum + (Number(weight) || 0), 0);
   const weightValidationMessage = weightTotalValidationMessage(total);
+  const irrelevantWeightMessage = additionalWeights
+    .map((item) => additionalWeightRelevanceError(item.criterion, comparison))
+    .find(Boolean) || '';
   useEffect(() => {
     setWeights(initialWeights());
     setAdditionalWeights(initialAdditionalWeights());
@@ -1427,6 +1468,10 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
     setError('');
   };
   const regenerate = async () => {
+    if (irrelevantWeightMessage) {
+      setError(irrelevantWeightMessage);
+      return;
+    }
     if (total !== 100) {
       setError(`Weights must total 100%. Current total: ${total}%.`);
       return;
@@ -1459,9 +1504,15 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
   };
   const addAdditionalWeight = () => {
     const criterion = newAdditionalCriterion.trim();
-    if (!criterion || additionalWeights.some((item) => item.criterion.toLowerCase() === criterion.toLowerCase())) return;
+    const relevanceError = additionalWeightRelevanceError(criterion, comparison);
+    if (relevanceError) {
+      setError(relevanceError);
+      return;
+    }
+    if (additionalWeights.some((item) => item.criterion.toLowerCase() === criterion.toLowerCase())) return;
     setAdditionalWeights((current) => [...current, { id: current.length + 1, criterion, weight: 0 }]);
     setNewAdditionalCriterion('');
+    setError('');
   };
   const updateAdditionalWeight = (id: number, value: string) => {
     const parsed = Number(value);
@@ -1491,10 +1542,10 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
     <div className="mt-6 grid gap-x-6 gap-y-5 md:grid-cols-2">
       {WEIGHTED_CRITERIA.map((criterion) => { const fixed = criterion === 'Strategic Provider Role'; const maxAllowed = fixed ? 2 : 100; return <label className="block" key={criterion}><div className="flex items-center justify-between gap-3 text-xs font-bold text-[#202840]"><span>{criterion}{fixed ? ' (fixed)' : ''}</span><div className="flex items-center gap-1"><input type="number" min={fixed ? 2 : 0} max={maxAllowed} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-2 py-1.5 text-right text-xs font-bold text-[#202840] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight`} /><span>%</span></div></div><input type="range" min={fixed ? 2 : 0} max={maxAllowed} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="mt-2 w-full accent-[#0f766e] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight slider`} /></label>; })}
     </div>
-     <div className="mt-7 border-t border-[#c8d99a] pt-5" data-testid="section-additional-weights"><div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#35665c]">Additional weights</p><p className="mt-1 text-[11px] leading-5 text-[#566074]">Add a named factor and allocate part of the same 100% model. It maps to the closest existing evidence dimension instead of inventing unsupported scores.</p></div><div className="flex w-full gap-2 sm:max-w-md"><input value={newAdditionalCriterion} onChange={(event) => setNewAdditionalCriterion(event.target.value)} placeholder="e.g. resale value" className="focus-ring min-w-0 flex-1 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-3 py-2 text-xs text-[#202840]" aria-label="Additional criterion" /><button type="button" onClick={addAdditionalWeight} className="focus-ring rounded-lg bg-[#202840] px-3 py-2 text-xs font-bold text-[#f8f4e8]" data-testid="button-additional-weight">Add</button></div></div>{additionalWeights.length > 0 && <div className="mt-4 grid gap-3 md:grid-cols-2">{additionalWeights.map((item) => <div className="rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] p-3" key={item.id}><div className="flex items-center gap-2"><input value={item.criterion} onChange={(event) => setAdditionalWeights((current) => current.map((entry) => entry.id === item.id ? { ...entry, criterion: event.target.value } : entry))} className="focus-ring min-w-0 flex-1 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id}`} /><input type="number" min="0" max="98" value={item.weight} onChange={(event) => updateAdditionalWeight(item.id, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id} weight`} /><span className="text-xs">%</span><button type="button" onClick={() => setAdditionalWeights((current) => current.filter((entry) => entry.id !== item.id))} className="focus-ring rounded p-1 text-[#9a3e38]" aria-label={`Remove additional criterion ${item.criterion}`}><X size={14} /></button></div><p className="mt-2 text-[10px] text-[#687083]">Maps to {defaultCriterionMatches(item.criterion).join(' + ')}</p></div>)}</div>}</div>
+     <div className="mt-7 border-t border-[#c8d99a] pt-5" data-testid="section-additional-weights"><div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#35665c]">Additional weights</p><p className="mt-1 text-[11px] leading-5 text-[#566074]">Add a relevant named factor and allocate part of the same 100% model. Domain-specific factors are accepted only when they apply to this comparison.</p></div><div className="flex w-full gap-2 sm:max-w-md"><input value={newAdditionalCriterion} onChange={(event) => { setNewAdditionalCriterion(event.target.value); setError(''); }} placeholder="e.g. implementation speed" className="focus-ring min-w-0 flex-1 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-3 py-2 text-xs text-[#202840]" aria-label="Additional criterion" /><button type="button" onClick={addAdditionalWeight} className="focus-ring rounded-lg bg-[#202840] px-3 py-2 text-xs font-bold text-[#f8f4e8]" data-testid="button-additional-weight">Add</button></div></div>{additionalWeights.length > 0 && <div className="mt-4 grid gap-3 md:grid-cols-2">{additionalWeights.map((item) => { const relevanceError = additionalWeightRelevanceError(item.criterion, comparison); return <div className={`rounded-lg border bg-[#f8f4e8] p-3 ${relevanceError ? 'border-[#d99b91]' : 'border-[#b7c9a6]'}`} key={item.id}><div className="flex items-center gap-2"><input value={item.criterion} onChange={(event) => { setAdditionalWeights((current) => current.map((entry) => entry.id === item.id ? { ...entry, criterion: event.target.value } : entry)); setError(''); }} className="focus-ring min-w-0 flex-1 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id}`} /><input type="number" min="0" max="98" value={item.weight} onChange={(event) => updateAdditionalWeight(item.id, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id} weight`} /><span className="text-xs">%</span><button type="button" onClick={() => setAdditionalWeights((current) => current.filter((entry) => entry.id !== item.id))} className="focus-ring rounded p-1 text-[#9a3e38]" aria-label={`Remove additional criterion ${item.criterion}`}><X size={14} /></button></div>{relevanceError ? <p className="mt-2 text-[10px] font-bold leading-4 text-[#9a3e38]" role="alert">{relevanceError}</p> : <p className="mt-2 text-[10px] text-[#687083]">Maps to {defaultCriterionMatches(item.criterion).join(' + ')}</p>}</div>; })}</div>}</div>
     <div className="mt-6 flex flex-col gap-3 border-t border-[#c8d99a] pt-5 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-[11px] leading-5 text-[#566074]">Current winner: <strong>{comparison.recommendation}</strong>. {guest ? 'A regenerated report will update this result for the current session.' : 'A regenerated report will replace this saved result for your workspace.'}</p>
-       <div className="flex gap-2"><button type="button" onClick={() => { setWeights(initialWeights()); setAdditionalWeights([]); setError(''); }} className="focus-ring rounded-xl border border-[#9ebbb0] bg-[#f8f4e8] px-4 py-3 text-xs font-bold text-[#566074]">Reset</button><button type="button" onClick={regenerate} disabled={pending || total !== 100} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="animate-spin" size={15} />}{pending ? 'Regenerating report' : 'Regenerate report'}</button></div>
+       <div className="flex gap-2"><button type="button" onClick={() => { setWeights(initialWeights()); setAdditionalWeights([]); setError(''); }} className="focus-ring rounded-xl border border-[#9ebbb0] bg-[#f8f4e8] px-4 py-3 text-xs font-bold text-[#566074]">Reset</button><button type="button" onClick={regenerate} disabled={pending || total !== 100 || Boolean(irrelevantWeightMessage)} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="animate-spin" size={15} />}{pending ? 'Regenerating report' : 'Regenerate report'}</button></div>
     </div>
     {error && <p className="mt-3 text-xs font-bold text-[#9a3e38]" role="alert">{error}</p>}
   </section>;

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  additionalWeightRelevanceError,
   addElectricVehicleMatrixEvidence,
   addVerifiedElectricVehicleMatrixMetrics,
   addVerifiedElectricVehicleOfficialSpecs,
@@ -4112,6 +4113,8 @@ test("removes numeric stock values for a verified private company", () => {
 
 test("reweights an existing evidence-backed report without changing criterion scores", () => {
   const analysis = {
+    prompt: "Compare MG ZS EV and Mahindra XUV400 EV for long-term vehicle ownership.",
+    category: "Electric vehicles",
     recommendation: "Mahindra",
     score: 60,
     recommendationReason: "Original recommendation.",
@@ -4169,6 +4172,49 @@ test("reweights an existing evidence-backed report without changing criterion sc
   assert.match(result.insights?.[0] ?? "", /^Adjusted decision model —/);
   assert.match(result.vendorScores?.find((vendor) => vendor.vendor === "MG")?.verdict ?? "", /adjusted decision model/i);
   assert.match(result.vendorScores?.find((vendor) => vendor.vendor === "Mahindra")?.switchConditions?.[0] ?? "", /Value for Money/i);
+});
+
+test("rejects domain-specific custom weights that do not apply to the comparison", () => {
+  const aiComparison = {
+    prompt: "Compare Claude and ChatGPT as AI models for software development.",
+    category: "AI models",
+    vendors: ["Claude", "ChatGPT"],
+    criteria: ["Reasoning quality", "Context window"],
+  };
+
+  assert.match(
+    additionalWeightRelevanceError("Long-term resale value", aiComparison) ?? "",
+    /not relevant to AI models/i,
+  );
+  assert.equal(
+    additionalWeightRelevanceError("Reasoning quality", aiComparison),
+    null,
+  );
+  assert.equal(
+    additionalWeightRelevanceError("Long-term resale value", {
+      prompt: "Compare two electric vehicles for five-year ownership.",
+      category: "Electric vehicles",
+    }),
+    null,
+  );
+});
+
+test("enforces custom-weight relevance during server-side regeneration", () => {
+  const analysis = {
+    prompt: "Compare Claude and ChatGPT as AI models.",
+    category: "AI models",
+    recommendation: "Claude",
+    vendorScores: [],
+  } as unknown as AnalysisPayload;
+
+  assert.throws(
+    () => reweightAnalysis(
+      analysis,
+      WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({ criterion, weight })),
+      [{ criterion: "Resale value", weight: 10, mappedCriteria: ["Value for Money"] }],
+    ),
+    /not relevant to AI models/i,
+  );
 });
 
 test("rejects adjusted weights that do not total 100", () => {

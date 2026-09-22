@@ -4,6 +4,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
+  additionalWeightRelevanceError,
   buildComparisonPdf,
   comparisonOptionNamesOverlap,
   computeDecisionQuality,
@@ -195,6 +196,28 @@ test('restores persisted custom factors without adding their allocation twice', 
   const renamedEffective = weightsIncludingAdditional(base, renamed);
   assert.equal(renamedEffective['Value for Money'], 10);
   assert.equal(renamedEffective['Quality & Reliability'], 20);
+});
+
+test('rejects irrelevant custom weights for the current comparison domain', () => {
+  const aiComparison = {
+    prompt: 'Compare Claude and ChatGPT as AI models for software development.',
+    category: 'AI models',
+    vendors: ['Claude', 'ChatGPT'],
+    criteria: ['Reasoning quality', 'Context window'],
+  };
+
+  assert.match(
+    additionalWeightRelevanceError('Long-term resale value', aiComparison),
+    /not relevant to AI models/i,
+  );
+  assert.equal(additionalWeightRelevanceError('Reasoning quality', aiComparison), '');
+  assert.equal(
+    additionalWeightRelevanceError('Long-term resale value', {
+      prompt: 'Compare two electric vehicles for five-year ownership.',
+      category: 'Electric vehicles',
+    }),
+    '',
+  );
 });
 
 test('renders no definitive winner after adjusted weights leave the top options tied', async () => {

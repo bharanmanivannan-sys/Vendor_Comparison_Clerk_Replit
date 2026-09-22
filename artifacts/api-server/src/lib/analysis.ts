@@ -560,6 +560,54 @@ export type AdditionalComparisonWeight = {
   mappedCriteria: string[];
 };
 
+type ComparisonWeightContext = {
+  prompt?: string;
+  category?: string;
+  vendors?: string[];
+  criteria?: string[];
+};
+
+const RECOGNIZED_ADDITIONAL_FACTOR = /\b(?:accuracy|advocacy|availability|brand|budget|capabilit|catalog|charging|claims?|compliance|condition|context window|cost|coverage|customer|delivery|deposit|depreciation|differentiation|ease|excess|features?|fees?|freshness|fuel|ground clearance|hallucination|implementation|innovation|integration|interest|latency|lifecycle|lvr|maintenance|multimodal|nps|ownership|performance|premium|price|pricing|privacy|quality|range|reasoning|regulation|reliability|reputation|resale|safety|scalability|security|selection|service|speed|support|sustainability|throughput|time|token|towing|trade-in|usability|value|warranty)\b/i;
+const DURABLE_ASSET_CONTEXT = /\b(?:appliances?|automotive|cars?|computers?|devices?|equipment|hardware|laptops?|machinery|motorcycles?|phones?|property|real estate|trucks?|vehicles?)\b/i;
+const VEHICLE_CONTEXT = /\b(?:automotive|cars?|evs?|motorcycles?|suvs?|trucks?|vehicles?)\b/i;
+const AI_CONTEXT = /\b(?:ai models?|artificial intelligence|chatgpt|claude|gemini|gpt|large language models?|llama|llm|mistral|openai|anthropic)\b/i;
+const FINANCE_CONTEXT = /\b(?:bank|banking|credit card|finance|home loan|lender|loan|mortgage)\b/i;
+const INSURANCE_CONTEXT = /\b(?:insurance|insurer|policy)\b/i;
+
+export function additionalWeightRelevanceError(
+  criterion: string,
+  analysis: Partial<ComparisonWeightContext>,
+): string | null {
+  const factor = criterion.trim();
+  if (!factor) return "Enter a named factor before adding a weight.";
+  const context = [
+    analysis.prompt,
+    analysis.category,
+    ...(analysis.vendors ?? []),
+    ...(analysis.criteria ?? []),
+  ].filter(Boolean).join(" ");
+  const label = analysis.category?.trim() || "this comparison";
+  if (/\b(?:resale|depreciation|trade-in|retained value)\b/i.test(factor) && !DURABLE_ASSET_CONTEXT.test(context)) {
+    return `"${factor}" is not relevant to ${label}. Resale and depreciation apply only to durable assets such as vehicles, equipment, and devices.`;
+  }
+  if (/\b(?:charging|fuel economy|ground clearance|towing|driving range|seating capacity)\b/i.test(factor) && !VEHICLE_CONTEXT.test(context)) {
+    return `"${factor}" is vehicle-specific and is not relevant to ${label}.`;
+  }
+  if (/\b(?:context window|hallucination|multimodal|token cost|tokens? per|reasoning quality)\b/i.test(factor) && !AI_CONTEXT.test(context)) {
+    return `"${factor}" is AI-model-specific and is not relevant to ${label}.`;
+  }
+  if (/\b(?:deposit|interest rate|lvr|loan term|repayment)\b/i.test(factor) && !FINANCE_CONTEXT.test(context)) {
+    return `"${factor}" is lending-specific and is not relevant to ${label}.`;
+  }
+  if (/\b(?:insurance premium|policy excess|claims? handling|coverage limit)\b/i.test(factor) && !INSURANCE_CONTEXT.test(context)) {
+    return `"${factor}" is insurance-specific and is not relevant to ${label}.`;
+  }
+  if (!RECOGNIZED_ADDITIONAL_FACTOR.test(factor)) {
+    return `"${factor}" cannot be mapped to a supported, evidence-backed comparison dimension.`;
+  }
+  return null;
+}
+
 const INVALID_SWITCH_CONDITION = /^(?:none|n\/?a|not available|not applicable|unknown|-)$/i;
 
 function meaningfulSwitchConditions(value: unknown): string[] {
@@ -621,6 +669,10 @@ export function reweightAnalysis(
 ): AnalysisPayload {
   const weights = normalizedWeightMap(requestedWeights);
   const canonicalCriteria = new Set<string>(WEIGHTED_CRITERIA.map(({ criterion }) => criterion));
+  for (const entry of additionalWeights) {
+    const relevanceError = additionalWeightRelevanceError(entry.criterion, analysis);
+    if (relevanceError) throw new Error(relevanceError);
+  }
   const validAdditionalWeights = additionalWeights
     .map((entry) => ({
       criterion: entry.criterion.trim(),
