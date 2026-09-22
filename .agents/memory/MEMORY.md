@@ -26,5 +26,8 @@
 - [Compact official offer evidence](compact-offer-evidence.md) — deterministically extract verified offer metrics when official pages compress price and usage rate into one line.
 - [Portfolio-first product selection](portfolio-first-product-selection.md) — broad brand requests need portfolio screening, minimum comparability, holistic fit, and evidence readiness before ranking.
 - [Retrieved metric provenance](retrieved-metric-provenance.md) — evidence normalization must preserve verified document provenance so deterministic scoring can recognize recovered metrics.
-- [Parameter-first and evidence-limited decisions](parameter-first-decisions.md) — explicit user priorities control weights; uncertainty returns a brief with no exact winner, not a failed job.
+- [Parameter-first and evidence-limited decisions](parameter-first-decisions.md) — explicit priorities control weights; unique lens leaders can remain qualified when broader evidence is incomplete.
 - [Comparison intake compatibility](comparison-intake-compatibility.md) — reject known cross-domain and geography conflicts before creating research jobs.
+- [Refined comparison briefs](refined-comparison-briefs.md) — preserve the user’s original request while research uses a validated market, audience, and like-for-like brief.
+- [Model URL provenance](model-url-provenance.md) — model-written URLs are not evidence; admit only user, deterministic, or explicit retrieval citation URLs.
+- [Customer-facing terminology](customer-facing-terminology.md) — avoid “signal” in visible product copy; use evidence, fit, score, or comparison language instead.

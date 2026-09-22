@@ -1,0 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  --background: 43 33% 94%;
+  --foreground: 225 29% 17%;
+  --app-font-sans: 'Plus Jakarta Sans', sans-serif;
+  --app-font-mono: 'Space Mono', monospace;
+}
+.landing-page { font-family: var(--app-font-sans); color: #202840; }
+.landing-page .display { font-family: 'Bricolage Grotesque', sans-serif; }
+.landing-page .mono { font-family: var(--app-font-mono); }
+.landing-page .focus-ring:focus-visible { outline: 3px solid #d9ef66; outline-offset: 3px; }
+.landing-page .landing-hero-title {
+  font-family: var(--app-font-sans);
+  text-wrap: balance;
+}
+.landing-page .grain::after {
+  content: ""; pointer-events: none; position: fixed; inset: 0; opacity: .035; z-index: 50;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
+}
+@keyframes landing-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+.landing-page .animate-rise { animation: landing-rise .55s cubic-bezier(.22,1,.36,1) both; }
+.landing-page .animate-rise-1 { animation-delay: .08s; }

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -61,7 +61,6 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
-  Target,
   Trash2,
   TrendingUp,
   TriangleAlert,
@@ -90,9 +89,10 @@ const queryClient = new QueryClient({
     },
   },
 });
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string> }).env ?? {};
 const clerkPublishableKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+  typeof window === 'undefined' ? 'localhost' : window.location.hostname,
+  viteEnv.VITE_CLERK_PUBLISHABLE_KEY,
 );
 
 type ColorMode = 'light' | 'dark';
@@ -117,9 +117,9 @@ function ThemeToggle() {
   const dark = mode === 'dark';
   return <button type="button" onClick={toggle} className="theme-toggle focus-ring inline-flex size-10 items-center justify-center rounded-xl border border-[#c9c1ae] bg-[#f8f4e8] text-[#202840] shadow-sm transition-colors hover:border-[#0f766e] hover:text-[#0f766e]" aria-label={`Switch to ${dark ? 'light' : 'dark'} mode`} aria-pressed={dark} title={`Switch to ${dark ? 'light' : 'dark'} mode`} data-testid="button-theme-toggle">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>;
 }
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const clerkProxyUrl = viteEnv.VITE_CLERK_PROXY_URL;
 
-async function downloadComparisonPdf(comparison: any) {
+export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
@@ -180,6 +180,22 @@ async function downloadComparisonPdf(comparison: any) {
     lines.forEach((line, index) => page.drawText(line, { x, y: y - index * lineHeight, size, font: options.font ?? regular, color: options.color ?? navy }));
     return y - lines.length * lineHeight;
   };
+  const drawDecisionLines = (page: any, text: unknown, x: number, y: number, options: { size?: number; maxWidth?: number; lineHeight?: number; color?: any; maxLines?: number } = {}) => {
+    const value = String(text ?? '');
+    const match = value.match(/^(.*?)(?:\*\*(.+?)\*\*)(.*)$/s);
+    if (!match) return drawLines(page, value, x, y, options);
+    let nextY = y;
+    if (match[1].trim()) nextY = drawLines(page, match[1].trim(), x, nextY, options);
+    if (match[2].trim()) {
+      nextY -= 2;
+      nextY = drawLines(page, match[2].trim(), x, nextY, { ...options, font: bold });
+    }
+    if (match[3].trim()) {
+      nextY -= 2;
+      nextY = drawLines(page, match[3].trim(), x, nextY, options);
+    }
+    return nextY;
+  };
   const addHeader = (page: any, title: string, subtitle: string) => {
     page.drawRectangle({ x: 0, y: pageSize[1] - 84, width: pageSize[0], height: 84, color: navy });
     page.drawText('DECISIONINTEL', { x: margin, y: pageSize[1] - 34, size: 9, font: bold, color: lime });
@@ -197,7 +213,7 @@ async function downloadComparisonPdf(comparison: any) {
   if (decisionUsable) summary.drawText(`${Math.round(Number(comparison.score) || 0)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
   y -= 105;
   summary.drawText('EXECUTIVE RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
-  y = drawLines(summary, comparison.executiveSummary, margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
+   y = drawDecisionLines(summary, comparison.executiveSummary, margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
   y -= 8;
   summary.drawText('WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 19;
@@ -215,7 +231,7 @@ async function downloadComparisonPdf(comparison: any) {
   const actions = toTextList(comparison.nextSteps).slice(0, 3);
   summary.drawText('C-SUITE FOCUS', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 16;
-    y = drawLines(summary, `Strategic impact: ${decisionUsable ? comparison.recommendationReason : 'No commitment-grade winner is available until the release-quality issues are resolved.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
+    y = drawDecisionLines(summary, `Strategic impact: ${decisionUsable ? comparison.recommendationReason : 'No commitment-grade winner is available until the release-quality issues are resolved.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
   y -= 5;
   y = drawLines(summary, `Primary gap or risk: ${keyRisk ? `${keyRisk.capability} - ${keyRisk.gap} (${keyRisk.severity})` : 'Validate material functional, delivery, security, and compliance risks.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
   y -= 5;
@@ -378,7 +394,7 @@ async function downloadComparisonPdf(comparison: any) {
   drawSection(
     'Evidence sources',
     (comparison.sourceAvailability?.length
-      ? comparison.sourceAvailability.map((source: any) => ({ ...source, contextRole: source.primaryContext ? 'Primary context' : 'Supporting evidence' }))
+      ? comparison.sourceAvailability.filter(isVisibleSourceInList).map((source: any) => ({ ...source, contextRole: source.primaryContext ? 'Primary context' : 'Supporting evidence' }))
       : (comparison.urls || []).map((url: string) => ({ url, status: 'reachable', reason: 'Legacy report' }))),
     [['Source', 'url'], ['Role', 'contextRole'], ['Availability', 'status'], ['Reason', 'reason']],
   );
@@ -395,7 +411,11 @@ async function downloadComparisonPdf(comparison: any) {
   pdf.setTitle(clean(`${comparison.category || 'Vendor comparison'} complete decision report`));
   pdf.setSubject(clean(comparison.prompt));
   pdf.setCreator('DecisionIntel');
-  const pdfBytes = await pdf.save();
+  return pdf.save({ useObjectStreams: false });
+}
+
+async function downloadComparisonPdf(comparison: any) {
+  const pdfBytes = await buildComparisonPdf(comparison);
   const pdfBuffer = pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength) as ArrayBuffer;
   const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
   const href = URL.createObjectURL(blob);
@@ -408,7 +428,8 @@ async function downloadComparisonPdf(comparison: any) {
   window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
 }
 
-function computeDecisionQuality(comparison: any) {
+export function computeDecisionQuality(comparison: any) {
+  const lensWinner = evidenceBackedLensWinner(comparison);
   const evidence = (comparison.vendorScores || []).flatMap((vendor: any) => (
     (vendor.weightedScores || []).flatMap((criterion: any) => criterion.evidence || [])
   ));
@@ -459,11 +480,12 @@ function computeDecisionQuality(comparison: any) {
   if (metrics.sourceConcentration > 70) reasons.push('Evidence is concentrated in one publisher or domain.');
   if (!historyComparable) reasons.push('Historical series definitions or windows differ across options.');
   const definitiveWinner = comparison.recommendation && comparison.recommendation !== 'No exact winner';
-  const decision = prohibitedEvidence.length || !historyComparable || (definitiveWinner && metrics.citationCoverage < 50)
+  const decision = prohibitedEvidence.length || (!lensWinner && !historyComparable) || (definitiveWinner && metrics.citationCoverage < 50 && !lensWinner)
     ? 'FAIL'
     : reasons.length ? 'PASS_WITH_WARNINGS' : 'PASS';
   return {
     decision,
+    lensWinner,
     metrics,
     reasons,
     remediation: decision === 'PASS' ? [] : [
@@ -471,6 +493,61 @@ function computeDecisionQuality(comparison: any) {
       'Resolve incomparable definitions before using the report for commitment.',
     ],
   };
+}
+
+export function evidenceBackedLensWinner(comparison: any): {
+  winner: string;
+  wins: number;
+  decidedRows: number;
+  pricingWins: number;
+  featureWins: number;
+} | null {
+  const vendors = (comparison.vendorScores || [])
+    .map((vendor: any) => String(vendor.vendor || '').trim())
+    .filter(Boolean);
+  const canonicalVendor = (value: unknown) => vendors.find(
+    (vendor: string) => vendor.toLowerCase() === String(value || '').trim().toLowerCase(),
+  );
+  const counts = new Map<string, { pricing: number; features: number }>(
+    vendors.map((vendor: string) => [vendor, { pricing: 0, features: 0 }]),
+  );
+  let decidedRows = 0;
+  for (const [lens, key] of [
+    [comparison.pricing, 'pricing'],
+    [comparison.features, 'features'],
+  ] as const) {
+    for (const row of Array.isArray(lens) ? lens : []) {
+      const winner = canonicalVendor(row?.winner);
+      if (!winner) continue;
+      const count = counts.get(winner)!;
+      count[key] = count[key] + 1;
+      decidedRows += 1;
+    }
+  }
+  if (!decidedRows) return null;
+  const totals = vendors.map((vendor: string) => {
+    const count = counts.get(vendor)!;
+    return { vendor, pricingWins: count.pricing, featureWins: count.features, wins: count.pricing + count.features };
+  });
+  const highestWins = Math.max(...totals.map((entry: { wins: number }) => entry.wins));
+  const leaders = totals.filter((entry: { wins: number }) => entry.wins === highestWins);
+  if (!highestWins || leaders.length !== 1) return null;
+  const leader = leaders[0];
+  return {
+    winner: leader.vendor,
+    wins: leader.wins,
+    decidedRows,
+    pricingWins: leader.pricingWins,
+    featureWins: leader.featureWins,
+  };
+}
+
+function renderDecisionText(value: unknown): ReactNode {
+  return String(value ?? '').split(/(\*\*[^*]+\*\*)/g).map((part, index) => (
+    /^\*\*.+\*\*$/.test(part)
+      ? <strong key={index}>{part.slice(2, -2)}</strong>
+      : <React.Fragment key={index}>{part}</React.Fragment>
+  ));
 }
 
 function downloadComparisonJson(comparison: any) {
@@ -505,7 +582,7 @@ function downloadComparisonJson(comparison: any) {
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
 }
-const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const basePath = (viteEnv.BASE_URL || '').replace(/\/$/, '');
 
 function stripBase(path: string): string {
   return basePath && path.startsWith(basePath)
@@ -590,19 +667,19 @@ function FeatureComparisonTile({ compact = false }: { compact?: boolean }) {
 
 function PublicNav() {
   return (
-    <header className="mx-auto flex w-full max-w-7xl items-center justify-between px-5 py-6 lg:px-10">
+    <header className="relative z-20 mx-auto flex w-full max-w-7xl items-center justify-between px-5 py-5 sm:py-6 lg:px-10">
       <Logo />
-      <nav className="hidden items-center gap-8 text-sm font-semibold text-[#556075] md:flex" aria-label="Main navigation">
+      <nav className="hidden items-center gap-7 text-sm font-semibold text-[#556075] lg:flex" aria-label="Main navigation">
         <a className="focus-ring transition-colors hover:text-[#0f766e]" href="#method" data-testid="link-method">How it works</a>
-        <a className="focus-ring transition-colors hover:text-[#0f766e]" href="#signal" data-testid="link-signal">The signal</a>
+        <a className="focus-ring transition-colors hover:text-[#0f766e]" href="#evidence" data-testid="link-evidence">The evidence</a>
         <a className="focus-ring transition-colors hover:text-[#0f766e]" href="#teams" data-testid="link-teams">For teams</a>
         <Link className="focus-ring transition-colors hover:text-[#0f766e]" href="/api-docs" data-testid="link-api-docs">API</Link>
       </nav>
       <div className="flex items-center gap-2">
         <ThemeToggle />
-        <Link href="/sign-in" className="focus-ring hidden rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075] hover:text-[#0f766e] sm:inline-flex" data-testid="link-sign-in">Sign in</Link>
-         <Link href="/guest" className="focus-ring hidden rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075] hover:text-[#0f766e] sm:inline-flex" data-testid="link-guest-compare">Try as guest</Link>
-         <Link href="/sign-up" className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66] transition-transform hover:-translate-y-0.5" data-testid="link-sign-up">Start comparing <ArrowRight size={16} /></Link>
+        <Link href="/sign-in" className="focus-ring hidden rounded-xl px-3 py-2.5 text-sm font-bold text-[#556075] hover:text-[#0f766e] sm:inline-flex" data-testid="link-sign-in">Sign in</Link>
+        <Link href="/guest" className="focus-ring hidden rounded-xl px-3 py-2.5 text-sm font-bold text-[#556075] hover:text-[#0f766e] md:inline-flex" data-testid="link-guest-compare">Try as guest</Link>
+        <Link href="/sign-up" className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-3.5 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66] transition-transform hover:-translate-y-0.5 sm:px-4" data-testid="link-sign-up">Start comparing <ArrowRight size={16} /></Link>
       </div>
     </header>
   );
@@ -612,48 +689,55 @@ function Home() {
   return (
     <main className="grain min-h-[100dvh] overflow-hidden bg-[#f2eee2]">
       <PublicNav />
-      <section className="relative mx-auto grid max-w-7xl items-center gap-16 px-5 pb-24 pt-14 lg:grid-cols-[1.03fr_.97fr] lg:px-10 lg:pb-32 lg:pt-20">
-        <div className="absolute -left-40 top-20 size-[420px] rounded-full bg-[#e2efaa]/50 blur-3xl" />
+      <section className="relative mx-auto grid max-w-7xl items-center gap-14 px-5 pb-20 pt-12 sm:pb-24 lg:grid-cols-[.9fr_1.1fr] lg:gap-16 lg:px-10 lg:pb-28 lg:pt-16">
+        <div className="absolute -left-40 top-8 size-[420px] rounded-full bg-[#e2efaa]/55 blur-3xl" />
         <div className="relative z-10 animate-rise">
-          <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-[#c8d99a] bg-[#e8f2bd] px-3 py-1.5 text-[11px] font-bold uppercase tracking-[.14em] text-[#35665c]">
+          <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-[#c8d99a] bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.16em] text-[#35665c] sm:text-[11px]">
             <span className="size-2 rounded-full bg-[#0f766e]" /> AI-powered decision intelligence
           </div>
-          <h1 className="display max-w-3xl text-[clamp(3.7rem,8vw,7.5rem)] font-bold leading-[.88] tracking-[-.075em] text-[#202840]">
-            Decision<span className="text-[#0f766e]">Intel</span>
+          <h1 className="landing-hero-title max-w-2xl text-[clamp(3rem,7vw,5rem)] font-bold leading-[.98] tracking-[-.065em] text-[#202840]">
+            <span className="block">Make the call</span>
+            <span className="landing-hero-accent block text-[#0f766e]">before the meeting.</span>
           </h1>
-          <p className="mt-8 max-w-xl text-lg leading-8 text-[#556075]">
-            Drive decision outcomes with AI-powered comparison and recommendation platform
+          <p className="mt-8 max-w-xl text-base leading-7 text-[#556075] sm:text-lg sm:leading-8">
+            DecisionIntel turns a messy buying question into a defensible shortlist—with the evidence, trade-offs, and recommendation in one place.
           </p>
-          <div className="mt-9 flex flex-wrap items-center gap-4">
+          <div className="mt-8 flex flex-col items-start gap-4 sm:flex-row sm:items-center">
             <Link href="/sign-up" className="focus-ring inline-flex items-center gap-3 rounded-xl bg-[#0f766e] px-6 py-3.5 text-sm font-bold text-[#f8f4e8] shadow-[4px_4px_0_#202840] transition-transform hover:-translate-y-0.5" data-testid="link-hero-start">Start a comparison <ArrowRight size={17} /></Link>
-             <Link href="/guest" className="text-xs font-semibold text-[#8a8b8b] hover:text-[#0f766e]" data-testid="link-hero-guest">Try one comparison without signing up</Link>
+            <Link href="/guest" className="focus-ring text-xs font-semibold text-[#687083] underline decoration-[#b8c6ae] decoration-2 underline-offset-4 hover:text-[#0f766e]" data-testid="link-hero-guest">Try one without signing up</Link>
           </div>
-          <div className="mt-14 flex items-center gap-4 text-xs text-[#687083]">
-            <div className="flex -space-x-2">
-              {['MC', 'JR', 'SL', 'AK'].map((initials, index) => <span key={initials} className={`grid size-8 place-items-center rounded-full border-2 border-[#f2eee2] text-[10px] font-bold text-[#f8f4e8] ${['bg-[#0f766e]', 'bg-[#b94d45]', 'bg-[#7d6b8d]', 'bg-[#cf9147]'][index]}`}>{initials}</span>)}
-            </div>
-            <span><strong className="text-[#202840]">2,400+ teams</strong> are making sharper calls</span>
+          <div className="mt-11 grid max-w-xl grid-cols-1 gap-3 border-t border-[#d5cebd] pt-5 text-xs text-[#687083] sm:grid-cols-3 sm:gap-5">
+            <div className="flex items-center gap-2"><ShieldCheck size={16} className="shrink-0 text-[#0f766e]" /><span><strong className="text-[#202840]">Evidence-led</strong><br />sources stay attached</span></div>
+            <div className="flex items-center gap-2"><BarChart3 size={16} className="shrink-0 text-[#b94d45]" /><span><strong className="text-[#202840]">Criteria-first</strong><br />fit over feature count</span></div>
+            <div className="flex items-center gap-2"><Clock3 size={16} className="shrink-0 text-[#8c6328]" /><span><strong className="text-[#202840]">Ready to share</strong><br />clear enough for the room</span></div>
           </div>
         </div>
-        <div className="relative animate-rise animate-rise-1">
-          <div className="absolute -right-8 -top-8 z-20 hidden rotate-6 rounded-xl border border-[#202840]/10 bg-[#d9ef66] px-4 py-2 text-xs font-bold text-[#202840] shadow-[4px_4px_0_#202840] sm:block">THE SHORTLIST, FINALLY</div>
-          <div className="relative overflow-hidden rounded-[2rem] border border-[#202840] bg-[#202840] p-3 shadow-[10px_10px_0_#d9ef66]">
-            <div className="rounded-[1.4rem] bg-[#e7e2d4] p-5 sm:p-7">
-              <div className="mb-7 flex items-center justify-between">
-                <div><p className="mono text-[9px] uppercase tracking-[.18em] text-[#788080]">New workspace / 024</p><p className="display mt-2 text-2xl font-bold text-[#202840]">Your question, clarified</p></div>
-                <div className="grid size-10 place-items-center rounded-xl bg-[#0f766e] text-[#d9ef66]"><Sparkles size={18} /></div>
+        <div className="relative animate-rise animate-rise-1 lg:pt-5">
+          <div className="absolute -right-3 -top-5 z-20 hidden rotate-3 rounded-xl border border-[#202840]/10 bg-[#d9ef66] px-4 py-2 text-xs font-bold text-[#202840] shadow-[4px_4px_0_#202840] sm:block">THE SHORTLIST, FINALLY</div>
+          <div className="relative overflow-hidden rounded-[1.7rem] border border-[#202840] bg-[#202840] p-2.5 shadow-[9px_9px_0_#d9ef66] sm:rounded-[2rem] sm:p-3">
+            <div className="overflow-hidden rounded-[1.25rem] bg-[#e7e2d4] p-4 sm:rounded-[1.4rem] sm:p-6">
+              <div className="mb-5 flex items-start justify-between gap-3 sm:mb-7">
+                <div><p className="mono text-[9px] uppercase tracking-[.18em] text-[#788080]">New workspace / 024</p><p className="display mt-2 text-xl font-bold text-[#202840] sm:text-2xl">Your question, clarified</p></div>
+                <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#0f766e] text-[#d9ef66] sm:size-10"><Sparkles size={18} /></div>
               </div>
-              <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-4">
-                <p className="text-sm leading-6 text-[#4c576b]">“We’re a 40-person product team looking for a project tool with great async rituals, clear roadmaps, and sane pricing.”</p>
-                <div className="mt-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.12em] text-[#0f766e]"><Check size={13} /> Prompt parsed</div>
+              <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-3.5 sm:p-4">
+                <div className="flex items-center justify-between gap-3"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Decision brief</p><span className="flex items-center gap-1 text-[10px] font-bold text-[#0f766e]"><Check size={13} /> Parsed</span></div>
+                <p className="mt-3 text-sm leading-6 text-[#4c576b]">“We need a project tool with strong async rituals, clear roadmaps, and sane pricing.”</p>
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-4"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Vendors</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-md bg-[#dcefe9] px-2 py-1 text-xs font-bold text-[#0f766e]">Linear</span><span className="rounded-md bg-[#eee2c7] px-2 py-1 text-xs font-bold text-[#8c6328]">Asana</span><span className="rounded-md bg-[#e5dce8] px-2 py-1 text-xs font-bold text-[#685474]">Height</span></div></div>
-                <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-4"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Signal</p><div className="mt-3 flex items-end gap-1"><span className="display text-4xl font-bold text-[#0f766e]">86</span><span className="mb-1 text-xs font-bold text-[#7a7b76]">/ 100</span></div></div>
+              <div className="mt-3 grid grid-cols-[1.35fr_.65fr] gap-3">
+                <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-3.5 sm:p-4"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Compared</p><div className="mt-3 flex flex-wrap gap-1.5"><span className="rounded-md bg-[#dcefe9] px-2 py-1 text-[11px] font-bold text-[#0f766e]">Linear</span><span className="rounded-md bg-[#eee2c7] px-2 py-1 text-[11px] font-bold text-[#8c6328]">Asana</span><span className="rounded-md bg-[#e5dce8] px-2 py-1 text-[11px] font-bold text-[#685474]">Height</span></div></div>
+                <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-3.5 sm:p-4"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Fit score</p><div className="mt-3 flex items-end gap-1"><span className="display text-3xl font-bold text-[#0f766e] sm:text-4xl">86</span><span className="mb-1 text-[10px] font-bold text-[#7a7b76]">/ 100</span></div></div>
               </div>
-              <div className="mt-4 rounded-2xl bg-[#0f766e] p-4 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#acd9ce]">Recommendation</p><div className="mt-2 flex items-center justify-between"><p className="display text-xl font-bold">Linear</p><span className="rounded-full bg-[#d9ef66] px-2 py-1 text-[10px] font-bold text-[#202840]">Strong fit</span></div><p className="mt-2 text-xs leading-5 text-[#d1e6df]">Best match for your team’s async operating rhythm.</p></div>
+              <div className="mt-3 rounded-2xl bg-[#0f766e] p-4 text-[#f8f4e8] sm:p-4"><div className="flex items-center justify-between gap-3"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#acd9ce]">Recommendation</p><span className="rounded-full bg-[#d9ef66] px-2 py-1 text-[10px] font-bold text-[#202840]">Strong fit</span></div><div className="mt-2 flex items-center justify-between gap-3"><p className="display text-xl font-bold">Linear</p><span className="flex items-center gap-1 text-[10px] font-bold text-[#d1e6df]"><FileSearch size={13} /> 8 sources</span></div><p className="mt-2 text-xs leading-5 text-[#d1e6df]">Best match for this team’s async operating rhythm.</p></div>
             </div>
           </div>
+          <div className="mt-5 flex items-center justify-between px-1 text-[10px] font-bold uppercase tracking-[.14em] text-[#7b817c]"><span>Prompt → criteria → recommendation</span><span className="hidden sm:inline">Nothing important buried</span></div>
+        </div>
+      </section>
+      <section className="border-y border-[#d8d0bd] bg-[#f8f4e8] px-5 py-5 lg:px-10" aria-label="DecisionIntel capabilities">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-8 gap-y-3 text-center sm:justify-between sm:text-left">
+          <span className="mono text-[10px] font-bold uppercase tracking-[.17em] text-[#8a8b83]">For decisions that need more than a gut feel</span>
+          <div className="flex flex-wrap justify-center gap-x-6 gap-y-2 text-xs font-semibold text-[#556075] sm:justify-end"><span>Buying software</span><span>Choosing a vehicle</span><span>Evaluating finance</span><span>Planning the next move</span></div>
         </div>
       </section>
       <section id="method" className="border-y border-[#d8d0bd] bg-[#e7e2d4] px-5 py-20 lg:px-10">
@@ -671,8 +755,8 @@ function Home() {
           <div className="mt-12"><FeatureComparisonTile /></div>
         </div>
       </section>
-      <section id="signal" className="mx-auto grid max-w-7xl gap-14 px-5 py-24 lg:grid-cols-[1.1fr_.9fr] lg:px-10">
-        <div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#b94d45]">The signal</p><h2 className="display mt-4 max-w-2xl text-5xl font-bold leading-[.94] tracking-[-.055em] text-[#202840]">Less “it depends.”<br /><span className="text-[#b94d45]">More “here’s why.”</span></h2><p className="mt-7 max-w-lg text-base leading-7 text-[#667083]">The workspace keeps evidence and judgment together. Compare how vendors perform against the criteria your team actually cares about, then share the reasoning—not just the winner.</p><div className="mt-8 flex flex-wrap gap-3"><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Pricing clarity</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Feature fit</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Team context</span></div></div>
+      <section id="evidence" className="mx-auto grid max-w-7xl gap-14 px-5 py-24 lg:grid-cols-[1.1fr_.9fr] lg:px-10">
+        <div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#b94d45]">The evidence</p><h2 className="display mt-4 max-w-2xl text-5xl font-bold leading-[.94] tracking-[-.055em] text-[#202840]">Less “it depends.”<br /><span className="text-[#b94d45]">More “here’s why.”</span></h2><p className="mt-7 max-w-lg text-base leading-7 text-[#667083]">The workspace keeps evidence and judgment together. Compare how vendors perform against the criteria your team actually cares about, then share the reasoning—not just the winner.</p><div className="mt-8 flex flex-wrap gap-3"><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Pricing clarity</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Feature fit</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Team context</span></div></div>
         <div className="relative rounded-[2rem] bg-[#202840] p-7 text-[#f8f4e8] shadow-[8px_8px_0_#d9ef66]"><div className="absolute right-6 top-6 grid size-11 place-items-center rounded-full border border-[#68738e] text-[#d9ef66]"><BarChart3 size={19} /></div><p className="mono text-[10px] uppercase tracking-[.18em] text-[#a5b0c7]">Example scorecard</p><div className="mt-12 space-y-5">{[['Fit for team size', 92, '#d9ef66'], ['Pricing transparency', 81, '#db8a52'], ['Workflow flexibility', 74, '#8bc9bb']].map(([label, score, color]) => <div key={label as string}><div className="flex justify-between text-sm font-semibold"><span>{label}</span><span className="mono text-xs">{score}</span></div><div className="mt-2 h-2 rounded-full bg-[#3b4662]"><div className="h-2 rounded-full" style={{ width: `${score}%`, backgroundColor: color as string }} /></div></div>)}</div><div className="mt-10 border-t border-[#3b4662] pt-5 text-sm leading-6 text-[#cad0dc]">“Linear is the strongest fit—not because it has the most features, but because it creates the least operational drag for this team.”</div></div>
       </section>
       <section id="teams" className="bg-[#d9ef66] px-5 py-20 lg:px-10"><div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-8 md:flex-row md:items-center"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#55715e]">For teams who decide</p><h2 className="display mt-3 max-w-2xl text-4xl font-bold leading-tight tracking-[-.05em] text-[#202840]">The best choice is the one everyone can explain.</h2></div><Link href="/sign-up" className="focus-ring inline-flex shrink-0 items-center gap-2 rounded-xl bg-[#202840] px-5 py-3.5 text-sm font-bold text-[#f8f4e8] shadow-[4px_4px_0_#0f766e]" data-testid="link-bottom-start">Open your workspace <ArrowRight size={17} /></Link></div></section>
@@ -802,6 +886,21 @@ function ScoreRing({ score, size = 'large' }: { score: number; size?: 'large' | 
   return <div className={`relative grid shrink-0 place-items-center ${size === 'large' ? 'size-28' : 'size-16'}`} data-testid={`score-ring-${score}`}><svg className="absolute inset-0 size-full -rotate-90" viewBox="0 0 100 100"><circle cx="50" cy="50" r={radius} fill="none" stroke="#d9d3c5" strokeWidth="7" /><circle cx="50" cy="50" r={radius} fill="none" stroke="#0f766e" strokeWidth="7" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - score / 100)} /></svg><div className="text-center"><span className={`${size === 'large' ? 'text-3xl' : 'text-lg'} display font-bold text-[#202840]`}>{score}</span><span className="block text-[9px] font-bold text-[#7d817e]">/ 100</span></div></div>;
 }
 
+export function DecisionRecommendationCard({ comparison }: { comparison: any }) {
+  const decisionQuality = computeDecisionQuality(comparison);
+  return <div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]" data-testid="card-recommended">
+    <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionQuality.decision === 'FAIL' ? 'Evidence-limited result' : 'Recommended'}</p>
+    <div className="mt-5 flex items-center justify-between gap-4">
+      <div>
+        <p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{decisionQuality.decision === 'FAIL' ? 'No definitive winner' : comparison.recommendation}</p>
+        <p className="mt-2 text-xs text-[#a8b0c2]">{decisionQuality.decision === 'FAIL' ? 'Resolve quality issues before commitment' : 'Best overall fit'}</p>
+      </div>
+      {decisionQuality.decision !== 'FAIL' && <ScoreRing score={Math.round(comparison.score)} />}
+    </div>
+    {decisionQuality.decision === 'FAIL' && <div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{decisionQuality.reasons.join(' ')}</div>}
+  </div>;
+}
+
 function overallVendorScore(vendor: any): number {
   const baseScore = Number(vendor?.baseScore);
   const tieBreakBonus = Number(vendor?.providerRoleTieBreakBonus ?? 0);
@@ -870,7 +969,7 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
   </section>;
 }
 
-function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
+export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
   const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL';
   const runnerUp = [...(comparison.vendorScores || [])]
     .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
@@ -881,9 +980,9 @@ function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: a
       <span className="mono text-[10px] uppercase text-[#85877f]">Prepared {new Date(comparison.createdAt || Date.now()).toLocaleDateString()}</span>
     </div>
     <div className="mt-5 grid gap-4 md:grid-cols-3">
-      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionUsable ? comparison.recommendationReason : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
-      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{comparison.executiveSummary}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}</article>
-      <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
+      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionUsable ? renderDecisionText(comparison.recommendationReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
+      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(comparison.executiveSummary)}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}</article>
+      <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
     </div>
   </section>;
 }
@@ -1119,8 +1218,23 @@ function hasAnyMarketHistory(vendorScores: any[]): boolean {
   });
 }
 
+export function shouldDisplayMarketHistory(vendorScores: any[]): boolean {
+  if (!vendorScores.length || !hasAnyMarketHistory(vendorScores)) return false;
+  return vendorScores.every((vendor) => {
+    const history = vendor.marketHistory;
+    if (!history) return false;
+    const historyText = JSON.stringify(history);
+    const confidence = Number(history.dataQuality?.confidence);
+    return !/evidence unavailable or not independently verified/i.test(historyText)
+      && history.dataQuality?.comparable !== false
+      && confidence > 0
+      && history.forecast?.status !== 'suppressed'
+      && !/no decision-grade forecast was produced/i.test(history.forecast?.suppressionReason || '');
+  });
+}
+
 function MarketHistorySection({ vendorScores = [] }: { vendorScores?: any[] }) {
-  if (!hasAnyMarketHistory(vendorScores)) return null;
+  if (!shouldDisplayMarketHistory(vendorScores)) return null;
 
   return (
     <section className="mt-14" data-testid="section-market-history">
@@ -1282,15 +1396,23 @@ function Dashboard() {
   const stats = [
     { label: 'Comparisons', value: summary?.totalComparisons ?? 0, note: 'all time', icon: BarChart3 },
     { label: 'This month', value: summary?.thisMonth ?? 0, note: 'since June 1', icon: TrendingUp },
-    { label: 'Average signal', value: summary?.averageScore ? `${Math.round(summary.averageScore)}` : '—', note: 'out of 100', icon: Target },
-    { label: 'Top category', value: summary?.topCategory || '—', note: 'most explored', icon: Compass },
+    { label: 'Last Compared', value: formatLastComparedCategory(summary?.recentComparisons?.[0]?.category), note: 'category', icon: Compass },
   ];
   return <div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14">
     <div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Tuesday / 09:42</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Make the next call clearer.</h1><p className="mt-3 max-w-xl text-sm leading-6 text-[#687083]">Start with what you know. DecisionIntel will help you find the shape of the decision.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-sm font-bold text-[#0f766e] hover:underline" data-testid="link-view-history">View 30-day history <ArrowRight size={16} /></Link></div>
     <form onSubmit={submit} className="animate-rise animate-rise-1 relative mt-10 rounded-[1.5rem] border border-[#202840] bg-[#202840] p-5 shadow-[7px_7px_0_#d9ef66] sm:p-7"><div className="flex items-center gap-2 text-[#d9ef66]"><Sparkles size={16} /><span className="mono text-[10px] font-bold uppercase tracking-[.18em]">New comparison</span></div><label htmlFor="comparison-prompt" className="mt-5 block display text-2xl font-bold tracking-[-.035em] text-[#f8f4e8] sm:text-3xl">What are you trying to choose?</label><textarea id="comparison-prompt" className="focus-ring mt-4 min-h-[116px] w-full resize-none rounded-xl border border-[#49536e] bg-[#2b344e] p-4 text-sm leading-6 text-[#f8f4e8] placeholder:text-[#8d98ae]" placeholder="Example: We need a customer support platform for a 12-person team that handles email and live chat..." value={prompt} onChange={(event) => setPrompt(event.target.value)} data-testid="input-comparison-prompt" /><div className="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><p className="text-xs text-[#8d98ae]">Be specific about your team, constraints, and what a good outcome looks like.</p><PrimaryButton type="submit" disabled={prompt.trim().length < 8} className="bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e] hover:bg-[#e6f58e]" testId="button-start-comparison"><ArrowRight size={16} /> Start with this question</PrimaryButton></div></form>
-    <section className="mt-12"><div className="mb-5 flex items-center justify-between"><h2 className="display text-xl font-bold text-[#202840]">Your workspace at a glance</h2><span className="mono text-[10px] uppercase tracking-[.15em] text-[#8a8b83]">Live summary</span></div><div className="grid gap-4 md:grid-cols-4">{stats.map(({ label, value, note, icon: Icon }) => <div key={label} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid={`stat-${label.toLowerCase().replaceAll(' ', '-')}`}><div className="flex items-start justify-between"><span className="text-xs font-bold text-[#687083]">{label}</span><div className="rounded-lg bg-[#e7e2d4] p-2 text-[#0f766e]"><Icon size={16} /></div></div><p className="display mt-7 truncate text-3xl font-bold tracking-[-.04em] text-[#202840]">{value}</p><p className="mt-1 text-[11px] text-[#8a8b83]">{note}</p></div>)}</div></section>
+     <section className="mt-12"><div className="mb-5 flex items-center justify-between"><h2 className="display text-xl font-bold text-[#202840]">Your workspace at a glance</h2><span className="mono text-[10px] uppercase tracking-[.15em] text-[#8a8b83]">Live summary</span></div><div className="grid gap-4 md:grid-cols-3">{stats.map(({ label, value, note, icon: Icon }) => <div key={label} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid={`stat-${label.toLowerCase().replaceAll(' ', '-')}`}><div className="flex items-start justify-between"><span className="text-xs font-bold text-[#687083]">{label}</span><div className="rounded-lg bg-[#e7e2d4] p-2 text-[#0f766e]"><Icon size={16} /></div></div><p className="display mt-7 truncate text-3xl font-bold tracking-[-.04em] text-[#202840]">{value}</p><p className="mt-1 text-[11px] text-[#8a8b83]">{note}</p></div>)}</div></section>
     <section className="mt-12 grid gap-8 lg:grid-cols-[1.2fr_.8fr]"><div><div className="mb-5 flex items-center justify-between"><h2 className="display text-xl font-bold text-[#202840]">Recent comparisons</h2><Link href="/history" className="focus-ring text-xs font-bold text-[#0f766e]" data-testid="link-recent-history">See all</Link></div><div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{(summary?.recentComparisons?.length ? summary.recentComparisons : []).map((item, index) => <ComparisonRow key={item.id} item={item} index={index} />)}{!summary?.recentComparisons?.length && <EmptyRecent />}</div></div><div className="rounded-2xl bg-[#e7e2d4] p-6"><div className="flex items-center gap-2 text-[#b94d45]"><FileSearch size={17} /><span className="mono text-[10px] font-bold uppercase tracking-[.15em]">A useful prompt</span></div><p className="display mt-6 text-2xl font-bold leading-tight tracking-[-.04em] text-[#202840]">“Compare the options for how we actually work—not how they look on a pricing page.”</p><p className="mt-5 text-xs leading-5 text-[#697286]">The richer the context, the sharper the recommendation.</p></div></section>
   </div>;
+}
+
+function formatLastComparedCategory(category?: string): string {
+  if (!category) return '—';
+  const compact = category
+    .replace(/\s+comparison\b.*$/i, '')
+    .replace(/^(?:mid[- ]size|mid[- ]sized|midsize)\s+/i, '')
+    .trim();
+  return compact || category;
 }
 
 function EmptyRecent() { return <div className="p-8 text-center"><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-[#e7e2d4] text-[#0f766e]"><Compass size={21} /></div><p className="mt-4 text-sm font-bold text-[#202840]">Your first comparison is waiting.</p><p className="mt-1 text-xs text-[#7b7e7b]">Start with the question at the top of your workspace.</p></div>; }
@@ -1833,7 +1955,17 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
 
 function Portal() {
   const create = useComparisonJob(false);
-  const { data: summary } = useGetDashboardSummary();
+  const { data: rawSummary } = useGetDashboardSummary();
+  const summary = rawSummary
+    ? {
+        ...rawSummary,
+        recentComparisons: rawSummary.recentComparisons?.map((item, index) =>
+          index === 0
+            ? { ...item, category: formatLastComparedCategory(item.category) }
+            : item,
+        ),
+      }
+    : rawSummary;
   const [, setLocation] = useLocation();
   const initialPrompt = useMemo(() => {
     const draft = window.sessionStorage.getItem('vendor-compare-draft') || '';
@@ -1844,7 +1976,7 @@ function Portal() {
     data,
     { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) },
   );
-  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} jobState={create.jobState} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
+   return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Last Compared', summary?.recentComparisons?.[0]?.category || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} jobState={create.jobState} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
 }
 
 function BetaApiAccessPanel() {
@@ -1874,7 +2006,17 @@ function GuestPortal() {
 function ParsedBriefPortal() {
   const parse = useParseComparisonPrompt();
   const create = useCreateComparison();
-  const { data: summary } = useGetDashboardSummary();
+  const { data: rawSummary } = useGetDashboardSummary();
+  const summary = rawSummary
+    ? {
+        ...rawSummary,
+        recentComparisons: rawSummary.recentComparisons?.map((item, index) =>
+          index === 0
+            ? { ...item, category: formatLastComparedCategory(item.category) }
+            : item,
+        ),
+      }
+    : rawSummary;
   const [, setLocation] = useLocation();
   const [prompt, setPrompt] = useState(() => {
     const draft = window.sessionStorage.getItem('vendor-compare-draft') || '';
@@ -1884,7 +2026,7 @@ function ParsedBriefPortal() {
   const [parsed, setParsed] = useState<any>(null);
   const submitPrompt = (event: FormEvent) => { event.preventDefault(); if (prompt.trim().length < 8) return; parse.mutate({ data: { prompt: prompt.trim() } }, { onSuccess: setParsed }); };
   const createComparison = (data: any) => create.mutate({ data }, { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) });
-  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Put the messy question here.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">We’ll turn it into a brief with vendors, criteria, and a clear path to a recommendation.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]" data-testid="link-portal-history">View history <ArrowRight size={14} /></Link></div><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Average signal', summary?.averageScore ? Math.round(summary.averageScore) : '—'], ['Top category', summary?.topCategory || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string} data-testid={`portal-stat-${String(label).toLowerCase().replaceAll(' ', '-')}`}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><form className="animate-rise animate-rise-1 mt-9 max-w-4xl" onSubmit={submitPrompt}><div className="relative"><textarea className="focus-ring min-h-[180px] w-full resize-none rounded-2xl border border-[#bcb5a5] bg-[#f8f4e8] p-5 pr-16 text-base leading-7 text-[#202840] shadow-[4px_4px_0_#d9ef66] placeholder:text-[#9a9a90]" placeholder="Compare customer support tools for a 12-person SaaS team. We care about fast setup, a shared inbox, and predictable pricing..." value={prompt} onChange={(event) => setPrompt(event.target.value)} data-testid="input-portal-prompt" /><button className="focus-ring absolute bottom-4 right-4 grid size-10 place-items-center rounded-xl bg-[#0f766e] text-[#f8f4e8] shadow-[2px_2px_0_#202840] transition-transform hover:-translate-y-0.5 disabled:opacity-50" type="submit" disabled={parse.isPending || prompt.trim().length < 8} data-testid="button-parse-prompt">{parse.isPending ? <LoaderCircle size={17} className="animate-spin" /> : <ArrowRight size={17} />}</button></div><div className="mt-3 flex items-center justify-between text-[11px] text-[#85877f]"><span>Minimum 8 characters</span>{parse.isError && <span className="font-bold text-[#b94d45]" data-testid="status-parse-error">Could not parse this prompt. Try adding more context.</span>}</div></form>{parsed && <ParsedBrief parsed={parsed} onCreate={createComparison} pending={create.isPending} />}{!parsed && !parse.isPending && <div className="animate-rise animate-rise-2 mt-16 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / START BROAD</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the decision in plain language. Specificity can come next.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / REVIEW THE BRIEF</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We’ll pull out the options and the lens your team is using.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / MAKE THE CALL</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Add source URLs, then get a recommendation with receipts.</p></div></div>}</div></AppShell>;
+  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Put the messy question here.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">We’ll turn it into a brief with vendors, criteria, and a clear path to a recommendation.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]" data-testid="link-portal-history">View history <ArrowRight size={14} /></Link></div><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Last Compared', summary?.recentComparisons?.[0]?.category || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string} data-testid={`portal-stat-${String(label).toLowerCase().replaceAll(' ', '-')}`}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><form className="animate-rise animate-rise-1 mt-9 max-w-4xl" onSubmit={submitPrompt}><div className="relative"><textarea className="focus-ring min-h-[180px] w-full resize-none rounded-2xl border border-[#bcb5a5] bg-[#f8f4e8] p-5 pr-16 text-base leading-7 text-[#202840] shadow-[4px_4px_0_#d9ef66] placeholder:text-[#9a9a90]" placeholder="Compare customer support tools for a 12-person SaaS team. We care about fast setup, a shared inbox, and predictable pricing..." value={prompt} onChange={(event) => setPrompt(event.target.value)} data-testid="input-portal-prompt" /><button className="focus-ring absolute bottom-4 right-4 grid size-10 place-items-center rounded-xl bg-[#0f766e] text-[#f8f4e8] shadow-[2px_2px_0_#202840] transition-transform hover:-translate-y-0.5 disabled:opacity-50" type="submit" disabled={parse.isPending || prompt.trim().length < 8} data-testid="button-parse-prompt">{parse.isPending ? <LoaderCircle size={17} className="animate-spin" /> : <ArrowRight size={17} />}</button></div><div className="mt-3 flex items-center justify-between text-[11px] text-[#85877f]"><span>Minimum 8 characters</span>{parse.isError && <span className="font-bold text-[#b94d45]" data-testid="status-parse-error">Could not parse this prompt. Try adding more context.</span>}</div></form>{parsed && <ParsedBrief parsed={parsed} onCreate={createComparison} pending={create.isPending} />}{!parsed && !parse.isPending && <div className="animate-rise animate-rise-2 mt-16 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / START BROAD</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the decision in plain language. Specificity can come next.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / REVIEW THE BRIEF</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We’ll pull out the options and the lens your team is using.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / MAKE THE CALL</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Add source URLs, then get a recommendation with receipts.</p></div></div>}</div></AppShell>;
 }
 
 function ParsedBriefGuestPortal() {
@@ -1907,7 +2049,7 @@ function ParsedBriefGuestPortal() {
       },
     },
   );
-  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Try the signal before you create an account.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Run one comparison with the same structured analysis. Sign up later if you want a private workspace and 30-day history.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]" data-testid="link-guest-home"><ArrowLeft size={14} /> Back to home</Link></div><form className="animate-rise animate-rise-1 mt-9 max-w-4xl" onSubmit={submitPrompt}><div className="relative"><textarea className="focus-ring min-h-[180px] w-full resize-none rounded-2xl border border-[#202840] bg-[#202840] p-5 pr-16 text-base leading-7 text-[#f8f4e8] shadow-[5px_5px_0_#d9ef66] placeholder:text-[#8d98ae]" placeholder="Compare BYD vs Tesla for an electric car I’ll own for five years in Australia. My budget is A$50,000 and I care about maintenance, features, range, and resale value..." value={prompt} onChange={(event) => setPrompt(event.target.value)} data-testid="input-guest-prompt" /><button className="focus-ring absolute bottom-4 right-4 grid size-10 place-items-center rounded-xl bg-[#d9ef66] text-[#202840] shadow-[2px_2px_0_#0f766e] transition-transform hover:-translate-y-0.5 disabled:opacity-50" type="submit" disabled={parse.isPending || prompt.trim().length < 8} data-testid="button-guest-parse">{parse.isPending ? <LoaderCircle size={17} className="animate-spin" /> : <ArrowRight size={17} />}</button></div><div className="mt-3 flex items-center justify-between text-[11px] text-[#85877f]"><span>Describe the options, budget, location or market, and what matters to you.</span>{parse.isError && <span className="font-bold text-[#b94d45]" data-testid="status-guest-parse-error">Could not parse this prompt. Try adding the products and intended use.</span>}</div></form>{parsed && <ParsedBrief parsed={parsed} onCreate={createComparison} pending={create.isPending} />}{create.isError && <div className="mt-5 rounded-xl border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" data-testid="status-guest-create-error">{comparisonErrorMessage(create.error)}</div>}{!parsed && !parse.isPending && <div className="animate-rise animate-rise-2 mt-16 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / ACTUAL NAMES</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the real products or services instead of placeholders.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / RIGHT CONTEXT</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Add the intended use, market or location, budget, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / RESEARCHED SIGNAL</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We research current products and sources before making the recommendation.</p></div></div>}</div></GuestShell>;
+  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Try a comparison before you create an account.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Run one comparison with the same structured analysis. Sign up later if you want a private workspace and 30-day history.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]" data-testid="link-guest-home"><ArrowLeft size={14} /> Back to home</Link></div><form className="animate-rise animate-rise-1 mt-9 max-w-4xl" onSubmit={submitPrompt}><div className="relative"><textarea className="focus-ring min-h-[180px] w-full resize-none rounded-2xl border border-[#202840] bg-[#202840] p-5 pr-16 text-base leading-7 text-[#f8f4e8] shadow-[5px_5px_0_#d9ef66] placeholder:text-[#8d98ae]" placeholder="Compare BYD vs Tesla for an electric car I’ll own for five years in Australia. My budget is A$50,000 and I care about maintenance, features, range, and resale value..." value={prompt} onChange={(event) => setPrompt(event.target.value)} data-testid="input-guest-prompt" /><button className="focus-ring absolute bottom-4 right-4 grid size-10 place-items-center rounded-xl bg-[#d9ef66] text-[#202840] shadow-[2px_2px_0_#0f766e] transition-transform hover:-translate-y-0.5 disabled:opacity-50" type="submit" disabled={parse.isPending || prompt.trim().length < 8} data-testid="button-guest-parse">{parse.isPending ? <LoaderCircle size={17} className="animate-spin" /> : <ArrowRight size={17} />}</button></div><div className="mt-3 flex items-center justify-between text-[11px] text-[#85877f]"><span>Describe the options, budget, location or market, and what matters to you.</span>{parse.isError && <span className="font-bold text-[#b94d45]" data-testid="status-guest-parse-error">Could not parse this prompt. Try adding the products and intended use.</span>}</div></form>{parsed && <ParsedBrief parsed={parsed} onCreate={createComparison} pending={create.isPending} />}{create.isError && <div className="mt-5 rounded-xl border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" data-testid="status-guest-create-error">{comparisonErrorMessage(create.error)}</div>}{!parsed && !parse.isPending && <div className="animate-rise animate-rise-2 mt-16 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / ACTUAL NAMES</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the real products or services instead of placeholders.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / RIGHT CONTEXT</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Add the intended use, market or location, budget, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / EVIDENCE CHECK</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We research current products and sources before making the recommendation.</p></div></div>}</div></GuestShell>;
 }
 
 function HistoryPage() {
@@ -2071,7 +2213,7 @@ function AnalysisPage() {
     );
     setLocation(guest ? '/guest' : '/user-portal');
   };
-  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]"><p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionQuality.decision === 'FAIL' ? 'Evidence-limited result' : 'Recommended'}</p><div className="mt-5 flex items-center justify-between gap-4"><div><p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{decisionQuality.decision === 'FAIL' ? 'No definitive winner' : comparison.recommendation}</p><p className="mt-2 text-xs text-[#a8b0c2]">{decisionQuality.decision === 'FAIL' ? 'Resolve quality issues before commitment' : 'Best overall fit'}</p></div>{decisionQuality.decision !== 'FAIL' && <ScoreRing score={Math.round(comparison.score)} />}</div><div className="mt-5 border-t border-[#3b4662] pt-4 text-xs leading-5 text-[#c9cfdb]">{decisionQuality.decision === 'FAIL' ? decisionQuality.reasons.join(' ') : comparison.recommendationReason}</div></div></div>
+  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><DecisionRecommendationCard comparison={comparison} /></div>
          <ExecutiveDecisionBrief comparison={comparison} />
          <section className={`mt-6 rounded-2xl border p-5 sm:p-6 ${decisionQuality.decision === 'PASS' ? 'border-[#9ebbb0] bg-[#dcefe9]' : decisionQuality.decision === 'FAIL' ? 'border-[#d6a39f] bg-[#f7dfdc]' : 'border-[#d7c47b] bg-[#f5edc8]'}`} data-testid="section-decision-quality-gate">
            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -2106,7 +2248,7 @@ function AnalysisPage() {
         </section>
        <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
         <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
-     <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor signal</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{overallVendorScore(vendor)}/100</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${overallVendorScore(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
+    <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{overallVendorScore(vendor)}/100</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${overallVendorScore(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
          <ScoreCharts vendorScores={comparison.vendorScores} />
          <UserCriteriaDashboard criteria={comparison.criteria} vendorScores={comparison.vendorScores} />
          <WeightEditor
@@ -2133,14 +2275,20 @@ function AnalysisPage() {
       {(comparison.sourceAvailability?.length > 0 || comparison.urls?.length > 0) && <SourceAvailabilityList comparison={comparison} />}</div></AppShell>;
 }
 
+export function isVisibleSourceInList(source: { status?: unknown }): boolean {
+  const status = String(source.status ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  return status !== 'timed_out' && status !== 'unavailable';
+}
+
 function SourceAvailabilityList({ comparison }: { comparison: Comparison }) {
-  const sources = comparison.sourceAvailability?.length
+  const sources = (comparison.sourceAvailability?.length
     ? comparison.sourceAvailability
     : (comparison.urls || []).map((url: string) => ({
         url,
         status: 'reachable',
         reason: 'Legacy report: availability was not recorded when this report was generated.',
-      }));
+      }))).filter(isVisibleSourceInList);
+  if (!sources.length) return null;
   const styles: Record<string, string> = {
     reachable: 'border-[#9ebbb0] bg-[#dcefe9] text-[#0f766e]',
     restricted: 'border-[#d7c47b] bg-[#f5edc8] text-[#715d16]',

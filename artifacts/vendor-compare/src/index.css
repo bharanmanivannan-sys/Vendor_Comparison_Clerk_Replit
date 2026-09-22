@@ -152,6 +152,12 @@
 .display { font-family: 'Bricolage Grotesque', sans-serif; }
 .mono { font-family: var(--app-font-mono); }
 .focus-ring:focus-visible { outline: 3px solid hsl(var(--accent)); outline-offset: 3px; }
+.landing-hero-title {
+  font-family: var(--app-font-sans);
+  text-wrap: balance;
+}
+.dark .landing-hero-title { color: #f8f4e8; }
+.dark .landing-hero-accent { color: #67d8c6; }
 
 [data-testid="button-generate-analysis"],
 [data-testid="button-research-comparison"],
