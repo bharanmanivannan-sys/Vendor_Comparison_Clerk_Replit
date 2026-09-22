@@ -1,0 +1,37 @@
+
+
+Search Assist
+
+
+
+
+To rate a product, service, or brand when you can't verify its claims, consider using a variety of sources, including well-known websites with trustworthy reviews. Additionally, check the recency of reviews and the credibility of the reviewers to help assess their authenticity.
+ Federal Trade Commission
+ en.verified-reviews.com
+Evaluating Products, Services, or Brands
+When you cannot verify claims from trusted sources, you can still assess a product, service, or brand by following these guidelines:
+
+Consider Multiple Sources
+Use a variety of review platforms to gather a broader perspective.
+Look for well-known websites that provide trustworthy and impartial reviews.
+Check Review Recency
+Ensure that the reviews are recent. A sudden influx of reviews in a short time may indicate manipulation.
+Older reviews may not reflect the current quality of the product or service.
+Assess Reviewer Credibility
+Investigate the reviewers' profiles. Check if they have written multiple reviews or if they seem to be one-time users.
+Be cautious of reviews that appear overly positive or negative, as they may not be genuine.
+Analyze Review Content
+Look for detailed reviews that provide specific information about the product or service.
+Reviews that include both pros and cons are often more reliable than those that are entirely positive or negative.
+Watch for Incentives
+Some reviews may be influenced by incentives. Check if the platform indicates whether the reviewer received a product for free or was compensated.
+Use Structured Data
+If available, look for structured data that displays ratings and reviews directly on product pages. This can enhance credibility.
+Summary Table of Evaluation Steps
+Step	Action
+Consider Sources	Use multiple review platforms
+Check Recency	Look for recent reviews
+Assess Credibility	Investigate reviewer profiles
+Analyze Content	Look for detailed and balanced reviews
+Watch for Incentives	Check for indications of reviewer incentives
+Use Structured Data	Look for ratings displayed on product pages

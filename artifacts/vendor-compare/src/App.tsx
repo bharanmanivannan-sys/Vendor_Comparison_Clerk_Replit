@@ -542,6 +542,66 @@ export function evidenceBackedLensWinner(comparison: any): {
   };
 }
 
+function isPriceCriterionProvided(comparison: any): boolean {
+  return /\b(?:price|pricing|cost|affordability|budget|value for money|cheapest|lowest fee)\b/i.test(
+    `${comparison?.prompt || ''} ${(comparison?.criteria || []).join(' ')}`,
+  );
+}
+
+function pricingFeatureLensModel(comparison: any) {
+  const vendors = (comparison.vendorScores || [])
+    .map((vendor: any) => String(vendor.vendor || '').trim())
+    .filter(Boolean);
+  const counts = new Map<string, { pricing: number; features: number }>(
+    vendors.map((vendor: string) => [vendor, { pricing: 0, features: 0 }]),
+  );
+  const countRows = (rows: any[] | undefined, key: 'pricing' | 'features') => {
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const winner = vendors.find((vendor: string) => vendor.toLowerCase() === String(row?.winner || '').trim().toLowerCase());
+      if (winner) counts.get(winner)![key] += 1;
+    }
+  };
+  const pricingRows = Array.isArray(comparison.pricing) ? comparison.pricing : [];
+  const featureRows = Array.isArray(comparison.features) ? comparison.features : [];
+  countRows(pricingRows, 'pricing');
+  countRows(featureRows, 'features');
+  const priceRequested = isPriceCriterionProvided(comparison);
+  const rows = vendors.map((vendor: string) => {
+    const count = counts.get(vendor)!;
+    const pricingScore = pricingRows.length ? count.pricing / pricingRows.length * 100 : 0;
+    const featureScore = featureRows.length ? count.features / featureRows.length * 100 : 0;
+    return {
+      vendor,
+      pricingWins: count.pricing,
+      featureWins: count.features,
+      combinedWins: count.pricing + count.features,
+      pricingScore: Math.round(pricingScore),
+      featureScore: Math.round(featureScore),
+      lensScore: priceRequested ? Math.round(pricingScore * 0.65 + featureScore * 0.35) : count.pricing + count.features,
+    };
+  });
+  const highest = Math.max(...rows.map((row: any) => row.lensScore), 0);
+  const leaders = rows.filter((row: any) => row.lensScore === highest);
+  return {
+    priceRequested,
+    pricingRows: pricingRows.length,
+    featureRows: featureRows.length,
+    rows,
+    winner: highest > 0 && leaders.length === 1 ? leaders[0].vendor : null,
+    tied: leaders.length > 1 ? leaders.map((row: any) => row.vendor) : [],
+  };
+}
+
+function stripDecisionNote(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\s*\*\*Note:\s*.*?\*\*/is, '')
+    .trim();
+}
+
+function extractDecisionNote(value: unknown): string {
+  return String(value ?? '').match(/\*\*Note:\s*(.*?)\*\*/is)?.[1]?.trim() || '';
+}
+
 function renderDecisionText(value: unknown): ReactNode {
   return String(value ?? '').split(/(\*\*[^*]+\*\*)/g).map((part, index) => (
     /^\*\*.+\*\*$/.test(part)
@@ -971,6 +1031,8 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
   const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL';
+  const decisionReason = stripDecisionNote(comparison.recommendationReason);
+  const decisionNote = extractDecisionNote(comparison.recommendationReason);
   const runnerUp = [...(comparison.vendorScores || [])]
     .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
     .sort((a: any, b: any) => b.score - a.score)[0];
@@ -980,10 +1042,11 @@ export function ExecutiveDecisionBrief({ comparison, compact = false }: { compar
       <span className="mono text-[10px] uppercase text-[#85877f]">Prepared {new Date(comparison.createdAt || Date.now()).toLocaleDateString()}</span>
     </div>
     <div className="mt-5 grid gap-4 md:grid-cols-3">
-      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionUsable ? renderDecisionText(comparison.recommendationReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
+      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionUsable ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
       <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(comparison.executiveSummary)}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}</article>
       <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
-    </div>
+     </div>
+     {decisionNote && <div className="mt-4 rounded-xl border border-[#d7c47b] bg-[#f5edc8] px-4 py-3 text-xs leading-5 text-[#715d16]" data-testid="decision-note"><strong>Note:</strong> {renderDecisionText(decisionNote)}</div>}
   </section>;
 }
 
@@ -1073,22 +1136,85 @@ function reweightGuestComparison(comparison: any, weights: Record<string, number
 }
 
 function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest: boolean; onUpdated: (comparison: any) => void }) {
-  const initialWeights = () => Object.fromEntries(
-    WEIGHTED_CRITERIA.map((criterion) => [
-      criterion,
-      Number(comparison.vendorScores?.[0]?.weightedScores?.find((entry: any) => entry.criterion === criterion)?.weight ?? 0),
-    ]),
-  );
+  type AdditionalWeight = { id: number; criterion: string; weight: number };
+  const standardWeights: Record<string, number> = {
+    'Meets Needs / Features': 25,
+    'Quality & Reliability': 20,
+    'Value for Money': 20,
+    'Brand Reputation': 7,
+    'Customer Advocacy / NPS': 10,
+    'Innovation / Differentiation': 8,
+    'Strategic Provider Role': 2,
+    Sustainability: 5,
+    'Regulatory Compliance': 3,
+  };
+  const initialWeights = () => {
+    const priceLens = isPriceCriterionProvided(comparison);
+    const roleWeight = priceLens ? 0 : 2;
+    const variableTotal = 100 - roleWeight;
+    const raw = Object.fromEntries(
+      WEIGHTED_CRITERIA.map((criterion) => [
+        criterion,
+        Number(comparison.vendorScores?.[0]?.weightedScores?.find((entry: any) => entry.criterion === criterion)?.weight ?? standardWeights[criterion]),
+      ]),
+    );
+    const variableCriteria = WEIGHTED_CRITERIA.filter((criterion) => criterion !== 'Strategic Provider Role');
+    const rawVariableTotal = variableCriteria.reduce((sum, criterion) => sum + Math.max(0, raw[criterion] || 0), 0);
+    const normalized: Record<string, number> = { ...raw, 'Strategic Provider Role': roleWeight };
+    if (rawVariableTotal !== variableTotal) {
+      let remainder = variableTotal;
+      variableCriteria.forEach((criterion, index) => {
+        const value = index === variableCriteria.length - 1
+          ? remainder
+          : Math.floor((Math.max(0, raw[criterion] || 0) / Math.max(1, rawVariableTotal)) * variableTotal);
+        normalized[criterion] = value;
+        remainder -= value;
+      });
+    }
+    return normalized;
+  };
   const [weights, setWeights] = useState<Record<string, number>>(initialWeights);
+  const [additionalWeights, setAdditionalWeights] = useState<AdditionalWeight[]>([]);
+  const [newAdditionalCriterion, setNewAdditionalCriterion] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const total = Object.values(weights).reduce((sum, weight) => sum + (Number(weight) || 0), 0);
+  const effectiveWeights = (() => {
+    const customTotal = additionalWeights.reduce((sum, item) => sum + Math.max(0, item.weight), 0);
+    const variableCriteria = WEIGHTED_CRITERIA.filter((criterion) => criterion !== 'Strategic Provider Role');
+    const baseVariableTotal = variableCriteria.reduce((sum, criterion) => sum + Math.max(0, weights[criterion] || 0), 0);
+    const roleWeight = Math.max(0, Math.min(100, Math.round(weights['Strategic Provider Role'] ?? 2)));
+    const availableForBase = Math.max(0, 100 - roleWeight - customTotal);
+    const effective: Record<string, number> = { ...weights, 'Strategic Provider Role': roleWeight };
+    let remainder = availableForBase;
+    variableCriteria.forEach((criterion, index) => {
+      const value = index === variableCriteria.length - 1
+        ? remainder
+        : Math.floor((Math.max(0, weights[criterion] || 0) / Math.max(1, baseVariableTotal)) * availableForBase);
+      effective[criterion] = value;
+      remainder -= value;
+    });
+    additionalWeights.forEach((item) => {
+      const targets = defaultCriterionMatches(item.criterion);
+      let remainder = item.weight;
+      targets.forEach((target, index) => {
+        const share = index === targets.length - 1
+          ? remainder
+          : Math.floor(item.weight / Math.max(1, targets.length));
+        effective[target] = (effective[target] || 0) + share;
+        remainder -= share;
+      });
+    });
+    return effective;
+  })();
+  const total = Object.values(effectiveWeights).reduce((sum, weight) => sum + (Number(weight) || 0), 0);
   const weightValidationMessage = total > 100
     ? `Weights exceed 100% by ${total - 100}%. Reduce one or more criteria.`
     : total < 100
       ? `Weights must total 100%. Add ${100 - total}% across one or more criteria.`
       : '';
-  useEffect(() => setWeights(initialWeights()), [comparison]);
+  useEffect(() => {
+    if (!additionalWeights.length) setWeights(initialWeights());
+  }, [comparison, additionalWeights.length]);
   const updateWeight = (criterion: string, value: string) => {
     const parsed = Number(value);
     setWeights((current) => ({ ...current, [criterion]: Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 0 }));
@@ -1103,12 +1229,12 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
     setError('');
     try {
       if (guest) {
-        onUpdated(reweightGuestComparison(comparison, weights));
+        onUpdated(reweightGuestComparison(comparison, effectiveWeights));
       } else {
         const updated = await customFetch<any>(`/api/comparisons/${comparison.id}/regenerate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ weights: WEIGHTED_CRITERIA.map((criterion) => ({ criterion, weight: weights[criterion] })) }),
+          body: JSON.stringify({ weights: WEIGHTED_CRITERIA.map((criterion) => ({ criterion, weight: effectiveWeights[criterion] })) }),
         });
         onUpdated(updated);
       }
@@ -1118,20 +1244,61 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
       setPending(false);
     }
   };
+  const addAdditionalWeight = () => {
+    const criterion = newAdditionalCriterion.trim();
+    if (!criterion || additionalWeights.some((item) => item.criterion.toLowerCase() === criterion.toLowerCase())) return;
+    setAdditionalWeights((current) => [...current, { id: current.length + 1, criterion, weight: 0 }]);
+    setNewAdditionalCriterion('');
+  };
+  const updateAdditionalWeight = (id: number, value: string) => {
+    const parsed = Number(value);
+    const otherTotal = additionalWeights.filter((item) => item.id !== id).reduce((sum, item) => sum + item.weight, 0);
+    setAdditionalWeights((current) => current.map((item) => item.id === id
+      ? { ...item, weight: Number.isFinite(parsed) ? Math.max(0, Math.min(98 - otherTotal, Math.round(parsed))) : 0 }
+      : item));
+  };
+  const applyPriceFeaturePreset = () => setWeights({
+    ...standardWeights,
+    'Meets Needs / Features': 35,
+    'Quality & Reliability': 0,
+    'Value for Money': 63,
+    'Brand Reputation': 0,
+    'Customer Advocacy / NPS': 0,
+    'Innovation / Differentiation': 0,
+    'Strategic Provider Role': 2,
+    Sustainability: 0,
+    'Regulatory Compliance': 0,
+  });
   return <section className="mt-14 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-5 sm:p-7" data-testid="section-weight-editor">
     <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
       <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">01A / Adjust the decision model</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Regenerate with your priorities</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">Change the relative importance of each criterion. The evidence and criterion scores stay the same; only the weighted totals and recommendation change. This is useful when a factor is non-negotiable.</p></div>
       <div className={`shrink-0 rounded-xl px-4 py-3 text-center ${total === 100 ? 'bg-[#dcefe9] text-[#0f766e]' : 'bg-[#f7dfdc] text-[#9a3e38]'}`}><p className="mono text-[9px] uppercase tracking-[.12em]">Total weight</p><p className="mt-1 text-xl font-bold">{total}%</p></div>
     </div>
+    {isPriceCriterionProvided(comparison) && <div className="mt-5 rounded-xl border border-[#b7c9a6] bg-[#f8f4e8] p-4" data-testid="panel-price-feature-rationale"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Active lens rationale</p><p className="mt-2 text-xs leading-5 text-[#566074]">Because price is one of the requested criteria, the primary lens uses <strong>65% pricing evidence</strong> and <strong>35% feature evidence</strong>. The displayed 65%/35% split is represented in the full model as 63% Value for Money, 35% Features, and the reserved 2% provider-role tie-break.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={applyPriceFeaturePreset} className="focus-ring rounded-lg bg-[#0f766e] px-3 py-2 text-[11px] font-bold text-[#f8f4e8]" data-testid="button-apply-price-feature-preset">Use 65/35 lens</button><button type="button" onClick={() => { setWeights(standardWeights); setAdditionalWeights([]); }} className="focus-ring rounded-lg border border-[#9ebbb0] px-3 py-2 text-[11px] font-bold text-[#566074]" data-testid="button-restore-standard-weights">Restore standard weights</button></div></div>}
     {weightValidationMessage && <p className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7dfdc] px-3 py-2 text-xs font-bold text-[#9a3e38]" role="alert" data-testid="status-weight-total">{weightValidationMessage}</p>}
     <div className="mt-6 grid gap-x-6 gap-y-5 md:grid-cols-2">
       {WEIGHTED_CRITERIA.map((criterion) => { const fixed = criterion === 'Strategic Provider Role'; return <label className="block" key={criterion}><div className="flex items-center justify-between gap-3 text-xs font-bold text-[#202840]"><span>{criterion}{fixed ? ' (fixed)' : ''}</span><div className="flex items-center gap-1"><input type="number" min={fixed ? 2 : 0} max={fixed ? 2 : 100} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-2 py-1.5 text-right text-xs font-bold text-[#202840] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight`} /><span>%</span></div></div><input type="range" min={fixed ? 2 : 0} max={fixed ? 2 : 100} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="mt-2 w-full accent-[#0f766e] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight slider`} /></label>; })}
     </div>
+     <div className="mt-7 border-t border-[#c8d99a] pt-5" data-testid="section-additional-weights"><div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#35665c]">Additional weights</p><p className="mt-1 text-[11px] leading-5 text-[#566074]">Add a named factor and allocate part of the same 100% model. It maps to the closest existing evidence dimension instead of inventing unsupported scores.</p></div><div className="flex w-full gap-2 sm:max-w-md"><input value={newAdditionalCriterion} onChange={(event) => setNewAdditionalCriterion(event.target.value)} placeholder="e.g. resale value" className="focus-ring min-w-0 flex-1 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-3 py-2 text-xs text-[#202840]" aria-label="Additional criterion" /><button type="button" onClick={addAdditionalWeight} className="focus-ring rounded-lg bg-[#202840] px-3 py-2 text-xs font-bold text-[#f8f4e8]" data-testid="button-additional-weight">Add</button></div></div>{additionalWeights.length > 0 && <div className="mt-4 grid gap-3 md:grid-cols-2">{additionalWeights.map((item) => <div className="rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] p-3" key={item.id}><div className="flex items-center gap-2"><input value={item.criterion} onChange={(event) => setAdditionalWeights((current) => current.map((entry) => entry.id === item.id ? { ...entry, criterion: event.target.value } : entry))} className="focus-ring min-w-0 flex-1 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id}`} /><input type="number" min="0" max="98" value={item.weight} onChange={(event) => updateAdditionalWeight(item.id, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id} weight`} /><span className="text-xs">%</span><button type="button" onClick={() => setAdditionalWeights((current) => current.filter((entry) => entry.id !== item.id))} className="focus-ring rounded p-1 text-[#9a3e38]" aria-label={`Remove additional criterion ${item.criterion}`}><X size={14} /></button></div><p className="mt-2 text-[10px] text-[#687083]">Maps to {defaultCriterionMatches(item.criterion).join(' + ')}</p></div>)}</div>}</div>
     <div className="mt-6 flex flex-col gap-3 border-t border-[#c8d99a] pt-5 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-[11px] leading-5 text-[#566074]">Current winner: <strong>{comparison.recommendation}</strong>. {guest ? 'A regenerated report will update this result for the current session.' : 'A regenerated report will replace this saved result for your workspace.'}</p>
-      <div className="flex gap-2"><button type="button" onClick={() => { setWeights(initialWeights()); setError(''); }} className="focus-ring rounded-xl border border-[#9ebbb0] bg-[#f8f4e8] px-4 py-3 text-xs font-bold text-[#566074]">Reset</button><button type="button" onClick={regenerate} disabled={pending || total !== 100} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="animate-spin" size={15} />}{pending ? 'Regenerating report' : 'Regenerate report'}</button></div>
+       <div className="flex gap-2"><button type="button" onClick={() => { setWeights(initialWeights()); setAdditionalWeights([]); setError(''); }} className="focus-ring rounded-xl border border-[#9ebbb0] bg-[#f8f4e8] px-4 py-3 text-xs font-bold text-[#566074]">Reset</button><button type="button" onClick={regenerate} disabled={pending || total !== 100} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="animate-spin" size={15} />}{pending ? 'Regenerating report' : 'Regenerate report'}</button></div>
     </div>
     {error && <p className="mt-3 text-xs font-bold text-[#9a3e38]" role="alert">{error}</p>}
+  </section>;
+}
+
+function PricingFeatureLensPanel({ comparison }: { comparison: any }) {
+  const model = pricingFeatureLensModel(comparison);
+  if (!model.pricingRows && !model.featureRows) return null;
+  const winnerRow = model.rows.find((row: any) => row.vendor === model.winner);
+  return <section className="mt-14 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 sm:p-7" data-testid="section-pricing-feature-lens">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02B / Lens result</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Pricing and feature result</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{model.priceRequested ? 'Price is an explicit criterion, so the lens result uses 65% pricing evidence and 35% feature evidence.' : 'Price was not an explicit criterion, so the lens result counts wins across pricing and feature rows together. The broader weighted model remains available below.'}</p></div>
+      <div className="grid grid-cols-2 gap-2 text-center text-[10px] font-bold"><div className="rounded-xl bg-[#dcefe9] px-3 py-2 text-[#0f766e]"><span className="block text-lg">{model.priceRequested ? '65%' : model.pricingRows}</span>{model.priceRequested ? 'pricing' : 'pricing wins'}</div><div className="rounded-xl bg-[#f5edc8] px-3 py-2 text-[#715d16]"><span className="block text-lg">{model.priceRequested ? '35%' : model.featureRows}</span>{model.priceRequested ? 'features' : 'feature wins'}</div></div>
+    </div>
+    <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[540px] text-left text-xs"><thead className="border-b border-[#e3ddcf] text-[10px] uppercase tracking-[.1em] text-[#85877f]"><tr><th className="pb-3">Option</th><th className="pb-3">Pricing wins</th><th className="pb-3">Feature wins</th><th className="pb-3">{model.priceRequested ? 'Lens score' : 'Combined wins'}</th></tr></thead><tbody>{model.rows.sort((a: any, b: any) => b.lensScore - a.lensScore).map((row: any) => <tr className="border-b border-[#ece6d9] last:border-0" key={row.vendor}><td className="py-3 font-bold text-[#202840]">{row.vendor}</td><td className="py-3 text-[#687083]">{row.pricingWins}/{model.pricingRows}</td><td className="py-3 text-[#687083]">{row.featureWins}/{model.featureRows}</td><td className="py-3 font-bold text-[#0f766e]">{model.priceRequested ? `${row.lensScore}/100` : row.combinedWins}</td></tr>)}</tbody></table></div>
+    <p className="mt-4 border-t border-[#e3ddcf] pt-4 text-[11px] leading-5 text-[#687083]">{winnerRow ? <><strong>{winnerRow.vendor}</strong> leads this lens with {model.priceRequested ? `${winnerRow.lensScore}/100 after the 65/35 split` : `${winnerRow.combinedWins} combined pricing and feature wins`}.</> : 'The available lens evidence is tied or inconclusive; no lens winner is invented.'} Adjust the full model below to change the result.</p>
   </section>;
 }
 
@@ -1176,9 +1343,36 @@ function MarketPositionSection({ vendorScores = [] }: { vendorScores?: any[] }) 
   return <section className="mt-14" data-testid="section-market-position"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Market context</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Strategic role and market position</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Each option is classified for this decision as an accelerator, leader, core provider, or expert. Market figures use the most relevant current evidence found.</p><div className="mt-5 overflow-x-auto rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><table className="w-full min-w-[960px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3">Option</th><th className="px-4 py-3">Strategic role</th><th className="px-4 py-3">Why</th><th className="px-4 py-3">Market share</th><th className="px-4 py-3">Market / period</th><th className="px-4 py-3">Share value</th><th className="px-5 py-3">Evidence note</th></tr></thead><tbody>{vendorScores.map((vendor) => { const item = vendor.marketPosition || {}; return <tr className="border-t border-[#e7e2d4]" key={vendor.vendor}><td className="px-5 py-4 font-bold text-[#202840]">{vendor.vendor}</td><td className="px-4 py-4"><span className="rounded-full bg-[#dcefe9] px-2 py-1 text-[10px] font-bold uppercase text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></td><td className="max-w-[260px] px-4 py-4 leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Classification unavailable for this saved comparison.'}</td><td className="px-4 py-4 text-[#0f766e]">{item.marketShare || 'Unavailable'}</td><td className="px-4 py-4 text-[#687083]">{item.market || 'Relevant segment'}<br />{item.marketSharePeriod || ''}</td><td className="px-4 py-4 text-[#687083]">{item.shareValue || 'Not applicable'}<br />{item.shareValueAsOf || ''}</td><td className="px-5 py-4 leading-5 text-[#687083]">{item.evidence || item.applicability || 'No evidence note available.'}</td></tr>; })}</tbody></table></div></section>;
 }
 
-function StrategicFrameworkSection({ title, eyebrow, description, entries, testId }: { title: string; eyebrow: string; description: string; entries: [string, string[]][]; testId: string }) {
+function parseFrameworkOptionEntry(value: unknown, vendors: string[]): { vendor: string; text: string } | null {
+  const text = String(value ?? '').trim();
+  const vendor = vendors.find((candidate) => {
+    const prefix = candidate.trim().toLowerCase();
+    const normalized = text.toLowerCase();
+    return normalized.startsWith(`${prefix}:`)
+      || normalized.startsWith(`${prefix} —`)
+      || normalized.startsWith(`${prefix} -`);
+  });
+  if (!vendor) return null;
+  return {
+    vendor,
+    text: text.slice(vendor.length).replace(/^\s*(?::|—|-)\s*/, '').trim() || 'No specific adherence assessment was provided.',
+  };
+}
+
+function StrategicFrameworkSection({ title, eyebrow, description, entries, vendors = [], testId }: { title: string; eyebrow: string; description: string; entries: [string, string[]][]; vendors?: string[]; testId: string }) {
   if (!entries.length) return null;
-  return <section className="mt-14" data-testid={testId}><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">{eyebrow}</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">{title}</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{description}</p><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{entries.map(([key, values]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={key}><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#b94d45]">{key}</p><ul className="mt-4 space-y-3">{values.map((value, index) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={`${key}-${index}`}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#d9ef66] ring-1 ring-[#8a9640]" />{value}</li>)}</ul></article>)}</div></section>;
+  const optionSpecificEntries = entries.flatMap(([dimension, values]) => values
+    .map((value) => ({ dimension, parsed: parseFrameworkOptionEntry(value, vendors) }))
+    .filter((entry): entry is { dimension: string; parsed: { vendor: string; text: string } } => Boolean(entry.parsed)));
+  const showByOption = vendors.length > 0 && optionSpecificEntries.length > 0;
+  return <section className="mt-14" data-testid={testId}>
+    <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">{eyebrow}</p>
+    <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">{title}</h2>
+    <p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{description}</p>
+    {showByOption
+      ? <div className="mt-5 grid gap-4 lg:grid-cols-2">{vendors.map((vendor) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor} data-testid={`${testId}-${vendor.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><h3 className="display text-xl font-bold text-[#202840]">{vendor}</h3><div className="mt-5 space-y-3">{entries.map(([dimension, values]) => { const item = values.map((value) => parseFrameworkOptionEntry(value, vendors)).find((parsed) => parsed?.vendor.toLowerCase() === vendor.toLowerCase()); return <div className="rounded-xl bg-[#e7e2d4] p-3" key={`${vendor}-${dimension}`}><p className="mono text-[9px] font-bold uppercase tracking-[.12em] text-[#b94d45]">{dimension}</p><p className="mt-2 text-xs leading-5 text-[#626b7b]">{item?.text || 'No option-specific evidence was returned for this dimension.'}</p></div>; })}</div></article>)}</div>
+      : <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{entries.map(([key, values]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={key}><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#b94d45]">{key}</p><ul className="mt-4 space-y-3">{values.map((value, index) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={`${key}-${index}`}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#d9ef66] ring-1 ring-[#8a9640]" />{value}</li>)}</ul></article>)}</div>}
+  </section>;
 }
 
 function hasAnyMarketHistory(vendorScores: any[]): boolean {
@@ -2204,14 +2398,17 @@ function AnalysisPage() {
   );
   const alternativeInsights = visibleInsights.filter((item: string) => item.startsWith('Alternative outside comparison —'));
   const coreInsights = visibleInsights.filter((item: string) => !item.startsWith('Alternative outside comparison —'));
-  const compareAlternative = (insight: string) => {
-    const alternative = insight.replace('Alternative outside comparison — ', '').split(':')[0]?.trim();
-    if (!alternative) return;
+  const compareVendor = (vendor: string) => {
+    if (!vendor) return;
     window.sessionStorage.setItem(
       'vendor-compare-draft',
-      `Compare ${comparison.recommendation} and ${alternative}. Decision context and criteria: ${comparison.prompt}`,
+      `Compare ${comparison.recommendation} and ${vendor}. Decision context and criteria: ${comparison.prompt}`,
     );
     setLocation(guest ? '/guest' : '/user-portal');
+  };
+  const compareAlternative = (insight: string) => {
+    const alternative = insight.replace('Alternative outside comparison — ', '').split(':')[0]?.trim();
+    compareVendor(alternative);
   };
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><DecisionRecommendationCard comparison={comparison} /></div>
          <ExecutiveDecisionBrief comparison={comparison} />
@@ -2251,6 +2448,7 @@ function AnalysisPage() {
     <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{overallVendorScore(vendor)}/100</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${overallVendorScore(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
          <ScoreCharts vendorScores={comparison.vendorScores} />
          <UserCriteriaDashboard criteria={comparison.criteria} vendorScores={comparison.vendorScores} />
+          <PricingFeatureLensPanel comparison={comparison} />
          <WeightEditor
            comparison={comparison}
            guest={guest}
@@ -2263,10 +2461,11 @@ function AnalysisPage() {
            }}
          />
      <HeadToHead comparison={comparison} />
+      <NotableAlternatives comparison={comparison} onCompare={compareVendor} />
     <section className="mt-14 grid gap-7 lg:grid-cols-2"><AnalysisTable title="Pricing lens" rows={comparison.pricing} /><AnalysisTable title="Feature lens" rows={comparison.features} /></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Strategic read</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{swotEntries.map(([key, values]) => <div key={key} className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5"><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{key}</p><ul className="mt-4 space-y-3">{values.map((value) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={value}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#b94d45]" />{value}</li>)}</ul></div>)}</div></section>
-     <StrategicFrameworkSection title="PESTLE framework" eyebrow="Macro environment" description="Political, economic, social, technological, legal, and environmental forces that can change the decision or its timing." entries={pestleEntries} testId="section-pestle" />
-     <StrategicFrameworkSection title="SOAR framework" eyebrow="Strengths-led strategy" description="The shortlist’s shared strengths, emerging opportunities, strategic aspirations, and measurable results to pursue." entries={soarEntries} testId="section-soar" />
+      <StrategicFrameworkSection title="PESTLE adherence by option" eyebrow="Macro environment" description="How each brand, service, product, edition, or plan is addressing political, economic, social, technological, legal, and environmental forces, with evidence gaps called out." entries={pestleEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-pestle" />
+      <StrategicFrameworkSection title="SOAR adherence by option" eyebrow="Strengths-led strategy" description="How each option turns strengths and opportunities into aspirations and measurable results, rather than relying on a shared shortlist-level statement." entries={soarEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-soar" />
       {alternativeInsights.length > 0 && <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-alternative-insights"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Alternative path</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Alternatives outside your shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">These options were not included in the weighted ranking. Compare any alternative directly against the current recommendation using the same decision context.</p><ul className="mt-5 space-y-4">{alternativeInsights.map((item: string) => <li className="flex flex-col gap-3 rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4 text-sm leading-6 text-[#39435a] sm:flex-row sm:items-start sm:justify-between" key={item}><div className="flex gap-3"><Compass size={17} className="mt-1 shrink-0 text-[#0f766e]" /><span>{item.replace('Alternative outside comparison — ', '')}</span></div><button type="button" onClick={() => compareAlternative(item)} className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-[#f8f4e8]" data-testid={`button-compare-alternative-${item.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> Compare with recommendation</button></li>)}</ul></section>}
      <VrioSection vendorScores={comparison.vendorScores} />
      <MarketPositionSection vendorScores={comparison.vendorScores} />
@@ -2300,7 +2499,29 @@ function SourceAvailabilityList({ comparison }: { comparison: Comparison }) {
 }
 
 function AnalysisTable({ title, rows = [] }: { title: string; rows?: any[] }) {
-  return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><div className="border-b border-[#e3ddcf] px-5 py-4"><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[450px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3 font-bold">Dimension</th>{rows[0] && Object.keys(rows[0].values || {}).map((vendor) => <th className="px-3 py-3 font-bold" key={vendor}>{vendor}</th>)}<th className="px-5 py-3 font-bold">Winner</th></tr></thead><tbody>{rows.map((row) => <tr className="border-t border-[#e7e2d4]" key={row.dimension}><td className="px-5 py-4 font-bold text-[#202840]">{row.dimension}</td>{Object.values(row.values || {}).map((value, index) => <td className="px-3 py-4 text-[#687083]" key={`${row.dimension}-${index}`}>{value as string}</td>)}<td className={`px-5 py-4 font-bold ${row.winner === 'Not established' ? 'text-[#85877f]' : 'text-[#0f766e]'}`}>{row.winner === 'Not established' ? 'No evidence-backed winner' : row.winner}</td></tr>)}</tbody></table>{!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No lens data available for this comparison.</div>}</div><p className="border-t border-[#e3ddcf] px-5 py-3 text-[11px] leading-5 text-[#85877f]">A lens winner is shown only when the available evidence supports a like-for-like comparison.</p></div>;
+  return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><div className="border-b border-[#e3ddcf] px-5 py-4"><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[450px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3 font-bold">Dimension</th>{rows[0] && Object.keys(rows[0].values || {}).map((vendor) => <th className="px-3 py-3 font-bold" key={vendor}>{vendor}</th>)}<th className="px-5 py-3 font-bold">Winner</th></tr></thead><tbody>{rows.map((row) => { const inconclusive = !row.winner || row.winner === 'Not established' || /^No evidence-backed winner$/i.test(row.winner); const tie = inconclusive || /^Tie:/i.test(row.winner); return <tr className="border-t border-[#e7e2d4]" key={row.dimension}><td className="px-5 py-4 font-bold text-[#202840]">{row.dimension}</td>{Object.values(row.values || {}).map((value, index) => <td className="px-3 py-4 text-[#687083]" key={`${row.dimension}-${index}`}>{value as string}</td>)}<td className={`px-5 py-4 font-bold ${tie ? 'text-[#85877f]' : 'text-[#0f766e]'}`}>{tie ? 'Tie' : row.winner}</td></tr>; })}</tbody></table>{!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No lens data available for this comparison.</div>}</div><p className="border-t border-[#e3ddcf] px-5 py-3 text-[11px] leading-5 text-[#85877f]">A lens winner is shown only when the available evidence supports a like-for-like comparison; ties remain ties.</p></div>;
+}
+
+function NotableAlternatives({ comparison, onCompare }: { comparison: any; onCompare: (vendor: string) => void }) {
+  const recommendation = String(comparison.recommendation || '').trim().toLowerCase();
+  const seen = new Set<string>();
+  const alternatives = (comparison.vendorScores || [])
+    .filter((vendor: any) => {
+      const name = String(vendor.vendor || '').trim();
+      const key = name.toLowerCase();
+      if (!name || key === recommendation || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left: any, right: any) => overallVendorScore(right) - overallVendorScore(left))
+    .slice(0, 3);
+  if (!alternatives.length) return null;
+  return <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-notable-alternatives">
+    <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Notable alternatives</p>
+    <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Other compared options worth a look</h2>
+    <p className="mt-2 max-w-3xl text-xs leading-5 text-[#566074]">These are the strongest alternatives from the compared results, excluding the selected recommendation. They are not silently added to the ranking.</p>
+    <div className="mt-5 grid gap-3 md:grid-cols-3">{alternatives.map((vendor: any) => <article className="rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4" key={vendor.vendor}><div className="flex items-start justify-between gap-3"><h3 className="display text-lg font-bold text-[#202840]">{vendor.vendor}</h3><span className="mono text-xs font-bold text-[#0f766e]">{overallVendorScore(vendor)}/100</span></div><p className="mt-3 text-xs leading-5 text-[#687083]">{vendor.verdict || 'A compared option with a distinct evidence-backed trade-off.'}</p><button type="button" onClick={() => onCompare(vendor.vendor)} className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg bg-[#0f766e] px-3 py-2 text-xs font-bold text-[#f8f4e8]" data-testid={`button-notable-alternative-${vendor.vendor.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> Compare with winner</button></article>)}</div>
+  </section>;
 }
 
 const fieldLabel = (field: string) => field.replace(/([A-Z])/g, ' $1').replace(/^./, (value) => value.toUpperCase());

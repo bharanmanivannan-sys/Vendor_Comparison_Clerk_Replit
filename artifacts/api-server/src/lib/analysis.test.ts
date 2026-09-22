@@ -7,6 +7,7 @@ import {
   addVerifiedBaasOfferEvidence,
   addVerifiedHomeLoanRateEvidence,
   addVerifiedQuickCommerceDeliveryEvidence,
+  applyEvidenceBackedLensWinner,
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
   applySoftwareCapabilityMatrixDecision,
@@ -18,8 +19,10 @@ import {
   buildValidatedEvidenceDataset,
   capabilityLedSoftwarePriorityProfile,
   canonicalVendorScoreRows,
+  collectCitedHttpUrls,
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
+  deterministicOpenEndedEvFallback,
   discoveryTargetCount,
   electricVehicleFinalQualityIssues,
   evidenceSufficiency,
@@ -61,10 +64,12 @@ import {
   reconcileFinalRecommendationNarrative,
   reconcileRecommendationWithNarrative,
   rankEvidenceSources,
+  refineComparisonPrompt,
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
   requestsCurrentModelSelection,
   selectRecommendationLabel,
+  selectOpenEndedElectricVehicleShortlist,
   sourceMatchesResearchMarket,
   userSuppliedSourceInstructions,
   UNVERIFIABLE_WINNER_NOTE,
@@ -112,9 +117,32 @@ test("uses the user's explicit comparison parameter as the primary weight profil
   assert.equal(support?.label, "customer service and support");
   assert.equal(support?.weights.find(({ criterion }) => criterion === "Customer Advocacy / NPS")?.weight, 70);
   assert.equal(support?.weights.reduce((total, { weight }) => total + weight, 0), 100);
-  assert.equal(value?.weights.find(({ criterion }) => criterion === "Value for Money")?.weight, 70);
+  assert.equal(value?.weights.find(({ criterion }) => criterion === "Value for Money")?.weight, 65);
+  assert.equal(value?.weights.find(({ criterion }) => criterion === "Meets Needs / Features")?.weight, 35);
+  assert.equal(value?.weights.find(({ criterion }) => criterion === "Strategic Provider Role")?.weight, 0);
   assert.equal(value?.weights.reduce((total, { weight }) => total + weight, 0), 100);
   assert.equal(generic, null);
+});
+
+test("uses every named non-price criterion without treating long ownership as a price request", () => {
+  const prompt = "Compare Mahindra vs Tata Safari diesel AT. I plan to retain the car for 20 years. Compare on performance, reliability, safety features and maintenance.";
+  const profile = explicitDecisionPriorityProfile(prompt, [
+    "Performance",
+    "Quality and reliability",
+    "Safety features",
+    "Maintenance and servicing",
+    "Long-term ownership cost",
+  ]);
+
+  assert.ok(profile);
+  assert.match(profile.label, /performance/i);
+  assert.match(profile.label, /reliability/i);
+  assert.match(profile.label, /safety/i);
+  assert.match(profile.label, /maintenance/i);
+  assert.notEqual(profile.label, "price and feature lenses");
+  assert.equal(profile.weights.reduce((total, entry) => total + entry.weight, 0), 100);
+  assert.ok((profile.weights.find(({ criterion }) => criterion === "Quality & Reliability")?.weight ?? 0) >= 20);
+  assert.ok((profile.weights.find(({ criterion }) => criterion === "Regulatory Compliance")?.weight ?? 0) > 3);
 });
 
 test("seeds official Bharat NCAP sources for an India safety-first comparison", () => {
@@ -228,10 +256,43 @@ test("adds the exact user-discretion note when no winner can be verified", () =>
   annotateUnverifiableWinner(analysis);
   annotateUnverifiableWinner(analysis);
 
-  assert.match(analysis.executiveSummary, new RegExp(UNVERIFIABLE_WINNER_NOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(analysis.executiveSummary, /NOTE:|AI can sometimes provide incorrect results/i);
+  assert.match(analysis.recommendationReason, new RegExp(UNVERIFIABLE_WINNER_NOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.equal(analysis.insights.filter((item) => item === UNVERIFIABLE_WINNER_NOTE).length, 1);
   assert.equal(analysis.recommendation, "No exact winner");
   assert.equal(analysis.score, 50);
+});
+
+test("preserves a pricing and feature lens winner when other parameters are insufficient", () => {
+  const analysis = {
+    executiveSummary: "The broader weighted model is evidence-limited.",
+    recommendationReason: "The broader weighted model is evidence-limited.",
+    insights: [],
+    pricing: [
+      { dimension: "Headline price", values: {}, winner: "Westpac" },
+      { dimension: "Ongoing fees", values: {}, winner: "Westpac" },
+      { dimension: "Commercial conditions", values: {}, winner: "No evidence-backed winner" },
+    ],
+    features: [
+      { dimension: "Core capabilities", values: {}, winner: "Westpac" },
+      { dimension: "Ease of use", values: {}, winner: "Westpac" },
+    ],
+    vendorScores: [
+      { vendor: "Westpac", score: 62 },
+      { vendor: "CAPE", score: 58 },
+      { vendor: "NAB", score: 57 },
+      { vendor: "ANZ", score: 56 },
+    ],
+  } as unknown as AnalysisPayload;
+
+  annotateUnverifiableWinner(analysis);
+
+  assert.equal(analysis.recommendation, "Westpac");
+  assert.equal(analysis.score, 62);
+  assert.match(analysis.executiveSummary, /Westpac was suggested because it has the highest available weighted score of 62\/100/i);
+  assert.match(analysis.executiveSummary, /led the available pricing and feature lenses/i);
+  assert.doesNotMatch(analysis.executiveSummary, /other parameters were insufficient|AI can sometimes provide incorrect results/i);
+  assert.match(analysis.recommendationReason, /\*\*Note: .*AI can sometimes provide incorrect results\.\*\*/);
 });
 
 test("uses feature breadth and provider role when DXP and DAM are requested without pricing", () => {
@@ -1480,6 +1541,41 @@ test("normalizes market-position evidence arrays into the string response contra
   assert.equal(typeof evidence, "string");
 });
 
+test("does not admit model-invented home-loan URLs as web-search evidence", () => {
+  const inventedWestpacUrl = "https://www.westpac.com.au/home-loans/does-not-exist";
+  const citedAnzUrl = "https://www.anz.com.au/personal/home-loans/interest-rates";
+  const responseOutput = [{
+    type: "message",
+    content: [{
+      type: "output_text",
+      text: JSON.stringify({
+        sources: [inventedWestpacUrl],
+        pricing: [{ sourceUrl: inventedWestpacUrl }],
+      }),
+      annotations: [{
+        type: "url_citation",
+        url: citedAnzUrl,
+        title: "ANZ home loan rates",
+      }],
+    }],
+  }];
+
+  assert.deepEqual(collectCitedHttpUrls(responseOutput), [citedAnzUrl]);
+});
+
+test("removes an unapproved banking URL from normalized market evidence", () => {
+  const inventedUrl = "https://www.westpac.com.au/home-loans/does-not-exist";
+  const approvedUrl = "https://www.anz.com.au/personal/home-loans/interest-rates";
+
+  assert.equal(
+    normalizeMarketPositionEvidence(
+      `Westpac source: ${inventedUrl}; ANZ source: ${approvedUrl}`,
+      [approvedUrl],
+    ),
+    "Westpac source: ANZ source: https://www.anz.com.au/personal/home-loans/interest-rates",
+  );
+});
+
 test("normalizes direct advocacy percentages into deterministic weighted evidence", () => {
   const [evidence] = normalizeEvidenceRecords([{
     sourceUrl: "https://research.example.com/advocacy",
@@ -1746,6 +1842,27 @@ test("parses the Australian no-annual-fee credit-card request", () => {
   assert.equal(parsed.context.segment, "Credit cards");
 });
 
+test("accepts a named bank's business credit cards against an open competitor set", () => {
+  const parsed = parsePrompt(
+    "Compare Westpac Business credit card products with its competitors.",
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "its competitors"]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]!), true);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Credit cards");
+});
+
+test("accepts an unresolved named provider for business credit cards", () => {
+  const parsed = parsePrompt(
+    "Compare Westpac vs Cape vs NAB vs ANZ for Business Credit Cards",
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "Cape", "NAB", "ANZ"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Credit cards");
+});
+
 test("rejects product-specific comparisons across unrelated brands", () => {
   const parsed = parsePrompt("Compare Apple and Westpac for credit card product.");
   assert.deepEqual(parsed.vendors, ["Apple", "Westpac"]);
@@ -2008,6 +2125,141 @@ test("normalizes a descriptive BYD EV manufacturer label", async () => {
   assert.deepEqual(parsed.vendors, ["BYD", "Tesla"]);
   assert.equal(parsed.context.valid, true);
   assert.equal(parsed.context.segment, "Electric vehicles");
+});
+
+test("does not promote an EV comparison sentence into a vendor and preserves exact models", () => {
+  const parsed = parsePrompt(
+    "Compare BYD cars in the Australian market with other EV cars. How is it standing against Tesla Model Y and Kia EV6?",
+  );
+
+  assert.deepEqual(parsed.vendors, ["BYD", "Tesla Model Y", "Kia EV6"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Electric vehicles");
+});
+
+test("routes an unnamed BYD competitor request into concrete EV discovery", () => {
+  const prompt = "Compare BYD cars in the Australian market with other EV cars. How is it standing?";
+  const parsed = parsePrompt(prompt);
+
+  assert.deepEqual(parsed.vendors, ["BYD", "other EV cars"]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[0]), false);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
+  assert.equal(discoveryTargetCount(parsed.vendors), 4);
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(
+      parsed.vendors,
+      ["BYD Atto 3", "Tesla Model Y", "Kia EV6", "Hyundai Ioniq 5"],
+      discoveryTargetCount(parsed.vendors),
+    ),
+    ["BYD", "Tesla Model Y", "Kia EV6", "Hyundai Ioniq 5"],
+  );
+});
+
+test("routes vs-other wording into the same open-ended EV discovery path", () => {
+  const parsed = parsePrompt(
+    "Compare BYD cars in the Australian market vs other EV cars. How it is standing",
+  );
+
+  assert.deepEqual(parsed.vendors, ["BYD", "other EV cars"]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
+  assert.equal(discoveryTargetCount(parsed.vendors), 4);
+});
+
+test("classifies EV brand-car wording as an open-ended discovery objective", () => {
+  const parsed = parsePrompt(
+    "Compare BYD cars in the Australian market with other EV brand cars. How it is standing",
+  );
+
+  assert.deepEqual(parsed.vendors, ["BYD", "other EV brand cars"]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
+  assert.equal(discoveryTargetCount(parsed.vendors), 4);
+});
+
+test("refines the full request into a market-aware like-for-like processing brief", () => {
+  const prompt = "Compare BYD cars with other EV brand cars for urban families in Australia.";
+  const refined = refineComparisonPrompt(
+    prompt,
+    ["BYD", "other EV brand cars"],
+    ["Value for money", "Range and charging"],
+    {
+      valid: true,
+      segment: "Electric vehicles",
+      industry: "Australian consumer automotive",
+      message: "",
+    },
+    "AU",
+  );
+
+  assert.ok(refined.startsWith(prompt));
+  assert.match(refined, /Market and demographic scope: Australia; currency AUD; audience families, urban commuters/i);
+  assert.match(refined, /Resolve these open-ended objectives into concrete locally available products/i);
+  assert.match(refined, /Enforce a like-for-like comparison/i);
+  assert.match(refined, /Value for money, Range and charging/i);
+});
+
+test("selects one anchor-manufacturer EV model and distinct competitor models", () => {
+  assert.deepEqual(
+    selectOpenEndedElectricVehicleShortlist(
+      "BYD",
+      [
+        "BYD",
+        "BYD Atto 3",
+        "BYD Seal",
+        "Tesla Model Y",
+        "Tesla Model 3",
+        "Kia EV6",
+        "Hyundai Ioniq 5",
+        "other EV cars",
+      ],
+      4,
+    ),
+    ["BYD Atto 3", "Tesla Model Y", "Kia EV6", "Hyundai Ioniq 5"],
+  );
+  assert.deepEqual(
+    selectOpenEndedElectricVehicleShortlist(
+      "BYD",
+      ["BYD", "Tesla Model Y", "Kia EV6", "Hyundai Ioniq 5"],
+      4,
+    ),
+    [],
+  );
+});
+
+test("recovers the Australian BYD discovery request with a comparable official-source shortlist", () => {
+  const fallback = deterministicOpenEndedEvFallback("BYD", "AU", 4);
+  assert.ok(fallback);
+  const vendors = Array.isArray(fallback.vendors)
+    ? fallback.vendors.filter((value): value is string => typeof value === "string")
+    : [];
+  assert.deepEqual(
+    selectOpenEndedElectricVehicleShortlist("BYD", vendors, 4),
+    ["BYD SEALION 7", "Tesla Model Y", "Kia EV5", "Hyundai IONIQ 5"],
+  );
+  assert.deepEqual(
+    (fallback.selectionRoles as Array<{ officialUrl: string }>).map(({ officialUrl }) => new URL(officialUrl).hostname),
+    ["bydautomotive.com.au", "www.tesla.com", "www.kia.com", "www.hyundai.com"],
+  );
+  assert.match(String(fallback.selectionRationale), /Assuming the broad request is for current five-seat electric SUVs in Australia/i);
+  assert.equal(deterministicOpenEndedEvFallback("BYD", "IN", 4), undefined);
+});
+
+test("does not let intent extraction reintroduce a generic EV competitor label", async () => {
+  const prompt = "Compare BYD cars in the Australian market with other EV cars. How is it standing?";
+  const parsed = await parsePromptWithIntent(prompt, async () => ({
+    options: ["BYD cars", "other"],
+    subject: "Electric vehicles",
+    decisionType: "comparison",
+    category: "Electric vehicles",
+    useCase: "Australian EV market",
+    qualifiers: ["Australia"],
+    decisionCriterion: "market position",
+    freshness: "current",
+    confidence: 0.95,
+    clarification: "",
+  }));
+
+  assert.deepEqual(parsed.vendors, ["BYD", "other EV cars"]);
+  assert.equal(isObjectivePhraseVendor(parsed.vendors[1]), true);
 });
 
 test("parses EV battery-service comparisons with trailing punctuation", () => {
@@ -3504,6 +3756,110 @@ test("calculates lower numeric rates and fees as better", () => {
     ),
     "Tie: CBA, NAB, Westpac",
   );
+});
+
+test("uses the unique highest score before a pricing and feature lens tie-break", () => {
+  const analysis = {
+    recommendation: "ANZ",
+    score: 61,
+    recommendationReason: "ANZ has the highest weighted score.",
+    pricing: [
+      { dimension: "Headline price", values: {}, winner: "Westpac" },
+      { dimension: "Ongoing fees", values: {}, winner: "Westpac" },
+      { dimension: "Commercial conditions", values: {}, winner: "No evidence-backed winner" },
+      { dimension: "Overall value", values: {}, winner: "Westpac" },
+    ],
+    features: [
+      { dimension: "Core capabilities", values: {}, winner: "Westpac" },
+      { dimension: "Performance", values: {}, winner: "Westpac" },
+      { dimension: "Ease of use", values: {}, winner: "Westpac" },
+      { dimension: "Security", values: {}, winner: "No evidence-backed winner" },
+      { dimension: "Support", values: {}, winner: "Westpac" },
+    ],
+    vendorScores: [
+      { vendor: "ANZ", score: 61 },
+      { vendor: "NAB", score: 58 },
+      { vendor: "CAPE", score: 50 },
+      { vendor: "Westpac", score: 60 },
+    ],
+  } as AnalysisPayload;
+
+  const decision = applyEvidenceBackedLensWinner(analysis);
+
+  assert.deepEqual(decision, {
+    winner: "Westpac",
+    wins: 7,
+    decidedRows: 7,
+    pricingWins: 3,
+    featureWins: 4,
+  });
+  assert.equal(analysis.recommendation, "ANZ");
+  assert.equal(analysis.score, 61);
+  assert.match(
+    analysis.recommendationReason,
+    /^ANZ leads the highest available weighted score at 61\/100\./,
+  );
+
+  analysis.executiveSummary = "ANZ previously appeared to lead on the weighted score.";
+  analysis.recommendationReason = "Westpac has the strongest overall offer for the stated business use case.";
+  analysis.nextSteps = [];
+  reconcileFinalRecommendationNarrative(analysis);
+
+  assert.equal(analysis.recommendation, "ANZ");
+  assert.equal(analysis.score, 61);
+  assert.match(analysis.recommendationReason, /unique highest weighted score remains decisive/);
+  assert.match(analysis.recommendationReason, /strongest overall offer/);
+});
+
+test("selects Tesla when it has the highest available score despite another lens leader", () => {
+  const analysis = {
+    recommendation: "BYD",
+    score: 50,
+    recommendationReason: "BYD has broad market presence.",
+    executiveSummary: "The options are broadly comparable.",
+    pricing: [
+      { dimension: "Purchase price", values: {}, winner: "BYD" },
+      { dimension: "Running cost", values: {}, winner: "BYD" },
+    ],
+    features: [
+      { dimension: "Technology", values: {}, winner: "BYD" },
+    ],
+    vendorScores: [
+      { vendor: "BYD", score: 50 },
+      { vendor: "Kia EV6", score: 50 },
+      { vendor: "Tesla Model Y", score: 52 },
+    ],
+  } as AnalysisPayload;
+
+  applyEvidenceBackedLensWinner(analysis);
+
+  assert.equal(analysis.recommendation, "Tesla Model Y");
+  assert.equal(analysis.score, 52);
+  assert.match(analysis.recommendationReason, /Tesla Model Y leads the highest available weighted score at 52\/100/);
+});
+
+test("does not force an overall lens winner when decided row wins are tied", () => {
+  const analysis = {
+    recommendation: "ANZ",
+    score: 60,
+    recommendationReason: "The result remains tied.",
+    pricing: [
+      { dimension: "Price", values: {}, winner: "ANZ" },
+      { dimension: "Fees", values: {}, winner: "Westpac" },
+    ],
+    features: [
+      { dimension: "Support", values: {}, winner: "No evidence-backed winner" },
+      { dimension: "Security", values: {}, winner: "Tie: ANZ, Westpac" },
+    ],
+    vendorScores: [
+      { vendor: "ANZ", score: 60 },
+      { vendor: "Westpac", score: 60 },
+    ],
+  } as AnalysisPayload;
+
+  assert.equal(applyEvidenceBackedLensWinner(analysis), null);
+  assert.equal(analysis.recommendation, "ANZ");
+  assert.equal(analysis.recommendationReason, "The result remains tied.");
 });
 
 test("normalizes five-year market history without inventing private-company stock values", () => {

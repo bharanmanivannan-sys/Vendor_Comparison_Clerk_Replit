@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isObjectivePhraseVendor, parsePromptWithIntent } from "../lib/analysis";
+import { isObjectivePhraseVendor, parsePrompt, parsePromptWithIntent } from "../lib/analysis";
 import {
   comparisonFailureMessage,
   comparisonJobElapsedMs,
@@ -141,6 +141,35 @@ test("accepts one domain brand plus an open-ended competitor request", async () 
   assert.equal(isObjectivePhraseVendor(validated.vendors[1]), true);
 });
 
+test("preserves the original sentence while creating a demographic like-for-like brief", async () => {
+  const prompt = "Compare BYD cars with other EV brand cars for urban families in Australia and recommend the best five-year ownership fit.";
+  const validated = await validateComparisonInput(
+    { prompt, urls: [] },
+    (value) => parsePromptWithIntent(value, async () => ({
+      options: ["BYD cars", "other EV brand cars"],
+      subject: "Electric vehicles",
+      decisionType: "choice",
+      category: "Electric vehicles",
+      useCase: "five-year ownership",
+      qualifiers: ["Australia", "urban commuters", "families"],
+      decisionCriterion: "best fit for five-year ownership",
+      freshness: "current",
+      confidence: 0.9,
+      clarification: "",
+    })),
+  );
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+  if ("error" in validated) return;
+  assert.equal(validated.input.prompt, prompt);
+  assert.equal(validated.input.market, "AU");
+  assert.deepEqual(validated.vendors, ["BYD", "other EV brand cars"]);
+  assert.ok(validated.processingPrompt.startsWith(prompt));
+  assert.match(validated.processingPrompt, /audience families, urban commuters/i);
+  assert.match(validated.processingPrompt, /same broad use case/i);
+  assert.match(validated.processingPrompt, /concrete locally available products before scoring/i);
+});
+
 test("submission rejects a known provider outside the selected research market", async () => {
   const validated = await validateComparisonInput({
     prompt: "Compare Westpac and ANZ investment home loans.",
@@ -175,6 +204,39 @@ test("submission still accepts Westpac products in an available market", async (
   assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
   if ("error" in validated) return;
   assert.equal(validated.input.market, "AU");
+});
+
+test("submission accepts Westpac business credit cards for competitor discovery", async () => {
+  const prompt = "Compare Westpac Business credit card products with its competitors.";
+  const validated = await validateComparisonInput(
+    {
+      prompt,
+      market: "AU",
+      urls: ["https://www.westpac.com.au/business-banking/credit-cards/"],
+    },
+    async () => parsePrompt(prompt) as never,
+  );
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+  if ("error" in validated) return;
+  assert.deepEqual(validated.vendors, ["Westpac", "its competitors"]);
+  assert.equal(validated.context.segment, "Credit cards");
+  assert.deepEqual(validated.input.urls, [
+    "https://www.westpac.com.au/business-banking/credit-cards/",
+  ]);
+});
+
+test("submission accepts an unresolved named provider in a business credit-card comparison", async () => {
+  const validated = await validateComparisonInput({
+    prompt: "Compare Westpac vs Cape vs NAB vs ANZ for Business Credit Cards",
+    market: "AU",
+    vendors: ["Westpac", "Cape", "NAB", "ANZ"],
+  });
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+  if ("error" in validated) return;
+  assert.deepEqual(validated.vendors, ["Westpac", "Cape", "NAB", "ANZ"]);
+  assert.equal(validated.context.segment, "Credit cards");
 });
 
 test("rejects cross-market research involving unsupported Gulf countries before analysis", async () => {

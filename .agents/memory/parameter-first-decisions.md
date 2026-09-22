@@ -9,12 +9,18 @@ When a comparison query names a controlling decision parameter, that parameter m
 
 **How to apply:** Detect explicit priorities deterministically, apply a priority-focused weight profile, and register parameter-specific metrics with strict comparability rules. For Indian vehicle safety, seed official manufacturer and Bharat NCAP sources and support stars, adult/child protection, airbags, ESC, and ADAS evidence.
 
-Insufficient deterministic evidence, incomplete source coverage, or an exact scoring tie must not by itself fail the comparison. Return the normal executive decision brief with the recommendation set to no exact winner and include the required user-discretion warning.
+Insufficient deterministic evidence, incomplete source coverage, or an exact scoring tie must not by itself fail the comparison. When a unique evidence-backed leader exists across the user-requested pricing and feature lenses, preserve it as a qualified lens winner and state that the other parameters were insufficient to establish a clear winner. If no unique lens leader exists, return the normal executive decision brief with no exact winner and include the required user-discretion warning.
 
-**Why:** A failed job hides useful verified evidence and pressures the system to invent score separation. Returning an evidence-limited brief preserves transparency without presenting neutral 50 scores as proof of equality.
+**Why:** A failed job hides useful verified evidence and pressures the system to invent score separation. A previous report found a unique Westpac pricing/feature leader, then a broader evidence gate overwrote it with “No exact winner”; preserving the scoped result keeps the useful conclusion while preventing an overall claim.
 
-**How to apply:** Keep unsupported criteria neutral, do not use arbitrary tie-breaks for explicit-priority decisions, and clearly distinguish an unresolved decision from a validated winner.
+**How to apply:** Keep unsupported criteria neutral, do not use arbitrary tie-breaks for explicit-priority decisions, and clearly distinguish a scoped lens winner from an overall validated winner. Render the user-discretion warning as bold in browser and PDF outputs.
 
 For capability-led software comparisons, do not give unrequested pricing decision weight. A search-backed, complete feature matrix can support a conditional winner when official evidence covers every option and the transparent row-win calculation has one unique leader.
 
 **Why:** Quantitative-only gates can suppress a clear software capability result even when the requested feature matrix is complete and one option consistently leads.
+
+When a parser adds derived long-horizon or ownership criteria, only activate the price-and-feature lens when the prompt itself names price, cost, budget, or value.
+
+**Why:** A retention period can imply long-term ownership analysis without making price the user's controlling criterion; treating that context as a price request overrides the requested operational priorities.
+
+**How to apply:** Match supplied criteria back to explicit prompt terms before selecting the 65/35 pricing/feature profile. Keep contextual duration and derived ownership labels neutral unless cost is stated.

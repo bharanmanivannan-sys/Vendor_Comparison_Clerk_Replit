@@ -25,10 +25,12 @@ import {
   buildAnalysis,
   buildComparisonIdentity,
   comparisonFailureCode,
+  inferResearchMarket,
   MAX_COMPARISON_OPTIONS,
   parsePrompt,
   parsePromptWithIntent,
   reconcileRecommendationDecision,
+  refineComparisonPrompt,
   reweightAnalysis,
   validateComparisonContext,
   type AnalysisPayload,
@@ -230,6 +232,7 @@ function startComparisonJob(options: {
     ownershipPeriodYears?: number;
     urls?: string[];
   };
+  processingPrompt: string;
   vendors: string[];
   criteria: string[];
   subject: string;
@@ -254,6 +257,7 @@ function startComparisonJob(options: {
     try {
       const analysis = await buildAnalysis({
         ...options.input,
+        prompt: options.processingPrompt,
         vendors: options.vendors,
         criteria: options.criteria,
         urls,
@@ -436,7 +440,17 @@ export async function validateComparisonInput(
         : `${context.message} Oops. Sorry, I might have missed that. Can you try this phrase instead: “${comparisonWorkaroundPrompt(input.prompt, vendors)}”`,
     } as const;
   }
-  return { input, vendors, criteria, context } as const;
+  const market = input.market
+    ?? inferResearchMarket(input.prompt, vendors).countryCode;
+  const normalizedInput = { ...input, market };
+  const processingPrompt = refineComparisonPrompt(
+    input.prompt,
+    vendors,
+    criteria,
+    context,
+    market,
+  );
+  return { input: normalizedInput, processingPrompt, vendors, criteria, context } as const;
 }
 
 export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
@@ -550,6 +564,7 @@ router.post("/guest/comparison-jobs", async (req: Request, res): Promise<void> =
   const jobId = startComparisonJob({
     owner,
     input: validated.input,
+    processingPrompt: validated.processingPrompt,
     vendors: validated.vendors,
     criteria: validated.criteria,
     subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)
@@ -587,6 +602,7 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
   try {
     analysis = await buildAnalysis({
       ...validated.input,
+      prompt: validated.processingPrompt,
       vendors: validated.vendors,
       criteria: validated.criteria,
       urls,
@@ -637,6 +653,7 @@ router.post("/comparison-jobs", requireAuth, async (req: AuthedRequest, res): Pr
     owner: `user:${userId}`,
     userId,
     input: validated.input,
+    processingPrompt: validated.processingPrompt,
     vendors: validated.vendors,
     criteria: validated.criteria,
     subject: /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(validated.input.prompt)
@@ -667,12 +684,18 @@ router.post("/comparisons", requireAuth, async (req: AuthedRequest, res): Promis
     sendError(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
     return;
   }
-  const { input, vendors, criteria } = validated;
+  const { input, processingPrompt, vendors, criteria } = validated;
   if (!requireCurrentSourcePreflight(`user:${req.userId as string}`, input, res)) return;
   const urls = [...(input.urls ?? [])];
   let analysis: AnalysisPayload;
   try {
-    analysis = await buildAnalysis({ ...input, vendors, criteria, urls });
+    analysis = await buildAnalysis({
+      ...input,
+      prompt: processingPrompt,
+      vendors,
+      criteria,
+      urls,
+    });
   } catch (error) {
     sendError(res, 502, comparisonFailureCode(error), comparisonFailureMessage(error, input.prompt, vendors));
     return;

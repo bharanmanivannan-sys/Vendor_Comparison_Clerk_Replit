@@ -20,3 +20,21 @@ Treat explicit dealer/dealership requests as service-provider discovery. Discove
 Multi-lens requests must fill the shortlist across the named lenses, not with several near-identical peers. Require explicit search-backed roles and official product URLs for each slot, then fail closed if the role mix is incomplete.
 
 **Why:** A DXP-and-DAM request can otherwise select two DXP platforms and never answer the standalone DAM part of the decision.
+
+Generic category suffixes must remain identifiable as discovery objectives during normalization; collapsing “other EV cars” to “other” can make the parser treat a placeholder as a real competitor and bypass discovery.
+
+**Why:** The cleanup stage runs before objective detection, so lossy normalization can silently turn an open-ended request into a two-option comparison with no concrete alternatives.
+
+**How to apply:** Preserve generic vehicle/category wording long enough to classify it as an objective, retain the named anchor, and replace the objective with concrete products before scoring.
+
+When the named anchor is a manufacturer but downstream research requires exact products, preserve the manufacturer as a selection constraint rather than as a ranked option. Select one verified local model from that manufacturer, then concrete competitor models.
+
+**Why:** Preserving the bare manufacturer while requesting model-level discovery causes its own models to be treated as aliases and removed, which can collapse the shortlist to the manufacturer alone.
+
+**How to apply:** Give manufacturer-to-model discovery its own output contract and repair prompt, then validate one anchor model plus distinct competitor-manufacturer models before research.
+
+Reconcile model-extracted options against deterministic parser entities before routing discovery. A manufacturer followed only by a generic category noun, such as “cars” or “vehicles,” is still the manufacturer anchor rather than a different entity.
+
+**Why:** A valid deterministic anchor can otherwise become “manufacturer + category” after intent extraction, causing exact anchor checks to miss and sending the request through the wrong discovery path.
+
+**How to apply:** Canonicalize only generic suffixes; preserve genuine product names and model identifiers. For supported high-confidence open-ended cases, prefer a verified like-for-like local shortlist over accepting a mixed-segment set or failing the entire job after transient discovery output.
