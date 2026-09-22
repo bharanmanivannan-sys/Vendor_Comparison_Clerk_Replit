@@ -1382,7 +1382,7 @@ function reweightGuestComparison(comparison: any, weights: Record<string, number
   };
 }
 
-function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest: boolean; onUpdated: (comparison: any) => void }) {
+export function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest: boolean; onUpdated: (comparison: any) => void }) {
   const standardWeights: Record<string, number> = {
     'Meets Needs / Features': 25,
     'Quality & Reliability': 20,
@@ -1551,7 +1551,7 @@ function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest
   </section>;
 }
 
-function PricingFeatureLensPanel({ comparison }: { comparison: any }) {
+export function PricingFeatureLensPanel({ comparison }: { comparison: any }) {
   const [draftWeights, setDraftWeights] = useState({ pricing: 65, features: 35 });
   const [appliedWeights, setAppliedWeights] = useState({ pricing: 65, features: 35 });
   const total = draftWeights.pricing + draftWeights.features;
