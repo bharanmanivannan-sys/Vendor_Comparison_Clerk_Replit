@@ -2973,15 +2973,6 @@ function AnalysisPage() {
   };
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><DecisionRecommendationCard comparison={comparison} /></div>
          <ExecutiveDecisionBrief comparison={comparison} />
-         <section className={`mt-6 rounded-2xl border p-5 sm:p-6 ${decisionQuality.decision === 'PASS' ? 'border-[#9ebbb0] bg-[#dcefe9]' : decisionQuality.decision === 'FAIL' ? 'border-[#d6a39f] bg-[#f7dfdc]' : 'border-[#d7c47b] bg-[#f5edc8]'}`} data-testid="section-decision-quality-gate">
-           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-             <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#566074]">Release quality gate</p><h2 className="display mt-2 text-2xl font-bold text-[#202840]">{decisionQuality.decision.replaceAll('_', ' ')}</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#566074]">{decisionQuality.reasons.length ? decisionQuality.reasons.join(' ') : 'Evidence coverage, freshness, comparability, and access governance meet the release threshold.'}</p></div>
-             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-               {Object.entries(decisionQuality.metrics).slice(0, 4).map(([label, value]) => <div className="rounded-xl border border-black/10 bg-[#f8f4e8] px-3 py-2 text-center" key={label}><p className="mono text-[8px] uppercase tracking-[.08em] text-[#7b817e]">{label.replace(/([A-Z])/g, ' $1')}</p><p className="mt-1 text-sm font-bold text-[#202840]">{value}%</p></div>)}
-             </div>
-           </div>
-           {decisionQuality.decision !== 'PASS' && <p className="mt-4 border-t border-black/10 pt-3 text-[11px] leading-5 text-[#566074]"><strong>Remediation:</strong> {decisionQuality.remediation.join(' ')}</p>}
-         </section>
         <section className="mt-6 rounded-2xl border border-[#9ebbb0] bg-[#dcefe9] p-5 sm:p-6" data-testid="tile-evidence-dataset">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex gap-4">
@@ -3033,7 +3024,17 @@ function AnalysisPage() {
      <MarketPositionSection vendorScores={comparison.vendorScores} />
      <MarketHistorySection vendorScores={comparison.vendorScores} />
      <section className="mt-14 grid gap-7 lg:grid-cols-3"><InsightList title="Opportunities" items={comparison.opportunities} accent="teal" /><InsightList title="Key insights" items={coreInsights} accent="yellow" /><InsightList title="Next steps" items={comparison.nextSteps} accent="red" /></section>
-      {(comparison.sourceAvailability?.length > 0 || comparison.urls?.length > 0) && <SourceAvailabilityList comparison={comparison} />}</div></AppShell>;
+       {(comparison.sourceAvailability?.length > 0 || comparison.urls?.length > 0) && <SourceAvailabilityList comparison={comparison} />}
+       <section className={`mt-6 rounded-2xl border p-5 sm:p-6 ${decisionQuality.decision === 'PASS' ? 'border-[#9ebbb0] bg-[#dcefe9]' : decisionQuality.decision === 'FAIL' ? 'border-[#d6a39f] bg-[#f7dfdc]' : 'border-[#d7c47b] bg-[#f5edc8]'}`} data-testid="section-decision-quality-gate">
+         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+           <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#566074]">Release quality gate</p><h2 className="display mt-2 text-2xl font-bold text-[#202840]">{decisionQuality.decision.replaceAll('_', ' ')}</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#566074]">{decisionQuality.reasons.length ? decisionQuality.reasons.join(' ') : 'Evidence coverage, freshness, comparability, and access governance meet the release threshold.'}</p></div>
+           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+             {Object.entries(decisionQuality.metrics).slice(0, 4).map(([label, value]) => <div className="rounded-xl border border-black/10 bg-[#f8f4e8] px-3 py-2 text-center" key={label}><p className="mono text-[8px] uppercase tracking-[.08em] text-[#7b817e]">{label.replace(/([A-Z])/g, ' $1')}</p><p className="mt-1 text-sm font-bold text-[#202840]">{value}%</p></div>)}
+           </div>
+         </div>
+         {decisionQuality.decision !== 'PASS' && <p className="mt-4 border-t border-black/10 pt-3 text-[11px] leading-5 text-[#566074]"><strong>Remediation:</strong> {decisionQuality.remediation.join(' ')}</p>}
+       </section>
+     </div></AppShell>;
 }
 
 export function isVisibleSourceInList(source: { status?: unknown }): boolean {
