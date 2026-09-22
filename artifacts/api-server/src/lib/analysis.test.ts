@@ -55,6 +55,7 @@ import {
   normalizeEvidenceRecords,
   normalizeLensWinner,
   normalizeMarketHistory,
+  normalizeMarketPosition,
   normalizeMarketPositionEvidence,
   normalizeProviderRole,
   normalizeTextField,
@@ -179,6 +180,25 @@ test("rolls mandatory gate outcomes into conditional, failed, and insufficient q
     market: "AU",
     gateStatuses: { "Market availability": "UNKNOWN" },
   }).qualificationStatus, "INSUFFICIENT_EVIDENCE");
+});
+
+test("fills required market-position fields when research returns only evidence", () => {
+  const result = normalizeMarketPosition(
+    { evidence: "https://official.example/vehicle" },
+    undefined,
+    "Mid-size electric SUVs in Australia",
+    "https://official.example/vehicle",
+  );
+
+  assert.deepEqual(result, {
+    marketShare: "Reliable comparable figure not found",
+    marketSharePeriod: "Current period",
+    market: "Mid-size electric SUVs in Australia",
+    shareValue: "Not applicable or not verified",
+    shareValueAsOf: "Not verified",
+    applicability: "Share value applies only when the provider or its parent is publicly traded.",
+    evidence: "https://official.example/vehicle",
+  });
 });
 
 test("does not qualify the wrong market or a partial entity identity", () => {

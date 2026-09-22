@@ -3313,6 +3313,40 @@ export function normalizeDecisionGovernance(
   });
 }
 
+type VendorMarketPosition = NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["marketPosition"]>;
+
+export function normalizeMarketPosition(
+  value: Partial<VendorMarketPosition> | undefined,
+  fallback: Partial<VendorMarketPosition> | undefined,
+  category: string,
+  evidence: string,
+): VendorMarketPosition {
+  return {
+    marketShare: normalizeTextField(
+      value?.marketShare,
+      fallback?.marketShare ?? "Reliable comparable figure not found",
+    ),
+    marketSharePeriod: normalizeTextField(
+      value?.marketSharePeriod,
+      fallback?.marketSharePeriod ?? "Current period",
+    ),
+    market: normalizeTextField(value?.market, fallback?.market ?? category),
+    shareValue: normalizeTextField(
+      value?.shareValue,
+      fallback?.shareValue ?? "Not applicable or not verified",
+    ),
+    shareValueAsOf: normalizeTextField(
+      value?.shareValueAsOf,
+      fallback?.shareValueAsOf ?? "Not verified",
+    ),
+    applicability: normalizeTextField(
+      value?.applicability,
+      fallback?.applicability ?? "Share value applies only when the provider or its parent is publicly traded.",
+    ),
+    evidence,
+  };
+}
+
 function normalizeRisk(value: unknown): "low" | "medium" | "high" | "critical" {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized.includes("critical")) return "critical";
@@ -3415,20 +3449,14 @@ function normalizeAnalysis(
           organization: vrioDimension("organization"),
           implication: suppliedVrio?.implication || fallbackVrio?.implication || "Validate this capability against the exact product and borrower context.",
         },
-        marketPosition: item.marketPosition && /https?:\/\//i.test(marketPositionEvidence)
-          ? {
-            ...item.marketPosition,
-            evidence: marketPositionEvidence,
-          }
-          : {
-            marketShare: fallbackVendor?.marketPosition?.marketShare ?? "Reliable comparable figure not found",
-            marketSharePeriod: fallbackVendor?.marketPosition?.marketSharePeriod ?? "Current period",
-            market: fallbackVendor?.marketPosition?.market ?? fallback.category,
-            shareValue: fallbackVendor?.marketPosition?.shareValue ?? "Not applicable or not verified",
-            shareValueAsOf: fallbackVendor?.marketPosition?.shareValueAsOf ?? "Not verified",
-            applicability: fallbackVendor?.marketPosition?.applicability ?? "Share value applies only when the provider or its parent is publicly traded.",
-            evidence: "No exact supporting URL was returned for a comparable market-share or share-value figure.",
-          },
+        marketPosition: normalizeMarketPosition(
+          item.marketPosition,
+          fallbackVendor?.marketPosition,
+          fallback.category,
+          item.marketPosition && /https?:\/\//i.test(marketPositionEvidence)
+            ? marketPositionEvidence
+            : "No exact supporting URL was returned for a comparable market-share or share-value figure.",
+        ),
         marketHistory: normalizeMarketHistory(item.marketHistory, fallbackVendor?.marketHistory, allowedEvidenceUrls, scoreVerifiedUrls),
       };
     });
