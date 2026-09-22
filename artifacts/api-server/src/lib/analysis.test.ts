@@ -59,6 +59,7 @@ import {
   parsePromptWithIntent,
   preferredIndiaEvModelSelection,
   preserveConcreteDiscoveryOptions,
+  preserveReportedCriteriaLimitation,
   reweightAnalysis,
   reconcileRecommendationDecision,
   reconcileFinalRecommendationNarrative,
@@ -169,6 +170,7 @@ test("uses the user's explicit comparison parameter as the primary weight profil
 
 test("uses every named non-price criterion without treating long ownership as a price request", () => {
   const prompt = "Compare Mahindra vs Tata Safari diesel AT. I plan to retain the car for 20 years. Compare on performance, reliability, safety features and maintenance.";
+  const parsed = parsePrompt(prompt);
   const profile = explicitDecisionPriorityProfile(prompt, [
     "Performance",
     "Quality and reliability",
@@ -177,6 +179,7 @@ test("uses every named non-price criterion without treating long ownership as a 
     "Long-term ownership cost",
   ]);
 
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata Safari diesel AT"]);
   assert.ok(profile);
   assert.match(profile.label, /performance/i);
   assert.match(profile.label, /reliability/i);
@@ -186,6 +189,21 @@ test("uses every named non-price criterion without treating long ownership as a 
   assert.equal(profile.weights.reduce((total, entry) => total + entry.weight, 0), 100);
   assert.ok((profile.weights.find(({ criterion }) => criterion === "Quality & Reliability")?.weight ?? 0) >= 20);
   assert.ok((profile.weights.find(({ criterion }) => criterion === "Regulatory Compliance")?.weight ?? 0) > 3);
+});
+
+test("keeps a valid long-horizon vehicle comparison when research reports incomplete criterion evidence", () => {
+  const parsed = {
+    criteriaMet: false,
+    unmetCriteriaReason: "Twenty-year reliability evidence is not available for current models.",
+    insights: ["Current product specifications were verified."],
+  };
+
+  preserveReportedCriteriaLimitation(parsed);
+
+  assert.deepEqual(parsed.insights, [
+    "Current product specifications were verified.",
+    "Evidence limitation — Twenty-year reliability evidence is not available for current models.",
+  ]);
 });
 
 test("seeds official Bharat NCAP sources for an India safety-first comparison", () => {

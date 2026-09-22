@@ -1892,9 +1892,21 @@ export function parsePrompt(prompt: string) {
   )
     .filter((value) => value && !isPlaceholderVendor(value));
   const delimitedElectricVehicleBrands = extractDelimitedElectricVehicleBrands(normalized);
+  const hasSpecificNamedVehicleOption = vendors.some((vendor) => (
+    delimitedElectricVehicleBrands.some((brand) => {
+      const normalizedVendor = vendor.toLowerCase();
+      const normalizedBrand = brand.toLowerCase();
+      if (!normalizedVendor.startsWith(`${normalizedBrand} `)) return false;
+      const suffix = vendor.slice(brand.length).trim();
+      return Boolean(suffix) && !/^(?:&|and\b|,|\/)/i.test(suffix);
+    })
+  ));
   if (
-    delimitedElectricVehicleBrands.length >= 2
-    || (delimitedElectricVehicleBrands.length >= 1 && isElectricVehiclePrompt(normalized))
+    delimitedElectricVehicleBrands.length >= 1
+    && (
+      isElectricVehiclePrompt(normalized)
+      || (delimitedElectricVehicleBrands.length >= 2 && !hasSpecificNamedVehicleOption)
+    )
   ) {
     const concreteVehicleOptions = vendors.filter((vendor) => !isObjectivePhraseVendor(vendor));
     const isSpecificVehicleModel = (value: string) => /\b(?:model\s*(?:3|s|x|y)|seal|atto\s*3|dolphin|ev6|ev9|ioniq(?:\s*[5-9])?|kona|zs\s*ev|xuv\d+\s*ev|be\s*6|nexon(?:\s+ev)?|curvv(?:\s+ev)?)\b/i.test(value);
@@ -2647,6 +2659,26 @@ export function normalizeTextField(value: unknown, fallback = ""): string {
   return fallback;
 }
 
+export function preserveReportedCriteriaLimitation(parsed: {
+  criteriaMet?: boolean;
+  unmetCriteriaReason?: string;
+  insights?: unknown;
+}): void {
+  if (parsed.criteriaMet !== false) return;
+  const reason = normalizeTextField(
+    parsed.unmetCriteriaReason,
+    "Comparable evidence was unavailable for part of the requested decision criteria.",
+  );
+  const limitation = `Evidence limitation — ${reason}`;
+  const insights = Array.isArray(parsed.insights)
+    ? parsed.insights.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+    : [];
+  if (!insights.some((entry) => entry.toLowerCase() === limitation.toLowerCase())) {
+    insights.push(limitation);
+  }
+  parsed.insights = insights;
+}
+
 export function normalizeMarketPositionEvidence(value: unknown, allowedUrls: string[] = []): string {
   return normalizeKnownEvidenceUrls(
     normalizeTextField(
@@ -2915,6 +2947,10 @@ function normalizeAnalysis(
         ...item,
         vendor,
         score,
+        color: normalizeTextField(
+          item.color,
+          fallbackVendor?.color ?? ["#1c7c78", "#df7b48", "#6b61c9", "#bc5a85"][index] ?? "#1c7c78",
+        ),
         providerRole: normalizeProviderRole(item.providerRole ?? fallbackVendor?.providerRole),
         providerRoleRationale: normalizeTextField(
           item.providerRoleRationale,
@@ -6355,6 +6391,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "When official product claims cannot establish a winner, evaluate independent review signals only from retrieved public pages. Use at least two independent sources per option where available; record review or update date, publisher, reviewer or methodology credibility, structured rating and scale, sample size or review count, balanced pros and cons, and any incentive or affiliate disclosure. Prefer recent named-methodology reviews and structured ratings. Penalize stale, one-sided, low-sample, anonymous, incentivized, or affiliate evidence. Never treat a search snippet or an unverified review summary as evidence. Explain the review-signal calculation and confidence. Declare a review-based winner only when comparable retrieved review evidence covers every ranked option and produces a meaningful score separation; otherwise keep 'No exact winner'. Use metricKey review_rating for comparable ratings and review_count for sample size.",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
+      "Set criteriaMet to false only when the named options are categorically incompatible with the requested decision, not when one criterion has missing, uncertain, or incomplete evidence. A requested ownership or retention period is a decision horizon; it does not require evidence covering that full future period. Continue the comparison with neutral treatment and an explicit evidence limitation for unsupported criteria.",
     ].join(" ");
     const explicitBaasScenario = input.annualDistanceKm && input.ownershipPeriodYears
       ? `Use exactly ${input.annualDistanceKm} km per year and ${input.ownershipPeriodYears} years for the user's scenario. `
@@ -6487,7 +6524,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       });
     }
     if (parsed.criteriaMet === false && !isProviderLevelCreditCardDiscovery) {
-      throw new Error("Your input criteria can't be met across the products or services or brands chosen");
+      console.warn("Product research reported an unmet criterion; continuing with evidence limitations", {
+        vendors: input.vendors,
+        reason: normalizeTextField(parsed.unmetCriteriaReason, "No reason supplied"),
+      });
+      preserveReportedCriteriaLimitation(parsed);
     }
     addParsedSourceUrls(parsed.sources, input.urls);
     if (isProviderLevelHomeLoanDiscovery) {
