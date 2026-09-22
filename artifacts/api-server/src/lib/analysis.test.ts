@@ -29,6 +29,7 @@ import {
   enforceBaasTotalCostAssumptions,
   enforceIndianMgBaasFact,
   explicitDecisionPriorityProfile,
+  ensureIndiaSafariOutsideAlternatives,
   filterSourcesForMarket,
   hasElectricVehicleResearchCoverage,
   hasFiveYearMarketHistoryCoverage,
@@ -70,6 +71,7 @@ import {
   requestsFiveYearHomeLoanTrend,
   requestsCurrentModelSelection,
   sanitizeOutsideAlternativeInsights,
+  vehicleIndependentEvidenceInstructions,
   selectRecommendationLabel,
   selectOpenEndedElectricVehicleShortlist,
   sourceMatchesResearchMarket,
@@ -3057,6 +3059,13 @@ test("permits a review-signal decision only with recent retrieved ratings from t
   } as unknown as AnalysisPayload;
 
   assert.equal(hasVerifiedIndependentReviewCoverage(analysis, vendors, new Date("2026-09-21T00:00:00Z")), true);
+  for (const vendorScore of analysis.vendorScores) {
+    vendorScore.weightedScores![0].evidence![0].sourceUrl = "https://www.youtube.com/watch?v=independent-review";
+  }
+  assert.equal(hasVerifiedIndependentReviewCoverage(analysis, vendors, new Date("2026-09-21T00:00:00Z")), false);
+  for (const [vendorIndex, vendorScore] of analysis.vendorScores.entries()) {
+    vendorScore.weightedScores![0].evidence![0].sourceUrl = `https://reviews.example/${vendorIndex}/0`;
+  }
   analysis.vendorScores[0].weightedScores![0].evidence![1].sampleSize = 5;
   assert.equal(hasVerifiedIndependentReviewCoverage(analysis, vendors, new Date("2026-09-21T00:00:00Z")), false);
 });
@@ -3388,6 +3397,7 @@ test("keeps at most three alternatives and excludes names overlapping compared v
   const insights = sanitizeOutsideAlternativeInsights([
     "Alternative outside comparison — Tata: This is the compared parent brand.",
     "Alternative outside comparison — Tata Safari diesel AT: This is the compared model.",
+    "Alternative outside comparison — Tata Safari diesel vehicle: This is the same compared model with a generic suffix.",
     "Alternative outside comparison — Mahindra XUV700: This overlaps the compared Mahindra option.",
     "Alternative outside comparison — Hyundai Alcazar: Comparable three-row diesel SUV.",
     "Alternative outside comparison — MG Hector Plus: Comparable three-row SUV.",
@@ -3401,6 +3411,32 @@ test("keeps at most three alternatives and excludes names overlapping compared v
     "Alternative outside comparison — MG Hector Plus: Comparable three-row SUV.",
     "Alternative outside comparison — Jeep Meridian: Comparable diesel SUV.",
     "Keep this non-alternative insight.",
+  ]);
+});
+
+test("requires diverse expert or survey evidence when official vehicle sources are not comparable", () => {
+  const instructions = vehicleIndependentEvidenceInstructions(true);
+
+  assert.match(instructions, /automotive expert reviews/i);
+  assert.match(instructions, /owner or customer surveys/i);
+  assert.match(instructions, /NPS/i);
+  assert.match(instructions, /user comments/i);
+  assert.match(instructions, /Never return a YouTube-only evidence set/i);
+  assert.equal(vehicleIndependentEvidenceInstructions(false), "");
+});
+
+test("adds outside diesel SUV alternatives when a compared Tata Safari alias is removed", () => {
+  const analysis = {
+    insights: [
+      "Alternative outside comparison — Tata Safari diesel vehicle: This repeats the compared option.",
+    ],
+  };
+
+  ensureIndiaSafariOutsideAlternatives(analysis, ["Mahindra", "Tata Safari diesel AT"], "IN");
+
+  assert.deepEqual(analysis.insights, [
+    "Alternative outside comparison — Hyundai Alcazar diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
+    "Alternative outside comparison — Jeep Meridian diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
   ]);
 });
 

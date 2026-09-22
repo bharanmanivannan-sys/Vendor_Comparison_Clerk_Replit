@@ -3218,6 +3218,9 @@ export function hasVerifiedIndependentReviewCoverage(
   const oldest = new Date(asOf);
   oldest.setUTCFullYear(oldest.getUTCFullYear() - 1);
   const normalizedVendor = (value: string) => value.toLowerCase().match(/[a-z0-9]+/g)?.filter((token) => token.length >= 4) ?? [];
+  const isVideoPlatform = (hostname: string) => (
+    /(?:^|\.)(?:youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|tiktok\.com)$/.test(hostname)
+  );
   return vendors.every((vendor) => {
     const vendorScore = analysis.vendorScores.find((row) => row.vendor.toLowerCase() === vendor.toLowerCase());
     if (!vendorScore) return false;
@@ -3236,7 +3239,8 @@ export function hasVerifiedIndependentReviewCoverage(
       if (Number.isNaN(sourceDate.getTime()) || sourceDate < oldest || sourceDate > asOf) return false;
       try {
         const hostname = new URL(evidence.sourceUrl).hostname.toLowerCase();
-        return !vendorTokens.some((token) => hostname.includes(token));
+        return !isVideoPlatform(hostname)
+          && !vendorTokens.some((token) => hostname.includes(token));
       } catch {
         return false;
       }
@@ -5525,13 +5529,48 @@ function normalizeComparisonOptionName(value: string): string {
     .trim();
 }
 
+const COMPARISON_OPTION_DESCRIPTOR_TOKENS = new Set([
+  "at",
+  "auto",
+  "automatic",
+  "car",
+  "diesel",
+  "edition",
+  "electric",
+  "ev",
+  "hybrid",
+  "manual",
+  "model",
+  "mt",
+  "petrol",
+  "suv",
+  "variant",
+  "vehicle",
+]);
+
+function normalizeComparisonOptionCoreName(value: string): string {
+  return normalizeComparisonOptionName(value)
+    .split(" ")
+    .filter((token) => token && !COMPARISON_OPTION_DESCRIPTOR_TOKENS.has(token))
+    .join(" ");
+}
+
 function comparisonOptionNamesOverlap(left: string, right: string): boolean {
   const normalizedLeft = normalizeComparisonOptionName(left);
   const normalizedRight = normalizeComparisonOptionName(right);
   if (!normalizedLeft || !normalizedRight) return false;
-  return normalizedLeft === normalizedRight
+  if (
+    normalizedLeft === normalizedRight
     || normalizedLeft.startsWith(`${normalizedRight} `)
-    || normalizedRight.startsWith(`${normalizedLeft} `);
+    || normalizedRight.startsWith(`${normalizedLeft} `)
+  ) return true;
+  const coreLeft = normalizeComparisonOptionCoreName(left);
+  const coreRight = normalizeComparisonOptionCoreName(right);
+  return Boolean(coreLeft && coreRight) && (
+    coreLeft === coreRight
+    || coreLeft.startsWith(`${coreRight} `)
+    || coreRight.startsWith(`${coreLeft} `)
+  );
 }
 
 function alternativeInsightName(insight: string): string {
@@ -5565,6 +5604,45 @@ export function sanitizeOutsideAlternativeInsights(
     alternativeCount += 1;
     return [insight];
   });
+}
+
+export function ensureIndiaSafariOutsideAlternatives(
+  analysis: { insights?: unknown },
+  comparedOptions: string[],
+  marketCode: ResearchMarketCode | undefined,
+): void {
+  if (
+    marketCode !== "IN"
+    || !comparedOptions.some((option) => /\btata\s+safari\b/i.test(option))
+    || !comparedOptions.some((option) => /\bmahindra\b/i.test(option))
+  ) return;
+  const existingInsights = Array.isArray(analysis.insights)
+    ? analysis.insights.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const sanitized = sanitizeOutsideAlternativeInsights(existingInsights, comparedOptions);
+  const existingAlternativeCount = sanitized.filter((entry) => entry.startsWith(ALTERNATIVE_INSIGHT_PREFIX)).length;
+  if (existingAlternativeCount >= 2) {
+    analysis.insights = sanitized;
+    return;
+  }
+  const fallbackAlternatives = [
+    "Alternative outside comparison — Hyundai Alcazar diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
+    "Alternative outside comparison — Jeep Meridian diesel AT: Consider as another India-market three-row diesel automatic SUV; verify the current variant, price, safety, reliability, and service evidence before ranking.",
+  ];
+  analysis.insights = sanitizeOutsideAlternativeInsights(
+    [...sanitized, ...fallbackAlternatives],
+    comparedOptions,
+  );
+}
+
+export function vehicleIndependentEvidenceInstructions(isVehicleComparison: boolean): string {
+  if (!isVehicleComparison) return "";
+  return [
+    "For vehicle comparisons, official pages remain the primary source for specifications, safety equipment, warranty, and service terms.",
+    "When official sources do not provide comparable reliability, maintenance, ownership, or customer-experience outcomes, actively search for recent reputable local automotive expert reviews and named-methodology owner or customer surveys, including comparable NPS only when publisher, year, population, sample size, question basis, and methodology are disclosed.",
+    "Aggregated owner reviews or user comments may be used only as contextual themes when the publisher, collection method, date, and sample size are available; never score isolated, anonymous, or unverified comments.",
+    "YouTube or another video platform may corroborate an expert review only when the reviewer, publication date, exact claim, and accessible transcript or equivalent retrieved text are available. Never return a YouTube-only evidence set: include eligible non-video expert-review or survey sources for every compared vehicle, or explicitly mark the affected criterion unavailable and neutral.",
+  ].join(" ");
 }
 
 function analysisOutputShape(vendors: string[], isHomeLoan = false, isElectricVehicle = false) {
@@ -6357,6 +6435,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const requiresVendorDiscovery = vendorDiscoveryWasRequired;
     const isElectricVehicleComparison = context.segment === "Electric vehicles"
       || isElectricVehicleModelSelection;
+    const isVehicleComparison = isElectricVehicleComparison
+      || /\b(?:cars?|vehicles?|automotive|diesel|petrol|hybrid|suvs?|hatchbacks?|sedans?|automatic|manual)\b/i.test(
+        `${input.prompt} ${input.vendors.join(" ")}`,
+      );
     const researchShapeVendors = input.vendors;
     const vendorDiscoveryInstructions = vendorDiscoveryWasRequired
       ? "The shortlist was selected from the user's objective. Preserve these exact product names throughout the scorecard, tables, winners, and recommendation. Put other credible products only in insights as outside-shortlist alternatives; do not rank them. "
@@ -6389,6 +6471,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "Treat user-provided URLs as primary context sources, but not automatically valid evidence. Use them only when they are directly relevant to the named option, criterion, market, and requested time period. Exclude irrelevant pages and outdated resources; never use an old source merely to fill an evidence gap.",
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "When official product claims cannot establish a winner, evaluate independent review signals only from retrieved public pages. Use at least two independent sources per option where available; record review or update date, publisher, reviewer or methodology credibility, structured rating and scale, sample size or review count, balanced pros and cons, and any incentive or affiliate disclosure. Prefer recent named-methodology reviews and structured ratings. Penalize stale, one-sided, low-sample, anonymous, incentivized, or affiliate evidence. Never treat a search snippet or an unverified review summary as evidence. Explain the review-signal calculation and confidence. Declare a review-based winner only when comparable retrieved review evidence covers every ranked option and produces a meaningful score separation; otherwise keep 'No exact winner'. Use metricKey review_rating for comparable ratings and review_count for sample size.",
+      vehicleIndependentEvidenceInstructions(isVehicleComparison),
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
       "Set criteriaMet to false only when the named options are categorically incompatible with the requested decision, not when one criterion has missing, uncertain, or incomplete evidence. A requested ownership or retention period is a decision horizon; it does not require evidence covering that full future period. Continue the comparison with neutral treatment and an explicit evidence limitation for unsupported criteria.",
@@ -6760,6 +6843,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       }
       parsed.insights = existingInsights;
     }
+    ensureIndiaSafariOutsideAlternatives(parsed, input.vendors, researchMarket.countryCode);
     parsed.insights = sanitizeOutsideAlternativeInsights(parsed.insights, input.vendors);
     if (discoveredSelectionRationale) {
       const existingInsights = Array.isArray(parsed.insights) ? parsed.insights : [];

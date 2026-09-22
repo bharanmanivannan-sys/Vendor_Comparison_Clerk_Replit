@@ -5,11 +5,15 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   buildComparisonPdf,
+  comparisonOptionNamesOverlap,
   computeDecisionQuality,
   DecisionRecommendationCard,
   ExecutiveDecisionBrief,
+  hasOptionSpecificFrameworkEvidence,
   isVisibleSourceInList,
+  pricingFeatureLensModel,
   shouldDisplayMarketHistory,
+  weightTotalValidationMessage,
 } from './App';
 
 const sourceDate = new Date().toISOString().slice(0, 10);
@@ -113,6 +117,45 @@ test('omits timed-out and unavailable sources from source lists', () => {
   assert.equal(isVisibleSourceInList({ status: 'Timed-out' }), false);
   assert.equal(isVisibleSourceInList({ status: 'unavailable' }), false);
   assert.equal(isVisibleSourceInList({ status: 'Unavailable' }), false);
+});
+
+test('excludes compared vehicle aliases from outside alternatives', () => {
+  assert.equal(comparisonOptionNamesOverlap('Tata Safari diesel vehicle', 'Tata Safari diesel AT'), true);
+  assert.equal(comparisonOptionNamesOverlap('Mahindra XUV700', 'Mahindra'), true);
+  assert.equal(comparisonOptionNamesOverlap('Hyundai Alcazar', 'Tata Safari diesel AT'), false);
+});
+
+test('hides framework entries that explicitly use an unverified planning fallback', () => {
+  assert.equal(
+    hasOptionSpecificFrameworkEvidence('Assess local policy exposure; evidence is not verified in this planning fallback.'),
+    false,
+  );
+  assert.equal(
+    hasOptionSpecificFrameworkEvidence('Verified Bharat NCAP requirements and current product compliance were documented.'),
+    true,
+  );
+});
+
+test('omits unverified planning-fallback PESTLE entries from PDF exports', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.swot = {
+    Strengths: ['Alpha: Verified service coverage.'],
+    'PESTLE — Political': [
+      'Alpha: Assess policy exposure; evidence is not verified in this planning fallback.',
+    ],
+  };
+
+  const pdf = await buildComparisonPdf(comparison);
+  const text = extractPdfText(pdf);
+
+  assert.doesNotMatch(text, /evidence is not verified in this planning fallback/i);
+  assert.match(text, /Verified service coverage/i);
+});
+
+test('warns and blocks regeneration totals above or below 100 percent', () => {
+  assert.match(weightTotalValidationMessage(110), /exceed 100% by 10%/i);
+  assert.match(weightTotalValidationMessage(90), /Add 10%/i);
+  assert.equal(weightTotalValidationMessage(100), '');
 });
 
 function comparisonFixture({ mismatchedHistory = false } = {}) {
@@ -242,6 +285,21 @@ test('shows a qualified pricing and feature lens winner when broader evidence is
   assert.match(html, /Alpha was suggested because it performed better/);
   assert.match(html, /<strong>Note: The choice is left to the user discretion as AI can sometimes provide incorrect results\.<\/strong>/);
   assert.doesNotMatch(html, /No definitive winner/);
+});
+
+test('recalculates the quick pricing and feature comparison with user-selected weights', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.prompt = 'Compare Alpha and Beta on price and features.';
+  comparison.pricing = [{ dimension: 'Price', values: {}, winner: 'Alpha' }];
+  comparison.features = [{ dimension: 'Features', values: {}, winner: 'Beta' }];
+
+  const pricingLed = pricingFeatureLensModel(comparison, { pricing: 80, features: 20 });
+  const featureLed = pricingFeatureLensModel(comparison, { pricing: 20, features: 80 });
+
+  assert.equal(pricingLed.winner, 'Alpha');
+  assert.equal(featureLed.winner, 'Beta');
+  assert.equal(pricingLed.rows.find((row: any) => row.vendor === 'Alpha')?.lensScore, 80);
+  assert.equal(featureLed.rows.find((row: any) => row.vendor === 'Beta')?.lensScore, 80);
 });
 
 test('failed release-quality PDF suppresses recommended-option and winner-only emphasis', async () => {
