@@ -2939,10 +2939,6 @@ function AnalysisPage() {
     && evidence.evidenceKind !== 'analyst_judgment'
     && evidence.sourceUrl
   )).length;
-  const sourceCount = new Set(evidenceRecords.map((evidence: any) => evidence.sourceUrl).filter(Boolean)).size;
-  const averageConfidence = evidenceRecords.length
-    ? Math.round(evidenceRecords.reduce((total: number, evidence: any) => total + Number(evidence.confidence || 0), 0) / evidenceRecords.length)
-    : 0;
   const strategicEntries = Object.entries(comparison.swot || {}) as [string, string[]][];
   const swotEntries = strategicEntries.filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —'));
   const pestleEntries = strategicEntries.filter(([key]) => key.startsWith('PESTLE —')).map(([key, values]) => [key.replace('PESTLE — ', ''), values] as [string, string[]]);
@@ -2993,14 +2989,12 @@ function AnalysisPage() {
               <div>
                 <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Evidence dataset</p>
                 <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Validate every score.</h2>
-                <p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">Download the complete report plus the source-linked claims, raw metrics, confidence, normalization method, canonical weights, and weighted contributions used by the model.</p>
+                <p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">Download the complete report plus its claims, raw metrics, normalization method, canonical weights, and weighted contributions.</p>
               </div>
             </div>
             <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="grid grid-cols-1 gap-2 text-center">
                 <div className="rounded-xl border border-[#b9d3c7] bg-[#f8f4e8] px-3 py-2" data-testid="text-evidence-record-count"><p className="mono text-[9px] uppercase tracking-[.1em] text-[#7b817e]">Claims</p><p className="mt-1 text-sm font-bold text-[#202840]">{evidenceRecords.length}</p></div>
-                <div className="rounded-xl border border-[#b9d3c7] bg-[#f8f4e8] px-3 py-2" data-testid="text-evidence-source-count"><p className="mono text-[9px] uppercase tracking-[.1em] text-[#7b817e]">Sources</p><p className="mt-1 text-sm font-bold text-[#202840]">{sourceCount}</p></div>
-                <div className="rounded-xl border border-[#b9d3c7] bg-[#f8f4e8] px-3 py-2" data-testid="text-evidence-confidence"><p className="mono text-[9px] uppercase tracking-[.1em] text-[#7b817e]">Confidence</p><p className="mt-1 text-sm font-bold text-[#202840]">{averageConfidence}%</p></div>
               </div>
               <button type="button" onClick={exportJson} disabled={jsonStatus === 'exporting'} className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-[#202840] px-4 py-3 text-xs font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-evidence-json">{jsonStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={15} /> : <Download size={15} />}{jsonStatus === 'exporting' ? 'Preparing JSON' : 'Download JSON'}</button>
             </div>
