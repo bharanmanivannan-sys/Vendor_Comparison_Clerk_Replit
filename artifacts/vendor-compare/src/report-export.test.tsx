@@ -142,6 +142,8 @@ test('adds an outside alternative to every original option and preserves the dec
   const prompt = expandedAlternativeComparisonPrompt(comparison, 'Hyundai Alcazar');
 
   assert.match(prompt, /^Compare Mahindra vs Tata Safari diesel AT vs Hyundai Alcazar\./);
+  assert.match(prompt, /Treat all 3 options as the active shortlist/i);
+  assert.match(prompt, /do not return any of them as outside alternatives/i);
   assert.match(prompt, /same decision context and primary comparison parameters/i);
   assert.match(prompt, /family SUV purchase in India/i);
   assert.match(prompt, /Primary criteria: Price, Safety, Reliability, Service\./);

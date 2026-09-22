@@ -695,6 +695,7 @@ export function expandedAlternativeComparisonPrompt(comparison: any, alternative
   const context = String(comparison.prompt || '').trim();
   return [
     `Compare ${options.join(' vs ')}.`,
+    `Treat all ${options.length} options as the active shortlist and do not return any of them as outside alternatives.`,
     context ? `Use the same decision context and primary comparison parameters as the original report: ${context}` : '',
     criteria.length ? `Primary criteria: ${criteria.join(', ')}.` : '',
   ].filter(Boolean).join(' ');

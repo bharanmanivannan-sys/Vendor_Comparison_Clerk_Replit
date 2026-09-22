@@ -3454,6 +3454,27 @@ test("adds outside diesel SUV alternatives when a compared Tata Safari alias is 
   assert.doesNotMatch(analysis.insights.join(" "), /Tata Safari/);
 });
 
+test("does not suggest an alternative again after it joins the active shortlist", () => {
+  const analysis = {
+    insights: [
+      "Alternative outside comparison — Hyundai Alcazar: This option already joined the shortlist.",
+      "Alternative outside comparison — Jeep Meridian: Valid outside alternative.",
+    ],
+  };
+
+  ensureIndiaSafariOutsideAlternatives(
+    analysis,
+    ["Mahindra", "Tata Safari diesel AT", "Hyundai Alcazar"],
+    "IN",
+  );
+
+  const alternatives = analysis.insights.filter((insight) => insight.startsWith("Alternative outside comparison —"));
+  assert.equal(alternatives.length, 2);
+  assert.ok(alternatives.every((insight) => !/Hyundai Alcazar/i.test(insight)));
+  assert.match(alternatives.join(" "), /Jeep Meridian/);
+  assert.match(alternatives.join(" "), /MG Hector Plus/);
+});
+
 test("replenishes two market- and drivetrain-matched alternatives for a general vehicle comparison", () => {
   const analysis = {
     insights: [
