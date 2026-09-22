@@ -5780,14 +5780,19 @@ const VERIFIED_VEHICLE_ALTERNATIVES: VerifiedVehicleAlternative[] = [
 
 function requestedVehicleProfile(prompt: string, comparedOptions: string[]): {
   bodyStyle?: VehicleBodyStyle;
-  drivetrain?: VehicleDrivetrain;
+  drivetrains?: VehicleDrivetrain[];
 } {
   const context = `${prompt} ${comparedOptions.join(" ")}`;
   const knownCompared = VERIFIED_VEHICLE_ALTERNATIVES.filter((candidate) => (
     comparedOptions.some((option) => comparisonOptionNamesOverlap(candidate.name, option))
   ));
   const knownBodyStyles = new Set(knownCompared.map((candidate) => candidate.bodyStyle));
-  const knownDrivetrains = new Set(knownCompared.flatMap((candidate) => candidate.drivetrains));
+  const knownDrivetrainSets = knownCompared.map((candidate) => new Set(candidate.drivetrains));
+  const sharedKnownDrivetrains = knownDrivetrainSets.length
+    ? [...knownDrivetrainSets[0]!].filter((drivetrain) => (
+        knownDrivetrainSets.every((candidateDrivetrains) => candidateDrivetrains.has(drivetrain))
+      ))
+    : [];
   const bodyStyle: VehicleBodyStyle | undefined = /\b(?:three[ -]?row|7[ -]?seat|seven[ -]?seat|safari|alcazar|meridian|hector plus|xuv700|fortuner)\b/i.test(context)
     ? "three-row SUV"
     : /\b(?:suv|crossover)\b/i.test(context)
@@ -5799,18 +5804,34 @@ function requestedVehicleProfile(prompt: string, comparedOptions: string[]): {
           : knownBodyStyles.size === 1
             ? [...knownBodyStyles][0]
             : undefined;
-  const drivetrain: VehicleDrivetrain | undefined = /\b(?:battery[- ]electric|electric|ev)\b/i.test(context)
-    ? "electric"
+  const drivetrains: VehicleDrivetrain[] | undefined = /\b(?:battery[- ]electric|electric|ev)\b/i.test(context)
+    ? ["electric"]
     : /\bdiesel\b/i.test(context)
-      ? "diesel"
+      ? ["diesel"]
       : /\b(?:hybrid|phev|plug-in)\b/i.test(context)
-        ? "hybrid"
+        ? ["hybrid"]
         : /\bpetrol\b/i.test(context)
-          ? "petrol"
-          : knownDrivetrains.size === 1
-            ? [...knownDrivetrains][0]
+          ? ["petrol"]
+          : sharedKnownDrivetrains.length
+            ? sharedKnownDrivetrains
             : undefined;
-  return { bodyStyle, drivetrain };
+  return { bodyStyle, drivetrains };
+}
+
+export function isVehicleComparisonContext(
+  prompt: string,
+  comparedOptions: string[],
+  segment?: string,
+): boolean {
+  const context = `${prompt} ${comparedOptions.join(" ")}`;
+  if (/\b(?:dealerships?|car dealers?|auto dealers?|showrooms?)\b/i.test(context)) return false;
+  if (segment === "Electric vehicles") return true;
+  if (/\b(?:cars?|vehicles?|automotive|motor vehicles?|suvs?|crossovers?|hatchbacks?|sedans?|pickups?|utes?|mpvs?|minivans?)\b/i.test(context)) {
+    return true;
+  }
+  return VERIFIED_VEHICLE_ALTERNATIVES.some((candidate) => (
+    comparedOptions.some((option) => comparisonOptionNamesOverlap(candidate.name, option))
+  ));
 }
 
 export function ensureVehicleOutsideAlternatives(
@@ -5823,22 +5844,25 @@ export function ensureVehicleOutsideAlternatives(
   const existingInsights = Array.isArray(analysis.insights)
     ? analysis.insights.filter((entry): entry is string => typeof entry === "string")
     : [];
-  const nonAlternatives = existingInsights.filter((entry) => !entry.startsWith(ALTERNATIVE_INSIGHT_PREFIX));
+  const nonAlternatives = existingInsights.filter((entry) => (
+    !entry.startsWith(ALTERNATIVE_INSIGHT_PREFIX)
+    && !entry.startsWith("Outside-alternative coverage —")
+  ));
   if (!marketCode) {
     analysis.insights = nonAlternatives;
     return;
   }
   const profile = requestedVehicleProfile(prompt, comparedOptions);
   const bodyStyle = profile.bodyStyle;
-  const drivetrain = profile.drivetrain;
-  const eligible = bodyStyle && drivetrain
+  const drivetrains = profile.drivetrains;
+  const eligible = bodyStyle && drivetrains?.length
     ? VERIFIED_VEHICLE_ALTERNATIVES.filter((candidate) => (
     candidate.market === marketCode
     && candidate.availableThrough >= currentDate
     && Boolean(candidate.officialUrl)
     && !comparedOptions.some((option) => comparisonOptionNamesOverlap(candidate.name, option))
     && candidate.bodyStyle === bodyStyle
-    && candidate.drivetrains.includes(drivetrain)
+    && candidate.drivetrains.some((drivetrain) => drivetrains.includes(drivetrain))
       ))
     : [];
   const existingByName = new Map(existingInsights.flatMap((insight) => {
@@ -6670,10 +6694,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const requiresVendorDiscovery = vendorDiscoveryWasRequired;
     const isElectricVehicleComparison = context.segment === "Electric vehicles"
       || isElectricVehicleModelSelection;
-    const isVehicleComparison = isElectricVehicleComparison
-      || /\b(?:cars?|vehicles?|automotive|diesel|petrol|hybrid|suvs?|hatchbacks?|sedans?|automatic|manual)\b/i.test(
-        `${input.prompt} ${input.vendors.join(" ")}`,
-      );
+    const isVehicleComparison = !isDealershipComparison && isVehicleComparisonContext(
+      input.prompt,
+      input.vendors,
+      context.segment,
+    );
     const researchShapeVendors = input.vendors;
     const vendorDiscoveryInstructions = vendorDiscoveryWasRequired
       ? "The shortlist was selected from the user's objective. Preserve these exact product names throughout the scorecard, tables, winners, and recommendation. Put other credible products only in insights as outside-shortlist alternatives; do not rank them. "

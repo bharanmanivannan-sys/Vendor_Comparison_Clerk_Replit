@@ -39,6 +39,7 @@ import {
   hasRequiredDiscoveryLensCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
+  isVehicleComparisonContext,
   isDealershipComparisonRequest,
   isElectricVehiclePrompt,
   isSafetyFirstVehicleQuery,
@@ -3503,6 +3504,69 @@ test("filters compared aliases and mismatched model suggestions before vehicle a
   assert.doesNotMatch(combined, /Model Y Performance|Toyota RAV4/);
   assert.match(combined, /Ford Mustang Mach-E/);
   assert.equal(analysis.insights.filter((insight) => insight.startsWith("Alternative outside comparison —")).length, 2);
+});
+
+test("does not route manual software modes or diesel generators through vehicle alternatives", () => {
+  assert.equal(
+    isVehicleComparisonContext(
+      "Compare manual and automatic deployment modes for this software platform.",
+      ["Manual deployment", "Automatic deployment"],
+      "Business software",
+    ),
+    false,
+  );
+  assert.equal(
+    isVehicleComparisonContext(
+      "Compare two diesel generators for a construction site.",
+      ["Generator One", "Generator Two"],
+      "Equipment",
+    ),
+    false,
+  );
+});
+
+test("recognizes model-name-only SUV comparisons and replenishes compatible alternatives", () => {
+  const analysis = { insights: [] as string[] };
+
+  assert.equal(
+    isVehicleComparisonContext(
+      "Toyota RAV4 vs Honda CR-V",
+      ["Toyota RAV4", "Honda CR-V"],
+      "Product or service comparison",
+    ),
+    true,
+  );
+  ensureVehicleOutsideAlternatives(
+    analysis,
+    ["Toyota RAV4", "Honda CR-V"],
+    "AU",
+    "Toyota RAV4 vs Honda CR-V",
+  );
+
+  assert.equal(analysis.insights.filter((insight) => insight.startsWith("Alternative outside comparison —")).length, 2);
+  assert.ok(analysis.insights.every((insight) => /AU-market SUV/i.test(insight)));
+});
+
+test("keeps the no-invention vehicle coverage message idempotent", () => {
+  const analysis = { insights: [] as string[] };
+
+  ensureVehicleOutsideAlternatives(
+    analysis,
+    ["Example One", "Example Two"],
+    "AU",
+    "Compare these vehicles and include outside alternatives.",
+  );
+  ensureVehicleOutsideAlternatives(
+    analysis,
+    ["Example One", "Example Two"],
+    "AU",
+    "Compare these vehicles and include outside alternatives.",
+  );
+
+  assert.equal(
+    analysis.insights.filter((insight) => insight.startsWith("Outside-alternative coverage —")).length,
+    1,
+  );
 });
 
 test("requires separate variable and fixed home-loan rates plus an alternative", () => {
