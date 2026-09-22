@@ -5626,7 +5626,7 @@ export async function validateFinalEvidenceUrls(
   };
 }
 
-function frameworkAdherenceInstructions(vendors: string[]): string {
+export function frameworkAdherenceInstructions(vendors: string[]): string {
   const optionList = vendors.join(", ");
   return [
     `PESTLE and SOAR must assess each compared option separately: ${optionList}.`,
@@ -5636,6 +5636,8 @@ function frameworkAdherenceInstructions(vendors: string[]): string {
     "Name the exact product, edition, plan, or variant in the assessment, not only its parent brand.",
     "Explain whether and how that specific option is adhering to or addressing the framework dimension, cite the supporting product-level evidence already gathered, and state the decision implication.",
     "If option-specific evidence is missing, omit that option-dimension entry instead of replacing it with generic commentary or a placeholder.",
+    "SOAR entries are decision advice, not framework instructions. Strengths must name the strongest verified differentiator and why it matters. Opportunities must name a concrete product, positioning, negotiation, or usage action. Aspirations must describe the buyer or product outcome the option should enable. Results must specify a measurable acceptance gate, target, timeframe or validation method. Include both the product-manager action and the consumer or buyer implication where relevant.",
+    "Never return instructions such as `identify the capability`, `define the future position`, or `define measurable outcomes` as SOAR findings.",
     "Any insight beginning `Alternative outside comparison —` must name an option that does not equal, contain, or reduce to any compared option above; return no more than three such alternatives.",
   ].join(" ");
 }

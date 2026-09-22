@@ -33,6 +33,7 @@ import {
   ensureIndiaSafariOutsideAlternatives,
   ensureVehicleOutsideAlternatives,
   filterSourcesForMarket,
+  frameworkAdherenceInstructions,
   hasElectricVehicleResearchCoverage,
   hasFiveYearMarketHistoryCoverage,
   hasVerifiedIndependentReviewCoverage,
@@ -3426,6 +3427,16 @@ test("requires diverse expert or survey evidence when official vehicle sources a
   assert.match(instructions, /user comments/i);
   assert.match(instructions, /Never return a YouTube-only evidence set/i);
   assert.equal(vehicleIndependentEvidenceInstructions(false), "");
+});
+
+test("requires SOAR findings to give product and buyer actions instead of framework instructions", () => {
+  const instructions = frameworkAdherenceInstructions(["Alpha", "Beta"]);
+
+  assert.match(instructions, /strongest verified differentiator/i);
+  assert.match(instructions, /product-manager action/i);
+  assert.match(instructions, /consumer or buyer implication/i);
+  assert.match(instructions, /measurable acceptance gate/i);
+  assert.match(instructions, /Never return instructions/i);
 });
 
 test("adds outside diesel SUV alternatives when a compared Tata Safari alias is removed", () => {

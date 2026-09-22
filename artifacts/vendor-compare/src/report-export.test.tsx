@@ -5,6 +5,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   additionalWeightRelevanceError,
+  actionableSoarEntries,
   buildComparisonPdf,
   comparisonOptionNamesOverlap,
   computeDecisionQuality,
@@ -218,6 +219,63 @@ test('rejects irrelevant custom weights for the current comparison domain', () =
     }),
     '',
   );
+});
+
+test('replaces vague SOAR instructions with option-specific product and buyer decisions', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.prompt = 'Compare Alpha and Beta vehicles for a family purchase.';
+  comparison.category = 'Vehicles';
+  comparison.criteria = ['Safety', 'Value for Money'];
+  comparison.vendorScores = comparison.vendorScores.map((vendor: any, vendorIndex: number) => ({
+    ...vendor,
+    weightedScores: [
+      {
+        criterion: 'Safety',
+        score: vendorIndex === 0 ? 88 : 76,
+        weight: 60,
+        rationale: `${vendor.vendor} has verified current safety evidence.`,
+      },
+      {
+        criterion: 'Value for Money',
+        score: vendorIndex === 0 ? 62 : 72,
+        weight: 40,
+        rationale: `${vendor.vendor} has a current ownership-cost assessment.`,
+      },
+    ],
+  }));
+  comparison.pricing = [{ dimension: 'Purchase price', winner: 'Beta' }];
+  comparison.features = [{ dimension: 'Safety package', winner: 'Alpha' }];
+  const vague = [
+    ['Results', comparison.vendors.map((vendor: string) => `${vendor}: Define measurable outcomes, owners, timing, and evidence gates for proving value.`)],
+    ['Strengths', comparison.vendors.map((vendor: string) => `${vendor}: Identify the evidence-backed capability that can create advantage.`)],
+    ['Aspirations', comparison.vendors.map((vendor: string) => `${vendor}: Define the future position this option could support.`)],
+    ['Opportunities', comparison.vendors.map((vendor: string) => `${vendor}: Identify the highest-value growth or differentiation opportunity.`)],
+  ] as [string, string[]][];
+
+  const resolved = actionableSoarEntries(comparison, vague);
+  const text = resolved.flatMap(([, values]) => values).join(' ');
+  comparison.swot = Object.fromEntries(vague.map(([dimension, values]) => [`SOAR — ${dimension}`, values]));
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+
+  assert.deepEqual(resolved.map(([dimension]) => dimension), ['Strengths', 'Opportunities', 'Aspirations', 'Results']);
+  assert.doesNotMatch(text, /\b(?:Identify|Define)\s+(?:the\s+)?(?:evidence-backed|highest-value|future position|measurable outcomes)/i);
+  assert.match(text, /Product-manager use/i);
+  assert.match(text, /Buyer use/i);
+  assert.match(text, /Safety is the strongest weighted area at 88\/100/i);
+  assert.match(text, /Purchase price/i);
+  assert.match(text, /representative test drive/i);
+  assert.match(text, /decision target/i);
+  assert.doesNotMatch(pdfText, /Identify the evidence-backed capability/i);
+  assert.match(pdfText, /Product-manager use/i);
+  assert.match(pdfText, /Acceptance test/i);
+});
+
+test('preserves substantive option-specific SOAR findings', () => {
+  const comparison = comparisonFixture() as any;
+  const finding = 'Alpha: Verified retention strength — renewal evidence shows lower churn. Product action: use onboarding automation to protect the lead.';
+  const resolved = actionableSoarEntries(comparison, [['Strengths', [finding]]]);
+
+  assert.equal(resolved[0]?.[1]?.[0], finding);
 });
 
 test('renders no definitive winner after adjusted weights leave the top options tied', async () => {

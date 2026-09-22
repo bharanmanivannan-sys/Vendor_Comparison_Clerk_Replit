@@ -329,9 +329,19 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     toArray<any>(comparison.features).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
     [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
   );
+  const rawStrategicEntries = Object.entries(comparison.swot && typeof comparison.swot === 'object' && !Array.isArray(comparison.swot) ? comparison.swot : {}) as [string, string[]][];
+  const pdfStrategicEntries = [
+    ...rawStrategicEntries.filter(([framework]) => !/^SOAR\s+—/i.test(framework)),
+    ...actionableSoarEntries(
+      comparison,
+      rawStrategicEntries
+        .filter(([framework]) => /^SOAR\s+—/i.test(framework))
+        .map(([framework, findings]) => [framework.replace(/^SOAR\s+—\s*/i, ''), findings]),
+    ).map(([dimension, findings]) => [`SOAR — ${dimension}`, findings] as [string, string[]]),
+  ];
   drawSection(
     'SWOT, PESTLE, and SOAR findings',
-    Object.entries(comparison.swot && typeof comparison.swot === 'object' && !Array.isArray(comparison.swot) ? comparison.swot : {})
+    pdfStrategicEntries
       .map(([framework, findings]) => ({
         framework,
         findings: toTextList(findings)
@@ -1651,7 +1661,78 @@ function parseFrameworkOptionEntry(value: unknown, vendors: string[]): { vendor:
 export function hasOptionSpecificFrameworkEvidence(text: string): boolean {
   return Boolean(text.trim())
     && !/^(?:no option-specific evidence was returned for this dimension|no specific adherence assessment was provided)\.?$/i.test(text.trim())
+    && !/^(?:identify|define)\s+(?:the\s+)?(?:evidence-backed capability|highest-value|future position|measurable outcomes)\b/i.test(text.trim())
     && !/\b(?:evidence is not verified|planning fallback|not independently verified|unverified|no verified evidence)\b/i.test(text);
+}
+
+export function actionableSoarEntries(
+  comparison: any,
+  entries: [string, string[]][],
+): [string, string[]][] {
+  const vendors = (comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || [])
+    .map((vendor: unknown) => String(vendor || '').trim())
+    .filter(Boolean);
+  const dimensions = ['Strengths', 'Opportunities', 'Aspirations', 'Results'];
+  const existing = new Map<string, string>();
+  for (const [dimension, values] of entries) {
+    for (const value of values || []) {
+      const parsed = parseFrameworkOptionEntry(value, vendors);
+      if (parsed && hasOptionSpecificFrameworkEvidence(parsed.text)) {
+        existing.set(`${dimension.toLowerCase()}::${parsed.vendor.toLowerCase()}`, parsed.text);
+      }
+    }
+  }
+  const isVehicle = /\b(?:vehicles?|automotive|cars?|suv|sedan|hatchback|ute|pickup|diesel|petrol|hybrid|electric)\b/i.test(
+    `${comparison.category || ''} ${comparison.prompt || ''}`,
+  );
+  const vendorScores = Array.isArray(comparison.vendorScores) ? comparison.vendorScores : [];
+  const optionText = (vendor: string, dimension: string) => {
+    const stored = existing.get(`${dimension.toLowerCase()}::${vendor.toLowerCase()}`);
+    if (stored) return stored;
+    const scorecard = vendorScores.find((entry: any) => String(entry.vendor).toLowerCase() === vendor.toLowerCase()) || {};
+    const criteria = (Array.isArray(scorecard.weightedScores) ? scorecard.weightedScores : [])
+      .map((entry: any) => ({
+        criterion: String(entry.criterion || 'Decision fit'),
+        score: Math.max(0, Math.min(100, Math.round(Number(entry.score) || 0))),
+        weight: Math.max(0, Math.min(100, Math.round(Number(entry.weight) || 0))),
+        rationale: String(entry.rationale || '').trim(),
+      }))
+      .filter((entry: any) => entry.criterion !== 'Strategic Provider Role')
+      .sort((left: any, right: any) => (right.score * right.weight) - (left.score * left.weight));
+    const strongest = criteria[0] || { criterion: 'overall decision fit', score: Math.round(Number(scorecard.score) || 0), weight: 0, rationale: '' };
+    const weakest = [...criteria].sort((left: any, right: any) => left.score - right.score)[0] || strongest;
+    const target = Math.min(85, Math.max(60, weakest.score + 10));
+    const winningRows = [...(comparison.pricing || []), ...(comparison.features || [])]
+      .filter((row: any) => String(row?.winner || '').toLowerCase() === vendor.toLowerCase())
+      .map((row: any) => String(row.dimension || row.item || row.feature || '').trim())
+      .filter(Boolean);
+    const verifiedRationale = hasOptionSpecificFrameworkEvidence(strongest.rationale)
+      ? ` ${strongest.rationale}`
+      : '';
+    const validationMethod = isVehicle
+      ? 'a representative test drive, written on-road quote, warranty terms, and local service evidence'
+      : 'a representative pilot, implementation plan, written commercial quote, and reference checks';
+    if (dimension === 'Strengths') {
+      return `Current advantage — ${strongest.criterion} is the strongest weighted area at ${strongest.score}/100.${verifiedRationale} Product-manager use: make this the lead value proposition and test whether the advantage is defensible. Buyer use: treat it as a must-pass proof point, not a marketing claim.`;
+    }
+    if (dimension === 'Opportunities') {
+      const win = winningRows[0]
+        ? `Its clearest comparison win is ${winningRows[0]}.`
+        : 'No unique pricing or feature-row win is established yet.';
+      return `Decision opportunity — ${win} Improve ${weakest.criterion} from ${weakest.score}/100 toward at least ${target}/100 while preserving the ${strongest.criterion} advantage. Product managers should prioritize the gap in the roadmap or offer; buyers should use it in validation and negotiation.`;
+    }
+    if (dimension === 'Aspirations') {
+      const position = vendor === comparison.recommendation
+        ? 'Convert the current recommendation into a durable, evidence-backed lead'
+        : `Become a credible alternative to ${comparison.recommendation || 'the current leader'}`;
+      return `Best-fit future state — ${position} by pairing ${strongest.criterion} with acceptable ${weakest.criterion}. The desired outcome is a choice that remains strong after real-world validation, ownership or implementation costs, and the user's highest-priority criteria are applied.`;
+    }
+    return `Acceptance test — validate ${strongest.criterion} and ${weakest.criterion} through ${validationMethod}. Proceed only if ${weakest.criterion} reaches the ${target}/100 decision target without reducing ${strongest.criterion} below its current ${strongest.score}/100 level; otherwise keep the option conditional or switch.`;
+  };
+  return dimensions.map((dimension) => [
+    dimension,
+    vendors.map((vendor: string) => `${vendor}: ${optionText(vendor, dimension)}`),
+  ]);
 }
 
 function StrategicFrameworkSection({ title, eyebrow, description, entries, vendors = [], testId }: { title: string; eyebrow: string; description: string; entries: [string, string[]][]; vendors?: string[]; testId: string }) {
@@ -2700,7 +2781,10 @@ function AnalysisPage() {
   const strategicEntries = Object.entries(comparison.swot || {}) as [string, string[]][];
   const swotEntries = strategicEntries.filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —'));
   const pestleEntries = strategicEntries.filter(([key]) => key.startsWith('PESTLE —')).map(([key, values]) => [key.replace('PESTLE — ', ''), values] as [string, string[]]);
-  const soarEntries = strategicEntries.filter(([key]) => key.startsWith('SOAR —')).map(([key, values]) => [key.replace('SOAR — ', ''), values] as [string, string[]]);
+  const soarEntries = actionableSoarEntries(
+    comparison,
+    strategicEntries.filter(([key]) => key.startsWith('SOAR —')).map(([key, values]) => [key.replace('SOAR — ', ''), values] as [string, string[]]),
+  );
   const visibleInsights = (comparison.insights || []).filter(
     (item: string) => !/^Evidence unavailable\b/i.test(item.trim()),
   );
@@ -2781,7 +2865,7 @@ function AnalysisPage() {
     <section className="mt-14 grid gap-7 lg:grid-cols-2"><AnalysisTable title="Pricing lens" rows={comparison.pricing} /><AnalysisTable title="Feature lens" rows={comparison.features} /></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Strategic read</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{swotEntries.map(([key, values]) => <div key={key} className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5"><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{key}</p><ul className="mt-4 space-y-3">{values.map((value) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={value}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#b94d45]" />{value}</li>)}</ul></div>)}</div></section>
       <StrategicFrameworkSection title="PESTLE adherence by option" eyebrow="Macro environment" description="How each brand, service, product, edition, or plan is addressing political, economic, social, technological, legal, and environmental forces, with evidence gaps called out." entries={pestleEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-pestle" />
-      <StrategicFrameworkSection title="SOAR adherence by option" eyebrow="Strengths-led strategy" description="How each option turns strengths and opportunities into aspirations and measurable results, rather than relying on a shared shortlist-level statement." entries={soarEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-soar" />
+      <StrategicFrameworkSection title="SOAR decision strategy by option" eyebrow="Strengths-led strategy" description="What each option is strongest at, where it must improve, the outcome it should enable, and the measurable acceptance test. Each finding includes a product-management action and a buyer decision implication." entries={soarEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-soar" />
       {alternativeInsights.length > 0 && <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-alternative-insights"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Alternative path</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Alternatives outside your shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">These options were not included in the weighted ranking. Compare any alternative directly against the current recommendation using the same decision context.</p><ul className="mt-5 space-y-4">{alternativeInsights.map((item: string) => <li className="flex flex-col gap-3 rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4 text-sm leading-6 text-[#39435a] sm:flex-row sm:items-start sm:justify-between" key={item}><div className="flex gap-3"><Compass size={17} className="mt-1 shrink-0 text-[#0f766e]" /><span>{item.replace('Alternative outside comparison — ', '')}</span></div><button type="button" onClick={() => compareAlternative(item)} className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-[#f8f4e8]" data-testid={`button-compare-alternative-${item.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> Compare with recommendation</button></li>)}</ul></section>}
      <VrioSection vendorScores={comparison.vendorScores} />
      <MarketPositionSection vendorScores={comparison.vendorScores} />
