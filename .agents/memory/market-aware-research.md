@@ -16,3 +16,9 @@ Non-official fallback evidence must be reputable, searched newest-first from the
 **Why:** Global brands publish materially different products, subscriptions, prices, warranties, and offers by market. Generic/global evidence produced wrong local comparisons, omitted official India BaaS information, treated a requested home-loan trend as generic company history, and could replace user-selected listings with unrelated current products.
 
 **How to apply:** Require the app user to choose a research market before submission and carry its stable market code through the API to research. Retrieve supplied URLs first, preserve listing-specific facts for used products, then filter mismatched regional domains and validate evidence. Require local official coverage for market-specific claims when supplied pages leave gaps. Official current product pages may be undated, but time-sensitive facts need an as-of date. Reject malformed URLs containing explanatory prose.
+
+Vehicle market-position rows must preserve entity level and denominator. A brand-only option may use brand-level local sales, while a named model requires exact model-level evidence. Prefer numeric local share; if its denominator is unavailable, show sourced local sales volume or rank. Never replace a missing named-model figure with the manufacturer's broader total.
+
+**Why:** Mixed brand/model comparisons can otherwise present global, manufacturer-group, brand, model, national, and segment figures as if they were comparable, or hide valid local sales evidence merely because an exact percentage was unavailable.
+
+**How to apply:** Require a local scope, explicit period, numeric share/sales/rank, and exact citation for every market-position claim. Reject qualitative labels such as “leading” or “emerging.” Mark only the unsupported option unavailable while retaining valid rows for the others.

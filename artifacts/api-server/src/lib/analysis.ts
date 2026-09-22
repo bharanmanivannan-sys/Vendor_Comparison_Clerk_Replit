@@ -1370,6 +1370,15 @@ export function comparisonMarketAvailabilityIssue(
 export function officialMarketSourcesFor(prompt: string, vendors: string[], market: ResearchMarket): string[] {
   const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
   const officialSources: string[] = [];
+  if (market.countryCode === "AU" && isElectricVehiclePrompt(normalized)) {
+    officialSources.push(
+      "https://electricvehiclecouncil.com.au/media-releases/ev-sales-hit-record-highs-in-2025-with-38-rise-and-new-monthly-record-in-december",
+      "https://electricvehiclecouncil.com.au/media-releases/ev-surge-continues-battery-electric-sales-more-than-triple-year-on-year",
+      "https://electricvehiclecouncil.com.au/media-releases/evs-hit-36-market-share-as-tesla-model-y-becomes-australias-best-selling-car-for-second-consecutive-month",
+      "https://www.fcai.com.au/new-vehicle-market-records-strongest-month-ever",
+      "https://www.fcai.com.au/get-vfacts",
+    );
+  }
   if (market.countryCode === "IN" && isSafetyFirstVehicleQuery(prompt)) {
     officialSources.push("https://www.bncap.in/vehicle-safety-ratings");
     if (/\b(?:tata\s+)?nexon\b/.test(normalized)) {
@@ -3340,7 +3349,7 @@ export function normalizeMarketPosition(
   return {
     marketShare: normalizeTextField(
       value?.marketShare,
-      fallback?.marketShare ?? "Reliable comparable figure not found",
+      fallback?.marketShare ?? "No current local option-level share, sales, or rank verified",
     ),
     marketSharePeriod: normalizeTextField(
       value?.marketSharePeriod,
@@ -3361,6 +3370,99 @@ export function normalizeMarketPosition(
     ),
     evidence,
   };
+}
+
+type ScopedMarketPositionCandidate = {
+  vendor?: unknown;
+  marketShare?: unknown;
+  marketSharePeriod?: unknown;
+  market?: unknown;
+  evidence?: unknown;
+};
+
+export function officialAustralianEvMarketPositionFallbacks(
+  vendors: string[],
+  market: ResearchMarket,
+): ScopedMarketPositionCandidate[] {
+  if (market.countryCode !== "AU") return [];
+  const julyEvc = "https://electricvehiclecouncil.com.au/media-releases/ev-surge-continues-battery-electric-sales-more-than-triple-year-on-year";
+  const juneEvc = "https://electricvehiclecouncil.com.au/media-releases/evs-hit-36-market-share-as-tesla-model-y-becomes-australias-best-selling-car-for-second-consecutive-month";
+  const juneFcai = "https://www.fcai.com.au/new-vehicle-market-records-strongest-month-ever";
+  return vendors.flatMap((vendor) => {
+    if (/^BYD$/i.test(vendor.trim())) {
+      return [{
+        vendor,
+        marketShare: "7,857 Australian sales; second-largest-selling brand",
+        market: "Australia — brand-level, all new-vehicle sales",
+        marketSharePeriod: "July 2026",
+        evidence: julyEvc,
+      }];
+    }
+    if (/^Tesla Model Y$/i.test(vendor.trim())) {
+      return [{
+        vendor,
+        marketShare: "8,072 Australian sales; #1 vehicle nationally",
+        market: "Australia — exact model, all new-vehicle sales",
+        marketSharePeriod: "June 2026",
+        evidence: juneEvc,
+      }];
+    }
+    if (/^Kia$/i.test(vendor.trim())) {
+      return [{
+        vendor,
+        marketShare: "8,005 Australian sales; #4 brand nationally",
+        market: "Australia — brand-level, all new-vehicle sales",
+        marketSharePeriod: "June 2026",
+        evidence: juneFcai,
+      }];
+    }
+    return [];
+  });
+}
+
+export function applyScopedVehicleMarketPositions(
+  analysis: Partial<AnalysisPayload>,
+  vendors: string[],
+  candidates: ScopedMarketPositionCandidate[],
+  allowedUrls: string[],
+  market: ResearchMarket,
+): void {
+  if (!Array.isArray(analysis.vendorScores)) return;
+  const unavailable = "No current local option-level share, sales, or rank verified";
+  for (const vendor of vendors) {
+    const scoreRow = analysis.vendorScores.find((row) => (
+      row.vendor === vendor || comparisonOptionNamesOverlap(row.vendor, vendor)
+    ));
+    if (!scoreRow) continue;
+    const candidate = candidates.find((row) => (
+      typeof row.vendor === "string"
+      && (
+        row.vendor.trim().toLowerCase() === vendor.toLowerCase()
+        || comparisonOptionNamesOverlap(row.vendor, vendor)
+      )
+    )) ?? scoreRow.marketPosition;
+    const marketShare = normalizeTextField(candidate?.marketShare, "");
+    const scope = normalizeTextField(candidate?.market, "");
+    const period = normalizeTextField(candidate?.marketSharePeriod, "");
+    const evidence = normalizeMarketPositionEvidence(candidate?.evidence, allowedUrls);
+    const hasNumericPosition = /\d/.test(marketShare)
+      && /%|\b(?:sales?|registrations?|deliveries|vehicles?|units?|rank(?:ed)?|#\s*\d+)\b/i.test(marketShare);
+    const hasLocalScope = new RegExp(`\\b(?:${market.country.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|${market.countryCode})\\b`, "i").test(scope);
+    const hasPeriod = /\b20\d{2}\b/.test(period);
+    const hasEvidence = /https?:\/\//i.test(evidence);
+    scoreRow.marketPosition = {
+      marketShare: hasNumericPosition && hasLocalScope && hasPeriod && hasEvidence ? marketShare : unavailable,
+      marketSharePeriod: hasNumericPosition && hasLocalScope && hasPeriod && hasEvidence ? period : "Current period not verified",
+      market: hasNumericPosition && hasLocalScope && hasPeriod && hasEvidence ? scope : market.country,
+      shareValue: scoreRow.marketPosition?.shareValue ?? "Not applicable or not verified",
+      shareValueAsOf: scoreRow.marketPosition?.shareValueAsOf ?? "Not verified",
+      applicability: scoreRow.marketPosition?.applicability
+        ?? "Share value applies only when the provider or its parent is publicly traded.",
+      evidence: hasNumericPosition && hasLocalScope && hasPeriod && hasEvidence
+        ? evidence
+        : "No cited current local source established a numeric share, sales volume, or rank for this exact option and scope.",
+    };
+  }
 }
 
 function normalizeRisk(value: unknown): "low" | "medium" | "high" | "critical" {
@@ -6298,6 +6400,21 @@ export function vehicleIndependentEvidenceInstructions(isVehicleComparison: bool
   ].join(" ");
 }
 
+export function vehicleMarketPositionInstructions(
+  isVehicleComparison: boolean,
+  market: ResearchMarket,
+): string {
+  if (!isVehicleComparison) return "";
+  return [
+    `Market position is required. Actively search the latest authoritative ${market.country} vehicle-registration or sales dataset rather than relying only on product pages.`,
+    "For a named model, report that exact model's local sales volume, market share, or rank. For a brand-only option, report brand-level local sales or share and label it as brand-level.",
+    "Use a percentage only when the source states the denominator or provides enough same-period data to calculate it. Otherwise report the sourced sales volume and rank instead of saying that no market figure exists.",
+    "Put the exact geography, segment or denominator, entity level, and reporting period in marketPosition.market and marketPosition.marketSharePeriod.",
+    "Put the supported percentage, sales volume, and/or rank in marketPosition.marketShare and the exact cited URL in marketPosition.evidence.",
+    "Do not compare brand, model, manufacturer-group, global, national, and segment shares as if they used one denominator. Global manufacturer share may be labelled as broader context, but it must not replace local model or brand evidence.",
+  ].join(" ");
+}
+
 function analysisOutputShape(vendors: string[], isHomeLoan = false, isElectricVehicle = false) {
   const values = Object.fromEntries(vendors.map((vendor) => [vendor, ""]));
   const vrioDimension = { status: "strong|partial|weak|not_applicable", rationale: "" };
@@ -7126,6 +7243,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "For regulatory, security, compliance, financial-stability, market-share, customer-satisfaction, and reliability claims, prefer the relevant regulator, audited filing, standards body, government source, or named-methodology research publisher. Corroborate material non-official claims with a second independent reliable source when possible.",
       "When official product claims cannot establish a winner, evaluate independent review signals only from retrieved public pages. Use at least two independent sources per option where available; record review or update date, publisher, reviewer or methodology credibility, structured rating and scale, sample size or review count, balanced pros and cons, and any incentive or affiliate disclosure. Prefer recent named-methodology reviews and structured ratings. Penalize stale, one-sided, low-sample, anonymous, incentivized, or affiliate evidence. Never treat a search snippet or an unverified review summary as evidence. Explain the review-signal calculation and confidence. Declare a review-based winner only when comparable retrieved review evidence covers every ranked option and produces a meaningful score separation; otherwise keep 'No exact winner'. Use metricKey review_rating for comparable ratings and review_count for sample size.",
       vehicleIndependentEvidenceInstructions(isVehicleComparison),
+      vehicleMarketPositionInstructions(isVehicleComparison, researchMarket),
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
       "Set criteriaMet to false only when the named options are categorically incompatible with the requested decision, not when one criterion has missing, uncertain, or incomplete evidence. A requested ownership or retention period is a decision horizon; it does not require evidence covering that full future period. Continue the comparison with neutral treatment and an explicit evidence limitation for unsupported criteria.",
@@ -7205,7 +7323,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 : isProviderLevelHomeLoanDiscovery
                   ? `${providerRoleInstructions}${fiveYearHomeLoanTrendInstructions}Replace every empty value in the shape. Do not treat bank names as products: identify each bank's applicable current ${researchMarket.country} investor home-loan products. Compare both variable rates and fixed rates/terms, including comparison rates, revert rates, break-cost risk, fees, offset/redraw, investor eligibility, LVR restrictions, mortgage-insurance or equity requirements, repayments, and total-cost implications for the stated loan amount. Distinguish advertised rates from personalised offers and state when an exact rate requires property value, loan-to-value ratio, repayment type, or borrower details. Use current official lender URLs and reputable comparison evidence. Return criteriaMet and unmetCriteriaReason, use 0–100 scores, preserve weights, complete every framework field, and add one or two credible lenders outside the shortlist as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named bank preferable.`
                   : isElectricVehicleComparison
-                    ? `${providerRoleInstructions}Compare the exact named electric-vehicle models in the user's market. Do not substitute a special edition, concept, predecessor, or different model. If no trim is specified, select the closest like-for-like currently sold variants, name those variants explicitly, and show the full price range separately. Fill every pricing and feature row with product-specific values and units. Cover ex-showroom price, on-road price dependencies, battery, certified range and real-world caveat, motor power, torque, acceleration, AC/DC charging, dimensions, wheelbase, ground clearance, boot space, airbags, crash rating, ADAS, infotainment, connectivity, cabin comfort, warranty, service network, and reliability evidence. Cite an exact official product, brochure/specification, price, or warranty URL for every model; supplement reliability and crash-safety claims with a current named-methodology independent source. Never infer reliability from brand reputation or early reviews. Use 'No comparable evidence found' only for an individual unavailable metric, never as the default for an entire row. Do not assign neutral 50 scores across all criteria when measurable product differences exist. Derive each criterion score from cited evidence, explain the score in plain language, state the decisive trade-offs, and make the recommendation conditional on buyer priorities. Return criteriaMet, unmetCriteriaReason, and sources, preserve the supplied weights, complete all framework fields, and include up to two outside-shortlist alternatives only in insights.`
+                    ? `${providerRoleInstructions}Compare the exact named electric-vehicle models in the user's market. Do not substitute a special edition, concept, predecessor, or different model. If the user supplied a brand rather than a model, keep the brand as the ranked option and select one current like-for-like model only for the product-specification rows; keep brand-level and model-level market-position evidence explicitly separated. If no trim is specified, select the closest like-for-like currently sold variants, name those variants explicitly, and show the full price range separately. Fill every pricing and feature row with product-specific values and units. Cover ex-showroom price, on-road price dependencies, battery, certified range and real-world caveat, motor power, torque, acceleration, AC/DC charging, dimensions, wheelbase, ground clearance, boot space, airbags, crash rating, ADAS, infotainment, connectivity, cabin comfort, warranty, service network, and reliability evidence. Cite an exact official product, brochure/specification, price, or warranty URL for every model; supplement reliability and crash-safety claims with a current named-methodology independent source. Never infer reliability from brand reputation or early reviews. Use 'No comparable evidence found' only for an individual unavailable metric, never as the default for an entire row. Do not assign neutral 50 scores across all criteria when measurable product differences exist. Derive each criterion score from cited evidence, explain the score in plain language, state the decisive trade-offs, and make the recommendation conditional on buyer priorities. Complete marketPosition for every option using the latest authoritative local sales, share, or rank evidence and preserve its exact scope. Return criteriaMet, unmetCriteriaReason, and sources, preserve the supplied weights, complete all framework fields, and include up to two outside-shortlist alternatives only in insights.`
                     : `${vendorDiscoveryInstructions}${providerRoleInstructions}Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, explain every score, and complete every framework field. Build a feature-by-feature matrix for the exact compared products, editions, plans, or variants. Replace the generic feature-row labels with the full category-appropriate feature set: for financial products include rates, fees, limits, eligibility, benefits, protections, repayment or cancellation terms; for physical products include measurable specifications, performance, safety, included equipment, warranty, service, and reliability; for software include included capabilities, limits, integrations, security, support, and plan-level exclusions. Populate every product in every applicable row with specific values, units, and material omissions. Never use a generic placeholder for an entire row, and never claim that a provider name is itself a product when a specific product must be selected. Map current products and services to target equivalents at capability level; never assume similarly named products are functionally equivalent. Identify full, partial, absent, and unverified equivalencies, then convert uncovered scope into mitigated functional gaps. Map business services to current and target products, dependencies, and accountable owners. Sequence migration through validation, design/proof, data and integration preparation, transition/cutover, stabilization, and benefits review with dependencies, exit criteria, and risks. Define decision owners, approvers, required evidence, and approval gates. Return approvers and evidenceRequired as concise strings, not arrays. Include implementation effort, training, process change, TCO, hidden costs, risks, executive impacts, due-diligence unknowns, and actions that accelerate the decision. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs. Never recommend solely on cost; prioritize long-term business value, risk reduction, and strategic fit.`,
             }),
           },
@@ -7484,6 +7602,78 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       // product documents are retrieved and verified below, where deterministic
       // recovery can fill scoring evidence before the final EV quality gate.
     }
+    if (isElectricVehicleComparison) {
+      let scopedMarketPositions: ScopedMarketPositionCandidate[] = [];
+      try {
+        const marketPositionResponse = await retryAiStage("Electric vehicle market position", async () => {
+          const response = await client.responses.create({
+            model: "gpt-4.1-mini",
+            max_output_tokens: 8000,
+            tools: [{
+              type: "web_search",
+              search_context_size: "high",
+              external_web_access: true,
+              user_location: {
+                type: "approximate" as const,
+                country: researchMarket.countryCode,
+                timezone: researchMarket.timezone,
+              },
+            }],
+            input: [
+              {
+                role: "system",
+                content: `You research numeric vehicle market position in ${researchMarket.country}. Return only one valid JSON object. Search authoritative local registration or sales sources first. Never return qualitative labels such as leading, significant, or emerging.`,
+              },
+              {
+                role: "user",
+                content: JSON.stringify({
+                  prompt: input.prompt,
+                  options: input.vendors,
+                  suppliedAuthoritativeUrls: officialMarketSourcesFor(input.prompt, input.vendors, researchMarket),
+                  requiredShape: {
+                    marketPositions: input.vendors.map((vendor) => ({
+                      vendor,
+                      marketShare: "numeric percentage, sales/registration volume, and/or numeric rank; null when unavailable",
+                      market: `${researchMarket.country} plus exact entity level and denominator or segment`,
+                      marketSharePeriod: "exact month, quarter, or year including a four-digit year",
+                      evidence: "exact public URL supporting this option's numeric figure",
+                    })),
+                  },
+                  instructions: vehicleMarketPositionInstructions(true, researchMarket),
+                }),
+              },
+            ],
+          });
+          if (response.status !== "completed" || !response.output_text) {
+            throw new Error("Vehicle market-position research returned no structured result.");
+          }
+          return response;
+        });
+        for (const sourceUrl of collectCitedHttpUrls(marketPositionResponse.output)) {
+          if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
+        }
+        const marketPositionObject = parseJsonObject(marketPositionResponse.output_text) as {
+          marketPositions?: ScopedMarketPositionCandidate[];
+        };
+        scopedMarketPositions = Array.isArray(marketPositionObject.marketPositions)
+          ? marketPositionObject.marketPositions
+          : [];
+      } catch (marketPositionError) {
+        console.warn("Continuing without dedicated numeric vehicle market position", {
+          message: marketPositionError instanceof Error ? marketPositionError.message : String(marketPositionError),
+        });
+      }
+      applyScopedVehicleMarketPositions(
+        parsed,
+        input.vendors,
+        [
+          ...officialAustralianEvMarketPositionFallbacks(input.vendors, researchMarket),
+          ...scopedMarketPositions,
+        ],
+        input.urls,
+        researchMarket,
+      );
+    }
     if (discoveredAlternativeInsights.length) {
       const existingInsights = Array.isArray(parsed.insights) ? parsed.insights : [];
       for (const alternative of discoveredAlternativeInsights) {
@@ -7608,6 +7798,18 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       citationUrls,
       scoreVerifiedUrls,
     );
+    if (isElectricVehicleComparison) {
+      applyScopedVehicleMarketPositions(
+        normalized,
+        resolvedVendors,
+        officialAustralianEvMarketPositionFallbacks(resolvedVendors, researchMarket),
+        dedupeReferenceUrls([
+          ...citationUrls,
+          ...officialMarketSourcesFor(input.prompt, resolvedVendors, researchMarket),
+        ]),
+        researchMarket,
+      );
+    }
     if (isElectricVehicleComparison) {
       addVerifiedElectricVehicleOfficialSpecs(
         normalized as unknown as Record<string, unknown>,

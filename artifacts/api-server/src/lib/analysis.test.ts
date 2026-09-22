@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   additionalWeightRelevanceError,
+  applyScopedVehicleMarketPositions,
   addElectricVehicleMatrixEvidence,
   addVerifiedElectricVehicleMatrixMetrics,
   addVerifiedElectricVehicleOfficialSpecs,
@@ -60,6 +61,7 @@ import {
   normalizeProviderRole,
   normalizeTextField,
   normalizeVrioStatus,
+  officialAustralianEvMarketPositionFallbacks,
   officialMarketSourcesFor,
   officialHomeLoanSourcesFor,
   parseJsonObject,
@@ -80,6 +82,7 @@ import {
   scoreDifferenceBand,
   sanitizeOutsideAlternativeInsights,
   vehicleIndependentEvidenceInstructions,
+  vehicleMarketPositionInstructions,
   selectRecommendationLabel,
   selectOpenEndedElectricVehicleShortlist,
   sourceMatchesResearchMarket,
@@ -191,7 +194,7 @@ test("fills required market-position fields when research returns only evidence"
   );
 
   assert.deepEqual(result, {
-    marketShare: "Reliable comparable figure not found",
+    marketShare: "No current local option-level share, sales, or rank verified",
     marketSharePeriod: "Current period",
     market: "Mid-size electric SUVs in Australia",
     shareValue: "Not applicable or not verified",
@@ -414,6 +417,78 @@ test("seeds official Bharat NCAP sources for an India safety-first comparison", 
 
   assert.ok(sources.includes("https://www.bncap.in/vehicle/tata-nexon"));
   assert.ok(sources.includes("https://www.bncap.in/vehicle/mahindra-xuv-3xo"));
+});
+
+test("seeds authoritative Australian EV market sources and requires scoped local market position", () => {
+  const market = inferResearchMarket(
+    "Compare BYD vs Tesla Model Y vs Kia vs Hyundai IONIQ 5 in Australia",
+    ["BYD", "Tesla Model Y", "Kia", "Hyundai IONIQ 5"],
+    "AU",
+  );
+  const sources = officialMarketSourcesFor(
+    "Compare mid-size electric SUVs in Australia",
+    ["BYD", "Tesla Model Y", "Kia", "Hyundai IONIQ 5"],
+    market,
+  );
+  const instructions = vehicleMarketPositionInstructions(true, market);
+
+  assert.ok(sources.some((source) => source.includes("electricvehiclecouncil.com.au")));
+  assert.ok(sources.includes("https://www.fcai.com.au/new-vehicle-market-records-strongest-month-ever"));
+  assert.ok(sources.includes("https://www.fcai.com.au/get-vfacts"));
+  assert.match(instructions, /sales volume and rank/i);
+  assert.match(instructions, /Do not compare brand, model, manufacturer-group, global, national, and segment shares/i);
+});
+
+test("uses entity-level official Australian EV figures without substituting a brand total for a named model", () => {
+  const market = inferResearchMarket(
+    "Compare mid-size electric SUVs in Australia",
+    ["BYD", "Tesla Model Y", "Kia", "Hyundai IONIQ 5"],
+    "AU",
+  );
+  const rows = officialAustralianEvMarketPositionFallbacks(
+    ["BYD", "Tesla Model Y", "Kia", "Hyundai IONIQ 5"],
+    market,
+  );
+
+  assert.match(String(rows.find((row) => row.vendor === "BYD")?.marketShare), /7,857/);
+  assert.match(String(rows.find((row) => row.vendor === "Tesla Model Y")?.market), /exact model/i);
+  assert.match(String(rows.find((row) => row.vendor === "Kia")?.market), /brand-level/i);
+  assert.equal(rows.some((row) => row.vendor === "Hyundai IONIQ 5"), false);
+});
+
+test("accepts only cited numeric local vehicle market position and rejects vague labels", () => {
+  const analysis = {
+    vendorScores: [
+      { vendor: "Tesla Model Y", score: 50, marketPosition: { marketShare: "Leading" } },
+      { vendor: "BYD", score: 50, marketPosition: { marketShare: "Emerging" } },
+    ],
+  } as unknown as AnalysisPayload;
+  const market = inferResearchMarket("Compare EVs in Australia", ["Tesla Model Y", "BYD"], "AU");
+  const source = "https://electricvehiclecouncil.com.au/market-data";
+
+  applyScopedVehicleMarketPositions(analysis, ["Tesla Model Y", "BYD"], [
+    {
+      vendor: "Tesla Model Y",
+      marketShare: "8,072 sales; ranked #1 nationally",
+      market: "Australia — exact model, all new vehicles",
+      marketSharePeriod: "June 2026",
+      evidence: source,
+    },
+    {
+      vendor: "BYD",
+      marketShare: "Emerging",
+      market: "Global manufacturer share",
+      marketSharePeriod: "2026",
+      evidence: source,
+    },
+  ], [source], market);
+
+  assert.equal(analysis.vendorScores[0]?.marketPosition?.marketShare, "8,072 sales; ranked #1 nationally");
+  assert.equal(
+    analysis.vendorScores[1]?.marketPosition?.marketShare,
+    "No current local option-level share, sales, or rank verified",
+  );
+  assert.match(analysis.vendorScores[1]?.marketPosition?.evidence ?? "", /No cited current local source/);
 });
 
 test("uses the active safety-focused criterion weight for same-protocol NCAP scores", () => {
