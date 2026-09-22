@@ -27,6 +27,7 @@ import {
   comparisonFailureCode,
   inferResearchMarket,
   MAX_COMPARISON_OPTIONS,
+  normalizeLensWinner,
   parsePrompt,
   parsePromptWithIntent,
   reconcileRecommendationDecision,
@@ -478,6 +479,10 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
 }
 
 export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
+  const normalizeStoredRows = (rows: typeof row.pricing) => rows.map((lensRow) => ({
+    ...lensRow,
+    winner: normalizeLensWinner(lensRow.dimension, lensRow.values ?? {}, row.vendors, lensRow.winner),
+  }));
   return {
     ...summaryFromRow(row),
     urls: row.urls,
@@ -487,8 +492,8 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     recommendationReason: row.recommendationReason,
     weightAdjustments: row.weightAdjustments,
     vendorScores: row.vendorScores,
-    pricing: row.pricing,
-    features: row.features,
+    pricing: normalizeStoredRows(row.pricing),
+    features: normalizeStoredRows(row.features),
     swot: row.swot,
     opportunities: row.opportunities,
     insights: row.insights,

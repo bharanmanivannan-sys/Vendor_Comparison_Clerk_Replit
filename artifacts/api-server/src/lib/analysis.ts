@@ -3530,29 +3530,54 @@ export function normalizeLensWinner(
   vendors: string[],
   suppliedWinner = "",
 ): string {
+  const chargingPowerEntries = vendors.map((vendor) => {
+    const value = values[vendor] ?? "";
+    const matches = Array.from(value.matchAll(/(\d+(?:\.\d+)?)\s*kW\b/gi));
+    const chargingMatch = matches.find((match) => (
+      /\b(?:charging|charger|supercharging|fast charging|dc)\b/i.test(
+        value.slice(Math.max(0, (match.index ?? 0) - 48), (match.index ?? 0) + match[0].length + 48),
+      )
+    ));
+    return {
+      vendor,
+      numeric: chargingMatch ? Number(chargingMatch[1]) : Number.NaN,
+    };
+  });
+  const hasComparableChargingPower = chargingPowerEntries.every((entry) => Number.isFinite(entry.numeric))
+    && (
+      /\b(?:charging|charger|supercharging|fast charging|dc)\b/i.test(dimension)
+      || vendors.every((vendor) => /\b(?:charging|charger|supercharging|fast charging|dc)\b/i.test(values[vendor] ?? ""))
+    );
+  if (hasComparableChargingPower) {
+    const best = Math.max(...chargingPowerEntries.map((entry) => entry.numeric));
+    const winners = chargingPowerEntries.filter((entry) => entry.numeric === best).map((entry) => entry.vendor);
+    return winners.length === 1 ? winners[0] : `Tie: ${winners.join(", ")}`;
+  }
+
   const suppliedTie = suppliedWinner.match(/^Tie:\s*(.+)$/i)?.[1]
     ?.split(",")
     .map((vendor) => vendor.trim())
     .filter(Boolean);
-  if (
-    suppliedTie?.length === vendors.length
-    && vendors.every((vendor) => suppliedTie.some((candidate) => candidate.toLowerCase() === vendor.toLowerCase()))
-  ) {
-    return `Tie: ${vendors.join(", ")}`;
-  }
   const entries = vendors.map((vendor) => ({
     vendor,
     value: values[vendor] ?? "",
     numeric: Number((values[vendor] ?? "").replaceAll(",", "").match(/\d+(?:\.\d+)?/)?.[0]),
   }));
   const comparable = entries.filter((entry) => Number.isFinite(entry.numeric));
-  if (comparable.length !== vendors.length) return vendors.includes(suppliedWinner) ? suppliedWinner : "Not established";
   const lowerIsBetter = /\b(?:rate|fee|cost|price|minimum income|minimum credit limit)\b/i.test(dimension);
   const higherIsBetter = /\b(?:days|rewards?|earn|welcome|bonus|cashback|nps|net promoter)\b/i.test(dimension);
-  if (!lowerIsBetter && !higherIsBetter) return vendors.includes(suppliedWinner) ? suppliedWinner : "Not established";
-  const best = (lowerIsBetter ? Math.min : Math.max)(...comparable.map((entry) => entry.numeric));
-  const winners = comparable.filter((entry) => entry.numeric === best).map((entry) => entry.vendor);
-  return winners.length === 1 ? winners[0] : `Tie: ${winners.join(", ")}`;
+  if (comparable.length === vendors.length && (lowerIsBetter || higherIsBetter)) {
+    const best = (lowerIsBetter ? Math.min : Math.max)(...comparable.map((entry) => entry.numeric));
+    const winners = comparable.filter((entry) => entry.numeric === best).map((entry) => entry.vendor);
+    return winners.length === 1 ? winners[0] : `Tie: ${winners.join(", ")}`;
+  }
+  if (
+    suppliedTie?.length === vendors.length
+    && vendors.every((vendor) => suppliedTie.some((candidate) => candidate.toLowerCase() === vendor.toLowerCase()))
+  ) {
+    return `Tie: ${vendors.join(", ")}`;
+  }
+  return vendors.includes(suppliedWinner) ? suppliedWinner : "Not established";
 }
 
 export type EvidenceBackedLensWinner = {

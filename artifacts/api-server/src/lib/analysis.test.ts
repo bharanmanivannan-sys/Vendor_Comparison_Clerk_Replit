@@ -4036,6 +4036,24 @@ test("calculates lower numeric rates and fees as better", () => {
   );
 });
 
+test("uses comparable DC charging power to replace an incorrect all-option tie", () => {
+  const vendors = ["BYD", "Kia", "Tesla Model Y", "Hyundai Ioniq 5"];
+  assert.equal(
+    normalizeLensWinner(
+      "Energy consumption and indicative running cost",
+      {
+        BYD: "150 kW DC fast charging, blade battery efficiency",
+        Kia: "Supports 150 kW DC fast charging",
+        "Tesla Model Y": "Up to 250 kW Supercharging, efficient battery",
+        "Hyundai Ioniq 5": "Supports 220 kW DC fast charging",
+      },
+      vendors,
+      "Tie: BYD, Kia, Tesla Model Y, Hyundai Ioniq 5",
+    ),
+    "Tesla Model Y",
+  );
+});
+
 test("uses the unique highest score before a pricing and feature lens tie-break", () => {
   const analysis = {
     recommendation: "ANZ",
