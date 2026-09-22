@@ -31,3 +31,4 @@
 - [Refined comparison briefs](refined-comparison-briefs.md) — preserve the user’s original request while research uses a validated market, audience, and like-for-like brief.
 - [Model URL provenance](model-url-provenance.md) — model-written URLs are not evidence; admit only user, deterministic, or explicit retrieval citation URLs.
 - [Customer-facing terminology](customer-facing-terminology.md) — avoid “signal” in visible product copy; use evidence, fit, score, or comparison language instead.
+- [Research repair boundaries](research-repair-boundaries.md) — model feasibility flags are advisory; repaired analyses must regain every required response field.
