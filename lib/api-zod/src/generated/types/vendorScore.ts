@@ -16,7 +16,10 @@
  */
 import type { MarketHistory } from './marketHistory';
 import type { MarketPosition } from './marketPosition';
+import type { QualificationGate } from './qualificationGate';
+import type { VendorDimensionScore } from './vendorDimensionScore';
 import type { VendorScoreProviderRole } from './vendorScoreProviderRole';
+import type { VendorScoreQualificationStatus } from './vendorScoreQualificationStatus';
 import type { VrioAssessment } from './vrioAssessment';
 import type { WeightedCriterionScore } from './weightedCriterionScore';
 
@@ -30,6 +33,30 @@ export interface VendorScore {
   /** Evidence-based explanation for the assigned strategic market role. */
   providerRoleRationale?: string;
   weightedScores?: WeightedCriterionScore[];
+  /**
+     * Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.
+     * @minimum 0
+     * @maximum 100
+     */
+  modelScore?: number;
+  /** Qualification outcome based on mandatory gates and validated evidence. */
+  qualificationStatus?: VendorScoreQualificationStatus;
+  qualificationGates?: QualificationGate[];
+  dimensionScores?: VendorDimensionScore[];
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  evidenceConfidence?: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  evidenceCoverage?: number;
+  strengths?: string[];
+  gaps?: string[];
+  conditions?: string[];
+  limitations?: string[];
   /** Conditions under which this option should be preferred over the overall recommendation. */
   switchConditions?: string[];
   vrio?: VrioAssessment;

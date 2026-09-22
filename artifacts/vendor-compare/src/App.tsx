@@ -133,7 +133,9 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const pageSize: [number, number] = [595.28, 841.89];
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
-  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL' && !hasAdjustedTopScoreTie(comparison);
+  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL'
+    && !hasAdjustedTopScoreTie(comparison)
+    && qualificationDecisionUsable(comparison);
   const clean = (value: unknown) => String(value ?? 'Not established')
     .normalize('NFKD')
     .replace(/[^\x20-\x7E]/g, ' ')
@@ -219,10 +221,11 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   y -= 19;
   toArray<any>(comparison.vendorScores).slice(0, 6).forEach((vendor: any) => {
     const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
+    const scoreEligible = qualificationAllowsScore(vendor);
     summary.drawText(clean(vendor.vendor), { x: margin, y, size: 8.5, font: bold, color: navy });
     summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290, height: 9, color: rgb(0.88, 0.86, 0.8) });
-    summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290 * score / 100, height: 9, color: decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
-    summary.drawText(`${Math.round(score)}`, { x: margin + 428, y, size: 8.5, font: bold, color: navy });
+    if (scoreEligible) summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290 * score / 100, height: 9, color: decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
+    summary.drawText(scoreEligible ? `${Math.round(score)}` : 'Not scored', { x: margin + 428, y, size: 8.5, font: bold, color: navy });
     y -= 21;
   });
   y -= 3;
@@ -287,11 +290,12 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     appendixY -= 24;
     toArray<any>(comparison.vendorScores).slice(0, 6).forEach((vendor: any) => {
       const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
+      const scoreEligible = qualificationAllowsScore(vendor);
       ensureSpace(48, 'Scorecard and weighted decision model');
       appendixPage.drawText(clean(vendor.vendor), { x: margin, y: appendixY, size: 9, font: bold, color: navy });
-      appendixPage.drawText(`${Math.round(score)}/100`, { x: pageSize[0] - margin - 38, y: appendixY, size: 9, font: bold, color: navy });
+      appendixPage.drawText(scoreEligible ? `${Math.round(score)}/100` : 'Not scored', { x: pageSize[0] - margin - 62, y: appendixY, size: 9, font: bold, color: navy });
       appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth, height: 10, color: rgb(0.88, 0.86, 0.8) });
-      appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth * score / 100, height: 10, color: decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
+      if (scoreEligible) appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth * score / 100, height: 10, color: decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
       appendixY = drawLines(appendixPage, vendor.verdict, margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
       appendixY -= 12;
     });
@@ -314,6 +318,38 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     });
   };
   drawDetailedScoreCharts();
+  const pdfEligibleScores = toArray<any>(comparison.vendorScores).filter((vendor: any) => Number.isFinite(Number(vendor.score))
+    && qualificationAllowsScore(vendor));
+  const pdfTopScore = pdfEligibleScores.length ? Math.max(...pdfEligibleScores.map((vendor: any) => Number(vendor.score))) : null;
+  const extendedVendorRows = toArray<any>(comparison.vendorScores).filter(hasVendorScoreExtension).flatMap((vendor: any) => {
+    const dimensions = toArray<any>(vendor.dimensionScores).map((dimension: any) => {
+      const score = dimension.coverageStatus === 'SUPPRESSED' || dimension.score === undefined || dimension.score === null
+        ? 'Suppressed'
+        : `${Math.round(Number(dimension.score))}/100`;
+      return `${dimension.dimension}: ${score} (${coverageLabel(dimension.coverageStatus)}; ${dimension.coverage ?? 0}% coverage; ${dimension.supportedSubcriteria ?? 0}/${dimension.totalSubcriteria ?? 0} supported)`;
+    }).join(' | ');
+    const gates = toArray<any>(vendor.qualificationGates).map((gate: any) => `${gate.gate}: ${gate.status || 'UNKNOWN'}${gate.mandatory ? ' (mandatory)' : ''} — ${gate.rationale || 'Not established'}${toTextList(gate.evidenceSourceIds).length ? ` [Evidence IDs: ${toTextList(gate.evidenceSourceIds).join(', ')}]` : ''}`).join(' | ');
+    return [{
+      vendor: vendor.vendor,
+      qualification: vendor.qualificationStatus ? String(vendor.qualificationStatus).replaceAll('_', ' ') : 'Not established',
+      difference: pdfTopScore === null || !Number.isFinite(Number(vendor.score))
+        ? 'Not established'
+        : Number(vendor.score) === pdfTopScore ? 'Leads'
+          : scoreDifferenceLabel(pdfTopScore - Number(vendor.score)),
+      gates: gates || 'Not established',
+      dimensions: dimensions || 'Not established',
+      evidence: `Confidence: ${vendor.evidenceConfidence ?? 'Not established'}%; coverage: ${vendor.evidenceCoverage ?? 'Not established'}%`,
+      strengths: toTextList(vendor.strengths).join(' | ') || 'Not established',
+      gaps: toTextList(vendor.gaps).join(' | ') || 'Not established',
+      conditions: toTextList(vendor.conditions).join(' | ') || 'Not established',
+      limitations: toTextList(vendor.limitations).join(' | ') || 'Not established',
+    }];
+  });
+  if (extendedVendorRows.length) drawSection(
+    'Qualification, gates, and evidence coverage',
+    extendedVendorRows,
+    [['Option', 'vendor'], ['Overall score difference', 'difference'], ['Qualification status', 'qualification'], ['Qualification gates', 'gates'], ['Dimension scores', 'dimensions'], ['Evidence confidence and coverage', 'evidence'], ['Strengths', 'strengths'], ['Gaps', 'gaps'], ['Conditions', 'conditions'], ['Limitations', 'limitations']],
+  );
   drawSection(
     'Vendor verdicts',
     comparison.vendorScores,
@@ -1071,9 +1107,84 @@ function ScoreRing({ score, size = 'large' }: { score: number; size?: 'large' | 
   return <div className={`relative grid shrink-0 place-items-center ${size === 'large' ? 'size-28' : 'size-16'}`} data-testid={`score-ring-${score}`}><svg className="absolute inset-0 size-full -rotate-90" viewBox="0 0 100 100"><circle cx="50" cy="50" r={radius} fill="none" stroke="#d9d3c5" strokeWidth="7" /><circle cx="50" cy="50" r={radius} fill="none" stroke="#0f766e" strokeWidth="7" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - score / 100)} /></svg><div className="text-center"><span className={`${size === 'large' ? 'text-3xl' : 'text-lg'} display font-bold text-[#202840]`}>{score}</span><span className="block text-[9px] font-bold text-[#7d817e]">/ 100</span></div></div>;
 }
 
+const VENDOR_SCORE_DIMENSIONS = [
+  'Requirements Fit',
+  'Price and Total Value',
+  'Feature and Capability Strength',
+  'Service, Ownership and Support',
+  'Evidence Confidence',
+] as const;
+
+export function scoreDifferenceLabel(difference: number): string {
+  const absolute = Math.abs(Number(difference) || 0);
+  if (absolute < 1) return 'Practical tie';
+  if (absolute < 3) return 'Near tie';
+  if (absolute < 7) return 'Moderate advantage';
+  return 'Clear advantage';
+}
+
+function hasVendorScoreExtension(vendor: any): boolean {
+  return Boolean(vendor && (
+    vendor.qualificationStatus
+    || Array.isArray(vendor.qualificationGates)
+    || Array.isArray(vendor.dimensionScores)
+    || vendor.evidenceConfidence !== undefined
+    || vendor.evidenceCoverage !== undefined
+    || Array.isArray(vendor.strengths)
+    || Array.isArray(vendor.gaps)
+    || Array.isArray(vendor.conditions)
+    || Array.isArray(vendor.limitations)
+  ));
+}
+
+function qualificationAllowsScore(vendor: any): boolean {
+  return !vendor?.qualificationStatus
+    || vendor.qualificationStatus === 'QUALIFIED'
+    || vendor.qualificationStatus === 'QUALIFIED_WITH_CONDITIONS';
+}
+
+function qualificationDecisionUsable(comparison: any): boolean {
+  const modeled: any[] = (Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [])
+    .filter((vendor: any) => vendor?.qualificationStatus);
+  if (!modeled.length) return true;
+  return modeled.some((vendor) => qualificationAllowsScore(vendor) && vendor.vendor === comparison.recommendation);
+}
+
+function coverageLabel(status: unknown): string {
+  return String(status || 'UNKNOWN').replaceAll('_', ' ');
+}
+
+export function VendorScoreExtensionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
+  const extended = vendorScores.filter(hasVendorScoreExtension);
+  if (!extended.length) return null;
+  const eligible = vendorScores.filter((vendor) => Number.isFinite(Number(vendor.score))
+    && qualificationAllowsScore(vendor));
+  const topScore = eligible.length ? Math.max(...eligible.map((vendor) => Number(vendor.score))) : null;
+  return <section className="mt-14" data-testid="section-vendor-score-extension">
+    <div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02B / Qualification and evidence</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Decision readiness by option</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Qualification gates and coverage labels keep unsupported conclusions explicit. A suppressed dimension has no numeric score.</p></div>
+    <div className="grid gap-5 lg:grid-cols-2">
+      {extended.map((vendor) => {
+        const score = Number(vendor.score);
+        const scoreEligible = qualificationAllowsScore(vendor);
+        const difference = topScore === null || !scoreEligible || !Number.isFinite(score) ? null : topScore - score;
+        const dimensions = Array.isArray(vendor.dimensionScores) ? vendor.dimensionScores : [];
+        return <article key={vendor.vendor} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid={`vendor-score-extension-${String(vendor.vendor).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3>{difference !== null && <p className="mt-1 text-[10px] font-bold uppercase tracking-[.1em] text-[#7b817e]">{difference === 0 ? 'Leads' : scoreDifferenceLabel(difference)}</p>}</div><div className="flex items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.qualificationStatus || 'Not established').replaceAll('_', ' ')}</span>{scoreEligible && Number.isFinite(score) ? <span className="mono text-sm font-bold text-[#202840]">{Math.round(score)}/100</span> : <span className="mono text-xs font-bold text-[#687083]">Not scored</span>}</div></div>
+          {Array.isArray(vendor.qualificationGates) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Qualification gates</p><div className="mt-2 space-y-2">{vendor.qualificationGates.map((gate: any, index: number) => <div key={`${gate.gate}-${index}`} className="rounded-lg border border-[#e3ddcf] bg-white/50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-bold text-[#202840]">{gate.gate}</span><span className="rounded-full bg-[#e7e2d4] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(gate.status || 'UNKNOWN').replaceAll('_', ' ')}{gate.mandatory ? ' · mandatory' : ''}</span></div>{gate.rationale && <p className="mt-1 text-[11px] leading-5 text-[#687083]">{gate.rationale}</p>}{Array.isArray(gate.evidenceSourceIds) && gate.evidenceSourceIds.length > 0 && <p className="mt-1 text-[9px] text-[#85877f]">Evidence IDs: {gate.evidenceSourceIds.join(', ')}</p>}</div>)}</div></div>}
+          {Array.isArray(vendor.dimensionScores) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Dimension scores</p><div className="mt-2 space-y-3">{VENDOR_SCORE_DIMENSIONS.map((name) => { const dimension = dimensions.find((item: any) => item.dimension === name); if (!dimension) return null; const suppressed = dimension.coverageStatus === 'SUPPRESSED' || dimension.score === undefined || dimension.score === null; return <div key={name}><div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-bold text-[#202840]">{name}</span><span className="mono font-bold text-[#0f766e]">{suppressed ? 'Suppressed' : `${Math.round(Number(dimension.score))}/100`}</span></div><div className="mt-1 flex items-center justify-between gap-3 text-[9px] text-[#85877f]"><span>{coverageLabel(dimension.coverageStatus)}</span><span>{dimension.coverage ?? 0}% coverage · {dimension.supportedSubcriteria ?? 0}/{dimension.totalSubcriteria ?? 0} supported</span></div>{dimension.rationale && <p className="mt-1 text-[10px] leading-4 text-[#687083]">{dimension.rationale}</p>}</div>; })}</div></div>}
+          {(vendor.evidenceConfidence !== undefined || vendor.evidenceCoverage !== undefined) && <div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence confidence</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{vendor.evidenceConfidence ?? '—'}%</p></div><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence coverage</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{vendor.evidenceCoverage ?? '—'}%</p></div></div>}
+          {[['Strengths', vendor.strengths], ['Gaps', vendor.gaps], ['Conditions', vendor.conditions], ['Limitations', vendor.limitations]].map(([label, items]) => Array.isArray(items) && items.length ? <div className="mt-4" key={label as string}><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{label as string}</p><ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-5 text-[#687083]">{(items as string[]).map((item, index) => <li key={`${label}-${index}`}>{item}</li>)}</ul></div> : null)}
+        </article>;
+      })}
+    </div>
+  </section>;
+}
+
 export function DecisionRecommendationCard({ comparison }: { comparison: any }) {
   const decisionQuality = computeDecisionQuality(comparison);
-  const decisionUsable = decisionQuality.decision !== 'FAIL' && !hasAdjustedTopScoreTie(comparison);
+  const decisionUsable = decisionQuality.decision !== 'FAIL'
+    && !hasAdjustedTopScoreTie(comparison)
+    && qualificationDecisionUsable(comparison);
   return <div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]" data-testid="card-recommended">
     <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionUsable ? 'Recommended' : 'Evidence-limited result'}</p>
     <div className="mt-5 flex items-center justify-between gap-4">
@@ -1096,6 +1207,14 @@ function overallVendorScore(vendor: any): number {
   return Math.max(0, Math.min(100, Math.round(Number.isFinite(overallScore) ? overallScore : 0)));
 }
 
+function displayedVendorScore(vendor: any): string {
+  return qualificationAllowsScore(vendor) ? `${overallVendorScore(vendor)}/100` : 'Not scored';
+}
+
+function displayedVendorScoreWidth(vendor: any): number {
+  return qualificationAllowsScore(vendor) ? overallVendorScore(vendor) : 0;
+}
+
 export function weightedCriterionImpact(score: unknown, weight: unknown): number {
   const normalizedScore = Math.max(0, Math.min(100, Number(score) || 0));
   const normalizedWeight = Math.max(0, Math.min(100, Number(weight) || 0));
@@ -1103,6 +1222,7 @@ export function weightedCriterionImpact(score: unknown, weight: unknown): number
 }
 
 function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
+  if (vendorScores.some(hasVendorScoreExtension)) return null;
   const scoredVendors = vendorScores.filter((vendor) => Array.isArray(vendor.weightedScores) && vendor.weightedScores.length);
   if (!scoredVendors.length) return null;
   const radarData = scoredVendors[0].weightedScores.map((entry: any) => ({
@@ -1245,7 +1365,9 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 }
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
-  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL' && !hasAdjustedTopScoreTie(comparison);
+  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL'
+    && !hasAdjustedTopScoreTie(comparison)
+    && qualificationDecisionUsable(comparison);
   const decisionReason = stripDecisionNote(comparison.recommendationReason);
   const decisionNote = extractDecisionNote(comparison.recommendationReason);
   const runnerUp = [...(comparison.vendorScores || [])]
@@ -1669,6 +1791,7 @@ export function HeadToHead({ comparison }: { comparison: any }) {
 }
 
 function VrioSection({ vendorScores = [] }: { vendorScores?: any[] }) {
+  if (vendorScores.some(hasVendorScoreExtension)) return null;
   const dimensions = [['value', 'Value'], ['rarity', 'Rarity'], ['imitability', 'Imitability'], ['organization', 'Organization']];
   if (!vendorScores.some((vendor) => vendor.vrio)) return null;
   return <section className="mt-14" data-testid="section-vrio"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Strategic advantage</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">VRIO framework across the shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">VRIO tests whether each option creates value, is rare, is difficult to imitate, and is organized to capture that advantage.</p><div className="mt-5 grid gap-4 lg:grid-cols-2">{vendorScores.map((vendor) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor}><div className="flex items-center justify-between"><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3><span className="mono text-[10px] font-bold text-[#0f766e]">{vendor.score}/100</span></div><div className="mt-5 grid gap-3 sm:grid-cols-2">{dimensions.map(([key, label]) => { const item = vendor.vrio?.[key]; return <div className="rounded-xl bg-[#e7e2d4] p-3" key={key}><div className="flex items-center justify-between"><p className="text-xs font-bold text-[#202840]">{label}</p><span className="rounded-full bg-[#f8f4e8] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(item?.status || 'not available').replace('_', ' ')}</span></div>{item?.rationale && <p className="mt-2 text-[11px] leading-5 text-[#687083]">{item.rationale}</p>}</div>; })}</div><p className="mt-4 border-t border-[#e3ddcf] pt-4 text-xs leading-5 text-[#556075]"><strong>Implication:</strong> {vendor.vrio?.implication || 'No implication available.'}</p></article>)}</div></section>;
@@ -2883,11 +3006,12 @@ function AnalysisPage() {
         </section>
        <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
         <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
-    <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{overallVendorScore(vendor)}/100</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${overallVendorScore(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
+    <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{displayedVendorScore(vendor)}</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${displayedVendorScoreWidth(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
          <ScoreCharts vendorScores={comparison.vendorScores} />
-         <UserCriteriaDashboard criteria={comparison.criteria} vendorScores={comparison.vendorScores} />
+         <VendorScoreExtensionSection vendorScores={comparison.vendorScores} />
+         {!comparison.vendorScores?.some(hasVendorScoreExtension) && <UserCriteriaDashboard criteria={comparison.criteria} vendorScores={comparison.vendorScores} />}
           <PricingFeatureLensPanel comparison={comparison} />
-         <WeightEditor
+          {!comparison.vendorScores?.some(hasVendorScoreExtension) && <WeightEditor
            comparison={comparison}
            guest={guest}
            onUpdated={(updated) => {
@@ -2900,8 +3024,8 @@ function AnalysisPage() {
                 queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
              }
            }}
-         />
-     <HeadToHead comparison={comparison} />
+          />}
+    {!comparison.vendorScores?.some(hasVendorScoreExtension) && <HeadToHead comparison={comparison} />}
     <section className="mt-14 grid gap-7 lg:grid-cols-2"><AnalysisTable title="Pricing lens" rows={comparison.pricing} /><AnalysisTable title="Feature lens" rows={comparison.features} /></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Strategic read</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{swotEntries.map(([key, values]) => <div key={key} className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5"><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{key}</p><ul className="mt-4 space-y-3">{values.map((value) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={value}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#b94d45]" />{value}</li>)}</ul></div>)}</div></section>
       <StrategicFrameworkSection title="PESTLE adherence by option" eyebrow="Macro environment" description="How each brand, service, product, edition, or plan is addressing political, economic, social, technological, legal, and environmental forces, with evidence gaps called out." entries={pestleEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-pestle" />

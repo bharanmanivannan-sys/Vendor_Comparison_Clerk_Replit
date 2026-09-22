@@ -18,8 +18,10 @@ import {
   hasOptionSpecificFrameworkEvidence,
   isVisibleSourceInList,
   pricingFeatureLensModel,
+  scoreDifferenceLabel,
   shouldDisplayMarketHistory,
   weightedCriterionImpact,
+  VendorScoreExtensionSection,
   weightsBeforeAdditional,
   weightsIncludingAdditional,
   weightTotalValidationMessage,
@@ -533,4 +535,51 @@ test('passing release-quality fixture keeps the normal recommendation in browser
   assert.match(pdfText, /RECOMMENDED OPTION/);
   assert.match(pdfText, /Alpha/);
   assert.match(pdfText, /92\/100/);
+});
+
+test('renders the optional qualification and coverage extension in browser and PDF', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendorScores[0] = {
+    ...comparison.vendorScores[0],
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    qualificationGates: [{
+      gate: 'Security review',
+      status: 'CONDITIONAL',
+      mandatory: true,
+      rationale: 'Complete the pending control review.',
+      evidenceSourceIds: ['src-alpha-1'],
+    }],
+    dimensionScores: [
+      { dimension: 'Requirements Fit', weight: 30, score: 92, coverage: 100, coverageStatus: 'SUFFICIENTLY_SUPPORTED', supportedSubcriteria: 3, totalSubcriteria: 3, rationale: 'Strong fit.' },
+      { dimension: 'Price and Total Value', weight: 25, coverage: 0, coverageStatus: 'SUPPRESSED', supportedSubcriteria: 0, totalSubcriteria: 2, rationale: 'No comparable price evidence.' },
+    ],
+    evidenceConfidence: 81,
+    evidenceCoverage: 74,
+    strengths: ['Verified service result.'],
+    gaps: ['Commercial terms remain open.'],
+    conditions: ['Complete security review.'],
+    limitations: ['No like-for-like price evidence.'],
+  };
+  const html = renderToStaticMarkup(<>
+    <VendorScoreExtensionSection vendorScores={comparison.vendorScores} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  assert.match(html, /QUALIFIED WITH CONDITIONS/);
+  assert.match(html, /Security review/);
+  assert.match(html, /Suppressed/);
+  assert.doesNotMatch(html, /Price and Total Value[^]*25\/100/);
+  assert.match(html, /Evidence confidence/);
+  assert.match(html, /src-alpha-1/);
+  assert.match(pdfText, /QUALIFIED WITH CONDITIONS/);
+  assert.match(pdfText, /Suppressed/);
+  assert.match(pdfText, /src-alpha-1/);
+});
+
+test('uses eligible overall score differences for advantage labels', () => {
+  assert.equal(scoreDifferenceLabel(0.5), 'Practical tie');
+  assert.equal(scoreDifferenceLabel(1), 'Near tie');
+  assert.equal(scoreDifferenceLabel(2.9), 'Near tie');
+  assert.equal(scoreDifferenceLabel(3), 'Moderate advantage');
+  assert.equal(scoreDifferenceLabel(6.9), 'Moderate advantage');
+  assert.equal(scoreDifferenceLabel(7), 'Clear advantage');
 });

@@ -606,6 +606,11 @@ export const ScoreEvidenceSupportDirection = {
 } as const;
 
 export interface ScoreEvidence {
+  /**
+     * Application-issued identifier for validated document provenance. Never a model-supplied URL.
+     * @pattern ^docsha256:[a-f0-9]{64}$
+     */
+  sourceId?: string;
   sourceUrl?: string;
   sourceTitle?: string;
   sourcePublisher?: string;
@@ -670,6 +675,89 @@ export interface WeightedCriterionScore {
   score: number;
   rationale: string;
   evidence?: ScoreEvidence[];
+}
+
+/**
+ * Qualification outcome based on mandatory gates and validated evidence.
+ */
+export type VendorScoreQualificationStatus = typeof VendorScoreQualificationStatus[keyof typeof VendorScoreQualificationStatus];
+
+
+export const VendorScoreQualificationStatus = {
+  QUALIFIED: 'QUALIFIED',
+  QUALIFIED_WITH_CONDITIONS: 'QUALIFIED_WITH_CONDITIONS',
+  NOT_QUALIFIED: 'NOT_QUALIFIED',
+  INSUFFICIENT_EVIDENCE: 'INSUFFICIENT_EVIDENCE',
+} as const;
+
+export type QualificationGateStatus = typeof QualificationGateStatus[keyof typeof QualificationGateStatus];
+
+
+export const QualificationGateStatus = {
+  PASS: 'PASS',
+  CONDITIONAL: 'CONDITIONAL',
+  FAIL: 'FAIL',
+  UNKNOWN: 'UNKNOWN',
+  NOT_APPLICABLE: 'NOT_APPLICABLE',
+} as const;
+
+export interface QualificationGate {
+  gate: string;
+  status: QualificationGateStatus;
+  mandatory: boolean;
+  rationale: string;
+  evidenceSourceIds: string[];
+}
+
+export type VendorDimensionScoreDimension = typeof VendorDimensionScoreDimension[keyof typeof VendorDimensionScoreDimension];
+
+
+export const VendorDimensionScoreDimension = {
+  Requirements_Fit: 'Requirements Fit',
+  Price_and_Total_Value: 'Price and Total Value',
+  Feature_and_Capability_Strength: 'Feature and Capability Strength',
+  'Service,_Ownership_and_Support': 'Service, Ownership and Support',
+  Evidence_Confidence: 'Evidence Confidence',
+} as const;
+
+export type VendorDimensionScoreWeight = typeof VendorDimensionScoreWeight[keyof typeof VendorDimensionScoreWeight];
+
+
+export const VendorDimensionScoreWeight = {
+  NUMBER_30: 30,
+  NUMBER_25: 25,
+  NUMBER_10: 10,
+} as const;
+
+export type VendorDimensionScoreCoverageStatus = typeof VendorDimensionScoreCoverageStatus[keyof typeof VendorDimensionScoreCoverageStatus];
+
+
+export const VendorDimensionScoreCoverageStatus = {
+  SUPPRESSED: 'SUPPRESSED',
+  PROVISIONAL: 'PROVISIONAL',
+  LIMITED_CONFIDENCE: 'LIMITED_CONFIDENCE',
+  SUFFICIENTLY_SUPPORTED: 'SUFFICIENTLY_SUPPORTED',
+} as const;
+
+export interface VendorDimensionScore {
+  dimension: VendorDimensionScoreDimension;
+  weight: VendorDimensionScoreWeight;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  score?: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  coverage: number;
+  coverageStatus: VendorDimensionScoreCoverageStatus;
+  /** @minimum 0 */
+  supportedSubcriteria: number;
+  /** @minimum 0 */
+  totalSubcriteria: number;
+  rationale: string;
 }
 
 export type VrioDimensionStatus = typeof VrioDimensionStatus[keyof typeof VrioDimensionStatus];
@@ -821,6 +909,30 @@ export interface VendorScore {
   /** Evidence-based explanation for the assigned strategic market role. */
   providerRoleRationale?: string;
   weightedScores?: WeightedCriterionScore[];
+  /**
+     * Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.
+     * @minimum 0
+     * @maximum 100
+     */
+  modelScore?: number;
+  /** Qualification outcome based on mandatory gates and validated evidence. */
+  qualificationStatus?: VendorScoreQualificationStatus;
+  qualificationGates?: QualificationGate[];
+  dimensionScores?: VendorDimensionScore[];
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  evidenceConfidence?: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  evidenceCoverage?: number;
+  strengths?: string[];
+  gaps?: string[];
+  conditions?: string[];
+  limitations?: string[];
   /** Conditions under which this option should be preferred over the overall recommendation. */
   switchConditions?: string[];
   vrio?: VrioAssessment;

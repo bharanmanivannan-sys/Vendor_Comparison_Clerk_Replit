@@ -12,12 +12,14 @@ import {
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
   applySoftwareCapabilityMatrixDecision,
+  applyVendorScoreModel,
   annotateUnverifiableWinner,
   assertCanonicalComparisonConsistency,
   assertSufficientComparisonEvidence,
   type AnalysisPayload,
   buildComparisonIdentity,
   buildValidatedEvidenceDataset,
+  calculateVendorScoreExtension,
   capabilityLedSoftwarePriorityProfile,
   canonicalVendorScoreRows,
   collectCitedHttpUrls,
@@ -74,6 +76,7 @@ import {
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
   requestsCurrentModelSelection,
+  scoreDifferenceBand,
   sanitizeOutsideAlternativeInsights,
   vehicleIndependentEvidenceInstructions,
   selectRecommendationLabel,
@@ -105,6 +108,149 @@ test("includes NPS in the 100-point weighted decision model", () => {
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+function qualificationEvidence(
+  vendor: string,
+  score: number,
+  confidence = 80,
+  hashCharacter = "a",
+) {
+  return {
+    sourceId: `docsha256:${hashCharacter.repeat(64)}`,
+    sourceUrl: `https://official.example/${vendor.toLowerCase().replaceAll(" ", "-")}`,
+    exactClaim: `${vendor} is available in Australia; verified product metric`,
+    metricKey: "capability_score",
+    metricSubject: vendor,
+    metricBasis: "same measurable basis",
+    rawMetricValue: score,
+    rawMetricUnit: "points",
+    normalizationDirection: "higher_is_better" as const,
+    evidenceKind: "quantitative" as const,
+    supportDirection: "supports" as const,
+    confidence,
+    normalizedScore: score,
+    normalizationMethod: "retrieved_document_metric",
+    criterionWeight: 20,
+    weightedContribution: score * 0.2,
+  };
+}
+
+test("qualifies an option when applicable mandatory gates pass and non-applicable gates stay neutral", () => {
+  const result = calculateVendorScoreExtension({
+    vendor: "Alpha Pro",
+    weightedScores: [{
+      criterion: "Requirements Fit",
+      evidence: [qualificationEvidence("Alpha Pro", 82)],
+    }],
+  }, {
+    market: "AU",
+    prompt: "Compare Alpha Pro for business use",
+  });
+
+  assert.equal(result.qualificationStatus, "QUALIFIED");
+  assert.equal(
+    result.qualificationGates?.find((gate) => gate.gate === "Applicable local regulatory compliance")?.status,
+    "NOT_APPLICABLE",
+  );
+  assert.equal(
+    result.qualificationGates?.find((gate) => gate.gate === "Applicable security/privacy baseline")?.mandatory,
+    false,
+  );
+});
+
+test("rolls mandatory gate outcomes into conditional, failed, and insufficient qualification states", () => {
+  const vendor = {
+    vendor: "Alpha Pro",
+    weightedScores: [{
+      criterion: "Requirements Fit",
+      evidence: [qualificationEvidence("Alpha Pro", 82)],
+    }],
+  };
+  assert.equal(calculateVendorScoreExtension(vendor, {
+    market: "AU",
+    gateStatuses: { "Market availability": "CONDITIONAL" },
+  }).qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+  assert.equal(calculateVendorScoreExtension(vendor, {
+    market: "AU",
+    gateStatuses: { "Market availability": "FAIL" },
+  }).qualificationStatus, "NOT_QUALIFIED");
+  assert.equal(calculateVendorScoreExtension(vendor, {
+    market: "AU",
+    gateStatuses: { "Market availability": "UNKNOWN" },
+  }).qualificationStatus, "INSUFFICIENT_EVIDENCE");
+});
+
+test("does not qualify the wrong market or a partial entity identity", () => {
+  const wrongMarket = calculateVendorScoreExtension({
+    vendor: "Alpha Pro",
+    weightedScores: [{ criterion: "Requirements Fit", evidence: [qualificationEvidence("Alpha Pro", 82)] }],
+  }, { market: "India IN" });
+  const partialIdentityEvidence = {
+    ...qualificationEvidence("Alpha Pro", 82),
+    metricSubject: "Alpha Pro",
+    exactClaim: "Alpha Pro is available in Australia; verified product metric",
+  };
+  const partialIdentity = calculateVendorScoreExtension({
+    vendor: "Alpha",
+    weightedScores: [{ criterion: "Requirements Fit", evidence: [partialIdentityEvidence] }],
+  }, { market: "Australia AU" });
+
+  assert.equal(
+    wrongMarket.qualificationGates?.find((gate) => gate.gate === "Market availability")?.status,
+    "UNKNOWN",
+  );
+  assert.equal(
+    partialIdentity.qualificationGates?.find((gate) => gate.gate === "Exact entity/variant identity")?.status,
+    "UNKNOWN",
+  );
+});
+
+test("suppresses dimensions below 60 percent coverage and reweights only supported dimensions", () => {
+  const result = calculateVendorScoreExtension({
+    vendor: "Alpha Pro",
+    weightedScores: [
+      { criterion: "Feature capability", evidence: [qualificationEvidence("Alpha Pro", 90)] },
+      { criterion: "Product performance", evidence: [] },
+    ],
+  }, { market: "AU" });
+  const feature = result.dimensionScores?.find((row) => row.dimension === "Feature and Capability Strength");
+
+  assert.equal(feature?.coverage, 50);
+  assert.equal(feature?.coverageStatus, "SUPPRESSED");
+  assert.equal(feature?.score, undefined);
+});
+
+test("calculates the five-dimension model with fixed weights and unrounded inputs", () => {
+  const analysis = {
+    vendorScores: [{
+      vendor: "Alpha Pro",
+      score: 0,
+      weightedScores: [
+        { criterion: "Requirements Fit", evidence: [qualificationEvidence("Alpha Pro", 80, 80, "a")] },
+        { criterion: "Price and Total Value", evidence: [qualificationEvidence("Alpha Pro", 70, 80, "b")] },
+        { criterion: "Feature capability", evidence: [qualificationEvidence("Alpha Pro", 90, 80, "c")] },
+        { criterion: "Service and support", evidence: [qualificationEvidence("Alpha Pro", 60, 80, "d")] },
+      ],
+    }],
+  } as unknown as AnalysisPayload;
+
+  applyVendorScoreModel(analysis, { market: "AU" });
+
+  assert.equal(analysis.vendorScores[0]?.score, 78);
+  assert.deepEqual(
+    analysis.vendorScores[0]?.dimensionScores?.map((row) => row.weight),
+    [30, 25, 25, 10, 10],
+  );
+});
+
+test("classifies practical ties and score advantages at the specified boundaries", () => {
+  assert.equal(scoreDifferenceBand(0.99), "PRACTICAL_TIE");
+  assert.equal(scoreDifferenceBand(1), "NEAR_TIE");
+  assert.equal(scoreDifferenceBand(2.99), "NEAR_TIE");
+  assert.equal(scoreDifferenceBand(3), "MODERATE_ADVANTAGE");
+  assert.equal(scoreDifferenceBand(6.99), "MODERATE_ADVANTAGE");
+  assert.equal(scoreDifferenceBand(7), "CLEAR_ADVANTAGE");
 });
 
 test("recovers a unique evidence-backed winner when rounded totals appear tied", () => {

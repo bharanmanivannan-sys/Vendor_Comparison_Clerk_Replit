@@ -455,6 +455,34 @@ export async function validateComparisonInput(
 }
 
 export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
+  const qualificationRows = row.vendorScores.filter((vendor) => vendor.qualificationStatus);
+  const qualifiedRows = qualificationRows.filter((vendor) => (
+    vendor.qualificationStatus === "QUALIFIED" || vendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
+  ));
+  if (qualificationRows.length) {
+    const ranked = [...qualifiedRows].sort((left, right) => (right.modelScore ?? right.score) - (left.modelScore ?? left.score));
+    const leader = ranked[0];
+    const runnerUp = ranked[1];
+    const leaderScore = leader ? (leader.modelScore ?? leader.score) : 0;
+    const runnerUpScore = runnerUp ? (runnerUp.modelScore ?? runnerUp.score) : undefined;
+    const practicalTie = runnerUpScore !== undefined && Math.abs(leaderScore - runnerUpScore) < 1;
+    const decision = !leader
+      ? { recommendation: "No qualified option", score: 0 }
+      : practicalTie
+        ? { recommendation: "No definitive winner", score: Math.round(leaderScore) }
+        : { recommendation: leader.vendor, score: Math.round(leaderScore) };
+    return {
+      id: row.id,
+      prompt: row.prompt,
+      vendors: row.vendors,
+      comparisonIdentity: buildComparisonIdentity(row.prompt, row.category, row.vendors),
+      category: row.category,
+      recommendation: decision.recommendation,
+      score: decision.score,
+      createdAt: row.createdAt,
+      status: row.status as "complete" | "processing" | "failed",
+    };
+  }
   const adjustedTopScoreTie = row.insights.some((insight) => insight.startsWith("Adjusted decision model —"))
     && row.vendorScores.filter((vendor) => vendor.score === Math.max(...row.vendorScores.map((entry) => entry.score))).length > 1;
   const decision = adjustedTopScoreTie
@@ -483,6 +511,23 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     ...lensRow,
     winner: normalizeLensWinner(lensRow.dimension, lensRow.values ?? {}, row.vendors, lensRow.winner),
   }));
+  // Keep extension fields optional for legacy rows. Source IDs are retained only
+  // when they use the application-issued document provenance form; URLs remain
+  // evidence metadata and must never become source IDs.
+  const vendorScores = row.vendorScores.map((vendor) => ({
+    ...vendor,
+    weightedScores: vendor.weightedScores?.map((weightedScore) => ({
+      ...weightedScore,
+      evidence: weightedScore.evidence?.map((evidence) => (
+        evidence.sourceId && /^docsha256:[a-f0-9]{64}$/i.test(evidence.sourceId)
+          ? evidence
+          : (() => {
+              const { sourceId: _sourceId, ...legacyEvidence } = evidence;
+              return legacyEvidence;
+            })()
+      )),
+    })),
+  }));
   return {
     ...summaryFromRow(row),
     urls: row.urls,
@@ -491,7 +536,7 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     executiveSummary: row.executiveSummary,
     recommendationReason: row.recommendationReason,
     weightAdjustments: row.weightAdjustments,
-    vendorScores: row.vendorScores,
+    vendorScores,
     pricing: normalizeStoredRows(row.pricing),
     features: normalizeStoredRows(row.features),
     swot: row.swot,

@@ -179,6 +179,7 @@ export const createComparisonResponseTwoWeightAdjustmentsMax = 8;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -193,6 +194,25 @@ export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEviden
 
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const createComparisonResponseTwoVendorScoresItemModelScoreMin = 0;
+export const createComparisonResponseTwoVendorScoresItemModelScoreMax = 100;
+
+export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const createComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const createComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -257,7 +277,7 @@ export const CreateComparisonResponse = zod.object({
 })).max(createComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -268,6 +288,7 @@ export const CreateComparisonResponse = zod.object({
   "score": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -293,6 +314,31 @@ export const CreateComparisonResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(createComparisonResponseTwoVendorScoresItemModelScoreMin).max(createComparisonResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin).max(createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(createComparisonResponseTwoVendorScoresItemEvidenceCoverageMin).max(createComparisonResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -462,6 +508,7 @@ export const createGuestComparisonResponseComparisonIdentityEntityCountMax = 6;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -476,6 +523,25 @@ export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvid
 
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const createGuestComparisonResponseVendorScoresItemModelScoreMin = 0;
+export const createGuestComparisonResponseVendorScoresItemModelScoreMax = 100;
+
+export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMin = 0;
+export const createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const createGuestComparisonResponseVendorScoresItemEvidenceCoverageMin = 0;
+export const createGuestComparisonResponseVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -531,7 +597,7 @@ export const CreateGuestComparisonResponse = zod.object({
   "recommendationReason": zod.string(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -542,6 +608,7 @@ export const CreateGuestComparisonResponse = zod.object({
   "score": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -567,6 +634,31 @@ export const CreateGuestComparisonResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(createGuestComparisonResponseVendorScoresItemModelScoreMin).max(createGuestComparisonResponseVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMin).max(createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMin).max(createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMin).max(createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(createGuestComparisonResponseVendorScoresItemEvidenceCoverageMin).max(createGuestComparisonResponseVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -967,6 +1059,7 @@ export const getComparisonJobResponseResultOneTwoWeightAdjustmentsMax = 8;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -982,6 +1075,25 @@ export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresI
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
 
+export const getComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMax = 100;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMax = 100;
+
 export const getComparisonJobResponseResultTwoVendorsMax = 6;
 
 export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
@@ -993,6 +1105,7 @@ export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMax =
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -1007,6 +1120,25 @@ export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItem
 
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemModelScoreMin = 0;
+export const getComparisonJobResponseResultTwoVendorScoresItemModelScoreMax = 100;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -1080,7 +1212,7 @@ export const GetComparisonJobResponse = zod.object({
 })).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -1091,6 +1223,7 @@ export const GetComparisonJobResponse = zod.object({
   "score": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -1116,6 +1249,31 @@ export const GetComparisonJobResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(getComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -1290,7 +1448,7 @@ export const GetComparisonJobResponse = zod.object({
   "recommendationReason": zod.string(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -1301,6 +1459,7 @@ export const GetComparisonJobResponse = zod.object({
   "score": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin).max(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -1326,6 +1485,31 @@ export const GetComparisonJobResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(getComparisonJobResponseResultTwoVendorScoresItemModelScoreMin).max(getComparisonJobResponseResultTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMin).max(getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMin).max(getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(getComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMin).max(getComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin).max(getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -1513,6 +1697,7 @@ export const regenerateComparisonResponseTwoWeightAdjustmentsMax = 8;
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -1527,6 +1712,25 @@ export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEv
 
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemModelScoreMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemModelScoreMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const regenerateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const regenerateComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -1591,7 +1795,7 @@ export const RegenerateComparisonResponse = zod.object({
 })).max(regenerateComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -1602,6 +1806,7 @@ export const RegenerateComparisonResponse = zod.object({
   "score": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -1627,6 +1832,31 @@ export const RegenerateComparisonResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(regenerateComparisonResponseTwoVendorScoresItemModelScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(regenerateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin).max(regenerateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(regenerateComparisonResponseTwoVendorScoresItemEvidenceCoverageMin).max(regenerateComparisonResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -1839,6 +2069,7 @@ export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsMax = 8;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -1854,6 +2085,25 @@ export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedSc
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
 
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMax = 100;
+
 export const getGuestComparisonJobResponseResultTwoVendorsMax = 6;
 
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
@@ -1865,6 +2115,7 @@ export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCount
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -1879,6 +2130,25 @@ export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScore
 
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemModelScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemModelScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -1952,7 +2222,7 @@ export const GetGuestComparisonJobResponse = zod.object({
 })).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -1963,6 +2233,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -1988,6 +2259,31 @@ export const GetGuestComparisonJobResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -2162,7 +2458,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "recommendationReason": zod.string(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -2173,6 +2469,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -2198,6 +2495,31 @@ export const GetGuestComparisonJobResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(getGuestComparisonJobResponseResultTwoVendorScoresItemModelScoreMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -2356,6 +2678,7 @@ export const getComparisonResponseTwoWeightAdjustmentsMax = 8;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -2370,6 +2693,25 @@ export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceI
 
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const getComparisonResponseTwoVendorScoresItemModelScoreMin = 0;
+export const getComparisonResponseTwoVendorScoresItemModelScoreMax = 100;
+
+export const getComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const getComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const getComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const getComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const getComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const getComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const getComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const getComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const getComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const getComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -2434,7 +2776,7 @@ export const GetComparisonResponse = zod.object({
 })).max(getComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -2445,6 +2787,7 @@ export const GetComparisonResponse = zod.object({
   "score": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(getComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -2470,6 +2813,31 @@ export const GetComparisonResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(getComparisonResponseTwoVendorScoresItemModelScoreMin).max(getComparisonResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(getComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(getComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(getComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(getComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(getComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(getComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(getComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin).max(getComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(getComparisonResponseTwoVendorScoresItemEvidenceCoverageMin).max(getComparisonResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -2725,6 +3093,7 @@ export const externalCreateComparisonResponseTwoWeightAdjustmentsMax = 8;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -2739,6 +3108,25 @@ export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresIt
 
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemModelScoreMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemModelScoreMax = 100;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -2803,7 +3191,7 @@ export const ExternalCreateComparisonResponse = zod.object({
 })).max(externalCreateComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -2814,6 +3202,7 @@ export const ExternalCreateComparisonResponse = zod.object({
   "score": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -2839,6 +3228,31 @@ export const ExternalCreateComparisonResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemModelScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin).max(externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMin).max(externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({
@@ -2995,6 +3409,7 @@ export const externalGetComparisonResponseTwoWeightAdjustmentsMax = 8;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
 
+export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
@@ -3009,6 +3424,25 @@ export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemE
 
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const externalGetComparisonResponseTwoVendorScoresItemModelScoreMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemModelScoreMax = 100;
+
+export const externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const externalGetComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const externalGetComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
 
 
@@ -3073,7 +3507,7 @@ export const ExternalGetComparisonResponse = zod.object({
 })).max(externalGetComparisonResponseTwoWeightAdjustmentsMax).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
-  "score": zod.number().int(),
+  "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
@@ -3084,6 +3518,7 @@ export const ExternalGetComparisonResponse = zod.object({
   "score": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -3109,6 +3544,31 @@ export const ExternalGetComparisonResponse = zod.object({
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
+  "modelScore": zod.number().min(externalGetComparisonResponseTwoVendorScoresItemModelScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(externalGetComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin).max(externalGetComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(externalGetComparisonResponseTwoVendorScoresItemEvidenceCoverageMin).max(externalGetComparisonResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
   "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
   "vrio": zod.object({
   "value": zod.object({

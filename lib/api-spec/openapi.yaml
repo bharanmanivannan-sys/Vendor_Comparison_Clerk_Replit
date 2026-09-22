@@ -1529,7 +1529,7 @@ components:
         vendor:
           type: string
         score:
-          type: integer
+          type: number
         color:
           type: string
         verdict:
@@ -1545,6 +1545,43 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WeightedCriterionScore"
+        modelScore:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.
+        qualificationStatus:
+          type: string
+          description: Qualification outcome based on mandatory gates and validated evidence.
+          enum: [QUALIFIED, QUALIFIED_WITH_CONDITIONS, NOT_QUALIFIED, INSUFFICIENT_EVIDENCE]
+        qualificationGates:
+          type: array
+          items:
+            $ref: "#/components/schemas/QualificationGate"
+        dimensionScores:
+          type: array
+          items:
+            $ref: "#/components/schemas/VendorDimensionScore"
+        evidenceConfidence:
+          type: number
+          minimum: 0
+          maximum: 100
+        evidenceCoverage:
+          type: number
+          minimum: 0
+          maximum: 100
+        strengths:
+          type: array
+          items: { type: string }
+        gaps:
+          type: array
+          items: { type: string }
+        conditions:
+          type: array
+          items: { type: string }
+        limitations:
+          type: array
+          items: { type: string }
         switchConditions:
           type: array
           description: Conditions under which this option should be preferred over the overall recommendation.
@@ -1557,6 +1594,47 @@ components:
         marketHistory:
           $ref: "#/components/schemas/MarketHistory"
       required: [vendor, score, color, verdict]
+    QualificationGate:
+      type: object
+      properties:
+        gate: { type: string }
+        status:
+          type: string
+          enum: [PASS, CONDITIONAL, FAIL, UNKNOWN, NOT_APPLICABLE]
+        mandatory: { type: boolean }
+        rationale: { type: string }
+        evidenceSourceIds:
+          type: array
+          items: { type: string }
+      required: [gate, status, mandatory, rationale, evidenceSourceIds]
+    VendorDimensionScore:
+      type: object
+      properties:
+        dimension:
+          type: string
+          enum: ["Requirements Fit", "Price and Total Value", "Feature and Capability Strength", "Service, Ownership and Support", "Evidence Confidence"]
+        weight:
+          type: integer
+          enum: [30, 25, 25, 10, 10]
+        score:
+          type: number
+          minimum: 0
+          maximum: 100
+        coverage:
+          type: number
+          minimum: 0
+          maximum: 100
+        coverageStatus:
+          type: string
+          enum: [SUPPRESSED, PROVISIONAL, LIMITED_CONFIDENCE, SUFFICIENTLY_SUPPORTED]
+        supportedSubcriteria:
+          type: integer
+          minimum: 0
+        totalSubcriteria:
+          type: integer
+          minimum: 0
+        rationale: { type: string }
+      required: [dimension, weight, coverage, coverageStatus, supportedSubcriteria, totalSubcriteria, rationale]
     VrioDimension:
       type: object
       properties:
@@ -1704,6 +1782,10 @@ components:
     ScoreEvidence:
       type: object
       properties:
+        sourceId:
+          type: string
+          description: Application-issued identifier for validated document provenance. Never a model-supplied URL.
+          pattern: "^docsha256:[a-f0-9]{64}$"
         sourceUrl:
           type: string
           format: uri

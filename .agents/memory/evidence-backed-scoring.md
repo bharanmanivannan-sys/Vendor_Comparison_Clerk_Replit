@@ -44,3 +44,9 @@ Independent review ratings may establish a review-signal winner only when every 
 **Why:** Official claims may not provide comparable outcomes, but a single review site, snippet, stale rating, or model-authored summary is too easy to manipulate or misattribute.
 
 **How to apply:** Require comparable rating scales, source dates within the freshness window, at least 20 reviews per observation, distinct independent domains, and retrieved hash/span provenance. Otherwise keep the result neutral.
+
+Final recommendations use mandatory qualification gates before the five-dimension score. Only PASS/CONDITIONAL options receive `modelScore`; FAIL/UNKNOWN options remain unscored, and suppressed dimensions are excluded with their weights redistributed.
+
+**Why:** Neutral-50 and win-count fallbacks can turn missing evidence into an apparent advantage, while partial product names or broad market tokens can qualify the wrong option.
+
+**How to apply:** Require exact normalized metric-subject identity, explicit selected-market availability evidence, and `docsha256:<hash>` source IDs backed by cited spans. Treat absent Must-Haves and inapplicable regulatory/security gates as NOT_APPLICABLE. Keep legacy report fields readable, but never let legacy reweighting, retrieval reconciliation, or score displays override a qualification-model decision.

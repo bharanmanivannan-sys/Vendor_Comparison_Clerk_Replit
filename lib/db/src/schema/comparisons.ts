@@ -60,7 +60,8 @@ export const comparisonsTable = pgTable("comparisons", {
      weightedScores?: Array<{
        criterion: string; weight: number; score: number; rationale: string;
        evidence?: Array<{
-         sourceUrl?: string; sourceTitle?: string; sourcePublisher?: string; sourceDate?: string;
+          sourceId?: string;
+          sourceUrl?: string; sourceTitle?: string; sourcePublisher?: string; sourceDate?: string;
           retrievalDate?: string; exactClaim: string; metricKey?: string; rawMetricValue?: number; rawMetricUnit?: string;
           normalizationDirection?: "higher_is_better" | "lower_is_better";
            documentSha256?: string; sourceTextStart?: number; sourceTextEnd?: number;
@@ -69,6 +70,31 @@ export const comparisonsTable = pgTable("comparisons", {
          normalizedScore: number; criterionWeight: number; weightedContribution: number; normalizationMethod: string;
        }>;
      }>;
+     qualificationStatus?: "QUALIFIED" | "QUALIFIED_WITH_CONDITIONS" | "NOT_QUALIFIED" | "INSUFFICIENT_EVIDENCE";
+      modelScore?: number;
+     qualificationGates?: Array<{
+       gate: string;
+       status: "PASS" | "CONDITIONAL" | "FAIL" | "UNKNOWN" | "NOT_APPLICABLE";
+       mandatory: boolean;
+       rationale: string;
+       evidenceSourceIds: string[];
+     }>;
+     dimensionScores?: Array<{
+       dimension: "Requirements Fit" | "Price and Total Value" | "Feature and Capability Strength" | "Service, Ownership and Support" | "Evidence Confidence";
+       weight: 30 | 25 | 10;
+       score?: number;
+       coverage: number;
+       coverageStatus: "SUPPRESSED" | "PROVISIONAL" | "LIMITED_CONFIDENCE" | "SUFFICIENTLY_SUPPORTED";
+       supportedSubcriteria: number;
+       totalSubcriteria: number;
+       rationale: string;
+     }>;
+     evidenceConfidence?: number;
+     evidenceCoverage?: number;
+     strengths?: string[];
+     gaps?: string[];
+     conditions?: string[];
+     limitations?: string[];
     switchConditions?: string[];
     vrio?: {
       value: { status: string; rationale: string };

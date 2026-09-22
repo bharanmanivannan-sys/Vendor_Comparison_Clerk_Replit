@@ -19,6 +19,11 @@ import type { ScoreEvidenceNormalizationDirection } from './scoreEvidenceNormali
 import type { ScoreEvidenceSupportDirection } from './scoreEvidenceSupportDirection';
 
 export interface ScoreEvidence {
+  /**
+     * Application-issued identifier for validated document provenance. Never a model-supplied URL.
+     * @pattern ^docsha256:[a-f0-9]{64}$
+     */
+  sourceId?: string;
   sourceUrl?: string;
   sourceTitle?: string;
   sourcePublisher?: string;

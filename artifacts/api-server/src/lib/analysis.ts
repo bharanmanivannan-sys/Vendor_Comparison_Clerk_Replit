@@ -30,7 +30,326 @@ export function comparisonFailureCode(error: unknown): ComparisonFailureCode {
   return "research_failed";
 }
 
-type EvidenceRecord = NonNullable<NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["weightedScores"]>[number]["evidence"]>[number];
+type EvidenceRecord = NonNullable<NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["weightedScores"]>[number]["evidence"]>[number] & {
+  /** Application-issued identifier for a validated document, never a model URL. */
+  sourceId?: string;
+};
+
+export type QualificationStatus =
+  | "QUALIFIED"
+  | "QUALIFIED_WITH_CONDITIONS"
+  | "NOT_QUALIFIED"
+  | "INSUFFICIENT_EVIDENCE";
+export type QualificationGateStatus = "PASS" | "CONDITIONAL" | "FAIL" | "UNKNOWN" | "NOT_APPLICABLE";
+export type VendorDimension =
+  | "Requirements Fit"
+  | "Price and Total Value"
+  | "Feature and Capability Strength"
+  | "Service, Ownership and Support"
+  | "Evidence Confidence";
+export type VendorCoverageStatus = "SUPPRESSED" | "PROVISIONAL" | "LIMITED_CONFIDENCE" | "SUFFICIENTLY_SUPPORTED";
+export const VENDOR_DIMENSION_WEIGHTS: Record<VendorDimension, 30 | 25 | 25 | 10 | 10> = {
+  "Requirements Fit": 30,
+  "Price and Total Value": 25,
+  "Feature and Capability Strength": 25,
+  "Service, Ownership and Support": 10,
+  "Evidence Confidence": 10,
+};
+export type QualificationGate = {
+  gate: string;
+  status: QualificationGateStatus;
+  mandatory: boolean;
+  rationale: string;
+  evidenceSourceIds: string[];
+};
+export type VendorDimensionScore = {
+  dimension: VendorDimension;
+  weight: 30 | 25 | 25 | 10 | 10;
+  score?: number;
+  coverage: number;
+  coverageStatus: VendorCoverageStatus;
+  supportedSubcriteria: number;
+  totalSubcriteria: number;
+  rationale: string;
+};
+export type VendorScoreExtension = {
+  modelScore?: number;
+  qualificationStatus?: QualificationStatus;
+  qualificationGates?: QualificationGate[];
+  dimensionScores?: VendorDimensionScore[];
+  evidenceConfidence?: number;
+  evidenceCoverage?: number;
+  strengths?: string[];
+  gaps?: string[];
+  conditions?: string[];
+  limitations?: string[];
+};
+
+export type VendorScoreModelOptions = {
+  /** Explicit gate observations may be supplied by the validated research layer. */
+  gateStatuses?: Partial<Record<string, QualificationGateStatus>>;
+  mustHaves?: string[];
+  category?: string;
+  prompt?: string;
+  market?: string;
+};
+
+const QUALIFICATION_GATE_NAMES = [
+  "Exact entity/variant identity",
+  "Market availability",
+  "Applicable local regulatory compliance",
+  "Applicable security/privacy baseline",
+  "Explicit user Must-Haves",
+] as const;
+
+function coverageBand(coverage: number): VendorCoverageStatus {
+  if (coverage < 60) return "SUPPRESSED";
+  if (coverage < 75) return "PROVISIONAL";
+  if (coverage < 90) return "LIMITED_CONFIDENCE";
+  return "SUFFICIENTLY_SUPPORTED";
+}
+
+function evidenceText(row: Record<string, unknown>): string {
+  return `${row.exactClaim ?? ""} ${row.metricKey ?? ""} ${row.metricSubject ?? ""} ${row.metricBasis ?? ""}`.toLowerCase();
+}
+
+function dimensionForCriterion(criterion: string): VendorDimension | undefined {
+  const c = criterion.toLowerCase();
+  if (/(?:requirement|must.?have|fit|identity|availability|regulat|security|privacy|compliance)/.test(c)) return "Requirements Fit";
+  if (/(?:price|pricing|cost|fee|value|afford|budget|total ownership)/.test(c)) return "Price and Total Value";
+  if (/(?:feature|capabilit|function|performance|quality|reliab|innovation|technology)/.test(c)) return "Feature and Capability Strength";
+  if (/(?:service|support|ownership|maintenance|warranty|customer|delivery|implementation)/.test(c)) return "Service, Ownership and Support";
+  return undefined;
+}
+
+function gateStatusFor(
+  name: string,
+  text: string,
+  options: VendorScoreModelOptions,
+): QualificationGateStatus {
+  const explicit = options.gateStatuses?.[name];
+  if (explicit) return explicit;
+  const applicable = name !== "Applicable security/privacy baseline" || /\b(?:security|privacy|data protection|encryption|soc ?2|iso ?27001|gdpr|pci)\b/i.test(text);
+  if (!applicable) return "NOT_APPLICABLE";
+  const relevant = {
+    "Exact entity/variant identity": /\b(?:identity|variant|model|sku|exact|matches?)\b/i,
+    "Market availability": /\b(?:available|availability|market|sold|launch|shipping|distribution)\b/i,
+    "Applicable local regulatory compliance": /\b(?:regulat|compliance|certif|approved|homolog|license|licen[cs]e)\b/i,
+    "Applicable security/privacy baseline": /\b(?:security|privacy|data protection|encryption|soc ?2|iso ?27001|gdpr|pci)\b/i,
+    "Explicit user Must-Haves": options.mustHaves?.length
+      ? new RegExp(options.mustHaves.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i")
+      : /\b(?:must.?have|required|requirement)\b/i,
+  }[name as (typeof QUALIFICATION_GATE_NAMES)[number]];
+  if (!relevant?.test(text)) return "UNKNOWN";
+  if (/\b(?:fail|not compliant|unavailable|discontinued|does not|cannot|missing)\b/i.test(text)) return "FAIL";
+  if (/\b(?:conditional|subject to|depends|limited|partial|exception)\b/i.test(text)) return "CONDITIONAL";
+  return "PASS";
+}
+
+function evidenceConfidenceFor(evidence: Array<Record<string, unknown>>): number | undefined {
+  const supported = evidence.filter((e) => Number.isFinite(Number(e.confidence)));
+  return supported.length
+    ? supported.reduce((sum, e) => sum + Math.max(0, Math.min(100, Number(e.confidence))), 0) / supported.length
+    : undefined;
+}
+
+function isScorableEvidence(evidence: Record<string, unknown>): boolean {
+  const method = String(evidence.normalizationMethod ?? "");
+  return Boolean(evidence.sourceId)
+    && (evidence.evidenceKind === "quantitative" || evidence.evidenceKind === "percentage")
+    && Number.isFinite(Number(evidence.normalizedScore))
+    && !/(?:winner_share|analyst_judgment|missing_evidence|insufficient_comparable|provider_role|strategic_provider_role)/i.test(method);
+}
+
+function normalizedIdentity(value: unknown): string {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Pure, category-agnostic VendorScore calculation from validated evidence. */
+export function calculateVendorScoreExtension(
+  vendor: { vendor: string; weightedScores?: Array<{ criterion: string; evidence?: Array<Record<string, unknown>>; score?: number }> },
+  options: VendorScoreModelOptions = {},
+): VendorScoreExtension {
+  const candidateEvidence = (vendor.weightedScores ?? []).flatMap((row) => row.evidence ?? []);
+  const allEvidence = candidateEvidence.filter((e) => Boolean(e.sourceId));
+  const scorableEvidence = allEvidence.filter(isScorableEvidence);
+  const text = allEvidence.map(evidenceText).join(" ");
+  const context = `${options.prompt ?? ""} ${options.category ?? ""}`.trim();
+  const vendorIdentity = normalizedIdentity(vendor.vendor);
+  const identityEvidence = allEvidence.filter((evidence) => {
+    const subject = normalizedIdentity(evidence.metricSubject);
+    return subject === vendorIdentity;
+  });
+  const compliancePattern = /\b(?:regulat|compliance|certif|approved|homolog|license|licen[cs]e|safety|ncap)\b/i;
+  const securityPattern = /\b(?:security|privacy|data protection|encryption|soc ?2|iso ?27001|gdpr|pci)\b/i;
+  const gateEvidence = (pattern: RegExp) => allEvidence.filter((evidence) => pattern.test(evidenceText(evidence)));
+  const marketAliases: Record<string, string[]> = {
+    au: ["australia", "australian"],
+    in: ["india", "indian"],
+    us: ["united states", "usa", "american"],
+    gb: ["united kingdom", "britain", "british"],
+  };
+  const marketValue = normalizedIdentity(options.market);
+  const marketCode = Object.keys(marketAliases).find((code) => marketValue.split(" ").includes(code));
+  const marketTerms = marketCode ? marketAliases[marketCode]! : [marketValue].filter(Boolean);
+  const marketEvidence = allEvidence.filter((evidence) => {
+    const value = normalizedIdentity(evidenceText(evidence));
+    return /\b(?:available|availability|sold|offered|launched|shipping|distribution|market)\b/i.test(evidenceText(evidence))
+      && marketTerms.some((term) => new RegExp(`(?:^| )${term.replace(/ /g, " +")}(?: |$)`, "i").test(value));
+  });
+  const statusFromEvidence = (evidence: Array<Record<string, unknown>>): QualificationGateStatus => {
+    const evidenceValue = evidence.map(evidenceText).join(" ");
+    if (/\b(?:fail|not compliant|unavailable|discontinued|does not|cannot|missing)\b/i.test(evidenceValue)) return "FAIL";
+    if (/\b(?:conditional|subject to|depends|limited|partial|exception)\b/i.test(evidenceValue)) return "CONDITIONAL";
+    return evidence.length ? "PASS" : "UNKNOWN";
+  };
+  const mustHaves = (options.mustHaves ?? []).map((item) => item.trim()).filter(Boolean);
+  const mustHaveEvidence = mustHaves.flatMap((mustHave) => {
+    const tokens = normalizedIdentity(mustHave).split(" ").filter((token) => token.length >= 4);
+    return allEvidence.filter((evidence) => {
+      const normalized = normalizedIdentity(evidenceText(evidence));
+      return tokens.length > 0 && tokens.every((token) => normalized.includes(token));
+    });
+  });
+  const inferredStatuses: Record<(typeof QUALIFICATION_GATE_NAMES)[number], QualificationGateStatus> = {
+    "Exact entity/variant identity": statusFromEvidence(identityEvidence),
+    "Market availability": options.market ? statusFromEvidence(marketEvidence) : "UNKNOWN",
+    "Applicable local regulatory compliance": compliancePattern.test(context)
+      ? statusFromEvidence(gateEvidence(compliancePattern))
+      : "NOT_APPLICABLE",
+    "Applicable security/privacy baseline": securityPattern.test(context)
+      ? statusFromEvidence(gateEvidence(securityPattern))
+      : "NOT_APPLICABLE",
+    "Explicit user Must-Haves": mustHaves.length
+      ? (mustHaves.every((mustHave) => {
+          const tokens = normalizedIdentity(mustHave).split(" ").filter((token) => token.length >= 4);
+          return allEvidence.some((evidence) => {
+            const normalized = normalizedIdentity(evidenceText(evidence));
+            return tokens.length > 0 && tokens.every((token) => normalized.includes(token));
+          });
+        }) ? statusFromEvidence(mustHaveEvidence) : "UNKNOWN")
+      : "NOT_APPLICABLE",
+  };
+  const gates = QUALIFICATION_GATE_NAMES.map((gate) => {
+    const status = options.gateStatuses?.[gate] ?? inferredStatuses[gate];
+    const matchingEvidence = gate === "Exact entity/variant identity" ? identityEvidence
+      : gate === "Market availability" ? marketEvidence
+        : gate === "Applicable local regulatory compliance" ? gateEvidence(compliancePattern)
+          : gate === "Applicable security/privacy baseline" ? gateEvidence(securityPattern)
+            : mustHaveEvidence;
+    const ids = matchingEvidence.map((e) => String(e.sourceId));
+    return {
+      gate,
+      status,
+      mandatory: status !== "NOT_APPLICABLE",
+      rationale: status === "PASS" ? "Validated provenance-complete evidence supports this gate." : `Gate status is ${status.toLowerCase()} based on available validated evidence.`,
+      evidenceSourceIds: Array.from(new Set(ids)),
+    };
+  });
+  const failed = gates.some((g) => g.mandatory && g.status === "FAIL");
+  const unknown = gates.some((g) => g.mandatory && g.status === "UNKNOWN");
+  const conditional = gates.some((g) => g.mandatory && g.status === "CONDITIONAL");
+  const qualificationStatus: QualificationStatus = failed ? "NOT_QUALIFIED"
+    : unknown ? "INSUFFICIENT_EVIDENCE"
+      : conditional ? "QUALIFIED_WITH_CONDITIONS" : "QUALIFIED";
+
+  const dimensions = (Object.entries(VENDOR_DIMENSION_WEIGHTS) as Array<[VendorDimension, 30 | 25 | 25 | 10 | 10]>).map(([dimension, weight]) => {
+    const rows = dimension === "Evidence Confidence"
+      ? [{ criterion: dimension, evidence: candidateEvidence }]
+      : (vendor.weightedScores ?? []).filter((row) => dimensionForCriterion(row.criterion) === dimension);
+    const totalSubcriteria = rows.length;
+    const supported = rows.filter((row) => (row.evidence ?? []).some(isScorableEvidence));
+    const supportedSubcriteria = supported.length;
+    const coverage = totalSubcriteria ? supportedSubcriteria / totalSubcriteria * 100 : 0;
+    const rowScores = dimension === "Evidence Confidence"
+      ? (evidenceConfidenceFor(scorableEvidence) === undefined ? [] : [evidenceConfidenceFor(scorableEvidence)!])
+      : supported.map((row) => {
+          const values = (row.evidence ?? []).filter(isScorableEvidence)
+            .map((e) => Number(e.normalizedScore));
+          return values.reduce((sum, value) => sum + value, 0) / values.length;
+        });
+    const rawScore = rowScores.length ? rowScores.reduce((a, b) => a + b, 0) / rowScores.length : undefined;
+    const score = coverage >= 60 ? rawScore : undefined;
+    return {
+      dimension, weight, ...(score === undefined ? {} : { score }),
+      coverage, coverageStatus: coverageBand(coverage), supportedSubcriteria, totalSubcriteria,
+      rationale: score === undefined ? "No provenance-complete evidence matched this dimension."
+        : `${supportedSubcriteria} of ${totalSubcriteria} matched subcriteria have provenance-complete evidence.`,
+    };
+  });
+  const evidenceConfidence = evidenceConfidenceFor(scorableEvidence) ?? 0;
+  const evidenceCoverage = candidateEvidence.length ? scorableEvidence.length / candidateEvidence.length * 100 : 0;
+  const criterionResults = (vendor.weightedScores ?? []).map((row) => {
+    const values = (row.evidence ?? []).filter(isScorableEvidence).map((e) => Number(e.normalizedScore));
+    return { criterion: row.criterion, score: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined };
+  });
+  const strengths = criterionResults.filter((row) => row.score !== undefined && row.score >= 60).map((row) => row.criterion);
+  const gaps = criterionResults.filter((row) => row.score === undefined || row.score < 60).map((row) => row.criterion);
+  const conditions = gates.filter((g) => g.status === "CONDITIONAL").map((g) => g.gate);
+  const limitations = dimensions.filter((d) => d.coverageStatus !== "SUFFICIENTLY_SUPPORTED").map((d) => `${d.dimension}: ${d.coverageStatus.toLowerCase().replaceAll("_", " ")}`);
+  return { qualificationStatus, qualificationGates: gates, dimensionScores: dimensions, evidenceConfidence, evidenceCoverage, strengths, gaps, conditions, limitations };
+}
+
+/** Applies the replacement model to new analyses; legacy reports remain untouched. */
+export function applyVendorScoreModel(
+  analysis: AnalysisPayload,
+  options: VendorScoreModelOptions = {},
+): void {
+  for (const row of analysis.vendorScores ?? []) {
+    const extension = calculateVendorScoreExtension(row as unknown as Parameters<typeof calculateVendorScoreExtension>[0], options);
+    Object.assign(row as object, extension);
+    if (extension.qualificationStatus === "QUALIFIED" || extension.qualificationStatus === "QUALIFIED_WITH_CONDITIONS") {
+      const active = extension.dimensionScores!.filter((d) => d.coverageStatus !== "SUPPRESSED" && d.score !== undefined);
+      const weightTotal = active.reduce((sum, d) => sum + d.weight, 0);
+      row.score = weightTotal ? active.reduce((sum, d) => sum + (d.score! * d.weight), 0) / weightTotal : 0;
+    } else row.score = 0;
+  }
+}
+
+export type ScoreDifferenceBand = "PRACTICAL_TIE" | "NEAR_TIE" | "MODERATE_ADVANTAGE" | "CLEAR_ADVANTAGE";
+export function scoreDifferenceBand(difference: number): ScoreDifferenceBand {
+  const absolute = Math.abs(difference);
+  return absolute < 1 ? "PRACTICAL_TIE"
+    : absolute < 3 ? "NEAR_TIE"
+      : absolute < 7 ? "MODERATE_ADVANTAGE" : "CLEAR_ADVANTAGE";
+}
+
+function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScoreModelOptions = {}): void {
+  const hasValidatedProvenance = (analysis.vendorScores ?? []).some((vendor) =>
+    (vendor.weightedScores ?? []).some((criterion) => (criterion.evidence ?? []).some((evidence) => Boolean((evidence as EvidenceRecord).sourceId))));
+  if (!hasValidatedProvenance) return; // Preserve the interpretation of legacy saved reports.
+  applyVendorScoreModel(analysis, options);
+  const eligible = (analysis.vendorScores ?? []).filter((vendor) =>
+    (vendor as unknown as VendorScoreExtension).qualificationStatus === "QUALIFIED"
+    || (vendor as unknown as VendorScoreExtension).qualificationStatus === "QUALIFIED_WITH_CONDITIONS");
+  if (!eligible.length) {
+    analysis.recommendation = "No qualified option";
+    analysis.score = 0;
+    analysis.recommendationReason = "No option passed all mandatory qualification gates with sufficient validated evidence.";
+    return;
+  }
+  const ranked = [...eligible].sort((a, b) => b.score - a.score);
+  const winner = ranked[0];
+  const runnerUp = ranked[1];
+  const difference = runnerUp ? winner.score - runnerUp.score : winner.score;
+  const band = scoreDifferenceBand(difference);
+  analysis.recommendation = band === "PRACTICAL_TIE" ? "No definitive winner" : winner.vendor;
+  analysis.score = Math.round(winner.score);
+  analysis.recommendationReason = band === "PRACTICAL_TIE"
+    ? `${winner.vendor} and ${runnerUp?.vendor ?? "the leading options"} are a practical tie under the qualification and weighted evidence model.`
+    : `${winner.vendor} leads with a ${band.toLowerCase().replaceAll("_", " ")} (${winner.score.toFixed(2)} vs ${runnerUp?.score.toFixed(2) ?? "n/a"}).`;
+}
+
+function sourceIdForEvidence(row: Record<string, unknown>): string | undefined {
+  const hash = typeof row.documentSha256 === "string" && /^[a-f0-9]{64}$/i.test(row.documentSha256)
+    ? row.documentSha256.toLowerCase() : undefined;
+  const start = row.sourceTextStart;
+  const end = row.sourceTextEnd;
+  // A hash alone is not provenance-complete: require the cited span as well.
+  return hash && typeof start === "number" && Number.isInteger(start) && start >= 0
+    && typeof end === "number" && Number.isInteger(end) && end > start
+    ? `docsha256:${hash}` : undefined;
+}
 
 function clampScore(value: unknown, fallback = 0): number {
   const number = typeof value === "number" ? value : Number(value);
@@ -127,6 +446,7 @@ export function normalizeEvidenceRecords(
       documentSha256: typeof row.documentSha256 === "string" && /^[a-f0-9]{64}$/.test(row.documentSha256)
         ? row.documentSha256
         : undefined,
+      sourceId: sourceIdForEvidence(row),
       sourceTextStart: typeof row.sourceTextStart === "number" && Number.isInteger(row.sourceTextStart) && row.sourceTextStart >= 0
         ? row.sourceTextStart
         : undefined,
@@ -667,6 +987,9 @@ export function reweightAnalysis(
   requestedWeights: ComparisonWeight[],
   additionalWeights: AdditionalComparisonWeight[] = [],
 ): AnalysisPayload {
+  if ((analysis.vendorScores ?? []).some((vendor) => vendor.qualificationStatus)) {
+    throw new Error("This report uses the fixed five-dimension qualification model and cannot be regenerated with legacy criterion weights.");
+  }
   const weights = normalizedWeightMap(requestedWeights);
   const canonicalCriteria = new Set<string>(WEIGHTED_CRITERIA.map(({ criterion }) => criterion));
   for (const entry of additionalWeights) {
@@ -7377,8 +7700,19 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       || insight.startsWith("Outside-alternative coverage —")
       || insight.startsWith("Review-signal basis —")
     ));
-    await synthesizeValidatedDecision(client, input, researchMarket, normalized);
     reconcileFinalRecommendationNarrative(normalized);
+    await synthesizeValidatedDecision(client, input, researchMarket, normalized);
+    const mustHaves = /\b(?:must.?have|required|mandatory|non-negotiable)\b/i.test(input.prompt)
+      ? input.criteria
+      : input.criteria.filter((criterion) => /\b(?:must.?have|required|mandatory|non-negotiable)\b/i.test(criterion));
+    // New reports with validated document provenance use the qualification model
+    // as final authority; reports without it retain their legacy decision path.
+    applyVendorModelDecision(normalized, {
+      prompt: input.prompt,
+      category: normalized.category,
+      market: `${researchMarket.country} ${researchMarket.countryCode}`,
+      mustHaves,
+    });
     if (hasReviewSignalCoverage && !insufficientEvidence && normalized.recommendation !== "No exact winner") {
       normalized.recommendationReason = `Review-signal winner: ${normalized.recommendation} leads on comparable recent independent review ratings with verified multi-source coverage. ${normalized.recommendationReason}`;
     }
@@ -7396,7 +7730,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.onProgress?.("validating_comparison");
       assertCanonicalComparisonConsistency(resolvedVendors, normalized);
     }
-    if (insufficientEvidence) {
+    const hasQualificationModel = normalized.vendorScores.some((vendor) => (
+      Boolean((vendor as unknown as VendorScoreExtension).qualificationStatus)
+    ));
+    if (insufficientEvidence && !hasQualificationModel) {
       annotateUnverifiableWinner(normalized);
     }
     return normalized;
