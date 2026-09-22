@@ -680,6 +680,26 @@ export function comparisonOptionNamesOverlap(left: unknown, right: unknown): boo
   );
 }
 
+export function expandedAlternativeComparisonPrompt(comparison: any, alternative: unknown): string {
+  const alternativeName = String(alternative || '').trim();
+  const originalOptions = (comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || [])
+    .map((vendor: unknown) => String(vendor || '').trim())
+    .filter(Boolean);
+  const options = [...originalOptions];
+  if (alternativeName && !options.some((option) => option.toLowerCase() === alternativeName.toLowerCase())) {
+    options.push(alternativeName);
+  }
+  const criteria = Array.isArray(comparison.criteria)
+    ? comparison.criteria.map((criterion: unknown) => String(criterion || '').trim()).filter(Boolean)
+    : [];
+  const context = String(comparison.prompt || '').trim();
+  return [
+    `Compare ${options.join(' vs ')}.`,
+    context ? `Use the same decision context and primary comparison parameters as the original report: ${context}` : '',
+    criteria.length ? `Primary criteria: ${criteria.join(', ')}.` : '',
+  ].filter(Boolean).join(' ');
+}
+
 function stripDecisionNote(value: unknown): string {
   return String(value ?? '')
     .replace(/\s*\*\*Note:\s*.*?\*\*/is, '')
@@ -2796,17 +2816,14 @@ function AnalysisPage() {
     return !comparedOptionNames.some((option: string) => comparisonOptionNamesOverlap(alternativeName, option));
   }).slice(0, 3);
   const coreInsights = visibleInsights.filter((item: string) => !item.startsWith('Alternative outside comparison —'));
-  const compareVendor = (vendor: string) => {
-    if (!vendor) return;
-    window.sessionStorage.setItem(
-      'vendor-compare-draft',
-      `Compare ${comparison.recommendation} and ${vendor}. Decision context and criteria: ${comparison.prompt}`,
-    );
-    setLocation(guest ? '/guest' : '/user-portal');
-  };
   const compareAlternative = (insight: string) => {
     const alternative = insight.replace('Alternative outside comparison — ', '').split(':')[0]?.trim();
-    compareVendor(alternative);
+    if (!alternative) return;
+    window.sessionStorage.setItem(
+      'vendor-compare-draft',
+      expandedAlternativeComparisonPrompt(comparison, alternative),
+    );
+    setLocation(guest ? '/guest' : '/user-portal');
   };
   return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><DecisionRecommendationCard comparison={comparison} /></div>
          <ExecutiveDecisionBrief comparison={comparison} />
@@ -2866,7 +2883,7 @@ function AnalysisPage() {
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Strategic read</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{swotEntries.map(([key, values]) => <div key={key} className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5"><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{key}</p><ul className="mt-4 space-y-3">{values.map((value) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={value}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#b94d45]" />{value}</li>)}</ul></div>)}</div></section>
       <StrategicFrameworkSection title="PESTLE adherence by option" eyebrow="Macro environment" description="How each brand, service, product, edition, or plan is addressing political, economic, social, technological, legal, and environmental forces, with evidence gaps called out." entries={pestleEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-pestle" />
       <StrategicFrameworkSection title="SOAR decision strategy by option" eyebrow="Strengths-led strategy" description="What each option is strongest at, where it must improve, the outcome it should enable, and the measurable acceptance test. Each finding includes a product-management action and a buyer decision implication." entries={soarEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-soar" />
-      {alternativeInsights.length > 0 && <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-alternative-insights"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Alternative path</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Alternatives outside your shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">These options were not included in the weighted ranking. Compare any alternative directly against the current recommendation using the same decision context.</p><ul className="mt-5 space-y-4">{alternativeInsights.map((item: string) => <li className="flex flex-col gap-3 rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4 text-sm leading-6 text-[#39435a] sm:flex-row sm:items-start sm:justify-between" key={item}><div className="flex gap-3"><Compass size={17} className="mt-1 shrink-0 text-[#0f766e]" /><span>{item.replace('Alternative outside comparison — ', '')}</span></div><button type="button" onClick={() => compareAlternative(item)} className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-[#f8f4e8]" data-testid={`button-compare-alternative-${item.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> Compare with recommendation</button></li>)}</ul></section>}
+      {alternativeInsights.length > 0 && <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-alternative-insights"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Alternative path</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Alternatives outside your shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">These options were not included in the weighted ranking. Add an alternative to every option in the current shortlist and rerun the same decision context and criteria.</p><ul className="mt-5 space-y-4">{alternativeInsights.map((item: string) => <li className="flex flex-col gap-3 rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4 text-sm leading-6 text-[#39435a] sm:flex-row sm:items-start sm:justify-between" key={item}><div className="flex gap-3"><Compass size={17} className="mt-1 shrink-0 text-[#0f766e]" /><span>{item.replace('Alternative outside comparison — ', '')}</span></div><button type="button" onClick={() => compareAlternative(item)} className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-[#f8f4e8]" data-testid={`button-compare-alternative-${item.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> Add to comparison</button></li>)}</ul></section>}
      <VrioSection vendorScores={comparison.vendorScores} />
      <MarketPositionSection vendorScores={comparison.vendorScores} />
      <MarketHistorySection vendorScores={comparison.vendorScores} />

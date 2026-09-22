@@ -11,6 +11,7 @@ import {
   computeDecisionQuality,
   DecisionRecommendationCard,
   ExecutiveDecisionBrief,
+  expandedAlternativeComparisonPrompt,
   HeadToHead,
   hasAdjustedTopScoreTie,
   hasOptionSpecificFrameworkEvidence,
@@ -130,6 +131,29 @@ test('excludes compared vehicle aliases from outside alternatives', () => {
   assert.equal(comparisonOptionNamesOverlap('Tata Safari diesel vehicle', 'Tata Safari diesel AT'), true);
   assert.equal(comparisonOptionNamesOverlap('Mahindra XUV700', 'Mahindra'), true);
   assert.equal(comparisonOptionNamesOverlap('Hyundai Alcazar', 'Tata Safari diesel AT'), false);
+});
+
+test('adds an outside alternative to every original option and preserves the decision parameters', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendors = ['Mahindra', 'Tata Safari diesel AT'];
+  comparison.criteria = ['Price', 'Safety', 'Reliability', 'Service'];
+  comparison.prompt = 'Compare Mahindra vs Tata Safari diesel AT for a family SUV purchase in India.';
+
+  const prompt = expandedAlternativeComparisonPrompt(comparison, 'Hyundai Alcazar');
+
+  assert.match(prompt, /^Compare Mahindra vs Tata Safari diesel AT vs Hyundai Alcazar\./);
+  assert.match(prompt, /same decision context and primary comparison parameters/i);
+  assert.match(prompt, /family SUV purchase in India/i);
+  assert.match(prompt, /Primary criteria: Price, Safety, Reliability, Service\./);
+});
+
+test('does not add the same alternative twice', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendors = ['Alpha', 'Beta', 'Gamma'];
+
+  const prompt = expandedAlternativeComparisonPrompt(comparison, 'gamma');
+
+  assert.equal((prompt.match(/\bgamma\b/gi) || []).length, 1);
 });
 
 test('hides framework entries that explicitly use an unverified planning fallback', () => {

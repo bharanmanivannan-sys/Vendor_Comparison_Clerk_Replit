@@ -36,3 +36,4 @@
 - [Vehicle outside alternatives](vehicle-outside-alternatives.md) — name alternatives only when market, body style, drivetrain, alias exclusion, and current availability all validate.
 - [Browser-style React tests](browser-react-tests.md) — initialize the DOM shim before importing React DOM or app modules that register browser event support.
 - [Actionable strategic frameworks](actionable-strategic-frameworks.md) — framework sections must contain option-specific decisions and acceptance gates, never instructions to “identify” or “define.”
+- [Alternative comparison expansion](alternative-comparison-expansion.md) — adding a suggested alternative must preserve the full original shortlist, context, and criteria.
