@@ -301,8 +301,14 @@ export function applyVendorScoreModel(
     if (extension.qualificationStatus === "QUALIFIED" || extension.qualificationStatus === "QUALIFIED_WITH_CONDITIONS") {
       const active = extension.dimensionScores!.filter((d) => d.coverageStatus !== "SUPPRESSED" && d.score !== undefined);
       const weightTotal = active.reduce((sum, d) => sum + d.weight, 0);
-      row.score = weightTotal ? active.reduce((sum, d) => sum + (d.score! * d.weight), 0) / weightTotal : 0;
-    } else row.score = 0;
+      extension.modelScore = weightTotal
+        ? active.reduce((sum, d) => sum + (d.score! * d.weight), 0) / weightTotal
+        : undefined;
+      if (extension.modelScore !== undefined) {
+        row.score = extension.modelScore;
+        (row as unknown as VendorScoreExtension).modelScore = extension.modelScore;
+      }
+    }
   }
 }
 
@@ -315,9 +321,8 @@ export function scoreDifferenceBand(difference: number): ScoreDifferenceBand {
 }
 
 function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScoreModelOptions = {}): void {
-  const hasValidatedProvenance = (analysis.vendorScores ?? []).some((vendor) =>
-    (vendor.weightedScores ?? []).some((criterion) => (criterion.evidence ?? []).some((evidence) => Boolean((evidence as EvidenceRecord).sourceId))));
-  if (!hasValidatedProvenance) return; // Preserve the interpretation of legacy saved reports.
+  // This function runs only while building a new analysis. Legacy saved rows are
+  // serialized directly and keep their original optional extension fields.
   applyVendorScoreModel(analysis, options);
   const eligible = (analysis.vendorScores ?? []).filter((vendor) =>
     (vendor as unknown as VendorScoreExtension).qualificationStatus === "QUALIFIED"
@@ -328,16 +333,22 @@ function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScor
     analysis.recommendationReason = "No option passed all mandatory qualification gates with sufficient validated evidence.";
     return;
   }
-  const ranked = [...eligible].sort((a, b) => b.score - a.score);
+  const ranked = [...eligible].sort((a, b) =>
+    ((b as unknown as VendorScoreExtension).modelScore ?? b.score)
+    - ((a as unknown as VendorScoreExtension).modelScore ?? a.score));
   const winner = ranked[0];
   const runnerUp = ranked[1];
-  const difference = runnerUp ? winner.score - runnerUp.score : winner.score;
+  const winnerScore = (winner as unknown as VendorScoreExtension).modelScore ?? winner.score;
+  const runnerUpScore = runnerUp
+    ? ((runnerUp as unknown as VendorScoreExtension).modelScore ?? runnerUp.score)
+    : undefined;
+  const difference = runnerUpScore === undefined ? winnerScore : winnerScore - runnerUpScore;
   const band = scoreDifferenceBand(difference);
   analysis.recommendation = band === "PRACTICAL_TIE" ? "No definitive winner" : winner.vendor;
-  analysis.score = Math.round(winner.score);
+  analysis.score = Math.round(winnerScore);
   analysis.recommendationReason = band === "PRACTICAL_TIE"
     ? `${winner.vendor} and ${runnerUp?.vendor ?? "the leading options"} are a practical tie under the qualification and weighted evidence model.`
-    : `${winner.vendor} leads with a ${band.toLowerCase().replaceAll("_", " ")} (${winner.score.toFixed(2)} vs ${runnerUp?.score.toFixed(2) ?? "n/a"}).`;
+    : `${winner.vendor} leads with a ${band.toLowerCase().replaceAll("_", " ")} (${winnerScore.toFixed(2)} vs ${runnerUpScore?.toFixed(2) ?? "n/a"}).`;
 }
 
 function sourceIdForEvidence(row: Record<string, unknown>): string | undefined {
@@ -2199,7 +2210,12 @@ export function assertCanonicalComparisonConsistency(
   if (JSON.stringify(scoreVendors) !== expected) {
     throw new Error("Generated score rows conflict with the canonical comparison entities.");
   }
-  if (!vendors.includes(analysis.recommendation)) {
+  const nonEntityDecisionLabels = new Set([
+    "No qualified option",
+    "No definitive winner",
+    "No exact winner",
+  ]);
+  if (!vendors.includes(analysis.recommendation) && !nonEntityDecisionLabels.has(analysis.recommendation)) {
     throw new Error("Generated recommendation is not a canonical comparison entity.");
   }
   const isCanonicalWinner = (winner: string): boolean => {

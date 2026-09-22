@@ -541,6 +541,7 @@ test('renders the optional qualification and coverage extension in browser and P
   const comparison = comparisonFixture() as any;
   comparison.vendorScores[0] = {
     ...comparison.vendorScores[0],
+    modelScore: 92,
     qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
     qualificationGates: [{
       gate: 'Security review',
@@ -573,6 +574,21 @@ test('renders the optional qualification and coverage extension in browser and P
   assert.match(pdfText, /QUALIFIED WITH CONDITIONS/);
   assert.match(pdfText, /Suppressed/);
   assert.match(pdfText, /src-alpha-1/);
+});
+
+test('does not expose a legacy neutral score for an evidence-limited modeled option', () => {
+  const html = renderToStaticMarkup(<VendorScoreExtensionSection vendorScores={[{
+    vendor: 'BYD',
+    score: 50,
+    qualificationStatus: 'INSUFFICIENT_EVIDENCE',
+    qualificationGates: [],
+    dimensionScores: [],
+    evidenceConfidence: 0,
+    evidenceCoverage: 0,
+  }]} />);
+
+  assert.match(html, /Not scored/);
+  assert.doesNotMatch(html, /50\/100/);
 });
 
 test('uses eligible overall score differences for advantage labels', () => {

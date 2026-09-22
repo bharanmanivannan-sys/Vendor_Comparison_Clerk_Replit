@@ -1157,14 +1157,14 @@ function coverageLabel(status: unknown): string {
 export function VendorScoreExtensionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
   const extended = vendorScores.filter(hasVendorScoreExtension);
   if (!extended.length) return null;
-  const eligible = vendorScores.filter((vendor) => Number.isFinite(Number(vendor.score))
+  const eligible = vendorScores.filter((vendor) => Number.isFinite(Number(vendor.modelScore))
     && qualificationAllowsScore(vendor));
-  const topScore = eligible.length ? Math.max(...eligible.map((vendor) => Number(vendor.score))) : null;
+  const topScore = eligible.length ? Math.max(...eligible.map((vendor) => Number(vendor.modelScore))) : null;
   return <section className="mt-14" data-testid="section-vendor-score-extension">
     <div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02B / Qualification and evidence</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Decision readiness by option</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Qualification gates and coverage labels keep unsupported conclusions explicit. A suppressed dimension has no numeric score.</p></div>
     <div className="grid gap-5 lg:grid-cols-2">
       {extended.map((vendor) => {
-        const score = Number(vendor.score);
+        const score = Number(vendor.modelScore);
         const scoreEligible = qualificationAllowsScore(vendor);
         const difference = topScore === null || !scoreEligible || !Number.isFinite(score) ? null : topScore - score;
         const dimensions = Array.isArray(vendor.dimensionScores) ? vendor.dimensionScores : [];
@@ -1199,6 +1199,10 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
 }
 
 function overallVendorScore(vendor: any): number {
+  if (hasVendorScoreExtension(vendor)) {
+    const modelScore = Number(vendor?.modelScore);
+    return Math.max(0, Math.min(100, Math.round(Number.isFinite(modelScore) ? modelScore : 0)));
+  }
   const baseScore = Number(vendor?.baseScore);
   const tieBreakBonus = Number(vendor?.providerRoleTieBreakBonus ?? 0);
   const overallScore = Number.isFinite(baseScore)

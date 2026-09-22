@@ -258,10 +258,36 @@ test("calculates the five-dimension model with fixed weights and unrounded input
   applyVendorScoreModel(analysis, { market: "AU" });
 
   assert.equal(analysis.vendorScores[0]?.score, 78);
+  assert.equal(analysis.vendorScores[0]?.modelScore, 78);
   assert.deepEqual(
     analysis.vendorScores[0]?.dimensionScores?.map((row) => row.weight),
     [30, 25, 25, 10, 10],
   );
+});
+
+test("marks evidence-limited new analyses as unscored instead of exposing the legacy neutral 50", () => {
+  const analysis = {
+    vendorScores: [{
+      vendor: "BYD",
+      score: 50,
+      weightedScores: [{
+        criterion: "Requirements Fit",
+        evidence: [{
+          exactClaim: "No provenance-complete comparable metric was recovered.",
+          evidenceKind: "unverified",
+          confidence: 0,
+          normalizedScore: 50,
+          normalizationMethod: "missing_evidence",
+        }],
+      }],
+    }],
+  } as unknown as AnalysisPayload;
+
+  applyVendorScoreModel(analysis, { market: "AU" });
+
+  assert.equal(analysis.vendorScores[0]?.qualificationStatus, "INSUFFICIENT_EVIDENCE");
+  assert.equal(analysis.vendorScores[0]?.modelScore, undefined);
+  assert.equal(analysis.vendorScores[0]?.score, 50);
 });
 
 test("classifies practical ties and score advantages at the specified boundaries", () => {
@@ -2624,6 +2650,18 @@ test("accepts canonical matrix ties without treating the tie label as a new enti
   };
 
   assert.doesNotThrow(() => assertCanonicalComparisonConsistency(vendors, result));
+  assert.doesNotThrow(
+    () => assertCanonicalComparisonConsistency(vendors, {
+      ...result,
+      recommendation: "No qualified option",
+    }),
+  );
+  assert.doesNotThrow(
+    () => assertCanonicalComparisonConsistency(vendors, {
+      ...result,
+      recommendation: "No definitive winner",
+    }),
+  );
   assert.doesNotThrow(
     () => assertCanonicalComparisonConsistency(vendors, {
       ...result,

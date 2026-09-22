@@ -50,3 +50,9 @@ Final recommendations use mandatory qualification gates before the five-dimensio
 **Why:** Neutral-50 and win-count fallbacks can turn missing evidence into an apparent advantage, while partial product names or broad market tokens can qualify the wrong option.
 
 **How to apply:** Require exact normalized metric-subject identity, explicit selected-market availability evidence, and `docsha256:<hash>` source IDs backed by cited spans. Treat absent Must-Haves and inapplicable regulatory/security gates as NOT_APPLICABLE. Keep legacy report fields readable, but never let legacy reweighting, retrieval reconciliation, or score displays override a qualification-model decision.
+
+Every newly built analysis must receive qualification extensions even when no provenance-complete evidence was recovered. Legacy compatibility belongs at saved-report serialization boundaries, not inside new-analysis scoring.
+
+**Why:** Skipping qualification when evidence was absent exposed the old neutral 50 as if it were a current model score.
+
+**How to apply:** New reports with failed or unknown mandatory gates retain no `modelScore` and render “Not scored.” Non-entity decision labels such as “No qualified option” remain valid canonical outcomes.
