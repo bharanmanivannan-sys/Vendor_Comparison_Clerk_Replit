@@ -843,7 +843,8 @@ export const parseComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
 export const parseComparisonPromptResponseVendorsMin = 2;
@@ -937,7 +938,8 @@ export const parseGuestComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseGuestComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
 export const parseGuestComparisonPromptResponseVendorsMin = 2;
@@ -1069,7 +1071,7 @@ export const CreateComparisonJobResponse = zod.object({
   "entities": zod.array(zod.string()).min(createComparisonJobResponseProgressEntitiesMin).max(createComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.')
 }).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
 
 
@@ -1219,8 +1221,8 @@ export const GetComparisonJobResponse = zod.object({
   "entities": zod.array(zod.string()).min(getComparisonJobResponseProgressEntitiesMin).max(getComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "elapsedMs": zod.number().int().min(getComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
+  "elapsedMs": zod.number().int().min(getComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.'),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
@@ -1734,7 +1736,7 @@ export const GetComparisonJobResponse = zod.object({
 }))
 })]).optional(),
   "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence', 'latency_budget_exceeded']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
 }).describe('Pollable state for asynchronous comparison research.')
 
 
@@ -2154,7 +2156,7 @@ export const CreateGuestComparisonJobResponse = zod.object({
   "entities": zod.array(zod.string()).min(createGuestComparisonJobResponseProgressEntitiesMin).max(createGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.')
 }).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
 
 
@@ -2304,8 +2306,8 @@ export const GetGuestComparisonJobResponse = zod.object({
   "entities": zod.array(zod.string()).min(getGuestComparisonJobResponseProgressEntitiesMin).max(getGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "elapsedMs": zod.number().int().min(getGuestComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
+  "elapsedMs": zod.number().int().min(getGuestComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.'),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
@@ -2819,7 +2821,7 @@ export const GetGuestComparisonJobResponse = zod.object({
 }))
 })]).optional(),
   "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence', 'latency_budget_exceeded']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
 }).describe('Pollable state for asynchronous comparison research.')
 
 

@@ -195,12 +195,23 @@ export interface RegenerateComparisonInput {
   additionalWeights?: AdditionalComparisonWeight[];
 }
 
+export type ComparisonPromptInputMarket = typeof ComparisonPromptInputMarket[keyof typeof ComparisonPromptInputMarket];
+
+
+export const ComparisonPromptInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
+
 export interface ComparisonPromptInput {
   /**
      * @minLength 8
      * @maxLength 2000
      */
   prompt: string;
+  market?: ComparisonPromptInputMarket;
 }
 
 export type SourcePreflightInputMarket = typeof SourcePreflightInputMarket[keyof typeof SourcePreflightInputMarket];
@@ -393,7 +404,7 @@ export interface ComparisonJobAccepted {
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   /**
-     * Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+     * Hard deadline in seconds for reaching a terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;
@@ -418,6 +429,7 @@ export const ComparisonJobStateErrorCode = {
   research_failed: 'research_failed',
   validation_failed: 'validation_failed',
   insufficient_quantitative_evidence: 'insufficient_quantitative_evidence',
+  latency_budget_exceeded: 'latency_budget_exceeded',
 } as const;
 
 export type ComparisonSummaryStatus = typeof ComparisonSummaryStatus[keyof typeof ComparisonSummaryStatus];
@@ -1149,12 +1161,12 @@ export interface ComparisonJobState {
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   /**
-     * Server-measured milliseconds since this job was created.
+     * Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
      * @minimum 0
      */
   elapsedMs: number;
   /**
-     * Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+     * Hard deadline in seconds for reaching a terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;

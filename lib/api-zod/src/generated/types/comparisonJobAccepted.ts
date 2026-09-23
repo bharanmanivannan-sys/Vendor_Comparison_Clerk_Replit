@@ -27,7 +27,7 @@ export interface ComparisonJobAccepted {
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   /**
-     * Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+     * Hard deadline in seconds for reaching a terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;

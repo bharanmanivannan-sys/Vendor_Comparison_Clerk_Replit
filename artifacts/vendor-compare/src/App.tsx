@@ -132,6 +132,7 @@ const clerkProxyUrl = viteEnv.VITE_CLERK_PROXY_URL;
 
 export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+  comparison = reconcileReportScores(comparison);
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -145,7 +146,9 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
   const decisionQuality = computeDecisionQuality(comparison);
-  const decisionUsable = decisionQuality.decision !== 'FAIL'
+  const confirmedContractUsable = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
+  const decisionUsable = (decisionQuality.decision !== 'FAIL' || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
@@ -230,7 +233,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   if (decisionUsable) summary.drawText(`${Math.round(Number(comparison.score) || 0)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
   y -= 105;
   summary.drawText('EXECUTIVE RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
-   y = drawDecisionLines(summary, comparison.executiveSummary, margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
+   y = drawDecisionLines(summary, evidenceSafeExecutiveSummary(comparison), margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
   y -= 8;
   summary.drawText('WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 19;
@@ -311,7 +314,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       appendixPage.drawText(scoreEligible ? `${Math.round(score)}/100` : 'Not scored', { x: pageSize[0] - margin - 62, y: appendixY, size: 9, font: bold, color: navy });
       appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth, height: 10, color: rgb(0.88, 0.86, 0.8) });
       if (scoreEligible) appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth * score / 100, height: 10, color: decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
-      appendixY = drawLines(appendixPage, vendor.verdict, margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
+       appendixY = drawLines(appendixPage, vendorVerdictPresentation(vendor), margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
       appendixY -= 12;
     });
     toArray<any>(comparison.vendorScores).forEach((vendor: any) => {
@@ -321,12 +324,27 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       toArray<any>(vendor.weightedScores).forEach((criterion: any) => {
         ensureSpace(43, 'Weighted criteria');
         const score = Math.max(0, Math.min(100, Number(criterion.score) || 0));
+        const criterionScoreEligible = qualificationAllowsScore(vendor);
+        const qualificationModelReport = hasVendorScoreExtension(vendor);
+        const verifiedMetricCount = toArray<any>(criterion.evidence).filter((evidence: any) => (
+          evidence.normalizationMethod === 'retrieved_document_metric'
+          && evidence.evidenceKind !== 'unverified'
+          && evidence.sourceId
+        )).length;
         const label = `${clean(criterion.criterion)} (${Number(criterion.weight) || 0}% weight)`;
         appendixPage.drawText(label, { x: margin, y: appendixY, size: 8, font: bold, color: navy });
-        appendixPage.drawText(`${Math.round(score)}`, { x: pageSize[0] - margin - 22, y: appendixY, size: 8, font: bold, color: navy });
-        appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth, height: 6, color: rgb(0.88, 0.86, 0.8) });
-        appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth * score / 100, height: 6, color: teal });
-        appendixY = drawLines(appendixPage, criterion.rationale, margin, appendixY - 25, { size: 7.6, lineHeight: 9.5, color: grey, maxLines: 3 });
+        const secondaryMetric = qualificationModelReport
+          ? `${verifiedMetricCount} verified metric${verifiedMetricCount === 1 ? '' : 's'}`
+          : criterionScoreEligible ? `${Math.round(score)}` : 'Not scored';
+        appendixPage.drawText(secondaryMetric, { x: pageSize[0] - margin - (qualificationModelReport ? 95 : criterionScoreEligible ? 22 : 58), y: appendixY, size: 8, font: bold, color: navy });
+        if (!qualificationModelReport) {
+          appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth, height: 6, color: rgb(0.88, 0.86, 0.8) });
+          if (criterionScoreEligible) appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth * score / 100, height: 6, color: teal });
+        }
+        const criterionDetail = qualificationModelReport
+          ? `Evidence coverage: ${verifiedMetricCount} exact retrieved metric${verifiedMetricCount === 1 ? '' : 's'}.`
+          : criterion.rationale;
+        appendixY = drawLines(appendixPage, criterionDetail, margin, appendixY - 25, { size: 7.6, lineHeight: 9.5, color: grey, maxLines: 3 });
         appendixY -= 9;
       });
       if (toTextList(vendor.switchConditions).length) drawListSection(`When the recommendation could switch from ${vendor.vendor}`, vendor.switchConditions);
@@ -338,10 +356,8 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const pdfTopScore = pdfEligibleScores.length ? Math.max(...pdfEligibleScores.map((vendor: any) => Number(vendor.score))) : null;
   const extendedVendorRows = toArray<any>(comparison.vendorScores).filter(hasVendorScoreExtension).flatMap((vendor: any) => {
     const dimensions = toArray<any>(vendor.dimensionScores).map((dimension: any) => {
-      const score = dimension.coverageStatus === 'SUPPRESSED' || dimension.score === undefined || dimension.score === null
-        ? 'Suppressed'
-        : `${Math.round(Number(dimension.score))}/100`;
-      return `${dimension.dimension}: ${score} (${coverageLabel(dimension.coverageStatus)}; ${dimension.coverage ?? 0}% coverage; ${dimension.supportedSubcriteria ?? 0}/${dimension.totalSubcriteria ?? 0} supported)`;
+      const coverageStatus = dimension.coverageStatus === 'SUPPRESSED' ? 'Suppressed' : coverageLabel(dimension.coverageStatus);
+      return `${dimension.dimension}: Evidence coverage ${dimension.supportedSubcriteria ?? 0}/${dimension.totalSubcriteria ?? 0} verified metrics (${coverageStatus}; ${dimension.coverage ?? 0}% coverage)`;
     }).join(' | ');
     const gates = toArray<any>(vendor.qualificationGates).map((gate: any) => `${gate.gate}: ${gate.status || 'UNKNOWN'}${gate.mandatory ? ' (mandatory)' : ''} — ${gate.rationale || 'Not established'}${toTextList(gate.evidenceSourceIds).length ? ` [Evidence IDs: ${toTextList(gate.evidenceSourceIds).join(', ')}]` : ''}`).join(' | ');
     return [{
@@ -365,9 +381,19 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     extendedVendorRows,
     [['Option', 'vendor'], ['Overall score difference', 'difference'], ['Qualification status', 'qualification'], ['Qualification gates', 'gates'], ['Dimension scores', 'dimensions'], ['Evidence confidence and coverage', 'evidence'], ['Strengths', 'strengths'], ['Gaps', 'gaps'], ['Conditions', 'conditions'], ['Limitations', 'limitations']],
   );
+  const pdfVendorVerdicts = toArray<any>(comparison.vendorScores).map((vendor: any) => {
+    const role = providerRolePresentation(vendor);
+    return {
+      ...vendor,
+      score: qualificationAllowsScore(vendor) ? vendor.score : 'Not scored',
+      providerRole: role.label,
+      providerRoleRationale: role.rationale,
+      verdict: vendorVerdictPresentation(vendor),
+    };
+  });
   drawSection(
     'Vendor verdicts',
-    comparison.vendorScores,
+    pdfVendorVerdicts,
     [['Vendor', 'vendor'], ['Weighted score', 'score'], ['Strategic role', 'providerRole'], ['Role rationale', 'providerRoleRationale'], ['Verdict', 'verdict']],
   );
   drawSection(
@@ -1158,6 +1184,152 @@ function qualificationAllowsScore(vendor: any): boolean {
     || vendor.qualificationStatus === 'QUALIFIED_WITH_CONDITIONS';
 }
 
+function provenanceCompleteEvidence(evidence: any): boolean {
+  const sourceId = String(evidence?.sourceId || '');
+  const hash = String(evidence?.documentSha256 || '');
+  return /^docsha256:[a-f0-9]{64}$/i.test(sourceId)
+    || (
+      /^[a-f0-9]{64}$/i.test(hash)
+      && Number.isInteger(evidence?.sourceTextStart)
+      && Number.isInteger(evidence?.sourceTextEnd)
+      && evidence.sourceTextStart >= 0
+      && evidence.sourceTextEnd > evidence.sourceTextStart
+    );
+}
+
+function vendorHasProvenanceCompleteEvidence(vendor: any): boolean {
+  const weightedScores = Array.isArray(vendor?.weightedScores) ? vendor.weightedScores : [];
+  return weightedScores.some((criterion: any) => (
+    (Array.isArray(criterion?.evidence) ? criterion.evidence : []).some((evidence: any) => (
+      evidence?.evidenceKind !== 'unverified'
+      && evidence?.evidenceKind !== 'analyst_judgment'
+      && provenanceCompleteEvidence(evidence)
+    ))
+  ));
+}
+
+export function providerRolePresentation(vendor: any): { label: string; rationale: string } {
+  if (!qualificationAllowsScore(vendor) || (
+    hasVendorScoreExtension(vendor)
+    && !vendorHasProvenanceCompleteEvidence(vendor)
+  )) {
+    return {
+      label: 'Not established',
+      rationale: 'Strategic role was not established from provenance-complete evidence.',
+    };
+  }
+  return {
+    label: String(vendor?.providerRole || 'Not classified').replaceAll('_', ' '),
+    rationale: String(vendor?.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'),
+  };
+}
+
+/**
+ * Restore the scores that form the saved report's decision contract when an
+ * older browser snapshot has stale modeled scores (for example, all zeros
+ * after a guest job can no longer be re-fetched).  The evidence/model values
+ * are retained under raw* fields for inspection; every report view consumes
+ * the reconciled score fields from this boundary.
+ */
+export function reconcileReportScores<T extends Record<string, any>>(report: T): T {
+  if (!report || typeof report !== 'object') return report;
+  const vendors = Array.isArray(report.vendorScores) ? report.vendorScores : [];
+  const canonical = (value: unknown) => String(value ?? '').trim().toLowerCase();
+  const finalRecommendedVendor = vendors.find(
+    (vendor: any) => canonical(vendor?.vendor) === canonical(report.recommendation),
+  );
+  const finalRecommendationQualified = finalRecommendedVendor
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(finalRecommendedVendor.qualificationStatus));
+  const finalScore = Number(report.score);
+  const storedConfirmedMatchesFinal = report.confirmedRecommendation?.status === 'CONFIRMED'
+    && canonical(report.confirmedRecommendation?.option) === canonical(report.recommendation);
+  const confirmed = storedConfirmedMatchesFinal
+    ? report.confirmedRecommendation
+    : finalRecommendationQualified && Number.isFinite(finalScore) && finalScore > 0
+    ? {
+        status: 'CONFIRMED',
+        option: finalRecommendedVendor.vendor,
+        score: finalScore,
+        basis: finalRecommendedVendor.qualificationStatus,
+        rationale: String(report.recommendationReason || ''),
+      }
+    : report.confirmedRecommendation;
+  const confirmedQualified = confirmed?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(confirmed?.basis));
+  const confirmedScore = Number(confirmed?.score);
+  const scoreOverrides = new Map<string, number>();
+  if (confirmedQualified && Number.isFinite(confirmedScore)) {
+    scoreOverrides.set(canonical(confirmed.option), confirmedScore);
+  }
+  const alternatives = Array.isArray(report.alternatives) ? report.alternatives : [];
+  alternatives.forEach((alternative: any) => {
+    const qualified = ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(alternative?.qualificationStatus));
+    const score = Number(alternative?.score);
+    if (confirmedQualified && qualified && Number.isFinite(score)) {
+      scoreOverrides.set(canonical(alternative?.option), score);
+    }
+  });
+  const reconciledVendors = vendors.map((vendor: any) => {
+    const rowScore = Number(vendor?.score);
+    const score = scoreOverrides.get(canonical(vendor?.vendor))
+      ?? (Number.isFinite(rowScore) ? rowScore : undefined);
+    if (score === undefined) return vendor;
+    return {
+      ...vendor,
+      rawScore: vendor.rawScore ?? vendor.score,
+      rawModelScore: vendor.rawModelScore ?? vendor.modelScore,
+      score,
+      modelScore: score,
+      reconciledScoreSource: canonical(vendor?.vendor) === canonical(confirmed?.option)
+        ? 'confirmedRecommendation'
+        : 'qualifiedAlternative',
+    };
+  });
+  const reconciledAlternatives = Array.isArray(report.alternatives)
+    ? report.alternatives.map((alternative: any) => {
+        const qualified = ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(alternative?.qualificationStatus));
+        const score = Number(alternative?.score);
+        const vendor = confirmedQualified && qualified && Number.isFinite(score)
+          ? reconciledVendors.find((item: any) => canonical(item?.vendor) === canonical(alternative?.option))
+          : undefined;
+        if (!vendor) return alternative;
+        return {
+          ...alternative,
+          rawScore: alternative.rawScore ?? alternative.score,
+          score,
+          reconciledScoreSource: 'qualifiedAlternative',
+        };
+      })
+    : report.alternatives;
+  return {
+    ...report,
+    ...(confirmedQualified && Number.isFinite(confirmedScore)
+      ? { recommendation: confirmed.option, score: confirmedScore }
+      : {}),
+    ...(confirmed ? { confirmedRecommendation: confirmed } : {}),
+    ...(finalRecommendationQualified
+      ? { vendors: reconciledVendors.map((vendor: any) => String(vendor?.vendor || '').trim()).filter(Boolean) }
+      : {}),
+    vendorScores: reconciledVendors,
+    ...(Array.isArray(report.alternatives) ? { alternatives: reconciledAlternatives } : {}),
+  };
+}
+
+function vendorVerdictPresentation(vendor: any): string {
+  return qualificationAllowsScore(vendor)
+    ? String(vendor?.verdict || 'No verdict was returned.')
+    : 'No evidence-backed verdict was established for this option.';
+}
+
+function evidenceSafeExecutiveSummary(comparison: any): string {
+  return qualificationDecisionUsable(comparison)
+    ? String(comparison?.executiveSummary || comparison?.recommendationReason || '')
+    : String(
+        comparison?.recommendationReason
+        || 'No option passed the mandatory qualification gates with sufficient provenance-complete evidence.',
+      );
+}
+
 function qualificationDecisionUsable(comparison: any): boolean {
   const modeled: any[] = (Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [])
     .filter((vendor: any) => vendor?.qualificationStatus);
@@ -1174,7 +1346,8 @@ export function provisionalLensDecisionUsable(comparison: any): boolean {
   const modeled: any[] = (Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [])
     .filter((vendor: any) => vendor?.qualificationStatus);
   return modeled.length > 0
-    && modeled.every((vendor) => vendor.qualificationStatus === 'INSUFFICIENT_EVIDENCE');
+    && modeled.every((vendor) => vendor.qualificationStatus === 'INSUFFICIENT_EVIDENCE')
+    && modeled.every(vendorHasProvenanceCompleteEvidence);
 }
 
 function coverageLabel(status: unknown): string {
@@ -1198,7 +1371,7 @@ export function VendorScoreExtensionSection({ vendorScores = [] }: { vendorScore
         return <article key={vendor.vendor} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid={`vendor-score-extension-${String(vendor.vendor).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>
           <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3>{difference !== null && <p className="mt-1 text-[10px] font-bold uppercase tracking-[.1em] text-[#7b817e]">{difference === 0 ? 'Leads' : scoreDifferenceLabel(difference)}</p>}</div><div className="flex items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.qualificationStatus || 'Not established').replaceAll('_', ' ')}</span>{scoreEligible && Number.isFinite(score) ? <span className="mono text-sm font-bold text-[#202840]">{Math.round(score)}/100</span> : <span className="mono text-xs font-bold text-[#687083]">Not scored</span>}</div></div>
           {Array.isArray(vendor.qualificationGates) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Qualification gates</p><div className="mt-2 space-y-2">{vendor.qualificationGates.map((gate: any, index: number) => <div key={`${gate.gate}-${index}`} className="rounded-lg border border-[#e3ddcf] bg-white/50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-bold text-[#202840]">{gate.gate}</span><span className="rounded-full bg-[#e7e2d4] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(gate.status || 'UNKNOWN').replaceAll('_', ' ')}{gate.mandatory ? ' · mandatory' : ''}</span></div>{gate.rationale && <p className="mt-1 text-[11px] leading-5 text-[#687083]">{gate.rationale}</p>}{Array.isArray(gate.evidenceSourceIds) && gate.evidenceSourceIds.length > 0 && <p className="mt-1 text-[9px] text-[#85877f]">Evidence IDs: {gate.evidenceSourceIds.join(', ')}</p>}</div>)}</div></div>}
-          {Array.isArray(vendor.dimensionScores) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Dimension scores</p><div className="mt-2 space-y-3">{VENDOR_SCORE_DIMENSIONS.map((name) => { const dimension = dimensions.find((item: any) => item.dimension === name); if (!dimension) return null; const suppressed = dimension.coverageStatus === 'SUPPRESSED' || dimension.score === undefined || dimension.score === null; return <div key={name}><div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-bold text-[#202840]">{name}</span><span className="mono font-bold text-[#0f766e]">{suppressed ? 'Suppressed' : `${Math.round(Number(dimension.score))}/100`}</span></div><div className="mt-1 flex items-center justify-between gap-3 text-[9px] text-[#85877f]"><span>{coverageLabel(dimension.coverageStatus)}</span><span>{dimension.coverage ?? 0}% coverage · {dimension.supportedSubcriteria ?? 0}/{dimension.totalSubcriteria ?? 0} supported</span></div>{dimension.rationale && <p className="mt-1 text-[10px] leading-4 text-[#687083]">{dimension.rationale}</p>}</div>; })}</div></div>}
+          {Array.isArray(vendor.dimensionScores) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Evidence coverage</p><div className="mt-2 space-y-3">{VENDOR_SCORE_DIMENSIONS.map((name) => { const dimension = dimensions.find((item: any) => item.dimension === name); if (!dimension) return null; const suppressed = dimension.coverageStatus === 'SUPPRESSED'; return <div key={name}><div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-bold text-[#202840]">{name}</span><span className="mono font-bold text-[#0f766e]">{dimension.supportedSubcriteria ?? 0}/{dimension.totalSubcriteria ?? 0} verified metrics{suppressed ? ' (Suppressed)' : ''}</span></div><div className="mt-1 flex items-center justify-between gap-3 text-[9px] text-[#85877f]"><span>{coverageLabel(dimension.coverageStatus)}</span><span>{dimension.coverage ?? 0}% evidence coverage</span></div>{dimension.rationale && <p className="mt-1 text-[10px] leading-4 text-[#687083]">{dimension.rationale}</p>}</div>; })}</div></div>}
           {(vendor.evidenceConfidence !== undefined || vendor.evidenceCoverage !== undefined) && <div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence confidence</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{vendor.evidenceConfidence ?? '—'}%</p></div><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence coverage</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{vendor.evidenceCoverage ?? '—'}%</p></div></div>}
           {[['Strengths', vendor.strengths], ['Gaps', vendor.gaps], ['Conditions', vendor.conditions], ['Limitations', vendor.limitations]].map(([label, items]) => Array.isArray(items) && items.length ? <div className="mt-4" key={label as string}><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{label as string}</p><ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-5 text-[#687083]">{(items as string[]).map((item, index) => <li key={`${label}-${index}`}>{item}</li>)}</ul></div> : null)}
         </article>;
@@ -1215,6 +1388,7 @@ export function comparedSetAlternatives(comparison: any): Array<{
   qualificationStatus: string;
   rationale: string;
 }> {
+  comparison = reconcileReportScores(comparison);
   const vendors = Array.isArray(comparison?.vendors)
     ? comparison.vendors.map((vendor: unknown) => String(vendor).trim()).filter(Boolean)
     : (comparison?.vendorScores || []).map((vendor: any) => String(vendor?.vendor || '').trim()).filter(Boolean);
@@ -1222,6 +1396,8 @@ export function comparedSetAlternatives(comparison: any): Array<{
     (vendor: string) => vendor.toLowerCase() === String(value || '').trim().toLowerCase(),
   );
   const hasConfirmedRecommendationContract = Boolean(comparison?.confirmedRecommendation);
+  const confirmedContractQualified = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
   const confirmedOption = hasConfirmedRecommendationContract
     ? comparison.confirmedRecommendation.status === 'CONFIRMED'
       ? canonicalOption(comparison.confirmedRecommendation.option)
@@ -1248,18 +1424,27 @@ export function comparedSetAlternatives(comparison: any): Array<{
     return [{
       option,
       rank: Number.isInteger(alternative?.rank) && alternative.rank > 0 ? alternative.rank : index + 1,
-      score: alternative?.score !== null && Number.isFinite(rawScore) ? Math.round(rawScore) : null,
-      scoreDifference: alternative?.scoreDifference !== null && Number.isFinite(rawDifference) ? Math.max(0, Math.round(rawDifference)) : null,
+      score: confirmedContractQualified && alternative?.score !== null && Number.isFinite(rawScore)
+        ? Math.round(rawScore)
+        : null,
+      scoreDifference: confirmedContractQualified && alternative?.scoreDifference !== null && Number.isFinite(rawDifference)
+        ? Math.max(0, Math.round(rawDifference))
+        : null,
       qualificationStatus: String(alternative?.qualificationStatus || 'NOT_ESTABLISHED'),
-      rationale: String(alternative?.rationale || `${option} remains an alternative from the compared set.`),
+      rationale: ['INSUFFICIENT_EVIDENCE', 'NOT_QUALIFIED'].includes(String(alternative?.qualificationStatus))
+        ? 'No evidence-backed verdict was established; this option remains under consideration pending provenance-complete evidence.'
+        : String(alternative?.rationale || `${option} remains an alternative from the compared set.`),
     }];
   });
 }
 
 export function DecisionRecommendationCard({ comparison }: { comparison: any }) {
+  comparison = reconcileReportScores(comparison);
   const decisionQuality = computeDecisionQuality(comparison);
   const hasConfirmedRecommendationContract = Boolean(comparison?.confirmedRecommendation);
   const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED';
+  const confirmedContractUsable = contractConfirmed
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
   const recommendation = String(
     contractConfirmed ? comparison.confirmedRecommendation.option : comparison?.recommendation || '',
   ).trim();
@@ -1271,7 +1456,7 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
     && decisionQuality.lensWinner.winner.toLowerCase() === recommendation.toLowerCase(),
   );
   const decisionUsable = Boolean(recommendedVendor)
-    && (decisionQuality.decision !== 'FAIL' || recommendationMatchesLens)
+    && (decisionQuality.decision !== 'FAIL' || recommendationMatchesLens || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = provisionalLensDecisionUsable(comparison)
@@ -1343,8 +1528,10 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
 
 function overallVendorScore(vendor: any): number {
   if (hasVendorScoreExtension(vendor)) {
+    const finalScore = Number(vendor?.score);
     const modelScore = Number(vendor?.modelScore);
-    return Math.max(0, Math.min(100, Math.round(Number.isFinite(modelScore) ? modelScore : 0)));
+    const score = Number.isFinite(finalScore) ? finalScore : modelScore;
+    return Math.max(0, Math.min(100, Math.round(Number.isFinite(score) ? score : 0)));
   }
   const baseScore = Number(vendor?.baseScore);
   const tieBreakBonus = Number(vendor?.providerRoleTieBreakBonus ?? 0);
@@ -1512,6 +1699,7 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 }
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
+  comparison = reconcileReportScores(comparison);
   const decisionQuality = computeDecisionQuality(comparison);
   const decisionUsable = decisionQuality.decision !== 'FAIL'
     && !hasAdjustedTopScoreTie(comparison)
@@ -1524,9 +1712,12 @@ export function ExecutiveDecisionBrief({ comparison, compact = false }: { compar
   const runnerUp = [...(comparison.vendorScores || [])]
     .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
     .sort((a: any, b: any) => b.score - a.score)[0];
-  const shortlist = Array.isArray(comparison.vendors) && comparison.vendors.length
-    ? comparison.vendors
-    : (comparison.vendorScores || []).map((vendor: any) => vendor.vendor);
+  const canonicalScoreRows = Array.isArray(comparison.vendorScores)
+    ? comparison.vendorScores.filter((vendor: any) => String(vendor?.vendor || '').trim())
+    : [];
+  const shortlist = canonicalScoreRows.length
+    ? canonicalScoreRows.map((vendor: any) => vendor.vendor)
+    : Array.isArray(comparison.vendors) ? comparison.vendors : [];
   const shortlistSummary = shortlist
     .map((vendorName: string) => {
       const scoreEntry = (comparison.vendorScores || []).find((vendor: any) => vendor.vendor === vendorName);
@@ -1541,7 +1732,7 @@ export function ExecutiveDecisionBrief({ comparison, compact = false }: { compar
     </div>
     <div className="mt-5 grid gap-4 md:grid-cols-3">
       <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : provisionalLensUsable ? 'Evidence-limited leader' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionVisible ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionVisible ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
-      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(comparison.executiveSummary)}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}{shortlistSummary && <p className="mt-3 border-t border-[#e2dccf] pt-3 text-xs leading-5 text-[#687083]" data-testid="brief-shortlist"><strong>Shortlist assessed:</strong> {shortlistSummary}</p>}</article>
+      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(evidenceSafeExecutiveSummary(comparison))}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}{shortlistSummary && <p className="mt-3 border-t border-[#e2dccf] pt-3 text-xs leading-5 text-[#687083]" data-testid="brief-shortlist"><strong>Shortlist assessed:</strong> {shortlistSummary}</p>}</article>
       <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
      </div>
      {decisionNote && <div className="mt-4 rounded-xl border border-[#d7c47b] bg-[#f5edc8] px-4 py-3 text-xs leading-5 text-[#715d16]" data-testid="decision-note"><strong>Note: {renderDecisionText(decisionNote)}</strong></div>}
@@ -1958,9 +2149,9 @@ function VrioSection({ vendorScores = [] }: { vendorScores?: any[] }) {
   return <section className="mt-14" data-testid="section-vrio"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Strategic advantage</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">VRIO framework across the shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">VRIO tests whether each option creates value, is rare, is difficult to imitate, and is organized to capture that advantage.</p><div className="mt-5 grid gap-4 lg:grid-cols-2">{vendorScores.map((vendor) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor}><div className="flex items-center justify-between"><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3><span className="mono text-[10px] font-bold text-[#0f766e]">{vendor.score}/100</span></div><div className="mt-5 grid gap-3 sm:grid-cols-2">{dimensions.map(([key, label]) => { const item = vendor.vrio?.[key]; return <div className="rounded-xl bg-[#e7e2d4] p-3" key={key}><div className="flex items-center justify-between"><p className="text-xs font-bold text-[#202840]">{label}</p><span className="rounded-full bg-[#f8f4e8] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(item?.status || 'not available').replace('_', ' ')}</span></div>{item?.rationale && <p className="mt-2 text-[11px] leading-5 text-[#687083]">{item.rationale}</p>}</div>; })}</div><p className="mt-4 border-t border-[#e3ddcf] pt-4 text-xs leading-5 text-[#556075]"><strong>Implication:</strong> {vendor.vrio?.implication || 'No implication available.'}</p></article>)}</div></section>;
 }
 
-function MarketPositionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
+export function MarketPositionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
   if (!vendorScores.some((vendor) => vendor.marketPosition)) return null;
-  return <section className="mt-14" data-testid="section-market-position"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Market context</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Strategic role and market position</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Each option is classified for this decision as an accelerator, leader, core provider, or expert. Market position uses the latest local share, sales, or rank found, with its entity level, denominator, and period kept explicit.</p><div className="mt-5 overflow-x-auto rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><table className="w-full min-w-[960px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3">Option</th><th className="px-4 py-3">Strategic role</th><th className="px-4 py-3">Why</th><th className="px-4 py-3">Market share / sales / rank</th><th className="px-4 py-3">Scope / period</th><th className="px-4 py-3">Share value</th><th className="px-5 py-3">Evidence note</th></tr></thead><tbody>{vendorScores.map((vendor) => { const item = vendor.marketPosition || {}; return <tr className="border-t border-[#e7e2d4]" key={vendor.vendor}><td className="px-5 py-4 font-bold text-[#202840]">{vendor.vendor}</td><td className="px-4 py-4"><span className="rounded-full bg-[#dcefe9] px-2 py-1 text-[10px] font-bold uppercase text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></td><td className="max-w-[260px] px-4 py-4 leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Classification unavailable for this saved comparison.'}</td><td className="px-4 py-4 text-[#0f766e]">{item.marketShare || 'Unavailable'}</td><td className="px-4 py-4 text-[#687083]">{item.market || 'Relevant segment'}<br />{item.marketSharePeriod || ''}</td><td className="px-4 py-4 text-[#687083]">{item.shareValue || 'Not applicable'}<br />{item.shareValueAsOf || ''}</td><td className="px-5 py-4 leading-5 text-[#687083]">{item.evidence || item.applicability || 'No evidence note available.'}</td></tr>; })}</tbody></table></div></section>;
+  return <section className="mt-14" data-testid="section-market-position"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Market context</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Strategic role and market position</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Strategic roles are shown only when provenance-complete evidence supports the option's classification. Market position keeps the latest supported local share, sales, or rank explicit with its entity level, denominator, and period.</p><div className="mt-5 overflow-x-auto rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><table className="w-full min-w-[960px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3">Option</th><th className="px-4 py-3">Strategic role</th><th className="px-4 py-3">Why</th><th className="px-4 py-3">Market share / sales / rank</th><th className="px-4 py-3">Scope / period</th><th className="px-4 py-3">Share value</th><th className="px-5 py-3">Evidence note</th></tr></thead><tbody>{vendorScores.map((vendor) => { const item = vendor.marketPosition || {}; const role = providerRolePresentation(vendor); return <tr className="border-t border-[#e7e2d4]" key={vendor.vendor}><td className="px-5 py-4 font-bold text-[#202840]">{vendor.vendor}</td><td className="px-4 py-4"><span className="rounded-full bg-[#dcefe9] px-2 py-1 text-[10px] font-bold uppercase text-[#0f766e]">{role.label}</span></td><td className="max-w-[260px] px-4 py-4 leading-5 text-[#687083]">{role.rationale}</td><td className="px-4 py-4 text-[#0f766e]">{item.marketShare || 'Unavailable'}</td><td className="px-4 py-4 text-[#687083]">{item.market || 'Relevant segment'}<br />{item.marketSharePeriod || ''}</td><td className="px-4 py-4 text-[#687083]">{item.shareValue || 'Not applicable'}<br />{item.shareValueAsOf || ''}</td><td className="px-5 py-4 leading-5 text-[#687083]">{item.evidence || item.applicability || 'No evidence note available.'}</td></tr>; })}</tbody></table></div></section>;
 }
 
 function parseFrameworkOptionEntry(value: unknown, vendors: string[]): { vendor: string; text: string } | null {
@@ -2007,9 +2198,19 @@ export function actionableSoarEntries(
     `${comparison.category || ''} ${comparison.prompt || ''}`,
   );
   const vendorScores = Array.isArray(comparison.vendorScores) ? comparison.vendorScores : [];
+  const qualificationModelReport = vendorScores.some(hasVendorScoreExtension);
+  const hasQualifiedOverallRecommendation = comparison.confirmedRecommendation?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(comparison.confirmedRecommendation?.basis);
   const optionText = (vendor: string, dimension: string) => {
     const stored = existing.get(`${dimension.toLowerCase()}::${vendor.toLowerCase()}`);
-    if (stored) return stored;
+    if (stored) {
+      return hasQualifiedOverallRecommendation
+        ? stored.replace(
+            /No unique pricing or feature-row win is established yet\./gi,
+            'No unique leader for this individual evidence row; this does not change the conditional overall recommendation.',
+          )
+        : stored;
+    }
     const scorecard = vendorScores.find((entry: any) => String(entry.vendor).toLowerCase() === vendor.toLowerCase()) || {};
     const criteria = (Array.isArray(scorecard.weightedScores) ? scorecard.weightedScores : [])
       .map((entry: any) => ({
@@ -2027,20 +2228,26 @@ export function actionableSoarEntries(
       .filter((row: any) => String(row?.winner || '').toLowerCase() === vendor.toLowerCase())
       .map((row: any) => String(row.dimension || row.item || row.feature || '').trim())
       .filter(Boolean);
-    const verifiedRationale = hasOptionSpecificFrameworkEvidence(strongest.rationale)
+    const verifiedRationale = !qualificationModelReport && hasOptionSpecificFrameworkEvidence(strongest.rationale)
       ? ` ${strongest.rationale}`
       : '';
     const validationMethod = isVehicle
       ? 'a representative test drive, written on-road quote, warranty terms, and local service evidence'
       : 'a representative pilot, implementation plan, written commercial quote, and reference checks';
     if (dimension === 'Strengths') {
-      return `Current advantage — ${strongest.criterion} is the strongest weighted area at ${strongest.score}/100.${verifiedRationale} Product-manager use: make this the lead value proposition and test whether the advantage is defensible. Buyer use: treat it as a must-pass proof point, not a marketing claim.`;
+      return qualificationModelReport
+        ? `Current advantage — ${strongest.criterion} has the strongest verified evidence coverage.${verifiedRationale} Product-manager use: make this the lead value proposition and test whether the advantage is defensible. Buyer use: treat it as a must-pass proof point, not a marketing claim.`
+        : `Current advantage — ${strongest.criterion} is the strongest weighted area at ${strongest.score}/100.${verifiedRationale} Product-manager use: make this the lead value proposition and test whether the advantage is defensible. Buyer use: treat it as a must-pass proof point, not a marketing claim.`;
     }
     if (dimension === 'Opportunities') {
       const win = winningRows[0]
         ? `Its clearest comparison win is ${winningRows[0]}.`
-        : 'No unique pricing or feature-row win is established yet.';
-      return `Decision opportunity — ${win} Improve ${weakest.criterion} from ${weakest.score}/100 toward at least ${target}/100 while preserving the ${strongest.criterion} advantage. Product managers should prioritize the gap in the roadmap or offer; buyers should use it in validation and negotiation.`;
+        : hasQualifiedOverallRecommendation
+          ? 'No unique leader for this individual evidence row; this does not change the conditional overall recommendation.'
+          : 'No unique leader is established for this individual evidence row.';
+      return qualificationModelReport
+        ? `Decision opportunity — ${win} Increase verified evidence coverage for ${weakest.criterion} while preserving the ${strongest.criterion} advantage. Product managers should prioritize the gap in the roadmap or offer; buyers should use it in validation and negotiation.`
+        : `Decision opportunity — ${win} Improve ${weakest.criterion} from ${weakest.score}/100 toward at least ${target}/100 while preserving the ${strongest.criterion} advantage. Product managers should prioritize the gap in the roadmap or offer; buyers should use it in validation and negotiation.`;
     }
     if (dimension === 'Aspirations') {
       const position = vendor === comparison.recommendation
@@ -2048,7 +2255,9 @@ export function actionableSoarEntries(
         : `Become a credible alternative to ${comparison.recommendation || 'the current leader'}`;
       return `Best-fit future state — ${position} by pairing ${strongest.criterion} with acceptable ${weakest.criterion}. The desired outcome is a choice that remains strong after real-world validation, ownership or implementation costs, and the user's highest-priority criteria are applied.`;
     }
-    return `Acceptance test — validate ${strongest.criterion} and ${weakest.criterion} through ${validationMethod}. Proceed only if ${weakest.criterion} reaches the ${target}/100 decision target without reducing ${strongest.criterion} below its current ${strongest.score}/100 level; otherwise keep the option conditional or switch.`;
+    return qualificationModelReport
+      ? `Acceptance test — validate ${strongest.criterion} and ${weakest.criterion} through ${validationMethod}. Proceed only when both have sufficient verified evidence coverage; otherwise keep the option conditional or switch.`
+      : `Acceptance test — validate ${strongest.criterion} and ${weakest.criterion} through ${validationMethod}. Proceed only if ${weakest.criterion} reaches the ${target}/100 decision target without reducing ${strongest.criterion} below its current ${strongest.score}/100 level; otherwise keep the option conditional or switch.`;
   };
   return dimensions.map((dimension) => [
     dimension,
@@ -2348,12 +2557,17 @@ function ParsedBrief({ parsed, onCreate, pending }: { parsed: any; onCreate: (in
 }
 
 function comparisonErrorMessage(error: unknown) {
-  const data = (error as { data?: { error?: string; message?: string } } | null)?.data;
+  const data = (error as { data?: { error?: string; message?: string; code?: string } } | null)?.data;
   const message = error instanceof Error ? error.message.replace(/^HTTP \d+\s*[^:]*:\s*/, '') : '';
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return 'The research connection was interrupted before the result arrived. Your request is safe to retry.';
   }
   return data?.error || data?.message || message || 'The comparison research could not be completed. Please try again.';
+}
+
+function isInvalidComparisonError(error: unknown): boolean {
+  const responseError = error as { status?: number; data?: { code?: string } } | null;
+  return responseError?.status === 400 && responseError.data?.code === 'invalid_comparison';
 }
 
 type ComparisonJobState = {
@@ -2362,7 +2576,7 @@ type ComparisonJobState = {
   progress: { entities: string[]; subject: string };
   result?: Comparison;
   message?: string;
-  errorCode?: 'research_failed' | 'validation_failed' | 'insufficient_quantitative_evidence';
+  errorCode?: 'research_failed' | 'validation_failed' | 'insufficient_quantitative_evidence' | 'latency_budget_exceeded';
 };
 
 class ComparisonJobError extends Error {
@@ -2384,6 +2598,14 @@ function formatNaturalList(values: string[]): string {
   if (values.length <= 1) return values[0] ?? '';
   if (values.length === 2) return `${values[0]} and ${values[1]}`;
   return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
+}
+
+function sourceComparisonPrompt(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, ' ').trim();
+  const generatedOriginalRequest = normalized.search(/\boriginal\s+request\s*:/i);
+  if (generatedOriginalRequest < 0) return normalized;
+  const editedRequest = normalized.slice(0, generatedOriginalRequest).trim();
+  return editedRequest.length >= 8 ? editedRequest : normalized;
 }
 
 function phraseComparisonPrompt(parsed: ParsedComparison, market: ResearchMarketCode): string {
@@ -2410,7 +2632,11 @@ function phraseComparisonPrompt(parsed: ParsedComparison, market: ResearchMarket
   ) {
     sentences.push(`Recommend the ${parsed.intent.decisionCriterion}.`);
   }
-  return sentences.join(' ');
+  const phrased = sentences.join(' ');
+  const original = sourceComparisonPrompt(parsed.prompt);
+  if (!original || phrased === original) return phrased;
+  const intentPreservingPrompt = `${phrased} Original request: ${original}`;
+  return intentPreservingPrompt.length <= 2000 ? intentPreservingPrompt : original;
 }
 
 type ComparisonRequest = {
@@ -2530,12 +2756,13 @@ export function RoutedComparisonComposer({
       pending={create.isPending}
       error={create.error}
       jobState={create.jobState}
+      onReset={create.reset}
       onSubmit={(data) => create.mutate(data, { onSuccess })}
     />
   );
 }
 
-export function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: ComparisonRequest) => void }) {
+export function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onReset, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onReset?: () => void; onSubmit: (data: ComparisonRequest) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [typoReview, setTypoReview] = useState<PromptTypoReview | null>(null);
   const [interpretation, setInterpretation] = useState<ParsedComparison | null>(null);
@@ -2554,7 +2781,48 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   const [sourcePreflightPending, setSourcePreflightPending] = useState(false);
   const [annualDistanceKm, setAnnualDistanceKm] = useState('');
   const [ownershipPeriodYears, setOwnershipPeriodYears] = useState('');
-  const isVehicleComparison = /\b(?:vehicle|car|suv|ev|electric vehicle|baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
+  const [dismissedResearchError, setDismissedResearchError] = useState(false);
+  const isBaasScenario = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
+  const researchErrorMessage = error ? comparisonErrorMessage(error) : '';
+  const blockingValidationError = !dismissedResearchError && isInvalidComparisonError(error);
+  const promptLengthError = prompt.trim().length > 2000
+    ? 'Keep the comparison prompt to 2,000 characters or fewer.'
+    : '';
+  const annualDistance = Number(annualDistanceKm);
+  const ownershipPeriod = Number(ownershipPeriodYears);
+  const baasValidationError = !isBaasScenario
+    ? ''
+    : Boolean(annualDistanceKm) !== Boolean(ownershipPeriodYears)
+      ? 'Enter both annual distance and ownership period, or leave both blank.'
+      : annualDistanceKm && (!Number.isInteger(annualDistance) || annualDistance < 1 || annualDistance > 500000)
+        ? 'Annual driving distance must be a whole number from 1 to 500,000 km.'
+        : ownershipPeriodYears && (ownershipPeriod < 0.5 || ownershipPeriod > 30 || !Number.isInteger(ownershipPeriod * 2))
+          ? 'Ownership period must be from 0.5 to 30 years in half-year increments.'
+          : '';
+  const actionableValidationMessage = interpretationError
+    || (blockingValidationError ? researchErrorMessage : '')
+    || promptLengthError;
+  useEffect(() => {
+    if (!isBaasScenario) {
+      setAnnualDistanceKm('');
+      setOwnershipPeriodYears('');
+    }
+  }, [isBaasScenario]);
+  useEffect(() => {
+    setDismissedResearchError(false);
+  }, [error]);
+  const focusPromptForEdit = () => {
+    onReset?.();
+    setDismissedResearchError(true);
+    interpretationRequestId.current += 1;
+    setInterpretation(null);
+    setInterpretationPrompt('');
+    setPhrasedPrompt('');
+    setPhrasedPromptBaseline('');
+    setInterpretationError('');
+    setInterpretationPending(false);
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
+  };
 
   const addUrl = () => {
     const value = urlDraft.trim();
@@ -2574,7 +2842,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   };
 
   const startResearch = async (confirmedPrompt: string, reviewedInterpretation?: ParsedComparison) => {
-    if (pending || sourcePreflightPending || interpretationPending || confirmedPrompt.length < 8 || !market) return;
+    if (pending || sourcePreflightPending || interpretationPending || confirmedPrompt.length < 8 || confirmedPrompt.length > 2000 || !market || baasValidationError) return;
     const listedOptions = confirmedPrompt.match(
       /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
     )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
@@ -2617,13 +2885,13 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
         vendors: reviewedInterpretation.vendors,
         criteria: reviewedInterpretation.criteria,
       } : {}),
-      ...(isVehicleComparison && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
-      ...(isVehicleComparison && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
+      ...(isBaasScenario && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
+      ...(isBaasScenario && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
     });
   };
 
   const requestInterpretation = async (requestedPrompt: string) => {
-    if (pending || sourcePreflightPending || interpretationPending || requestedPrompt.length < 8 || !market) return;
+    if (pending || sourcePreflightPending || interpretationPending || requestedPrompt.length < 8 || requestedPrompt.length > 2000 || !market || baasValidationError) return;
     const requestId = ++interpretationRequestId.current;
     setInterpretationPending(true);
     setInterpretationError('');
@@ -2633,7 +2901,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: requestedPrompt }),
+          body: JSON.stringify({ prompt: requestedPrompt, market }),
         },
       );
       if (interpretationRequestId.current !== requestId) return;
@@ -2657,7 +2925,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const trimmedPrompt = prompt.trim();
-    if (pending || trimmedPrompt.length < 8 || !market) return;
+    if (pending || trimmedPrompt.length < 8 || trimmedPrompt.length > 2000 || !market || baasValidationError) return;
     const review = reviewPromptTypos(trimmedPrompt);
     if (review) {
       setTypoReview(review);
@@ -2719,7 +2987,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
     if (!interpretation) return;
     const reviewedPrompt = phrasedPrompt.trim();
     if (phrasedPromptChanged) {
-      if (reviewedPrompt.length < 8) return;
+      if (reviewedPrompt.length < 8 || reviewedPrompt.length > 2000) return;
       setPrompt(reviewedPrompt);
       setInterpretation(null);
       setInterpretationPrompt('');
@@ -2727,7 +2995,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
       void requestInterpretation(reviewedPrompt);
       return;
     }
-    if (!interpretationConfirmable) return;
+    if (!interpretationConfirmable || baasValidationError) return;
     const reviewedInterpretation = {
       ...interpretation,
       vendors: trimmedInterpretedVendors,
@@ -2736,6 +3004,15 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
     setInterpretation(null);
     setInterpretationPrompt('');
     void startResearch(reviewedPrompt, reviewedInterpretation);
+  };
+  const editInterpretation = () => {
+    setPrompt(phrasedPrompt);
+    setInterpretation(null);
+    setInterpretationPrompt('');
+    setPhrasedPrompt('');
+    setPhrasedPromptBaseline('');
+    setInterpretationError('');
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
   };
 
   return (
@@ -2761,8 +3038,11 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           className={`focus-ring mt-4 min-h-[170px] w-full resize-y rounded-xl border p-4 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#2b344e] text-[#f8f4e8] placeholder:text-[#8d98ae]' : 'border-[#d0c8b7] bg-white text-[#202840] placeholder:text-[#9a9a90]'}`}
           placeholder="Example: Compare BYD vs Tesla for an electric car I’ll own for five years in Australia. My budget is A$50,000 and I care about maintenance, features, range, and resale value."
           value={prompt}
+          maxLength={2000}
           onChange={(event) => {
             setPrompt(event.target.value);
+            onReset?.();
+            setDismissedResearchError(true);
             setTypoReview(null);
             interpretationRequestId.current += 1;
             setInterpretation(null);
@@ -2799,11 +3079,20 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
               <p className={`mono text-[10px] font-bold uppercase tracking-[.16em] ${guest ? 'text-[#d9ef66]' : interpretation.context.valid ? 'text-[#35665c]' : 'text-[#8d5650]'}`}>Comparison validation</p>
               <AlertDialogTitle className="display text-2xl font-bold tracking-[-.04em]">Review the interpreted comparison</AlertDialogTitle>
               <AlertDialogDescription className={`text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-              {interpretation.context.valid
-                ? 'Confirm these options and criteria before any research begins.'
-                : interpretation.context.message}
+                {interpretation.context.valid
+                  ? 'Confirm these options and criteria before any research begins.'
+                  : 'This comparison cannot proceed until the prompt is corrected.'}
               </AlertDialogDescription>
             </AlertDialogHeader>
+            {!interpretation.context.valid && (
+              <div
+                className={`mt-4 rounded-xl border px-4 py-3 text-sm font-bold leading-6 ${guest ? 'border-[#d9ef66] bg-[#29334e] text-[#f8f4e8]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`}
+                role="alert"
+                data-testid="status-comparison-validation-error"
+              >
+                {interpretation.context.message}
+              </div>
+            )}
             <label
               htmlFor={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
               className={`mt-4 block text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#a8b0c2]' : 'text-[#85877f]'}`}
@@ -2814,6 +3103,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
               id={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
               value={phrasedPrompt}
               onChange={(event) => setPhrasedPrompt(event.target.value)}
+              maxLength={2000}
               className={`focus-ring mt-2 min-h-[150px] w-full resize-y rounded-lg border px-3 py-3 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c7dcd3] bg-white text-[#202840]'}`}
               aria-label="Phrased comparison request"
               data-testid="input-phrased-comparison"
@@ -2825,28 +3115,22 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
             </p>
             {interpretationOptionError && <p className="mt-2 text-xs font-bold text-[#b94d45]" data-testid="status-interpretation-options">{interpretationOptionError}</p>}
             <p className={`mt-3 text-xs ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-              <strong>Context:</strong> {interpretation.context.segment}. {interpretation.context.message}
+              <strong>Context:</strong> {interpretation.context.segment}.{interpretation.context.valid ? ` ${interpretation.context.message}` : ''}
             </p>
             <AlertDialogFooter className="mt-3">
-              <AlertDialogAction
-                disabled={interpretationPending || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 : !interpretationConfirmable)}
-                onClick={confirmInterpretation}
-                className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                data-testid="button-confirm-interpretation"
-              >
-                {phrasedPromptChanged ? 'Review revised prompt' : 'Confirm and research'}
-              </AlertDialogAction>
+              {interpretation.context.valid && (
+                <AlertDialogAction
+                  disabled={interpretationPending || Boolean(baasValidationError) || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 || phrasedPrompt.trim().length > 2000 : !interpretationConfirmable)}
+                  onClick={confirmInterpretation}
+                  className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="button-confirm-interpretation"
+                >
+                  {phrasedPromptChanged ? 'Review revised prompt' : 'Confirm and research'}
+                </AlertDialogAction>
+              )}
               <AlertDialogCancel
-                onClick={() => {
-                  setPrompt(phrasedPrompt);
-                  setInterpretation(null);
-                  setInterpretationPrompt('');
-                  setPhrasedPrompt('');
-                  setPhrasedPromptBaseline('');
-                  setInterpretationError('');
-                  window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
-                }}
-                className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`}
+                onClick={editInterpretation}
+                className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${!interpretation.context.valid ? 'border-[#b94d45] bg-[#b94d45] text-white hover:bg-[#a4423b]' : guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`}
                 data-testid="button-edit-interpretation"
               >
                 Edit prompt
@@ -2854,12 +3138,6 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
             </AlertDialogFooter>
           </AlertDialogContent>}
         </AlertDialog>
-
-        {interpretationError && (
-          <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert" data-testid="status-interpretation-error">
-            {interpretationError}
-          </div>
-        )}
 
         <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
           <label htmlFor={guest ? 'guest-research-market' : 'research-market'} className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
@@ -2895,7 +3173,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           </select>
         </div>
 
-        {isVehicleComparison && (
+        {isBaasScenario && (
           <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
             <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
               03 / Set a BaaS cost scenario <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
@@ -2941,8 +3219,8 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
                 </div>
               </label>
             </div>
-            {Boolean(annualDistanceKm) !== Boolean(ownershipPeriodYears) && (
-              <p className="mt-2 text-[11px] font-bold text-[#b94d45]">Enter both values to include a scenario total.</p>
+            {baasValidationError && (
+              <p className="mt-2 text-[11px] font-bold text-[#b94d45]" role="alert" data-testid="status-baas-validation">{baasValidationError}</p>
             )}
           </div>
         )}
@@ -2951,7 +3229,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           <div className="flex items-center gap-2">
             <Link2 size={14} className={guest ? 'text-[#bde3d8]' : 'text-[#0f766e]'} />
             <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
-              {isVehicleComparison ? '04' : '03'} / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
+              {isBaasScenario ? '04' : '03'} / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
             </p>
           </div>
 
@@ -3012,32 +3290,44 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           )}
         </div>
 
+        {actionableValidationMessage && (
+          <div className={`mt-5 rounded-xl border px-4 py-3 ${guest ? 'border-[#d9ef66] bg-[#29334e] text-[#f8f4e8]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`} role="alert" data-testid="status-comparison-validation-error">
+            <p className="text-xs font-bold">{actionableValidationMessage}</p>
+          </div>
+        )}
+
         <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className={`max-w-lg text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
             Your selected market controls the rates, currency, regulations, availability, and sources used in the comparison.
           </p>
-          <PrimaryButton
-            type="submit"
-             disabled={pending || sourcePreflightPending || interpretationPending || prompt.trim().length < 8 || !market}
-            className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
-            testId={guest ? 'button-guest-research' : 'button-research-comparison'}
-          >
-             {pending || sourcePreflightPending || interpretationPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
-            {pending
-              ? 'Researching and scoring'
-              : sourcePreflightPending
-                ? 'Validating sources'
-                : interpretationPending
-                  ? 'Interpreting request'
-                : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
-                  ? 'Validate supplied sources'
-                  : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
-          </PrimaryButton>
+          {actionableValidationMessage ? (
+            <button type="button" onClick={focusPromptForEdit} className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-xs font-bold ${guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : 'bg-[#b94d45] text-white hover:bg-[#a4423b]'}`} data-testid="button-edit-prompt-action">
+              Edit prompt
+            </button>
+          ) : (
+            <PrimaryButton
+              type="submit"
+              disabled={pending || sourcePreflightPending || interpretationPending || Boolean(baasValidationError) || prompt.trim().length < 8 || prompt.trim().length > 2000 || !market}
+              className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
+              testId={guest ? 'button-guest-research' : 'button-research-comparison'}
+            >
+              {pending || sourcePreflightPending || interpretationPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
+              {pending
+                ? 'Researching and scoring'
+                : sourcePreflightPending
+                  ? 'Validating sources'
+                  : interpretationPending
+                    ? 'Interpreting request'
+                    : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
+                      ? 'Validate supplied sources'
+                      : `${isBaasScenario ? '05' : '04'} / Research and compare`}
+            </PrimaryButton>
+          )}
         </div>
 
-        {Boolean(error) && (
+        {Boolean(error) && !blockingValidationError && (
           <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert">
-            {comparisonErrorMessage(error)}
+            {researchErrorMessage}
           </div>
         )}
       </form>
@@ -3288,7 +3578,7 @@ function AnalysisPage() {
   if (!guest && isLoading) return <AppShell><LoadingPanel label="Building the analysis" /></AppShell>;
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
   if (guest && !guestComparison) return <GuestShell><div className="mx-auto max-w-3xl px-5 py-20 text-center lg:px-10"><p className="mono text-xs uppercase tracking-[.2em] text-[#b94d45]">Guest result unavailable</p><h1 className="display mt-4 text-4xl font-bold tracking-[-.05em] text-[#202840]">That comparison has expired.</h1><p className="mt-4 text-sm leading-6 text-[#687083]">Run another guest comparison or create an account to keep a private 30-day history.</p><Link href="/guest" className="focus-ring mt-7 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]" data-testid="link-guest-result-restart"><ArrowLeft size={15} /> Run another comparison</Link></div></GuestShell>;
-  const comparison = (guest ? guestComparison : data) as Comparison;
+  const comparison = reconcileReportScores((guest ? guestComparison : data) as Comparison);
   const decisionQuality = computeDecisionQuality(comparison);
   const exportPdf = async () => {
     if (pdfStatus === 'exporting') return;
@@ -3352,7 +3642,7 @@ function AnalysisPage() {
     );
     setLocation(guest ? '/guest' : '/user-portal');
   };
-  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><DecisionRecommendationCard comparison={comparison} /></div>
+  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{evidenceSafeExecutiveSummary(comparison)}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><DecisionRecommendationCard comparison={comparison} /></div>
          <ExecutiveDecisionBrief comparison={comparison} />
         <section className="mt-6 rounded-2xl border border-[#9ebbb0] bg-[#dcefe9] p-5 sm:p-6" data-testid="tile-evidence-dataset">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
@@ -3376,7 +3666,7 @@ function AnalysisPage() {
         </section>
        <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
         <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
-    <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{displayedVendorScore(vendor)}</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${displayedVendorScoreWidth(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
+    <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => { const role = providerRolePresentation(vendor); return <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{displayedVendorScore(vendor)}</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{role.label}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendorVerdictPresentation(vendor)}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{role.rationale}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${displayedVendorScoreWidth(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>; })}</div></section>
          <ScoreCharts vendorScores={comparison.vendorScores} />
          <VendorScoreExtensionSection vendorScores={comparison.vendorScores} />
          {!comparison.vendorScores?.some(hasVendorScoreExtension) && <UserCriteriaDashboard criteria={comparison.criteria} vendorScores={comparison.vendorScores} />}
@@ -3472,7 +3762,7 @@ function DecisionArchitecturePage() {
   const { data, isLoading, isError, refetch } = useGetComparison(id, { query: { enabled: !guest && Boolean(id), queryKey: getGetComparisonQueryKey(id) } });
   if (!guest && isLoading) return <AppShell><LoadingPanel label="Loading decision plan" /></AppShell>;
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
-  const comparison = guest ? guestComparison : data;
+  const comparison = reconcileReportScores(guest ? guestComparison : data);
   if (!comparison) return <AppShell guest={guest}><ErrorPanel /></AppShell>;
   return <AppShell guest={guest}><main className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? '/guest/result' : `/comparisons/${id}`} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline"><ArrowLeft size={14} /> Back to comparison</Link><div className="mt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#b94d45]">Decision architecture</p><h1 className="display mt-3 max-w-4xl text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Equivalency, gaps, migration, and governance.</h1><p className="mt-4 max-w-3xl text-sm leading-6 text-[#687083]">A structured transition view for {comparison.recommendation}. Validate assumptions and evidence with accountable stakeholders before contract or cutover approval.</p></div><div className="mt-10"><DecisionArchitectureContent comparison={comparison} /></div></main></AppShell>;
 }
@@ -3574,7 +3864,7 @@ return {
   return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex gap-3"><Link href="/" className="focus-ring rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075]">Home</Link><Link href="/sign-up" className="focus-ring rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66]">Get beta access</Link></div></header><main className="mx-auto max-w-7xl px-5 pb-20 pt-10 lg:px-10">
     <section className="grid gap-10 lg:grid-cols-[1fr_340px]"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">Developer API / free beta</p><h1 className="display mt-4 text-5xl font-bold tracking-[-.06em] text-[#202840] sm:text-7xl">Add researched decisions to any AI workflow.</h1><p className="mt-6 max-w-3xl text-base leading-7 text-[#667083]">Send a natural-language buying question and receive a structured comparison with weighted recommendations, evidence, strategic frameworks, risks, migration planning, and next steps. Beta access does not require payment.</p></div><aside className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[10px] uppercase tracking-[.16em] text-[#bde3d8]">Authentication standard</p><p className="display mt-4 text-2xl font-bold text-[#d9ef66]">HTTP Bearer API key</p><code className="mt-5 block rounded-lg bg-[#151b2c] p-3 text-[11px] text-[#bde3d8]">Authorization: Bearer vc_beta_...</code><p className="mt-4 text-xs leading-5 text-[#c9cfdb]">Create a scoped key once using your signed-in Clerk session. Store it in your workflow tool’s encrypted credential or secret store. Never place it in a prompt, browser URL, or client-side application.</p></aside></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Create an API key</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Use Clerk once, then automate with a bearer key</h2><p className="mt-3 max-w-3xl text-sm leading-6 text-[#687083]">Clerk protects account administration. The generated DecisionIntel key is the standard credential your server, agent, n8n workflow, Zapier action, Make scenario, or other HTTP-capable tool sends on every <code>/api/v1</code> request.</p><pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{createKeyExample}</pre></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / NLP request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Submit the decision in plain language</h2><p className="mt-3 text-sm leading-6 text-[#687083]"><code>prompt</code> is required. The API infers vendors and criteria when possible. You may supply two to five <code>vendors</code>, optional <code>criteria</code>, and trusted <code>urls</code>. Use a unique <code>Idempotency-Key</code> for every workflow execution so retries cannot create duplicate comparisons or consume allowance twice.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{requestExample}</pre></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Structured response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Map fields into downstream agents</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns HTTP <code>201</code> after research completes. Configure workflow HTTP steps with a timeout of at least 120 seconds. Route <code>recommendation</code> and <code>executiveSummary</code> into concise outputs, while retaining evidence, assumptions, gaps, and governance fields for audit and review.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / NLP request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Submit the decision in plain language</h2><p className="mt-3 text-sm leading-6 text-[#687083]"><code>prompt</code> is required. The API infers vendors and criteria when possible. You may supply two to six <code>vendors</code>, optional <code>criteria</code>, and trusted <code>urls</code>. Use a unique <code>Idempotency-Key</code> for every workflow execution so retries cannot create duplicate comparisons or consume allowance twice.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{requestExample}</pre></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Structured response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Map fields into downstream agents</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns HTTP <code>201</code> after research completes. Configure workflow HTTP steps with a timeout of at least 120 seconds. Route <code>recommendation</code> and <code>executiveSummary</code> into concise outputs, while retaining evidence, assumptions, gaps, and governance fields for audit and review.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / White-label architecture</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Your product owns the customer experience</h2><div className="mt-6 grid gap-4 md:grid-cols-3"><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Call from your backend</h3><p className="mt-2 text-xs leading-5 text-[#687083]">Your branded web app, mobile app, chatbot, or agent calls your own server. Your server adds the bearer key and calls this API. Never expose the key or call the API directly from customer browsers.</p></article><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Render neutral JSON</h3><p className="mt-2 text-xs leading-5 text-[#687083]">The API returns data, not provider-branded HTML. Select the fields you need and apply your own product name, terminology, components, colours, reports, notifications, and approval flow.</p></article><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Keep decisions traceable</h3><p className="mt-2 text-xs leading-5 text-[#687083]">Map the returned comparison ID and your idempotency key to your own customer or case ID. Preserve sources, assumptions, confidence limits, and material warnings even when changing presentation.</p></article></div><pre className="mt-5 max-h-[620px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{whiteLabelExample}</pre></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Endpoint reference</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Versioned integration surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_250px_1fr_230px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
     <section className="mt-14 grid gap-5 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">Retries</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Retry transient <code>502</code> responses with exponential backoff and the same idempotency key. A completed key replays its original response.</p></div><div><h3 className="font-bold text-[#202840]">Limits</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>429</code> includes <code>Retry-After</code>. Usage responses and comparison responses include quota headers. Beta allowances may change before general availability.</p></div><div><h3 className="font-bold text-[#202840]">Security</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Use the minimum scopes required, rotate exposed keys, keep calls server-side, validate returned evidence, and require human approval before procurement or migration actions.</p></div></section>
@@ -3649,7 +3939,7 @@ function LegacyApiDocsPage() {
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Get access</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">From signup to your first API call</h2><div className="mt-6 grid gap-4 md:grid-cols-2">{[['1', 'Create an account', 'Sign in with Clerk. The app creates your tenant workspace.'], ['2', 'Create an API key', 'Create a scoped key, copy it once, and store it in a server-side secret manager.']].map(([number, title, text]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={number}><span className="mono text-xs font-bold text-[#b94d45]">{number}</span><h3 className="mt-3 font-bold text-[#202840]">{title}</h3><p className="mt-2 text-xs leading-5 text-[#687083]">{text}</p></article>)}</div><div className="mt-5 rounded-xl border border-[#c8d99a] bg-[#e8f2bd] px-5 py-4 text-xs leading-5 text-[#35665c]"><strong>Beta availability:</strong> No checkout or payment setup is required.</div><Link href="/user-portal" className="focus-ring mt-5 inline-flex rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]">Sign in to manage API access</Link></section>
     <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Authentication</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Two credentials, two purposes</h2><div className="mt-5 space-y-3"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Beta API key</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer vc_beta_...</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use this for every <code>/api/v1</code> request. Grant only the needed scopes: <code>comparisons:read</code>, <code>comparisons:write</code>, and <code>usage:read</code>.</p></div><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Clerk session token</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer &lt;Clerk session token&gt;</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use only for account and key management. Tenant operations also require <code>X-Tenant-Id</code> and owner/admin membership. Do not use a Clerk token for <code>/api/v1</code>.</p></div></div></div></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">04 / Endpoints</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Current API surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_240px_1fr_220px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to five named options and any number of distinct HTTP/HTTPS evidence URLs. Include current and target arrangements, constraints, regulatory and security requirements, integrations, migration scope, budget, and timing when known; omitted context is returned as explicit assumptions.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The contract includes weighted score rationale, product equivalency, functional gaps, service/product arrangements, migration phases, decision governance, VRIO, SWOT, alternatives, and every distinct collected source. Cost never determines the recommendation by itself.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[620px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to six named options and any number of distinct HTTP/HTTPS evidence URLs. Include current and target arrangements, constraints, regulatory and security requirements, integrations, migration scope, budget, and timing when known; omitted context is returned as explicit assumptions.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The contract includes weighted score rationale, product equivalency, functional gaps, service/product arrangements, migration phases, decision governance, VRIO, SWOT, alternatives, and every distinct collected source. Cost never determines the recommendation by itself.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[620px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
      <section className="mt-14 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">07 / Errors and limits</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Build for explicit failure states</h2><div className="mt-6 grid gap-5 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">401 / 403</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Missing or invalid keys return <code>invalid_api_key</code>. A valid key without the operation scope returns <code>insufficient_scope</code>.</p></div><div><h3 className="font-bold text-[#202840]">402 / 429</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>quota_exhausted</code> means the prepaid allowance is consumed. <code>rate_limit_exceeded</code> includes a <code>Retry-After</code> header.</p></div><div><h3 className="font-bold text-[#202840]">409 / 502</h3><p className="mt-2 text-xs leading-5 text-[#566074]">A changed body cannot reuse an idempotency key. Upstream research failures do not consume quota and may be retried with the same key.</p></div></div><pre className="mt-5 overflow-x-auto rounded-xl bg-[#202840] p-4 text-[11px] text-[#d9ef66]">{`{ "code": "insufficient_scope", "message": "The API key requires the comparisons:write scope." }`}</pre></section>
   </main></div>;
 }

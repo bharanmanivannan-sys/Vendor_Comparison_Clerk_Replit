@@ -1047,6 +1047,9 @@ components:
           type: string
           minLength: 8
           maxLength: 2000
+        market:
+          type: string
+          enum: [IN, AU, US, GB]
       required: [prompt]
     SourcePreflightInput:
       type: object
@@ -1136,8 +1139,8 @@ components:
         targetCompletionSeconds:
           type: integer
           minimum: 1
-          example: 120
-          description: Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+          example: 15
+          description: Hard deadline in seconds for reaching a terminal job state.
       required: [jobId, status, stage, progress, targetCompletionSeconds]
     ComparisonJobStage:
       type: string
@@ -1167,12 +1170,12 @@ components:
         elapsedMs:
           type: integer
           minimum: 0
-          description: Server-measured milliseconds since this job was created.
+          description: Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
         targetCompletionSeconds:
           type: integer
           minimum: 1
-          example: 120
-          description: Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+          example: 15
+          description: Hard deadline in seconds for reaching a terminal job state.
         result:
           oneOf:
             - $ref: "#/components/schemas/Comparison"
@@ -1183,7 +1186,7 @@ components:
         errorCode:
           type: string
           description: Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
-          enum: [research_failed, validation_failed, insufficient_quantitative_evidence]
+          enum: [research_failed, validation_failed, insufficient_quantitative_evidence, latency_budget_exceeded]
       required: [status, stage, progress, elapsedMs, targetCompletionSeconds]
     ComparisonIdentity:
       type: object

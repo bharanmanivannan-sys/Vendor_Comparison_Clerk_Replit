@@ -25,4 +25,5 @@ export const ComparisonJobStateErrorCode = {
   research_failed: 'research_failed',
   validation_failed: 'validation_failed',
   insufficient_quantitative_evidence: 'insufficient_quantitative_evidence',
+  latency_budget_exceeded: 'latency_budget_exceeded',
 } as const;

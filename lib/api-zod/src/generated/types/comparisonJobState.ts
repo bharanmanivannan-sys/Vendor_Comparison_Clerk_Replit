@@ -29,12 +29,12 @@ export interface ComparisonJobState {
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   /**
-     * Server-measured milliseconds since this job was created.
+     * Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
      * @minimum 0
      */
   elapsedMs: number;
   /**
-     * Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+     * Hard deadline in seconds for reaching a terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;

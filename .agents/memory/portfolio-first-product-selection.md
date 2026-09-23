@@ -20,3 +20,5 @@ A server-validated current portfolio may bypass model-based discovery, adjudicat
 **Why:** Repeating model calls after the server already owns the current-model, comparability, and evidence-readiness boundary adds latency and structured-output failure modes without improving the decision.
 
 **How to apply:** Use the validated portfolio directly, retain the same deterministic selection and evidence gates, and measure the browser job from accepted submission to its first terminal poll. Optimize toward the 120-second service target by removing redundant work, never by weakening verification.
+
+Brand-to-brand comparisons are valid intake requests and must not require the user to name exact models. When product-level evidence is needed, resolve exact current local offerings only in the governed downstream portfolio-selection stage before scoring. Preserve every explicit scope constraint throughout selection and research, especially product category, powertrain such as diesel, and local market; never broaden or substitute those constraints merely to obtain easier evidence.

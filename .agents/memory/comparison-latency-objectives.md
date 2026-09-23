@@ -1,10 +1,10 @@
 ---
 name: Comparison latency objectives
-description: The distinction between internal comparison performance measurement and the public asynchronous service objective.
+description: The hard terminal comparison deadline and correct elapsed-time semantics for asynchronous polling.
 ---
 
-The comparison service uses a 15-second internal latency benchmark for measurement and regression analysis. The public `targetCompletionSeconds` contract remains a 120-second asynchronous operational objective, not a hard deadline.
+Comparison jobs must reach a terminal server state within 15 seconds. Terminal jobs retain their completion timestamp, and every later poll reports the frozen terminal elapsed time rather than continuing to measure from the start time.
 
-**Why:** Evidence acquisition, upstream web search, and structured repair can vary significantly; changing the public target or forcing a hard timeout would encourage weaker evidence handling and could break the browser-safe submit-and-poll contract.
+**Why:** Delayed browser polling previously made completed jobs appear slower because elapsed time kept increasing after completion. A hard deadline also prevents slow serial repair loops from violating the product response-time requirement.
 
-**How to apply:** Keep terminal job telemetry explicit about both values. Improve latency through bounded, permission-preserving concurrency and optional-work reductions, while retaining asynchronous polling and evidence validation when the internal benchmark is missed.
+**How to apply:** Use bounded parallel retrieval, cached verified documents, zero-retry primary paths, and deterministic synthesis where possible. Store one terminal timestamp and use it for logs and all status responses.
