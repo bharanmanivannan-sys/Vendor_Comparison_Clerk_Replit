@@ -28,6 +28,7 @@ import {
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
   deterministicOpenEndedEvFallback,
+  discoverIndependentVehicleFallbackUrls,
   discoveryTargetCount,
   electricVehicleFinalQualityIssues,
   evidenceSufficiency,
@@ -51,6 +52,7 @@ import {
   isSafetyFirstVehicleQuery,
   isObjectivePhraseVendor,
   missingCreditCardSourceVendors,
+  missingExactModelVerifiedMetricVendors,
   missingElectricVehicleSourceVendors,
   mergeElectricVehicleResearch,
   normalizeDecisionGovernance,
@@ -97,7 +99,7 @@ import {
   validateQuantitativeEvidenceAgainstDocuments,
   validateComparisonContext,
 } from "./analysis";
-import type { RetrievedEvidenceDocument } from "./security";
+import { normalizeRetrievedText, type RetrievedEvidenceDocument } from "./security";
 import { flattenComparisonEvidence } from "../services/comparisonPersistence";
 import { isSafeUserInput } from "./security";
 import { CreateComparisonBody } from "@workspace/api-zod";
@@ -117,6 +119,321 @@ test("includes NPS in the 100-point weighted decision model", () => {
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("admits governed independent exact-model vehicle metrics when official pages are unavailable", () => {
+  const sourceUrl = "https://independent-auto.example/2026/xuv-7xo-vs-safari";
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text: [
+      "Published 2026-04-17",
+      "Mahindra XUV 7XO engine power is 185 hp in the tested diesel automatic.",
+      "Tata Safari engine power is 170 hp in the tested diesel automatic.",
+      "Mahindra XUV 7XO peak engine torque is 450 Nm in the tested diesel automatic.",
+      "Tata Safari peak engine torque is 350 Nm in the tested diesel automatic.",
+      "Mahindra XUV 7XO 0-100 km/h acceleration time is 9.97 seconds.",
+      "Tata Safari 0-100 km/h acceleration time is 12.09 seconds.",
+    ].join("\n"),
+    sha256: "a".repeat(64),
+    retrievedAt: "2026-04-17T10:00:00.000Z",
+    truncated: false,
+  };
+  const parsed = {
+    vendorScores: ["Mahindra XUV 7XO", "Tata Safari"].map((vendor, index) => ({
+      vendor,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        evidence: [{
+          sourceUrl,
+          sourceDate: "2026-04-17",
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: index === 0 ? 185 : 170,
+          rawMetricUnit: "hp",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    })),
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 2);
+  for (const vendor of parsed.vendorScores) {
+    const evidence = vendor.weightedScores[0].evidence[0] as Record<string, any>;
+    assert.equal(evidence.normalizationMethod, "retrieved_document_metric");
+    assert.equal(evidence.sourceDate, "2026-04-17");
+    assert.equal(evidence.documentSha256, "a".repeat(64));
+    assert.ok(evidence.sourceTextEnd > evidence.sourceTextStart);
+  }
+});
+
+test("matches qualified diesel-automatic models across representative heading and table text while preserving PS", () => {
+  const sourceUrl = "https://publisher.example/xuv700-safari-diesel-comparison";
+  const text = normalizeRetrievedText(`
+    <article>
+      <h1>Mahindra XUV700 vs Tata Safari diesel automatic comparison</h1>
+      <section>
+        <h2>Mahindra XUV700</h2>
+        <p>Tested powertrain: diesel automatic</p>
+        <table>
+          <thead><tr><th>Specification</th><th>Measured value</th></tr></thead>
+          <tbody>
+            <tr><th>Power</th><td>185 PS</td></tr>
+            <tr><th>Peak torque</th><td>450 Nm</td></tr>
+          </tbody>
+        </table>
+      </section>
+      <section>
+        <h2>Tata Safari</h2>
+        <p>Tested powertrain: diesel automatic</p>
+        <table>
+          <tbody>
+            <tr><th>Power</th><td>170 PS</td></tr>
+            <tr><th>Peak torque</th><td>350 Nm</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </article>
+  `, "text/html");
+  const analysis = {
+    features: [{
+      dimension: "Engine power and torque performance",
+      values: {
+        "Mahindra XUV700 diesel automatic": "185 PS; 450 Nm",
+        "Tata Safari diesel automatic": "170 PS; 350 Nm",
+      },
+    }],
+    pricing: [],
+    vendorScores: ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"].map((vendor) => ({
+      vendor,
+      weightedScores: [],
+    })),
+  } as unknown as AnalysisPayload;
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text,
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-04-17T00:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(addVerifiedElectricVehicleMatrixMetrics(analysis, [document]), 8);
+  const evidence = analysis.vendorScores.flatMap((vendor) => (
+    vendor.weightedScores?.flatMap((criterion) => criterion.evidence ?? []) ?? []
+  ));
+  assert.ok(evidence.some((row) => row.metricKey === "engine_power" && row.rawMetricUnit === "ps"));
+  assert.ok(evidence.every((row) => row.metricSubject === "Mahindra XUV700 diesel automatic"
+    || row.metricSubject === "Tata Safari diesel automatic"));
+});
+
+test("rejects a petrol table section for a diesel-qualified model", () => {
+  const sourceUrl = "https://publisher.example/xuv700-powertrains";
+  const text = normalizeRetrievedText(`
+    <article>
+      <h2>Mahindra XUV700</h2>
+      <p>Petrol automatic</p>
+      <table><tr><th>Power</th><td>200 PS</td></tr></table>
+      <h2>Mahindra XUV700</h2>
+      <p>Diesel automatic</p>
+      <table><tr><th>Power</th><td>185 PS</td></tr></table>
+    </article>
+  `, "text/html");
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700 diesel automatic",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{
+          sourceUrl,
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: 200,
+          rawMetricUnit: "PS",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    }],
+  };
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text,
+    sha256: "f".repeat(64),
+    retrievedAt: "2026-04-17T00:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+});
+
+test("runs at most one bounded citation-only fallback search when exact-model metrics are missing", async () => {
+  let searches = 0;
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    { vendorScores: [{ vendor: "Mahindra XUV 7XO", weightedScores: [] }] },
+    ["Mahindra XUV 7XO"],
+    async (missing) => {
+      searches += 1;
+      assert.deepEqual(missing, ["Mahindra XUV 7XO"]);
+      return {
+        output: [{
+          content: [{
+            type: "output_text",
+            text: "A prose URL https://not-a-citation.example must not be admitted.",
+            annotations: [
+              { type: "url_citation", url: "https://publisher.example/xuv-7xo-test" },
+              { type: "url_citation", url: "https://publisher.example/xuv-7xo-test" },
+            ],
+          }],
+        }],
+      };
+    },
+  );
+  assert.equal(searches, 1);
+  assert.deepEqual(urls, ["https://publisher.example/xuv-7xo-test"]);
+});
+
+test("skips independent fallback search when every exact model already has span-backed metrics", async () => {
+  let searches = 0;
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV 7XO",
+      weightedScores: [{
+        evidence: [{
+          normalizationMethod: "retrieved_document_metric",
+          documentSha256: "d".repeat(64),
+          sourceTextStart: 10,
+          sourceTextEnd: 40,
+          metricSubject: "Mahindra XUV 7XO",
+          sourceUrl: "https://auto.mahindra.com/xuv-7xo",
+        }],
+      }],
+    }],
+  };
+  assert.deepEqual(missingExactModelVerifiedMetricVendors(parsed, ["Mahindra XUV 7XO"]), []);
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    parsed,
+    ["Mahindra XUV 7XO"],
+    async () => {
+      searches += 1;
+      return [];
+    },
+  );
+  assert.equal(searches, 0);
+  assert.deepEqual(urls, []);
+});
+
+test("does not map XUV 7XO evidence to XUV700", () => {
+  const sourceUrl = "https://independent-auto.example/2026/xuv-7xo-test";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        evidence: [{
+          sourceUrl,
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: 185,
+          rawMetricUnit: "hp",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    }],
+  };
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text: "Mahindra XUV 7XO engine power is 185 hp in the tested diesel automatic.",
+    sha256: "b".repeat(64),
+    retrievedAt: "2026-04-17T10:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+});
+
+test("does not let an official-only EV gate reject two dated independent exact-model sources", () => {
+  const vendors = ["Alpha EV One", "Beta EV Two"];
+  const evidenceFor = (vendor: string, sourceUrl: string) => ({
+    sourceUrl,
+    sourceDate: "2026-04-17",
+    retrievalDate: "2026-04-18",
+    exactClaim: `${vendor} exact-model metric`,
+    metricKey: "engine_power",
+    metricSubject: vendor,
+    metricBasis: "electric_automatic_powertrain_output",
+    rawMetricValue: 100,
+    rawMetricUnit: "kw",
+    normalizationDirection: "higher_is_better" as const,
+    documentSha256: "c".repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 40,
+    evidenceKind: "quantitative" as const,
+    supportDirection: "context" as const,
+    confidence: 90,
+    normalizedScore: 50,
+    criterionWeight: 25,
+    weightedContribution: 12.5,
+    normalizationMethod: "retrieved_document_metric",
+  });
+  const analysis = {
+    pricing: [],
+    features: [],
+    recommendation: "No exact winner",
+    recommendationReason: "Evidence remains limited.",
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 50,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        score: 50,
+        rationale: "Two dated independent sources.",
+        evidence: [
+          evidenceFor(vendor, `https://review-one.example/${vendor.replaceAll(" ", "-")}`),
+          evidenceFor(vendor, `https://review-two.example/${vendor.replaceAll(" ", "-")}`),
+        ],
+      }],
+    })),
+  } as unknown as AnalysisPayload;
+
+  const issues = electricVehicleFinalQualityIssues(analysis, vendors, [], [
+    ...vendors.flatMap((vendor) => [
+      `https://review-one.example/${vendor.replaceAll(" ", "-")}`,
+      `https://review-two.example/${vendor.replaceAll(" ", "-")}`,
+    ]),
+  ]);
+  assert.ok(!issues.some((issue) => /official product sources/i.test(issue)));
+});
+
+test("long-horizon maintenance and comfort priorities produce different weights without horizon claims", () => {
+  const maintenance = explicitDecisionPriorityProfile(
+    "Compare these SUVs for 20 years; prioritize maintenance and service costs.",
+  );
+  const comfort = explicitDecisionPriorityProfile(
+    "Compare these SUVs for 5 years; prioritize ride comfort and cabin comfort.",
+  );
+  assert.ok(maintenance);
+  assert.ok(comfort);
+  const weight = (profile: NonNullable<typeof maintenance>, criterion: string) => (
+    profile.weights.find((entry) => entry.criterion === criterion)?.weight ?? 0
+  );
+  assert.ok(weight(maintenance, "Quality & Reliability") > weight(comfort!, "Quality & Reliability"));
+  assert.ok(weight(comfort!, "Meets Needs / Features") > weight(maintenance, "Meets Needs / Features"));
+  assert.doesNotMatch(maintenance.label, /20/);
+  assert.doesNotMatch(comfort!.label, /5/);
 });
 
 function qualificationEvidence(

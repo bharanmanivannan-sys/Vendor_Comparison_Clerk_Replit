@@ -5,9 +5,29 @@ import {
   checkEvidenceUrls,
   isSafeUserInput,
   retrieveEvidenceDocuments,
+  type EvidenceDocumentResult,
   type EvidenceUrlResult,
   type RetrievedEvidenceDocument,
 } from "./security";
+
+function logRetrievalDiagnostics(stage: "initial" | "rendered" | "independent_fallback", results: EvidenceDocumentResult[]): void {
+  const reasons: Record<string, number> = {};
+  let documentCount = 0;
+  for (const result of results) {
+    if (result.document) documentCount += 1;
+    else {
+      const reason = result.reason ?? "unknown";
+      reasons[reason] = (reasons[reason] ?? 0) + 1;
+    }
+  }
+  console.info("evidence_retrieval_diagnostics", {
+    stage,
+    requestedCount: results.length,
+    documentCount,
+    rejectedCount: results.length - documentCount,
+    reasons,
+  });
+}
 import { publisherPermissionRegistry } from "../services/publisherPermissionRegistry";
 import {
   isScrapyAiAcquisitionConfigured,
@@ -390,6 +410,24 @@ function normalizeDate(value: unknown): string | undefined {
     : normalized;
 }
 
+function publishedDateFromDocument(document: RetrievedEvidenceDocument): string | undefined {
+  const iso = document.text.match(/\b(?:published|updated|date)\s*:?\s*(20\d{2}-\d{2}-\d{2})\b/i)?.[1];
+  if (iso) return normalizeDate(iso);
+  const prose = document.text.match(/\b(?:published|updated|date)\s*:?\s*((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+20\d{2})\b/i)?.[1];
+  if (!prose) return undefined;
+  const parsedDate = new Date(`${prose} UTC`);
+  return Number.isNaN(parsedDate.getTime()) ? undefined : parsedDate.toISOString().slice(0, 10);
+}
+
+function publisherDomainForHostname(hostname: string): string {
+  const labels = hostname.toLowerCase().replace(/^www\./, "").split(".");
+  const secondLevelCountrySuffix = /^(?:co|com|net|org|gov|ac)\.[a-z]{2}$/;
+  const suffix = labels.slice(-2).join(".");
+  return labels.length >= 3 && secondLevelCountrySuffix.test(suffix)
+    ? labels.slice(-3).join(".")
+    : suffix;
+}
+
 /** Strictly canonicalize AI evidence before it can affect a score or be persisted. */
 export function normalizeEvidenceRecords(
   value: unknown,
@@ -713,6 +751,9 @@ export function isSafetyFirstVehicleQuery(prompt: string): boolean {
 
 function criterionTargets(criterion: string): string[] {
   const normalized = criterion.toLowerCase();
+  if (/(?:reliability|quality|durability|uptime|failure|maintenance|servicing|repair|upkeep)/.test(normalized)) {
+    return ["Quality & Reliability", "Value for Money"];
+  }
   if (/(?:price|pricing|cost|affordability|budget|value for money|cheapest|lowest fee)/.test(normalized)) {
     return ["Value for Money"];
   }
@@ -722,10 +763,7 @@ function criterionTargets(criterion: string): string[] {
   if (/(?:safety|crash|ncap|airbag|adas|occupant protection)/.test(normalized)) {
     return ["Meets Needs / Features", "Regulatory Compliance"];
   }
-  if (/(?:reliability|quality|durability|uptime|failure|maintenance|servicing|repair|upkeep)/.test(normalized)) {
-    return ["Quality & Reliability", "Value for Money"];
-  }
-  if (/(?:feature|capabilit|functionality|ease of use|usability|selection|range|variety)/.test(normalized)) {
+  if (/(?:feature|capabilit|functionality|ease of use|usability|selection|range|variety|comfort|ride quality|cabin)/.test(normalized)) {
     return ["Meets Needs / Features"];
   }
   if (/(?:reputation|brand)/.test(normalized)) return ["Brand Reputation"];
@@ -746,8 +784,8 @@ function explicitCriteriaFromPrompt(prompt: string, criteria: string[]): string[
     ["Reliability", /\b(?:reliability|reliable|durability|uptime|failure rate)\b/],
     ["Safety features", /\b(?:safety|crash|ncap|airbags?|adas|occupant protection)\b/],
     ["Maintenance", /\b(?:maintenance|servicing|service costs?|repair|upkeep)\b/],
-    ["Price", /\b(?:price|pricing|cost|affordability|budget|value for money|cheapest|lowest fee)\b/],
-    ["Features", /\b(?:features?|capabilities|functionality|ease of use|usability)\b/],
+    ["Price", /\b(?:price|pricing|affordability|budget|value for money|cheapest|lowest fee|total cost|purchase cost|upfront cost)\b/],
+    ["Features", /\b(?:features?|capabilities|functionality|ease of use|usability|comfort|ride quality|cabin)\b/],
   ];
   for (const [label, pattern] of promptTerms) {
     if (pattern.test(normalized)) detected.add(label);
@@ -5083,7 +5121,35 @@ export function electricVehicleFinalQualityIssues(
     issues.push("required product pricing and feature rows are incomplete");
   }
   const missingOfficial = missingElectricVehicleSourceVendors(vendors, citationUrls);
-  if (missingOfficial.length) issues.push(`official product sources are missing for ${missingOfficial.join(", ")}`);
+  const lacksCorroboratedIndependentFallback = missingOfficial.filter((vendor) => {
+    const vendorScore = analysis.vendorScores.find((row) => row.vendor.toLowerCase() === vendor.toLowerCase());
+    if (!vendorScore) return true;
+    const domains = new Set((vendorScore.weightedScores ?? []).flatMap((criterion) => (
+      (criterion.evidence ?? []).flatMap((evidence) => {
+        if (
+          evidence.evidenceKind === "unverified"
+          || evidence.evidenceKind === "analyst_judgment"
+          || evidence.normalizationMethod !== "retrieved_document_metric"
+          || !evidence.documentSha256
+          || !evidence.sourceDate
+          || !evidence.sourceUrl
+          || !evidence.metricSubject
+          || normalizeComparisonOptionName(evidence.metricSubject) !== normalizeComparisonOptionName(vendor)
+        ) return [];
+        try {
+          const hostname = new URL(evidence.sourceUrl).hostname.toLowerCase().replace(/^www\./, "");
+          const brandToken = normalizeComparisonOptionName(vendor).split(" ")[0] ?? "";
+          return brandToken.length >= 3 && hostname.includes(brandToken) ? [] : [publisherDomainForHostname(hostname)];
+        } catch {
+          return [];
+        }
+      })
+    )));
+    return domains.size < 2;
+  });
+  if (lacksCorroboratedIndependentFallback.length) {
+    issues.push(`official product sources or two dated independent exact-model sources are missing for ${lacksCorroboratedIndependentFallback.join(", ")}`);
+  }
 
   const verified = new Set(dedupeReferenceUrls(scoreVerifiedUrls));
   for (const vendorScore of analysis.vendorScores) {
@@ -5257,6 +5323,69 @@ export function collectCitedHttpUrls(value: unknown, found = new Set<string>()):
   return [...found];
 }
 
+export function missingExactModelVerifiedMetricVendors(
+  parsed: Record<string, unknown>,
+  vendors: string[],
+): string[] {
+  const vendorScores = Array.isArray(parsed.vendorScores)
+    ? parsed.vendorScores as Array<Record<string, unknown>>
+    : [];
+  return vendors.filter((vendor) => {
+    const vendorScore = vendorScores.find((row) => (
+      typeof row.vendor === "string"
+      && normalizeComparisonOptionName(row.vendor) === normalizeComparisonOptionName(vendor)
+    ));
+    const weightedScores = vendorScore && Array.isArray(vendorScore.weightedScores)
+      ? vendorScore.weightedScores as Array<Record<string, unknown>>
+      : [];
+    const exactEvidence = weightedScores.flatMap((criterion) => (
+      Array.isArray(criterion.evidence)
+      ? (criterion.evidence as Array<Record<string, unknown>>).filter((evidence) => (
+        evidence.normalizationMethod === "retrieved_document_metric"
+        && typeof evidence.documentSha256 === "string"
+        && /^[a-f0-9]{64}$/.test(evidence.documentSha256)
+        && typeof evidence.sourceTextStart === "number"
+        && typeof evidence.sourceTextEnd === "number"
+        && evidence.sourceTextEnd > evidence.sourceTextStart
+        && typeof evidence.metricSubject === "string"
+        && normalizeComparisonOptionName(evidence.metricSubject) === normalizeComparisonOptionName(vendor)
+        && typeof evidence.sourceUrl === "string"
+      ))
+      : []
+    ));
+    const brandToken = normalizeComparisonOptionName(vendor).split(" ")[0] ?? "";
+    const domains = new Set(exactEvidence.flatMap((evidence) => {
+      if (typeof evidence.sourceDate !== "string" || !normalizeDate(evidence.sourceDate)) return [];
+      try {
+        return [publisherDomainForHostname(new URL(String(evidence.sourceUrl)).hostname)];
+      } catch {
+        return [];
+      }
+    }));
+    const hasOfficialExactMetric = exactEvidence.some((evidence) => {
+      try {
+        const hostname = new URL(String(evidence.sourceUrl)).hostname.toLowerCase();
+        return brandToken.length >= 3 && hostname.includes(brandToken);
+      } catch {
+        return false;
+      }
+    });
+    return !hasOfficialExactMetric && domains.size < 2;
+  });
+}
+
+export async function discoverIndependentVehicleFallbackUrls(
+  parsed: Record<string, unknown>,
+  vendors: string[],
+  search: (missingVendors: string[]) => Promise<unknown>,
+  maximum = 8,
+): Promise<string[]> {
+  const missingVendors = missingExactModelVerifiedMetricVendors(parsed, vendors);
+  if (!missingVendors.length) return [];
+  const output = await search(missingVendors);
+  return dedupeReferenceUrls(collectCitedHttpUrls(output)).slice(0, Math.max(0, maximum));
+}
+
 function normalizeKnownEvidenceUrls(value: string, allowedUrls: string[]): string {
   if (!allowedUrls.length) return value;
   const allowed = new Set(dedupeReferenceUrls(allowedUrls));
@@ -5288,6 +5417,10 @@ function normalizedUnit(value: unknown): string {
   if (/^(?:km|kilomet(?:er|re)s?)$/.test(unit)) return "km";
   if (/^(?:kwh|kilowatt[- ]hours?)$/.test(unit)) return "kwh";
   if (/^(?:kw|kilowatts?)$/.test(unit)) return "kw";
+  if (/^(?:hp|bhp|horsepower)$/.test(unit)) return "hp";
+  if (/^ps$/.test(unit)) return "ps";
+  if (/^(?:nm|n·m|newton[- ]met(?:er|re)s?)$/.test(unit)) return "nm";
+  if (/^(?:s|sec|secs|seconds?)$/.test(unit)) return "seconds";
   if (/^(?:min|mins|minutes?)$/.test(unit)) return "minutes";
   if (/^(?:mm|millimet(?:er|re)s?)$/.test(unit)) return "mm";
   if (/^(?:year|years|yr|yrs)$/.test(unit)) return "years";
@@ -5326,6 +5459,9 @@ const METRIC_REGISTRY: Record<string, MetricDefinition> = {
   battery_capacity: { units: ["kwh"], direction: "higher_is_better", label: /\bbattery capacity\b/i },
   charging_power: { units: ["kw"], direction: "higher_is_better", label: /\b(?:charging|charger|dc charge|ac charge).{0,24}\b(?:power|capacity|rate)?\b/i },
   charging_time: { units: ["minutes"], direction: "lower_is_better", label: /\bcharg(?:e|ing).{0,24}\btime\b/i },
+  engine_power: { units: ["kw", "hp", "ps"], direction: "higher_is_better", label: /\b(?:engine|motor|power|output|horsepower|bhp|ps)\b/i },
+  engine_torque: { units: ["nm"], direction: "higher_is_better", label: /\b(?:engine|motor|torque)\b/i },
+  acceleration_0_100: { units: ["seconds"], direction: "lower_is_better", label: /\b(?:0|zero)\s*(?:-|–|—|to)\s*100\s*(?:km\/?h|kph).{0,32}\b(?:acceleration|time|seconds?|secs?|s)\b|\b(?:acceleration|time).{0,32}\b(?:0|zero)\s*(?:-|–|—|to)\s*100\b/i },
   warranty_years: { units: ["years"], direction: "higher_is_better", label: /\b(?:vehicle|battery|product)?\s*warranty\b/i },
   market_share: { units: ["percent"], direction: "higher_is_better", label: /\bmarket share\b/i },
   customer_satisfaction_rate: { units: ["percent"], direction: "higher_is_better", label: /\b(?:customer )?satisfaction\b/i },
@@ -5345,6 +5481,10 @@ const UNIT_PATTERNS: Record<string, RegExp> = {
   km: /^(?:\s{0,3})(?:km|kilomet(?:er|re)s?\b)/i,
   kwh: /^(?:\s{0,3})(?:kwh|kilowatt[- ]hours?\b)/i,
   kw: /^(?:\s{0,3})(?:kw|kilowatts?\b)/i,
+  hp: /^(?:\s{0,3})(?:hp|bhp|horsepower\b)/i,
+  ps: /^(?:\s{0,3})PS\b/i,
+  nm: /^(?:\s{0,3})(?:nm|n·m|newton[- ]met(?:er|re)s?\b)/i,
+  seconds: /^(?:\s{0,3})(?:s\b|sec|secs|seconds?\b)/i,
   minutes: /^(?:\s{0,3})(?:min|mins|minutes?\b)/i,
   mm: /^(?:\s{0,3})(?:mm|millimet(?:er|re)s?\b)/i,
   years: /^(?:\s{0,3})(?:year|years|yr|yrs\b)/i,
@@ -5386,11 +5526,17 @@ function findQuantitativeClaim(
   const definition = METRIC_REGISTRY[metricKey];
   if (!definition || !definition.units.includes(rawUnit)) return null;
   const vendorTokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-  if (!vendorTokens.length) return null;
+  const qualifierTokens = new Set(["diesel", "petrol", "gasoline", "electric", "hybrid", "automatic", "manual", "at", "amt", "cvt", "dct", "awd", "fwd", "4x4"]);
+  const baseTokens = vendorTokens.filter((token) => !qualifierTokens.has(token));
+  if (!baseTokens.length) return null;
   const vendorIdentityPattern = new RegExp(
-    `\\b${vendorTokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]{0,6}")}\\b`,
+    `\\b${baseTokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]{0,6}")}\\b`,
     "i",
   );
+  const requestedFuel = vendorTokens.find((token) => ["diesel", "petrol", "gasoline", "electric", "hybrid"].includes(token));
+  const requestedTransmission = vendorTokens.some((token) => ["automatic", "at", "amt", "cvt", "dct"].includes(token))
+    ? "automatic"
+    : vendorTokens.includes("manual") ? "manual" : undefined;
   const officialHomeLoanHost = (HOME_LOAN_OFFICIAL_SOURCES[vendor] ?? []).some((source) => {
     try {
       const sourceHost = new URL(source).hostname.replace(/^www\./, "");
@@ -5405,7 +5551,7 @@ function findQuantitativeClaim(
     const segment = match[0].trim();
     if (segment.length < 8 || segment.length > 800) continue;
     if (!isSafeUserInput(segment)) continue;
-    if (/\d\s*[-–—]\s*\d/.test(segment)) continue;
+    if (/\d\s*[-–—]\s*\d/.test(segment) && !/\b0\s*[-–—]\s*100\s*(?:km\/?h|kph)\b/i.test(segment)) continue;
     const numericMatches = Array.from(segment.matchAll(/[−-]?\d[\d,.]*(?:\d)?/g));
     const adjacentPairs = numericMatches.filter((numericMatch) => {
       const start = numericMatch.index ?? 0;
@@ -5428,13 +5574,51 @@ function findQuantitativeClaim(
     ) continue;
     const leadingWhitespace = match[0].length - match[0].trimStart().length;
     const start = (match.index ?? 0) + leadingWhitespace;
-    const identityContextStart = Math.max(0, start - (officialHomeLoanHost ? 520 : 180));
-    const identityContextEnd = Math.min(document.text.length, start + segment.length + 180);
+    const identityContextStart = Math.max(0, start - (officialHomeLoanHost ? 520 : 800));
+    const identityContextEnd = Math.min(document.text.length, start + segment.length + (officialHomeLoanHost ? 180 : 320));
     const identityContext = document.text.slice(identityContextStart, identityContextEnd);
     if (!definition.label.test(identityContext)) continue;
-    const identityMatch = identityContext.match(vendorIdentityPattern);
+    const identityMatches = Array.from(identityContext.matchAll(new RegExp(vendorIdentityPattern.source, "gi")));
+    const segmentOffset = start - identityContextStart;
+    const identityMatch = identityMatches
+      .filter((candidate) => (candidate.index ?? 0) <= segmentOffset + segment.length)
+      .sort((left, right) => (
+        Math.abs(segmentOffset - ((left.index ?? 0) + left[0].length))
+        - Math.abs(segmentOffset - ((right.index ?? 0) + right[0].length))
+      ))[0];
     if (!identityMatch && !officialHomeLoanHost) continue;
-    const subject = identityMatch?.[0] ?? vendor;
+    if (identityMatch && baseTokens.length >= 3) {
+      const familyPrefix = baseTokens.slice(0, -1)
+        .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("[^a-z0-9]{0,6}");
+      const expectedLeaf = baseTokens.at(-1)!;
+      const betweenIdentityAndMetric = identityContext.slice(
+        (identityMatch.index ?? 0) + identityMatch[0].length,
+        segmentOffset + pairStart,
+      );
+      const siblingMentions = Array.from(
+        betweenIdentityAndMetric.matchAll(new RegExp(`\\b${familyPrefix}[^a-z0-9]{0,6}([a-z0-9]+)\\b`, "gi")),
+        (candidate) => candidate[1].toLowerCase(),
+      );
+      if (siblingMentions.some((leaf) => leaf !== expectedLeaf)) continue;
+    }
+    if (identityMatch && (requestedFuel || requestedTransmission)) {
+      const identityStart = identityMatch.index ?? 0;
+      const nextIdentity = identityMatches
+        .map((candidate) => candidate.index ?? 0)
+        .filter((index) => index > identityStart && index < segmentOffset)
+        .sort((left, right) => left - right)[0];
+      const sectionStart = identityStart;
+      const sectionEnd = nextIdentity ?? Math.min(identityContext.length, segmentOffset + segment.length + 80);
+      const relevantSection = identityContext.slice(sectionStart, sectionEnd).toLowerCase();
+      const fuels = Array.from(relevantSection.matchAll(/\b(diesel|petrol|gasoline|electric|hybrid)\b/g), (fuel) => fuel[1]);
+      if (requestedFuel && (!fuels.includes(requestedFuel) || fuels.some((fuel) => fuel !== requestedFuel))) continue;
+      const hasAutomatic = /\b(?:automatic|at|amt|cvt|dct)\b/i.test(relevantSection);
+      const hasManual = /\bmanual\b/i.test(relevantSection);
+      if (requestedTransmission === "automatic" && (!hasAutomatic || hasManual)) continue;
+      if (requestedTransmission === "manual" && (!hasManual || hasAutomatic)) continue;
+    }
+    const subject = vendor;
     return {
       text: segment,
       basisText: identityContext,
@@ -5478,6 +5662,19 @@ function metricBasis(metricKey: string, unit: string, claim: string): string | n
     const window = normalized.match(/\b\d{1,3}\s*%\s*(?:to|-|–|—)\s*\d{1,3}\s*%\b/)?.[0];
     if (!window) return null;
     qualifier = window.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey === "engine_power") {
+    const powertrain = normalized.match(/\b(?:diesel|petrol|gasoline|electric|hybrid)\b/)?.[0];
+    if (!powertrain) return null;
+    const transmission = normalized.match(/\b(?:automatic|manual|dct|cvt|amt|at)\b/)?.[0] ?? "unspecified_transmission";
+    qualifier = `${powertrain}_${transmission}_powertrain_output`;
+  } else if (metricKey === "engine_torque") {
+    const powertrain = normalized.match(/\b(?:diesel|petrol|gasoline|electric|hybrid)\b/)?.[0];
+    if (!powertrain) return null;
+    const transmission = normalized.match(/\b(?:automatic|manual|dct|cvt|amt|at)\b/)?.[0] ?? "unspecified_transmission";
+    qualifier = `${powertrain}_${transmission}_powertrain_peak_torque`;
+  } else if (metricKey === "acceleration_0_100") {
+    if (!/\b(?:0|zero)\s*(?:-|–|—|to)\s*100\s*(?:km\/?h|kph)?\b/.test(normalized)) return null;
+    qualifier = "zero_to_100_kph";
   } else if (metricKey === "ncap_star_rating" || metricKey === "adult_occupant_score" || metricKey === "child_occupant_score") {
     const protocol = normalized.match(/\b(?:bharat|global)\s*ncap\b/)?.[0]?.replace(/\s+/g, "_");
     if (!protocol) return null;
@@ -5535,6 +5732,13 @@ export function validateQuantitativeEvidenceAgainstDocuments(
     byUrl.set(canonicalDocumentKey(document.finalUrl), document);
   }
   let verified = 0;
+  let candidates = 0;
+  const rejected = {
+    source_document_missing: 0,
+    metric_or_unit_unsupported: 0,
+    identity_variant_or_claim_mismatch: 0,
+    comparable_basis_missing: 0,
+  };
   const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
   for (const vendor of vendorScores) {
     if (!vendor || typeof vendor !== "object") continue;
@@ -5553,17 +5757,24 @@ export function validateQuantitativeEvidenceAgainstDocuments(
         if (!item || typeof item !== "object") continue;
         const row = item as Record<string, unknown>;
         if (typeof row.rawMetricValue !== "number" || !Number.isFinite(row.rawMetricValue)) continue;
+        candidates += 1;
         const sourceUrl = typeof row.sourceUrl === "string" ? canonicalDocumentKey(row.sourceUrl) : "";
         const document = byUrl.get(sourceUrl);
         const metricKey = typeof row.metricKey === "string"
           ? row.metricKey.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
           : "";
         const unit = normalizedUnit(row.rawMetricUnit);
+        if (!document) rejected.source_document_missing += 1;
+        else if (!METRIC_REGISTRY[metricKey]?.units.includes(unit)) rejected.metric_or_unit_unsupported += 1;
         const match = document && metricKey && unit
           ? findQuantitativeClaim(document, vendorName, metricKey, row.rawMetricValue, unit)
           : null;
         const basis = match ? metricBasis(metricKey, unit, match.basisText) : null;
         if (!match || !document || !basis) {
+          if (document && METRIC_REGISTRY[metricKey]?.units.includes(unit)) {
+            if (!match) rejected.identity_variant_or_claim_mismatch += 1;
+            else if (!basis) rejected.comparable_basis_missing += 1;
+          }
           row.evidenceKind = "unverified";
           row.confidence = Math.min(typeof row.confidence === "number" ? row.confidence : 0, 10);
           delete row.metricKey;
@@ -5582,6 +5793,9 @@ export function validateQuantitativeEvidenceAgainstDocuments(
         row.metricSubject = match.subject;
         row.metricBasis = basis;
         row.retrievalDate = document.retrievedAt.slice(0, 10);
+        const verifiedSourceDate = publishedDateFromDocument(document);
+        if (verifiedSourceDate) row.sourceDate = verifiedSourceDate;
+        else delete row.sourceDate;
         row.documentSha256 = document.sha256;
         row.sourceTextStart = match.start;
         row.sourceTextEnd = match.end;
@@ -5591,6 +5805,12 @@ export function validateQuantitativeEvidenceAgainstDocuments(
       }
     }
   }
+  console.info("evidence_extraction_diagnostics", {
+    documentCount: documents.length,
+    candidateCount: candidates,
+    verifiedCount: verified,
+    rejected,
+  });
   return verified;
 }
 
@@ -5618,6 +5838,17 @@ export function addVerifiedElectricVehicleMatrixMetrics(
     }
     if (/\bcharg/i.test(dimension)) {
       addMatches("charging_power", "kw", /(\d+(?:\.\d+)?)\s*kw\b/gi);
+    }
+    if (/\b(?:power|performance|motor|engine)\b/i.test(dimension) && !/\bcharg/i.test(dimension)) {
+      addMatches("engine_power", "hp", /(\d+(?:\.\d+)?)\s*(?:hp|bhp)\b/gi);
+      addMatches("engine_power", "ps", /(\d+(?:\.\d+)?)\s*ps\b/gi);
+      addMatches("engine_power", "kw", /(\d+(?:\.\d+)?)\s*kw\b/gi);
+    }
+    if (/\b(?:torque|performance|motor|engine)\b/i.test(dimension)) {
+      addMatches("engine_torque", "nm", /(\d+(?:\.\d+)?)\s*(?:nm|n·m)\b/gi);
+    }
+    if (/\b(?:acceleration|performance|0\s*[-–—]\s*100)\b/i.test(dimension)) {
+      addMatches("acceleration_0_100", "seconds", /(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)\b/gi);
     }
     if (/\bprice\b|ex[- ]showroom/i.test(dimension)) {
       addMatches("price", "inr_lakh", /₹\s*(\d+(?:\.\d+)?)\s*(?:lakh|lakhs)\b/gi);
@@ -5656,7 +5887,7 @@ export function addVerifiedElectricVehicleMatrixMetrics(
             candidate.value,
             candidate.unit,
           );
-          const basis = claim ? metricBasis(candidate.metricKey, candidate.unit, claim.text) : null;
+          const basis = claim ? metricBasis(candidate.metricKey, candidate.unit, claim.basisText) : null;
           return claim && basis ? [{ document, claim, basis }] : [];
         })[0];
         if (!match) continue;
@@ -5676,7 +5907,8 @@ export function addVerifiedElectricVehicleMatrixMetrics(
           ))) continue;
           evidence.push({
             sourceUrl: match.document.finalUrl,
-            sourceTitle: `${vendorName} official product information`,
+            sourceTitle: `${vendorName} retrieved product evidence`,
+            sourceDate: publishedDateFromDocument(match.document),
             exactClaim: match.claim.text,
             metricKey: candidate.metricKey,
             rawMetricValue: candidate.value,
@@ -8096,7 +8328,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         ? "For exact AI-model comparisons, use public provider developer documentation when launch or marketing pages deny access. Verify the exact model ID and current API availability before using token price, context-window, or benchmark evidence. Record input_token_price and output_token_price only as USD per million tokens, context_window_tokens only as explicit token counts, and coding_benchmark_score only when the exact same named benchmark, version, task, and scale cover every compared model. Never transfer a neighboring model's value."
         : "",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
-      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
+      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, engine_power, engine_torque, acceleration_0_100, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm; for engine_power preserve hp, PS, or kW as the source states it and never treat PS as hp; for engine_torque use Nm; and for acceleration_0_100 use seconds only when the source explicitly states the 0–100 km/h basis. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
       "Set criteriaMet to false only when the named options are categorically incompatible with the requested decision, not when one criterion has missing, uncertain, or incomplete evidence. A requested ownership or retention period is a decision horizon; it does not require evidence covering that full future period. Continue the comparison with neutral treatment and an explicit evidence limitation for unsupported criteria.",
     ].join(" ");
     const explicitBaasScenario = input.annualDistanceKm && input.ownershipPeriodYears
@@ -8581,12 +8813,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.urls.length,
       ...dedupeReferenceUrls([...rankedUrls, ...requiredHomeLoanRateUrls]),
     );
-    const evidenceAvailability = await measureAnalysisStage(
+    let evidenceAvailability = await measureAnalysisStage(
       input,
       "evidence_url_validation",
       () => validateFinalEvidenceUrls(input.urls, undefined, userSuppliedUrls),
     );
-    const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
+    let citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
     input.onProgress?.("building_evidence");
     const retrievalUrls = dedupeReferenceUrls([
       ...evidenceAvailability.reachable,
@@ -8600,6 +8832,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         concurrency: 6,
       }),
     );
+    logRetrievalDiagnostics("initial", retrievedResults);
     const directDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
     let retrievedDocuments = directDocuments;
     if (isScrapyAiAcquisitionConfigured()) {
@@ -8618,26 +8851,126 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             concurrency: 4,
           }),
         );
+        logRetrievalDiagnostics("rendered", renderedResults);
         const renderedDocuments = renderedResults.flatMap((result) => result.document ? [result.document] : []);
         const renderedByUrl = new Map(renderedDocuments.map((document) => [document.url, document]));
         retrievedDocuments = retrievalUrls.flatMap((url) => renderedByUrl.get(url) ?? directByUrl.get(url) ?? []);
       }
     }
-    const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
-      document.url,
-      document.finalUrl,
-    ]));
-    const matrixEvidenceAdded = isElectricVehicleComparison
+    let matrixEvidenceAdded = isVehicleComparison
       ? addVerifiedElectricVehicleMatrixMetrics(parsed as Record<string, unknown>, retrievedDocuments)
       : 0;
     validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
-    const officialSpecEvidenceAdded = isElectricVehicleComparison
+    let officialSpecEvidenceAdded = isElectricVehicleComparison
       ? addVerifiedElectricVehicleOfficialSpecs(
         parsed as Record<string, unknown>,
         retrievedDocuments,
         input.vendors,
       )
       : 0;
+    if (isVehicleComparison) {
+      const missingBeforeFallback = missingExactModelVerifiedMetricVendors(
+        parsed as Record<string, unknown>,
+        resolvedVendors,
+      );
+      const fallbackUrls = await discoverIndependentVehicleFallbackUrls(
+        parsed as Record<string, unknown>,
+        resolvedVendors,
+        async (missingVendors) => {
+          const response = await client.responses.create({
+            model: "gpt-4.1-mini",
+            max_output_tokens: 1200,
+            tools: [{
+              type: "web_search",
+              search_context_size: "low",
+              external_web_access: true,
+              user_location: {
+                type: "approximate" as const,
+                country: researchMarket.countryCode,
+                timezone: researchMarket.timezone,
+              },
+            }],
+            input: [{
+              role: "system",
+              content: "Find recent reputable independent local automotive publication pages for the exact named vehicle models. Return concise source notes. Do not cite search snippets, forums, affiliate pages, videos, or manufacturer-controlled sites. Never change or alias a model name.",
+            }, {
+              role: "user",
+              content: JSON.stringify({
+                exactModelsMissingVerifiedEvidence: missingVendors,
+                market: researchMarket,
+                asOf: currentDate,
+                requiredFacts: "Comparable exact-model prices, specifications, measured performance, maintenance, reliability, ownership, or comfort. Prefer pages naming every compared model and publishing a date.",
+              }),
+            }],
+          }, {
+            timeout: 15_000,
+            maxRetries: 0,
+          });
+          return response.output;
+        },
+      );
+      const existingDocuments = new Set(retrievedDocuments.flatMap((document) => [
+        canonicalDocumentKey(document.url),
+        canonicalDocumentKey(document.finalUrl),
+      ]));
+      const independentFallbackUrls = rankEvidenceSources(
+        filterSourcesForMarket(fallbackUrls, researchMarket),
+        resolvedVendors,
+        researchMarket,
+        [],
+        8,
+      ).filter((url) => {
+        if (existingDocuments.has(canonicalDocumentKey(url))) return false;
+        const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+        return resolvedVendors.every((vendor) => {
+          const brandToken = normalizeComparisonOptionName(vendor).split(" ")[0] ?? "";
+          return brandToken.length < 3 || !hostname.includes(brandToken);
+        });
+      }).slice(0, 8);
+      console.info("independent_vehicle_fallback_diagnostics", {
+        invoked: missingBeforeFallback.length > 0,
+        missingModelCount: missingBeforeFallback.length,
+        citedUrlCount: fallbackUrls.length,
+        eligibleUrlCount: independentFallbackUrls.length,
+      });
+      if (independentFallbackUrls.length) {
+        const fallbackAvailability = await validateFinalEvidenceUrls(independentFallbackUrls);
+        const fallbackRetrievals = await retrieveEvidenceDocuments(fallbackAvailability.reachable, {
+          permissionRegistry: publisherPermissionRegistry,
+          concurrency: 4,
+          batchTimeoutMs: 20_000,
+        });
+        logRetrievalDiagnostics("independent_fallback", fallbackRetrievals);
+        const fallbackDocuments = fallbackRetrievals.flatMap((result) => result.document ? [result.document] : []);
+        if (fallbackDocuments.length) {
+          retrievedDocuments = [...retrievedDocuments, ...fallbackDocuments];
+          citationUrls = dedupeReferenceUrls([...citationUrls, ...fallbackAvailability.referenceable]);
+          evidenceAvailability = {
+            ...evidenceAvailability,
+            reachable: dedupeReferenceUrls([...evidenceAvailability.reachable, ...fallbackAvailability.reachable]),
+            referenceable: citationUrls,
+            unavailableInsights: [...evidenceAvailability.unavailableInsights, ...fallbackAvailability.unavailableInsights],
+            sourceAvailability: [...evidenceAvailability.sourceAvailability, ...fallbackAvailability.sourceAvailability],
+          };
+          matrixEvidenceAdded += addVerifiedElectricVehicleMatrixMetrics(
+            parsed as Record<string, unknown>,
+            fallbackDocuments,
+          );
+          validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+          if (isElectricVehicleComparison) {
+            officialSpecEvidenceAdded += addVerifiedElectricVehicleOfficialSpecs(
+              parsed as Record<string, unknown>,
+              fallbackDocuments,
+              input.vendors,
+            );
+          }
+        }
+      }
+    }
+    const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
+      document.url,
+      document.finalUrl,
+    ]));
     if (batteryServiceInstructions) {
       addVerifiedBaasOfferEvidence(parsed as Record<string, unknown>, retrievedDocuments);
     }
