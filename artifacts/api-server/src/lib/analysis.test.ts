@@ -661,10 +661,11 @@ test("preserves only a provisional lens leader after every option fails evidence
 
   assert.equal(preserveProvisionalLensWinner(analysis), true);
   assert.equal(analysis.recommendation, "GPT 5.6 Luna fast");
-  assert.equal(analysis.score, 50);
+  assert.equal(analysis.score, 90);
+  assert.deepEqual(analysis.vendorScores.map((vendor) => vendor.score), [90, 45, 45, 45]);
   assert.match(analysis.executiveSummary, /^Provisional lens winner — GPT 5\.6 Luna fast/);
-  assert.match(analysis.recommendationReason, /not a qualified overall recommendation/i);
-  assert.match(analysis.recommendationReason, /missing comparable evidence, not equal performance/i);
+  assert.match(analysis.recommendationReason, /evidence-limited recommendation/i);
+  assert.match(analysis.recommendationReason, /unresolved or unverified criteria remain excluded/i);
   assert.ok(analysis.vendorScores.every((vendor) => (
     (vendor as any).qualificationStatus === "INSUFFICIENT_EVIDENCE"
   )));
@@ -2776,6 +2777,41 @@ test("rejects Westpac products in India before research", () => {
   );
   assert.equal(context.valid, false);
   assert.match(context.message, /Westpac does not offer.*India/i);
+});
+
+test("rejects a prompt country that conflicts with the selected research market", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata for automobiles in India. Use case: long-term ownership for 20 years.",
+    ["Mahindra", "Tata"],
+    "AU",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /prompt asks for India/i);
+  assert.match(context.message, /selected research market is Australia/i);
+});
+
+test("blocks manufacturer-only automobile comparisons until a vehicle class or exact models are named", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata for automobiles. Use case: long-term ownership for 20 years.",
+    ["Mahindra", "Tata"],
+    "IN",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /vehicle type or exact current models/i);
+});
+
+test("blocks mixed manufacturer and model specificity for vehicle decisions", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata Safari diesel automatic for long-term ownership in India.",
+    ["Mahindra", "Tata Safari diesel automatic"],
+    "IN",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /Mahindra is a manufacturer/i);
+  assert.match(context.message, /Tata Safari diesel automatic is a specific model/i);
 });
 
 test("allows a shared service criterion across different brand segments", () => {

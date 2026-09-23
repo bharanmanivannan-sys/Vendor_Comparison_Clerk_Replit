@@ -46,6 +46,7 @@ test('requires authenticated users to review interpreted options before research
   assert.ok(view.getByRole('alertdialog'));
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/api/comparisons/parse');
+  assert.equal(requests[0].body.market, 'AU');
   assert.equal(requests.some((request) => request.url === '/api/comparison-jobs'), false);
   assert.match((view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value, /Alpha and Beta/);
   assert.match(view.getByTestId('interpretation-review').textContent || '', /Australia/);
@@ -92,6 +93,7 @@ test('requires guest users to confirm the same interpreted brief before research
 
   await waitFor(() => assert.ok(view.queryByTestId('interpretation-review')));
   assert.equal(requests[0].url, '/api/guest/comparisons/parse');
+  assert.equal(requests[0].body.market, 'AU');
   assert.equal(requests.some((request) => request.url === '/api/guest/comparison-jobs'), false);
   fireEvent.click(view.getByRole('button', { name: 'Confirm and research' }));
 

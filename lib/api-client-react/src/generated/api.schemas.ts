@@ -195,12 +195,23 @@ export interface RegenerateComparisonInput {
   additionalWeights?: AdditionalComparisonWeight[];
 }
 
+export type ComparisonPromptInputMarket = typeof ComparisonPromptInputMarket[keyof typeof ComparisonPromptInputMarket];
+
+
+export const ComparisonPromptInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
+
 export interface ComparisonPromptInput {
   /**
      * @minLength 8
      * @maxLength 2000
      */
   prompt: string;
+  market?: ComparisonPromptInputMarket;
 }
 
 export type SourcePreflightInputMarket = typeof SourcePreflightInputMarket[keyof typeof SourcePreflightInputMarket];

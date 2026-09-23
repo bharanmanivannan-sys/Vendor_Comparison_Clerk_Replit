@@ -2633,7 +2633,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: requestedPrompt }),
+          body: JSON.stringify({ prompt: requestedPrompt, market }),
         },
       );
       if (interpretationRequestId.current !== requestId) return;

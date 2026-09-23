@@ -973,6 +973,29 @@ export function preserveProvisionalLensWinner(analysis: AnalysisPayload): boolea
   );
   if (!decision) return false;
 
+  const rows = [...(analysis.pricing ?? []), ...(analysis.features ?? [])];
+  const canonicalVendor = (value: string) => modeled.find(
+    (vendor) => vendor.vendor.toLowerCase() === value.trim().toLowerCase(),
+  )?.vendor;
+  const wins = new Map(modeled.map((vendor) => [vendor.vendor, 0]));
+  let decidedRows = 0;
+  for (const row of rows) {
+    const winner = canonicalVendor(row.winner ?? "");
+    if (!winner) continue;
+    wins.set(winner, (wins.get(winner) ?? 0) + 1);
+    decidedRows += 1;
+  }
+  if (decidedRows < 2) return false;
+  for (const vendor of modeled) {
+    const derivedScore = Math.round(45 + 45 * (wins.get(vendor.vendor) ?? 0) / decidedRows);
+    vendor.score = derivedScore;
+    const featureScore = vendor.weightedScores?.find((criterion) => criterion.criterion === "Meets Needs / Features");
+    if (featureScore) {
+      featureScore.score = derivedScore;
+      featureScore.rationale = `Directional matrix score derived from ${wins.get(vendor.vendor) ?? 0} wins across ${decidedRows} decided side-by-side pricing and feature dimensions. Missing or unverified criteria remain excluded.`;
+    }
+  }
+
   const winnerScore = modeled.find((vendor) => (
     vendor.vendor.toLowerCase() === decision.winner.toLowerCase()
   ))?.score;
@@ -981,7 +1004,7 @@ export function preserveProvisionalLensWinner(analysis: AnalysisPayload): boolea
     : decision.featureWins
       ? "feature lens"
       : "pricing lens";
-  const qualificationWarning = "This is not a qualified overall recommendation; neutral 50/100 scores indicate missing comparable evidence, not equal performance.";
+  const qualificationWarning = "This is an evidence-limited recommendation based on the researched side-by-side matrix; unresolved or unverified criteria remain excluded from the score.";
   analysis.recommendation = decision.winner;
   analysis.score = Number.isFinite(winnerScore) ? winnerScore! : 50;
   analysis.executiveSummary = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner} leads the available ${lensLabel}, winning ${decision.wins} of ${decision.decidedRows} decided dimensions. ${qualificationWarning}`;
@@ -1468,7 +1491,22 @@ const ENTITY_MARKET_AVAILABILITY: Array<{
     availableIn: ["IN"],
     footprint: "India",
   },
+  {
+    entity: /^tata(?:\s+motors?)?$/i,
+    availableIn: ["IN"],
+    footprint: "India for the passenger-vehicle comparison requested here",
+  },
 ];
+
+function explicitPromptMarketCodes(prompt: string): ResearchMarketCode[] {
+  const normalized = prompt.toLowerCase();
+  return ([
+    ["IN", /\b(?:india|indian|inr|rupees?|₹)\b/],
+    ["AU", /\b(?:australia|australian|aud|a\$)\b/],
+    ["US", /\b(?:united states|usa|u\.s\.|usd|us dollars?)\b/],
+    ["GB", /\b(?:united kingdom|britain|british|uk|gbp|pounds?|£)\b/],
+  ] as const).filter(([, pattern]) => pattern.test(normalized)).map(([code]) => code);
+}
 
 export function comparisonMarketAvailabilityIssue(
   prompt: string,
@@ -1476,6 +1514,11 @@ export function comparisonMarketAvailabilityIssue(
   selectedMarket?: ResearchMarketCode,
 ): string | undefined {
   const market = inferResearchMarket(prompt, vendors, selectedMarket);
+  const explicitMarkets = explicitPromptMarketCodes(prompt);
+  if (selectedMarket && explicitMarkets.length && !explicitMarkets.includes(selectedMarket)) {
+    const requested = explicitMarkets.map((code) => RESEARCH_MARKETS[code].country).join(" and ");
+    return `The prompt asks for ${requested}, but the selected research market is ${market.country}. Make the prompt and market selection match before research starts.`;
+  }
   for (const vendor of vendors) {
     const rule = ENTITY_MARKET_AVAILABILITY.find(({ entity }) => entity.test(vendor.trim()));
     if (rule && !rule.availableIn.includes(market.countryCode)) {
@@ -2800,7 +2843,7 @@ export async function extractIntentWithOpenAI(prompt: string): Promise<unknown> 
 export async function parsePromptWithIntent(
   prompt: string,
   extractor: IntentExtractor = extractIntentWithOpenAI,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; market?: ResearchMarketCode } = {},
 ) {
   const parsed = parsePrompt(prompt);
   let extracted: ComparisonIntent | null = null;
@@ -2840,7 +2883,7 @@ export async function parsePromptWithIntent(
       comparisonIdentity: buildComparisonIdentity(parsed.prompt, intent.category || parsed.context.segment, vendors),
       intent: { ...intent, options: vendors, clarification },
       context: {
-        ...validateComparisonContext(parsed.prompt, vendors),
+        ...validateComparisonContext(parsed.prompt, vendors, options.market),
         valid: false,
         message: clarification,
       },
@@ -2849,7 +2892,7 @@ export async function parsePromptWithIntent(
   const validationPrompt = /\b(?:compare|comparing|comparison|comparative(?:\s+analysis)?|versus|vs\.?|which|choose|recommend|should i)\b/i.test(parsed.prompt)
     ? parsed.prompt
     : `${parsed.prompt} Compare these options.`;
-  const context = validateComparisonContext(validationPrompt, vendors);
+  const context = validateComparisonContext(validationPrompt, vendors, options.market);
   const isBatteryServicePrompt = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(parsed.prompt);
   const segment = context.segment === "Product or service comparison" && isBatteryServicePrompt
     ? "Battery as a Service"
@@ -2970,7 +3013,8 @@ export function validateComparisonContext(
   const namesAustralianInsurer = /\b(?:youi|allianz|aami|nrma|qbe|budget direct|toyota insurance)\b/.test(normalized);
   const namesAustralianBank = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz)\b/.test(normalized);
   const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank|bank|credit union)\b/i;
-  const automotiveBrands = /\b(?:car\s*dekho|cardekho(?:\.com)?|tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra)\b/i;
+  const automotiveBrands = /\b(?:car\s*dekho|cardekho(?:\.com)?|tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra|tata)\b/i;
+  const automotiveManufacturerOnly = /^(?:byd|ford|hyundai|kia|mahindra|mg|tata|tesla|toyota|volvo|bmw|mercedes(?:-benz)?)$/i;
   const technologyBrands = /\b(?:apple|hp|microsoft|google|samsung|dell|lenovo|asus|acer)\b/i;
   const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon)\b/i;
   const investmentBrands = /\b(?:vanguard|betashares|ishares)\b/i;
@@ -3032,6 +3076,39 @@ export function validateComparisonContext(
   const industry = industryMatches[0] ?? inferredUseCase;
   if (vendors.length < 2 || vendors.some(isPlaceholderVendor)) {
     return { valid: false, segment, industry, message: "Enter at least two actual product or service names to compare." };
+  }
+  const explicitMarkets = explicitPromptMarketCodes(prompt);
+  if (selectedMarket && explicitMarkets.length && !explicitMarkets.includes(selectedMarket)) {
+    return {
+      valid: false,
+      segment,
+      industry,
+      message: comparisonMarketAvailabilityIssue(prompt, vendors, selectedMarket)!,
+    };
+  }
+  if (isConsumerVehicleDecision) {
+    const manufacturerOnly = vendors.filter((vendor) => automotiveManufacturerOnly.test(vendor.trim()));
+    const specificModels = vendors.filter((vendor) => (
+      !automotiveManufacturerOnly.test(vendor.trim()) && !isObjectivePhraseVendor(vendor)
+    ));
+    if (manufacturerOnly.length && specificModels.length) {
+      return {
+        valid: false,
+        segment,
+        industry,
+        message: `Compare like-for-like vehicles. ${manufacturerOnly.join(", ")} ${manufacturerOnly.length === 1 ? "is a manufacturer" : "are manufacturers"}, while ${specificModels.join(", ")} ${specificModels.length === 1 ? "is a specific model" : "are specific models"}. Name an exact current model for every manufacturer.`,
+      };
+    }
+    const hasVehicleClass = hasVehicleBrandPair
+      || /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|electric|ev|diesel|petrol|gasoline|hybrid|suv|sedan|hatchback|ute|pickup|truck|van|motorcycle|two-wheeler|4x4|awd)\b/i.test(prompt);
+    if (manufacturerOnly.length === vendors.length && !hasVehicleClass) {
+      return {
+        valid: false,
+        segment,
+        industry,
+        message: "Name the vehicle type or exact current models to compare, such as diesel automatic SUVs or Mahindra XUV700 versus Tata Safari. A manufacturer-only automobile comparison is not specific enough for an executable decision.",
+      };
+    }
   }
   if (knownDomains.size > 1 && !isCrossSegmentIntent) {
     return {

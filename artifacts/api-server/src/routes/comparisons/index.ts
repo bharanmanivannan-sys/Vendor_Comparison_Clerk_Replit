@@ -482,7 +482,7 @@ export async function validateComparisonInput(
   const hasProvidedVendors = (input.vendors?.length ?? 0) >= 2;
   const parsedPrompt = hasProvidedVendors
     ? parsePrompt(input.prompt)
-    : await parseWithIntent(input.prompt);
+    : await parseWithIntent(input.prompt, undefined, { market: input.market });
   if (parsedPrompt.vendors.length > MAX_COMPARISON_OPTIONS) {
     return { error: `You can compare up to ${MAX_COMPARISON_OPTIONS} products or vendors at a time. Remove one or more options and try again.` } as const;
   }
@@ -521,6 +521,26 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
     vendor.qualificationStatus === "QUALIFIED" || vendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
   ));
   if (qualificationRows.length) {
+    const provisionalRecommendation = row.vendorScores.find((vendor) => (
+      vendor.vendor.toLowerCase() === row.recommendation.toLowerCase()
+      && vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"
+    ));
+    if (
+      provisionalRecommendation
+      && row.executiveSummary.startsWith("Provisional lens winner —")
+    ) {
+      return {
+        id: row.id,
+        prompt: row.prompt,
+        vendors: row.vendors,
+        comparisonIdentity: buildComparisonIdentity(row.prompt, row.category, row.vendors),
+        category: row.category,
+        recommendation: provisionalRecommendation.vendor,
+        score: Math.round(provisionalRecommendation.score),
+        createdAt: row.createdAt,
+        status: row.status as "complete" | "processing" | "failed",
+      };
+    }
     const ranked = [...qualifiedRows].sort((left, right) => (right.modelScore ?? right.score) - (left.modelScore ?? left.score));
     const leader = ranked[0];
     const runnerUp = ranked[1];
@@ -622,7 +642,11 @@ export function buildComparisonDecisionSet(comparison: {
     : undefined;
   const numericScore = (vendor: Record<string, any> | undefined): number | null => {
     if (!vendor) return null;
-    const raw = Number(vendor.modelScore ?? vendor.score);
+    const raw = Number(
+      vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"
+        ? vendor.score
+        : vendor.modelScore ?? vendor.score,
+    );
     return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : null;
   };
   const scoredOptions = vendors.flatMap((option) => {
@@ -820,7 +844,11 @@ router.post("/guest/comparisons/parse", async (req: Request, res): Promise<void>
     sendError(res, 400, "invalid_prompt", "Enter a plain-language comparison without markup, SQL, or instruction injection.");
     return;
   }
-  res.json(ParseGuestComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
+  res.json(ParseGuestComparisonPromptResponse.parse(await parsePromptWithIntent(
+    parsed.data.prompt,
+    undefined,
+    { market: parsed.data.market },
+  )));
 });
 
 router.post("/guest/comparisons/source-preflight", async (req: Request, res): Promise<void> => {
@@ -917,7 +945,11 @@ router.post("/comparisons/parse", requireAuth, async (req: AuthedRequest, res): 
     sendError(res, 400, "invalid_prompt", "Enter a plain-language comparison without markup, SQL, or instruction injection.");
     return;
   }
-  res.json(ParseComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
+  res.json(ParseComparisonPromptResponse.parse(await parsePromptWithIntent(
+    parsed.data.prompt,
+    undefined,
+    { market: parsed.data.market },
+  )));
 });
 
 router.post("/comparisons/source-preflight", requireAuth, async (req: AuthedRequest, res): Promise<void> => {

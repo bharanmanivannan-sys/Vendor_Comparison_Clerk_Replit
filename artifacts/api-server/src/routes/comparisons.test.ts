@@ -71,6 +71,34 @@ test("does not confirm a named option when its top score is tied without a uniqu
   assert.deepEqual(decision.alternatives.map((alternative) => alternative.option), ["Alpha", "Beta"]);
 });
 
+test("uses directional matrix scores for an evidence-limited recommendation instead of neutral model placeholders", () => {
+  const decision = buildComparisonDecisionSet({
+    vendors: ["Mahindra XUV700", "Tata Safari"],
+    recommendation: "Mahindra XUV700",
+    score: 75,
+    recommendationReason: "Mahindra XUV700 leads the researched side-by-side matrix.",
+    vendorScores: [
+      { vendor: "Mahindra XUV700", score: 75, modelScore: 50, qualificationStatus: "INSUFFICIENT_EVIDENCE" },
+      { vendor: "Tata Safari", score: 60, modelScore: 50, qualificationStatus: "INSUFFICIENT_EVIDENCE" },
+    ],
+    pricing: [{ dimension: "Ownership cost", winner: "Tata Safari" }],
+    features: [
+      { dimension: "Safety", winner: "Mahindra XUV700" },
+      { dimension: "Performance", winner: "Mahindra XUV700" },
+    ],
+  });
+
+  assert.deepEqual(decision.confirmedRecommendation, {
+    status: "CONFIRMED",
+    option: "Mahindra XUV700",
+    score: 75,
+    basis: "EVIDENCE_LIMITED",
+    rationale: "Mahindra XUV700 leads the researched side-by-side matrix.",
+  });
+  assert.equal(decision.alternatives[0]?.score, 60);
+  assert.equal(decision.alternatives[0]?.scoreDifference, 15);
+});
+
 test("repairs non-finite stored evidence numbers before returning a report", () => {
   const repaired = normalizeEvidenceForResponse({
     exactClaim: "Comparable evidence was unavailable.",
