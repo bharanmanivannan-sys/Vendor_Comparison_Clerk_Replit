@@ -8,6 +8,7 @@ import {
   comparisonStageDurations,
   comparisonWorkaroundPrompt,
   buildComparisonDecisionSet,
+  COMPARISON_JOB_DEADLINE_SECONDS,
   COMPARISON_LATENCY_TARGET_SECONDS,
   normalizeEvidenceForResponse,
   OUTSIDE_RESEARCH_SCOPE_MESSAGE,
@@ -258,8 +259,9 @@ test("freezes completed job elapsed time at the terminal timestamp", () => {
   assert.equal(payloadElapsedAfterDelayedPoll, loggedElapsed);
 });
 
-test("records stage durations and flags only comparisons beyond the 15-second benchmark", () => {
+test("keeps the 15-second benchmark separate from the asynchronous job deadline", () => {
   assert.equal(COMPARISON_LATENCY_TARGET_SECONDS, 15);
+  assert.equal(COMPARISON_JOB_DEADLINE_SECONDS, 120);
   assert.equal(comparisonMissedLatencyTarget(15_000), false);
   assert.equal(comparisonMissedLatencyTarget(15_001), true);
   assert.deepEqual(

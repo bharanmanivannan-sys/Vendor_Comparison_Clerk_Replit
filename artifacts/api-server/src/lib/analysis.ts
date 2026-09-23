@@ -824,7 +824,10 @@ export type AnalysisInput = {
   signal?: AbortSignal;
 };
 
-const ANALYSIS_DEADLINE_MS = 14_500;
+// Fifteen seconds is the comparison latency objective, not the maximum safe
+// duration for an asynchronous evidence-research job. Allow enough time for
+// governed PDF extraction and document validation to finish.
+const ANALYSIS_DEADLINE_MS = 119_500;
 const ANALYSIS_CACHE_MS = 10 * 60 * 1000;
 const completedAnalysisCache = new Map<string, { expiresAt: number; value: AnalysisPayload; vendors: string[]; urls: string[] }>();
 
@@ -895,7 +898,7 @@ async function withinAnalysisBudget<T>(input: AnalysisInput, operation: () => Pr
       operation(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(
-          () => reject(new Error("latency_budget_exceeded: evidence acquisition did not finish within 15 seconds.")),
+          () => reject(new Error("latency_budget_exceeded: evidence acquisition did not finish within 120 seconds.")),
           remaining,
         );
       }),

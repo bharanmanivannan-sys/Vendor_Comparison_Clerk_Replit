@@ -133,8 +133,9 @@ const comparisonJobs = new Map<string, {
 const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
 const JOB_TTL_MS = 15 * 60 * 1000;
-const COMPARISON_TARGET_SECONDS = 15;
-/** Hard terminal deadline for comparison jobs. */
+export const COMPARISON_JOB_DEADLINE_SECONDS = 120;
+const COMPARISON_TARGET_SECONDS = COMPARISON_JOB_DEADLINE_SECONDS;
+/** Performance benchmark for comparison jobs; the asynchronous hard deadline is longer. */
 export const COMPARISON_LATENCY_TARGET_SECONDS = 15;
 export const OUTSIDE_RESEARCH_SCOPE_MESSAGE = "This query is outside of the research scope, please provide a query to compare brand, product or services within the demographics of India, Australia, US and UK";
 const UNSUPPORTED_GULF_MARKET = /\b(?:gulf countries|gulf states|gulf region|gcc countries|gcc|uae|united arab emirates|saudi arabia|qatar|kuwait|bahrain|oman)\b/i;
@@ -239,7 +240,7 @@ export function comparisonWorkaroundPrompt(prompt: string, vendors: string[]): s
 export function comparisonFailureMessage(error: unknown, prompt: string, vendors: string[]): string {
   const message = error instanceof Error ? error.message : "";
   if (/latency_budget_exceeded/i.test(message)) {
-    return "The comparison reached its 15-second latency budget before usable evidence was available. Retry to reuse any fresh cached sources, or provide current official URLs.";
+    return "The comparison reached its 120-second research limit before usable evidence was available. Retry to reuse any fresh cached sources, or provide current official URLs.";
   }
   if (/timed? out|timeout|did not finish/i.test(message)) {
     return "The research service took too long to respond. Your request is safe to retry.";
@@ -301,7 +302,7 @@ function startComparisonJob(options: {
       analysisTimings[stage] = (analysisTimings[stage] ?? 0) + durationMs;
     };
     const deadlineController = new AbortController();
-    const deadlineAt = startedAt + COMPARISON_LATENCY_TARGET_SECONDS * 1_000 - 500;
+    const deadlineAt = startedAt + COMPARISON_JOB_DEADLINE_SECONDS * 1_000 - 500;
     const deadlineTimer = setTimeout(
       () => {
         deadlineController.abort(new Error("latency_budget_exceeded"));
@@ -312,13 +313,13 @@ function startComparisonJob(options: {
             ...current,
             status: "failed",
             errorCode: "latency_budget_exceeded",
-            message: "The comparison reached its 15-second latency budget before usable evidence was available. Retry to reuse any fresh cached sources, or provide current official URLs.",
+            message: "The comparison reached its 120-second research limit before usable evidence was available. Retry to reuse any fresh cached sources, or provide current official URLs.",
             endedAt,
             createdAt: endedAt,
           });
         }
       },
-      Math.max(1, startedAt + COMPARISON_LATENCY_TARGET_SECONDS * 1_000 - Date.now()),
+      Math.max(1, startedAt + COMPARISON_JOB_DEADLINE_SECONDS * 1_000 - Date.now()),
     );
     const logTiming = (status: "complete" | "failed", endedAt: number): void => {
       const elapsedMs = comparisonJobElapsedMs(startedAt, endedAt);
