@@ -33,6 +33,7 @@ import {
   calculateVendorScoreExtension,
   capabilityLedSoftwarePriorityProfile,
   canonicalVendorScoreRows,
+  ensureVehicleEvidenceScoreRows,
   collectCitedHttpUrls,
   collectExplicitWebSearchSources,
   WEIGHTED_CRITERIA,
@@ -2924,6 +2925,27 @@ test("preserves exact EV model score rows during canonical matching", () => {
   assert.deepEqual(
     canonicalVendorScoreRows(["MG ZS EV", "Mahindra XUV400 EV"], rows),
     rows,
+  );
+});
+
+test("restores selected vehicle rows before extracting evidence from repaired research", () => {
+  const parsed: Record<string, unknown> = { vendorScores: [] };
+  const fallbackRows = [
+    { vendor: "Mahindra XUV700", weightedScores: [{ criterion: "Meets Needs / Features", evidence: [] }] },
+    { vendor: "Tata Safari", weightedScores: [{ criterion: "Meets Needs / Features", evidence: [] }] },
+  ];
+
+  assert.equal(
+    ensureVehicleEvidenceScoreRows(parsed, fallbackRows, ["Mahindra XUV700", "Tata Safari"]),
+    2,
+  );
+  assert.deepEqual(
+    (parsed.vendorScores as Array<{ vendor: string }>).map(({ vendor }) => vendor),
+    ["Mahindra XUV700", "Tata Safari"],
+  );
+  assert.equal(
+    ensureVehicleEvidenceScoreRows(parsed, fallbackRows, ["Mahindra XUV700", "Tata Safari"]),
+    0,
   );
 });
 

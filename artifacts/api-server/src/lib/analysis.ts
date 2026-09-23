@@ -3645,6 +3645,29 @@ export function canonicalVendorScoreRows<T extends { vendor?: unknown }>(
   )));
 }
 
+export function ensureVehicleEvidenceScoreRows(
+  parsed: Record<string, unknown>,
+  fallbackRows: Array<Record<string, unknown>>,
+  vendors: string[],
+): number {
+  const rows = Array.isArray(parsed.vendorScores)
+    ? parsed.vendorScores as Array<Record<string, unknown>>
+    : [];
+  if (!Array.isArray(parsed.vendorScores)) parsed.vendorScores = rows;
+  let added = 0;
+  for (const vendor of vendors) {
+    const existing = canonicalVendorScoreRows([vendor], rows)[0];
+    if (existing) continue;
+    const fallback = canonicalVendorScoreRows([vendor], fallbackRows)[0];
+    rows.push(fallback ? structuredClone(fallback) : {
+      vendor,
+      weightedScores: [],
+    });
+    added += 1;
+  }
+  return added;
+}
+
 export function assertCanonicalComparisonConsistency(
   vendors: string[],
   analysis: {
@@ -11175,6 +11198,13 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
     const vendorsWereResolved = resolvedVendors.some((vendor, index) => vendor !== input.vendors[index]);
     if (vendorsWereResolved) input.vendors.splice(0, input.vendors.length, ...resolvedVendors);
     const normalizationFallback = vendorsWereResolved ? fallbackAnalysis(input) : fallback;
+    if (isVehicleComparison) {
+      ensureVehicleEvidenceScoreRows(
+        parsed as Record<string, unknown>,
+        normalizationFallback.vendorScores as unknown as Array<Record<string, unknown>>,
+        resolvedVendors,
+      );
+    }
     const marketScopedUrls = dedupeReferenceUrls([
       ...filterSourcesForMarket(input.urls, researchMarket),
       // These configured sources are exact India product/safety documents.
