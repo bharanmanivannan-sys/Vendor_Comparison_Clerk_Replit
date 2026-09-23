@@ -696,26 +696,6 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
     vendor.qualificationStatus === "QUALIFIED" || vendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
   ));
   if (qualificationRows.length) {
-    const provisionalRecommendation = row.vendorScores.find((vendor) => (
-      vendor.vendor.toLowerCase() === row.recommendation.toLowerCase()
-      && vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"
-    ));
-    if (
-      provisionalRecommendation
-      && row.executiveSummary.startsWith("Provisional lens winner —")
-    ) {
-      return {
-        id: row.id,
-        prompt: row.prompt,
-        vendors: row.vendors,
-        comparisonIdentity: buildComparisonIdentity(row.prompt, row.category, row.vendors),
-        category: row.category,
-        recommendation: provisionalRecommendation.vendor,
-        score: Math.round(provisionalRecommendation.score),
-        createdAt: row.createdAt,
-        status: row.status as "complete" | "processing" | "failed",
-      };
-    }
     const ranked = [...qualifiedRows].sort((left, right) => (right.modelScore ?? right.score) - (left.modelScore ?? left.score));
     const leader = ranked[0];
     const runnerUp = ranked[1];
@@ -817,11 +797,10 @@ export function buildComparisonDecisionSet(comparison: {
     : undefined;
   const numericScore = (vendor: Record<string, any> | undefined): number | null => {
     if (!vendor) return null;
-    const raw = Number(
-      vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"
-        ? vendor.score
-        : vendor.modelScore ?? vendor.score,
-    );
+    if (vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE" || vendor.qualificationStatus === "NOT_QUALIFIED") {
+      return null;
+    }
+    const raw = Number(vendor.modelScore ?? vendor.score);
     return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : null;
   };
   const scoredOptions = vendors.flatMap((option) => {
@@ -848,6 +827,11 @@ export function buildComparisonDecisionSet(comparison: {
   const recommendationConfirmed = Boolean(
     recommendation
     && recommendedVendor
+    && (
+      recommendedVendor.qualificationStatus === undefined
+      || recommendedVendor.qualificationStatus === "QUALIFIED"
+      || recommendedVendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
+    )
     && !higherScoredOptionExists
     && (!practicalScoreTie || (uniqueLensWinner.length === 1 && uniqueLensWinner[0] === recommendation)),
   );

@@ -470,6 +470,36 @@ test("keeps the first exact vehicle pair when a later compare sentence lists onl
   assert.equal(parsed.context.valid, true);
 });
 
+test("treats an edited review request as authoritative over stale generated metadata", async () => {
+  const prompt = [
+    "Compare Mahindra xuv 700 and Tata Safari diesel AT in India.",
+    "Evaluate performance, reliability, safety features and maintenance.",
+    "Original request: Compare Mahindra vs Tata Safari diesel AT in India.",
+    "Original request: Compare Mahindra vs Tata Safari diesel AT in India.",
+  ].join(" ");
+
+  const deterministic = parsePrompt(prompt);
+  assert.equal(
+    deterministic.prompt,
+    "Compare Mahindra xuv 700 and Tata Safari diesel AT in India. Evaluate performance, reliability, safety features and maintenance.",
+  );
+  assert.deepEqual(deterministic.vendors, ["Mahindra xuv 700", "Tata Safari diesel AT"]);
+
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["Mahindra", "Tata Safari diesel AT"],
+    category: "Automotive",
+    useCase: "Long-term ownership",
+    confidence: 0.95,
+  })), { market: "IN" });
+  assert.deepEqual(parsed.vendors, ["Mahindra xuv 700", "Tata Safari diesel AT"]);
+  assert.deepEqual(parsed.comparisonIdentity.entities.map((entity) => entity.name), [
+    "Mahindra xuv 700",
+    "Tata Safari diesel AT",
+  ]);
+  assert.equal(parsed.context.valid, true);
+  assert.doesNotMatch(parsed.prompt, /Original request:/i);
+});
+
 test("keeps corrected and multi-model vehicle option chains out of later criteria sentences", () => {
   const corrected = parsePrompt(
     "Compare Mahindra XUV700 diesel AT vs Tata Safari diesel AT. Compare the vehicle on performance, reliability, safety features and maintenance.",
@@ -729,7 +759,7 @@ test("preserves a pricing and feature lens winner when other parameters are insu
   assert.match(analysis.recommendationReason, /\*\*Note: .*AI can sometimes provide incorrect results\.\*\*/);
 });
 
-test("preserves only a provisional lens leader after every option fails evidence qualification", () => {
+test("does not restore a provisional score or winner after every option fails evidence qualification", () => {
   const analysis = {
     recommendation: "No qualified option",
     score: 0,
@@ -755,13 +785,11 @@ test("preserves only a provisional lens leader after every option fails evidence
     })),
   } as unknown as AnalysisPayload;
 
-  assert.equal(preserveProvisionalLensWinner(analysis), true);
-  assert.equal(analysis.recommendation, "GPT 5.6 Luna fast");
-  assert.equal(analysis.score, 90);
-  assert.deepEqual(analysis.vendorScores.map((vendor) => vendor.score), [90, 45, 45, 45]);
-  assert.match(analysis.executiveSummary, /^Provisional lens winner — GPT 5\.6 Luna fast/);
-  assert.match(analysis.recommendationReason, /evidence-limited recommendation/i);
-  assert.match(analysis.recommendationReason, /unresolved or unverified criteria remain excluded/i);
+  assert.equal(preserveProvisionalLensWinner(analysis), false);
+  assert.equal(analysis.recommendation, "No qualified option");
+  assert.equal(analysis.score, 0);
+  assert.deepEqual(analysis.vendorScores.map((vendor) => vendor.score), [50, 50, 50, 50]);
+  assert.doesNotMatch(analysis.executiveSummary, /^Provisional lens winner —/);
   assert.ok(analysis.vendorScores.every((vendor) => (
     (vendor as any).qualificationStatus === "INSUFFICIENT_EVIDENCE"
   )));
@@ -2887,15 +2915,102 @@ test("rejects a prompt country that conflicts with the selected research market"
   assert.match(context.message, /selected research market is Australia/i);
 });
 
-test("blocks manufacturer-only automobile comparisons until a vehicle class or exact models are named", () => {
+test("accepts manufacturer-only automobile comparisons for governed portfolio discovery", () => {
   const context = validateComparisonContext(
     "Compare Mahindra vs Tata for automobiles. Use case: long-term ownership for 20 years.",
     ["Mahindra", "Tata"],
     "IN",
   );
 
-  assert.equal(context.valid, false);
-  assert.match(context.message, /vehicle type or exact current models/i);
+  assert.equal(context.valid, true);
+});
+
+test("parses the five supported broad-brand and model-family comparison examples", () => {
+  const cases = [
+    {
+      prompt: "Tata Safari vs Mahindra XUV",
+      vendors: ["Tata Safari", "Mahindra XUV"],
+      objective: "Mahindra XUV",
+    },
+    { prompt: "Tata vs Mahindra", vendors: ["Tata", "Mahindra"] },
+    {
+      prompt: "Tata Diesel vehicles vs Mahindra Diesel vehicles",
+      vendors: ["Tata", "Mahindra"],
+      segment: "Vehicles",
+    },
+    { prompt: "Gucci vs Prada", vendors: ["Gucci", "Prada"] },
+    {
+      prompt: "Titan watches vs other watch brands in India",
+      vendors: ["Titan watches", "other watch brands"],
+      objective: "other watch brands",
+    },
+  ];
+
+  for (const example of cases) {
+    const parsed = parsePrompt(example.prompt);
+    assert.deepEqual(parsed.vendors, example.vendors, example.prompt);
+    assert.equal(parsed.context.valid, true, `${example.prompt}: ${parsed.context.message}`);
+    if (example.prompt === "Tata vs Mahindra" || /Diesel/.test(example.prompt)) {
+      assert.equal(parsed.context.segment, "Vehicles");
+      assert.equal(parsed.context.industry, "Consumer automotive");
+    }
+    if (example.objective) assert.equal(isObjectivePhraseVendor(example.objective), true);
+  }
+});
+
+test("intent parsing accepts all five supported examples without requiring exact models", async () => {
+  const cases = [
+    ["Tata Safari vs Mahindra XUV", ["Tata Safari", "Mahindra XUV"]],
+    ["Tata vs Mahindra", ["Tata", "Mahindra"]],
+    ["Tata Diesel vehicles vs Mahindra Diesel vehicles", ["Tata", "Mahindra"]],
+    ["Gucci vs Prada", ["Gucci", "Prada"]],
+    ["Titan watches vs other watch brands in India", ["Titan watches", "other watch brands"]],
+  ] as const;
+
+  for (const [prompt, options] of cases) {
+    const parsed = await parsePromptWithIntent(prompt, async () => ({
+      ...intent({
+        options: [...options],
+        decisionType: "comparison",
+        category: /Tata|Mahindra/.test(prompt) ? "Vehicles" : /Titan/.test(prompt) ? "Watches" : "Luxury brands",
+        useCase: "Purchase decision",
+        confidence: 0.95,
+        clarification: "",
+      }),
+    }) as never, { market: /India/.test(prompt) || /Tata|Mahindra/.test(prompt) ? "IN" : "US" });
+    assert.deepEqual(parsed.vendors, [...options], prompt);
+    assert.equal(parsed.context.valid, true, `${prompt}: ${parsed.context.message}`);
+    assert.equal(parsed.intent.clarification, "");
+  }
+});
+
+test("low-specificity intent extraction cannot erase the automotive or diesel scope", async () => {
+  for (const prompt of [
+    "Tata vs Mahindra",
+    "Tata Diesel vehicles vs Mahindra Diesel vehicles",
+  ]) {
+    const parsed = await parsePromptWithIntent(prompt, async () => ({
+      ...intent({
+        options: ["Tata", "Mahindra"],
+        decisionType: "comparison",
+        category: "Product or service comparison",
+        useCase: "",
+        confidence: 0.55,
+        clarification: "Which exact models?",
+      }),
+    }) as never, { market: "IN" });
+
+    assert.deepEqual(parsed.vendors, ["Tata", "Mahindra"]);
+    assert.equal(parsed.context.valid, true);
+    assert.equal(parsed.context.segment, "Vehicles");
+    assert.equal(parsed.context.industry, "Consumer automotive");
+    assert.equal(parsed.intent.clarification, "");
+    if (/Diesel/.test(prompt)) {
+      const brief = refineComparisonPrompt(prompt, parsed.vendors, parsed.criteria, parsed.context, "IN");
+      assert.match(brief, /preserve the requested diesel powertrain/i);
+      assert.match(brief, /only current diesel vehicles/i);
+    }
+  }
 });
 
 test("blocks mixed manufacturer and model specificity for vehicle decisions", () => {

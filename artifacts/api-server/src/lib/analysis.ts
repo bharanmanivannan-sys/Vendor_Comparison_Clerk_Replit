@@ -949,75 +949,32 @@ export function annotateUnverifiableWinner(analysis: AnalysisPayload): void {
 export const PROVISIONAL_LENS_WINNER_PREFIX = "Provisional lens winner —";
 
 /**
- * Preserve a unique pricing/features leader when the broader qualification model
- * has only insufficient-evidence outcomes. This does not qualify the option or
- * turn neutral placeholder scores into evidence of equal performance.
+ * Legacy compatibility hook. An unqualified matrix leader is deliberately not
+ * promoted; callers and older tests can retain the symbol without reopening the
+ * evidence bypass.
  */
-export function preserveProvisionalLensWinner(analysis: AnalysisPayload): boolean {
-  const modeled = (analysis.vendorScores ?? []).filter((vendor) => (
-    Boolean((vendor as unknown as VendorScoreExtension).qualificationStatus)
-  ));
-  if (
-    analysis.recommendation !== "No qualified option"
-    || !modeled.length
-    || !modeled.every((vendor) => (
-      (vendor as unknown as VendorScoreExtension).qualificationStatus === "INSUFFICIENT_EVIDENCE"
-    ))
-  ) {
-    return false;
+export function preserveProvisionalLensWinner(_analysis: AnalysisPayload): boolean {
+  // A model-authored matrix row is not independently verified evidence. In
+  // particular, reachable source URLs alone do not prove that a displayed row
+  // value occurs in the retrieved document. Qualification requires
+  // provenance-complete evidence (document hash and cited span), so an option
+  // that failed those gates must never regain a score or recommendation from
+  // unverified matrix winners.
+  return false;
+}
+
+function suppressUnqualifiedLensWinners(analysis: AnalysisPayload): void {
+  const modeled = analysis.vendorScores ?? [];
+  if (!modeled.length || modeled.some((vendor) => {
+    const status = (vendor as unknown as VendorScoreExtension).qualificationStatus;
+    return status === "QUALIFIED" || status === "QUALIFIED_WITH_CONDITIONS";
+  })) return;
+  for (const row of [...(analysis.pricing ?? []), ...(analysis.features ?? [])]) {
+    row.winner = "Not established";
   }
-  const decision = selectEvidenceBackedLensWinner(
-    analysis.pricing,
-    analysis.features,
-    modeled.map((vendor) => vendor.vendor),
+  analysis.insights = (analysis.insights ?? []).filter(
+    (insight) => !insight.startsWith(PROVISIONAL_LENS_WINNER_PREFIX),
   );
-  if (!decision) return false;
-
-  const rows = [...(analysis.pricing ?? []), ...(analysis.features ?? [])];
-  const canonicalVendor = (value: string) => modeled.find(
-    (vendor) => vendor.vendor.toLowerCase() === value.trim().toLowerCase(),
-  )?.vendor;
-  const wins = new Map(modeled.map((vendor) => [vendor.vendor, 0]));
-  let decidedRows = 0;
-  for (const row of rows) {
-    const winner = canonicalVendor(row.winner ?? "");
-    if (!winner) continue;
-    wins.set(winner, (wins.get(winner) ?? 0) + 1);
-    decidedRows += 1;
-  }
-  if (decidedRows < 2) return false;
-  for (const vendor of modeled) {
-    const derivedScore = Math.round(45 + 45 * (wins.get(vendor.vendor) ?? 0) / decidedRows);
-    vendor.score = derivedScore;
-    const featureScore = vendor.weightedScores?.find((criterion) => criterion.criterion === "Meets Needs / Features");
-    if (featureScore) {
-      featureScore.score = derivedScore;
-      featureScore.rationale = `Directional matrix score derived from ${wins.get(vendor.vendor) ?? 0} wins across ${decidedRows} decided side-by-side pricing and feature dimensions. Missing or unverified criteria remain excluded.`;
-    }
-  }
-
-  const winnerScore = modeled.find((vendor) => (
-    vendor.vendor.toLowerCase() === decision.winner.toLowerCase()
-  ))?.score;
-  const lensLabel = decision.pricingWins && decision.featureWins
-    ? "pricing and feature lenses"
-    : decision.featureWins
-      ? "feature lens"
-      : "pricing lens";
-  const qualificationWarning = "This is an evidence-limited recommendation based on the researched side-by-side matrix; unresolved or unverified criteria remain excluded from the score.";
-  analysis.recommendation = decision.winner;
-  analysis.score = Number.isFinite(winnerScore) ? winnerScore! : 50;
-  analysis.executiveSummary = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner} leads the available ${lensLabel}, winning ${decision.wins} of ${decision.decidedRows} decided dimensions. ${qualificationWarning}`;
-  analysis.recommendationReason = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner} is the best available lens-specific choice because it leads ${decision.wins} of ${decision.decidedRows} decided dimensions (${decision.pricingWins} pricing and ${decision.featureWins} feature). ${qualificationWarning} **Note: ${UNVERIFIABLE_WINNER_NOTE}**`;
-  analysis.insights ??= [];
-  const marker = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner}`;
-  if (!analysis.insights.some((insight) => insight.startsWith(PROVISIONAL_LENS_WINNER_PREFIX))) {
-    analysis.insights.unshift(marker);
-  }
-  if (!analysis.insights.includes(UNVERIFIABLE_WINNER_NOTE)) {
-    analysis.insights.push(UNVERIFIABLE_WINNER_NOTE);
-  }
-  return true;
 }
 
 export type ComparisonWeight = {
@@ -1280,6 +1237,23 @@ export function isElectricVehiclePrompt(prompt: string): boolean {
 
 export function requestsCurrentModelSelection(prompt: string): boolean {
   return /\bselect\s+the\s+best[- ]matching\s+current\s+model\s+from\s+each\s+manufacturer\b/i.test(prompt);
+}
+
+const AUTOMOTIVE_MANUFACTURER_NAME = "(?:byd|ford|hyundai|kia|mahindra|mg|tata|tesla|toyota|volvo|bmw|mercedes(?:-benz)?)";
+const AUTOMOTIVE_MANUFACTURER_ONLY = new RegExp(`^${AUTOMOTIVE_MANUFACTURER_NAME}$`, "i");
+
+function normalizeAutomotivePortfolioLabel(value: string): string {
+  const match = value.trim().match(new RegExp(
+    `^(${AUTOMOTIVE_MANUFACTURER_NAME})\\s+(?:(?:diesel|petrol|gasoline|hybrid|electric|ev)\\s+)?(?:cars?|vehicles?|automobiles?|suvs?)$`,
+    "i",
+  ));
+  return match?.[1] ?? value;
+}
+
+export function requestsVehiclePortfolioSelection(prompt: string, vendors: string[]): boolean {
+  return vendors.length >= 2
+    && vendors.every((vendor) => AUTOMOTIVE_MANUFACTURER_ONLY.test(normalizeAutomotivePortfolioLabel(vendor)))
+    && /\b(?:compare|comparison|versus|vs\.?|against|which|choose|recommend)\b/i.test(prompt);
 }
 
 export function normalizeCurrentModelSelectionName(value: string): string {
@@ -1992,8 +1966,9 @@ function isPlaceholderVendor(value: string): boolean {
 export function isObjectivePhraseVendor(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return isPlaceholderVendor(value)
+    || /^mahindra\s+xuv$/i.test(value.trim())
     || /^(?:(?:it(?:'|’)?s|its|their|the|other|main|top|leading)\s+)?competitors?$/.test(normalized)
-    || /^(?:other|main|top|leading|strongest|best)\s+(?:e-?commerce\s+)?(?:sites?|platforms?|marketplaces?|providers?|services?|brands?|electric\s+vehicles?|electric\s+cars?|ev\s+vehicles?|ev\s+(?:brand\s+)?cars?|evs?|cars?)$/.test(normalized)
+    || /^(?:other|main|top|leading|strongest|best)\s+(?:(?:e-?commerce|watch)\s+)?(?:sites?|platforms?|marketplaces?|providers?|services?|brands?|electric\s+vehicles?|electric\s+cars?|ev\s+vehicles?|ev\s+(?:brand\s+)?cars?|evs?|cars?)$/.test(normalized)
     || /^let\s+me\s+know\b.*\bwhere\b.*\bstands?\b/.test(normalized)
     || /^(?:across|among|within|for)\b/.test(normalized)
     || /\b(?:my|our|your|their)\s+(?:products?|services?|business|customers?|market|team|organisation|organization)\b/.test(normalized)
@@ -2512,8 +2487,21 @@ export function assertCanonicalComparisonConsistency(
   }
 }
 
-export function parsePrompt(prompt: string) {
+function authoritativeComparisonPrompt(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, " ").trim();
+  const generatedOriginalRequest = normalized.search(/\boriginal\s+request\s*:/i);
+  if (generatedOriginalRequest < 0) return normalized;
+
+  // "Original request:" is metadata added by the review UI. Once that review
+  // text is edited, the clause before the marker is the new user-authored
+  // source of truth. Parsing the metadata again lets an older option list win
+  // through the parser's intentional later-chain precedence.
+  const editedRequest = normalized.slice(0, generatedOriginalRequest).trim();
+  return editedRequest.length >= 8 ? editedRequest : normalized;
+}
+
+export function parsePrompt(prompt: string) {
+  const normalized = authoritativeComparisonPrompt(prompt);
   const splitComparisonOptions = (value: string): string[] => {
     const candidate = value.trim();
     if (
@@ -2665,6 +2653,7 @@ export function parsePrompt(prompt: string) {
     ));
     if (genericVehicleObjective) vendors.push(genericVehicleObjective);
   }
+  vendors = vendors.map(normalizeAutomotivePortfolioLabel);
   if (
     vendors.length < MAX_COMPARISON_OPTIONS
     && /\bany\s+other\s+relevant\s+provider\b/i.test(normalized)
@@ -2985,6 +2974,10 @@ export function refineComparisonPrompt(
   const optionInstruction = discoveryObjectives.length
     ? `Preserve these named anchors: ${concreteOptions.join(", ") || "none"}. Resolve these open-ended objectives into concrete locally available products before scoring: ${discoveryObjectives.join(" | ")}.`
     : `Compare only these resolved options: ${concreteOptions.join(", ")}.`;
+  const vehicleScopeInstruction = /\bdiesel\b/i.test(original)
+    && /\b(?:cars?|vehicles?|automotive|suvs?|tata|mahindra)\b/i.test(original)
+    ? "- Vehicle scope constraint: preserve the requested diesel powertrain. Discover and score only current diesel vehicles; do not substitute petrol, electric, or hybrid models."
+    : "";
   const criteriaText = criteria.length ? criteria.join(", ") : "the decision criteria implied by the full request";
 
   return [
@@ -2995,10 +2988,11 @@ export function refineComparisonPrompt(
     `- Decision context: ${context.segment}${context.industry ? ` for ${context.industry}` : ""}.`,
     `- Decision criteria: ${criteriaText}.`,
     `- ${optionInstruction}`,
+    vehicleScopeInstruction,
     "- Enforce a like-for-like comparison: same product or service category, same broad use case, current availability in the selected market, and a comparable customer segment, capability level, size, and price band where those dimensions apply.",
     "- Do not rank raw request text, generic categories, placeholders, parent-brand aliases, unavailable products, or offerings aimed at a materially different demographic.",
     "- If the request names only a manufacturer or provider portfolio, select exact locally available offerings that satisfy the like-for-like and demographic constraints before research and scoring.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export function validateComparisonContext(
@@ -3007,6 +3001,8 @@ export function validateComparisonContext(
   selectedMarket?: ResearchMarketCode,
 ): ComparisonContext {
   const normalized = prompt.toLowerCase();
+  const hasKnownAutomotiveManufacturerPair = vendors.length >= 2
+    && vendors.every((vendor) => AUTOMOTIVE_MANUFACTURER_ONLY.test(normalizeAutomotivePortfolioLabel(vendor)));
   const hasVehicleBrandPair = /\b(?:tesla|byd)\b/.test(normalized)
     && vendors.some((vendor) => /\b(?:tesla|byd)\b/i.test(vendor));
   const hasBroadMarketInsightIntent = /\b(?:market insights?|market analysis|share prices?|market performance)\b/.test(normalized);
@@ -3022,6 +3018,14 @@ export function validateComparisonContext(
         ? /\b(?:electric cars?|electric vehicles?|electric suvs?|electric 4[ -]?wheelers?|electric four[ -]?wheelers?|evs?|battery electric|tesla|byd)\b/
         : /\b(?:electric cars?|electric vehicles?|electric suvs?|electric 4[ -]?wheelers?|electric four[ -]?wheelers?|evs?|battery electric|creta\s+(?:electric|ev)|be\s*6e?|xev\s*9e)\b/,
     },
+    ...(
+      hasKnownAutomotiveManufacturerPair
+      && !isElectricVehiclePrompt(prompt)
+      && !hasBroadMarketInsightIntent
+      && !/\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt)
+        ? [{ label: "Vehicles", pattern: /(?:)/ }]
+        : []
+    ),
     { label: "Computers and laptops", pattern: /\b(?:computers?|laptops?|notebooks?|workstations?|macbooks?|chromebooks?)\b/ },
     { label: "CRM", pattern: /\b(?:crm|salesforce|customer relationship)\b/ },
     { label: "Customer support", pattern: /\b(?:customer support|help desk|shared inbox|customer service|after.?sales support)\b/ },
@@ -3033,7 +3037,8 @@ export function validateComparisonContext(
     { label: "Communication", pattern: /\b(?:team chat|messaging|video conferencing)\b/ },
     { label: "Market insights", pattern: /\b(?:market insights?|market analysis|investment insights?|share prices?|market performance)\b/ },
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
-  const isConsumerVehicleDecision = /\b(?:car|vehicle|automotive|buy|purchase|driv(?:e|ing)|owner(?:ship)?)\b/.test(normalized);
+  const isConsumerVehicleDecision = hasKnownAutomotiveManufacturerPair
+    || /\b(?:car|vehicle|automotive|buy|purchase|driv(?:e|ing)|owner(?:ship)?)\b/.test(normalized);
   const isAustralianMarket = /\b(?:australia|australian|aud|a\$)\b/.test(normalized);
   const isRetailBankingDecision = /\b(?:home loans?|mortgages?|bank|lender|deposit|lvr|loan term|credit cards?|annual fees?|interest rates?|balance transfers?|rewards points?)\b/.test(normalized);
   const isInsuranceDecision = /\b(?:insurance|insurer|premium|excess|policy|claims?)\b/.test(normalized);
@@ -3041,7 +3046,6 @@ export function validateComparisonContext(
   const namesAustralianBank = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz)\b/.test(normalized);
   const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank|bank|credit union)\b/i;
   const automotiveBrands = /\b(?:car\s*dekho|cardekho(?:\.com)?|tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra|tata)\b/i;
-  const automotiveManufacturerOnly = /^(?:byd|ford|hyundai|kia|mahindra|mg|tata|tesla|toyota|volvo|bmw|mercedes(?:-benz)?)$/i;
   const technologyBrands = /\b(?:apple|hp|microsoft|google|samsung|dell|lenovo|asus|acer)\b/i;
   const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon)\b/i;
   const investmentBrands = /\b(?:vanguard|betashares|ishares)\b/i;
@@ -3125,9 +3129,9 @@ export function validateComparisonContext(
     };
   }
   if (isConsumerVehicleDecision) {
-    const manufacturerOnly = vendors.filter((vendor) => automotiveManufacturerOnly.test(vendor.trim()));
+    const manufacturerOnly = vendors.filter((vendor) => AUTOMOTIVE_MANUFACTURER_ONLY.test(vendor.trim()));
     const specificModels = vendors.filter((vendor) => (
-      !automotiveManufacturerOnly.test(vendor.trim()) && !isObjectivePhraseVendor(vendor)
+      !AUTOMOTIVE_MANUFACTURER_ONLY.test(vendor.trim()) && !isObjectivePhraseVendor(vendor)
     ));
     if (manufacturerOnly.length && specificModels.length) {
       return {
@@ -3139,14 +3143,9 @@ export function validateComparisonContext(
     }
     const hasVehicleClass = hasVehicleBrandPair
       || /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|electric|ev|diesel|petrol|gasoline|hybrid|suv|sedan|hatchback|ute|pickup|truck|van|motorcycle|two-wheeler|4x4|awd)\b/i.test(prompt);
-    if (manufacturerOnly.length === vendors.length && !hasVehicleClass) {
-      return {
-        valid: false,
-        segment,
-        industry,
-        message: "Name the vehicle type or exact current models to compare, such as diesel automatic SUVs or Mahindra XUV700 versus Tata Safari. A manufacturer-only automobile comparison is not specific enough for an executable decision.",
-      };
-    }
+    // A manufacturer-only request is an executable portfolio-selection
+    // decision. Exact local models are selected under the governed discovery
+    // and evidence-readiness gates before any scoring occurs.
   }
   if (knownDomains.size > 1 && !isCrossSegmentIntent) {
     return {
@@ -7430,7 +7429,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     input.onProgress?.("finding_official_sources");
     const isBrandLevelBaasComparison = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|battery as service)\b/i.test(input.prompt)
       && input.vendors.every((vendor) => /^(?:MG|Mahindra)$/i.test(vendor.trim()));
-    const isBrandLevelModelSelection = requestsCurrentModelSelection(input.prompt)
+    const isBrandLevelModelSelection = (
+      requestsCurrentModelSelection(input.prompt)
+      || requestsVehiclePortfolioSelection(input.prompt, input.vendors)
+    )
       && input.vendors.length >= 2
       && input.vendors.every((vendor) => !isObjectivePhraseVendor(vendor));
     const isElectricVehicleModelSelection = isBrandLevelModelSelection
@@ -7448,6 +7450,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       const requestedManufacturers = [...input.vendors];
       const concreteRequestedOptions = requestedManufacturers.filter((vendor) => !isObjectivePhraseVendor(vendor));
       const objectiveRequestedOptions = requestedManufacturers.filter(isObjectivePhraseVendor);
+      const hasAmbiguousMahindraXuv = objectiveRequestedOptions.some((option) => /^Mahindra\s+XUV$/i.test(option));
+      const isTitanWatchPortfolioDiscovery = input.market === "IN"
+        && concreteRequestedOptions.length === 1
+        && /^Titan(?:\s+watches?)?$/i.test(concreteRequestedOptions[0] ?? "")
+        && objectiveRequestedOptions.some((option) => /\bwatch\s+brands?\b/i.test(option));
       const openEndedElectricVehicleBrandDiscovery = isElectricVehiclePrompt(input.prompt)
         && concreteRequestedOptions.length === 1
         && objectiveRequestedOptions.length >= 1
@@ -7523,12 +7530,16 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 numberOfProducts: requestedCount,
                 instructions: isDealershipComparison
                   ? `Choose exactly ${requestedCount} unique authorised motor-vehicle dealerships that are genuinely comparable for this local buying-and-servicing decision. Preserve these named dealerships exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only the generic competitor phrases with current dealerships serving the same metropolitan area and selling or servicing the same vehicle brand, Toyota in this request. Compare dealership businesses and their sales, service, parts, finance, warranty support, customer experience, and location convenience—not Toyota vehicle models, manufacturers, marketplaces, or unrelated dealer groups. Verify every selected dealership using its official local dealer website or the manufacturer's official dealer locator. Return the official dealership homepage in selectionRoles.`
+                  : hasAmbiguousMahindraXuv
+                    ? `Resolve the explicitly named but ambiguous Mahindra XUV model family before scoring. Preserve every other exact model named by the user. Choose exactly one current Mahindra XUV model family sold in the stated local market that is genuinely comparable with the preserved vehicle, using the user's criteria and intended use. Verify it on an official local Mahindra product page. Never silently treat "XUV" as a specific model, choose a trim, or choose a model from another manufacturer. If current official evidence cannot support one defensible resolution, fail with an actionable request for the user to specify the intended XUV model.`
+                  : isTitanWatchPortfolioDiscovery
+                    ? `Choose exactly ${requestedCount} unique current watch model families sold in India. First select one exact current Titan watch model family after screening Titan's Indian portfolio, then select ${requestedCount - 1} genuinely comparable watch model families from distinct competing brands available in India. Preserve the user's India scope. Return exact model-family names, never bare brand names, collections without a concrete model family, categories, request text, or placeholders. Keep the selected Titan model first. Verify every selected watch on an official India brand product page and return those URLs in selectionRoles. These exact products, not Titan or "other watch brands", are the ranked shortlist.`
                   : openEndedElectricVehicleBrandDiscovery
                     ? `Choose exactly ${requestedCount} unique current battery-electric model families sold in the stated local market. Select exactly one current model from ${concreteRequestedOptions[0]} after screening its local EV portfolio, then select ${requestedCount - 1} genuinely comparable EV models from ${requestedCount - 1} distinct competing manufacturers. Return exact model-family names, never bare manufacturer names, categories, trims, grades, packs, request text, or placeholders. Keep the selected ${concreteRequestedOptions[0]} model first. Verify every model on an official local manufacturer product page and return those URLs in selectionRoles.`
                   : isBrandLevelBaasComparison
                   ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
                   : isBrandLevelModelSelection
-                    ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "product"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : ""}`
+                    ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "vehicle"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : /\bdiesel\b/i.test(input.prompt) ? "Select only current diesel vehicles; do not substitute petrol, electric, or hybrid models." : ""}`
                     : `Choose exactly ${requestedCount} unique products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. Never return an expanded name, acronym, edition, module, or alias of a preserved option as a competitor. Use web search to identify current alternatives and verify each exact product name from an official product page. When the request names multiple product lenses such as DXP and DAM, cover those lenses deliberately: include a broad platform peer and a focused specialist alternative when that produces the most decision-useful shortlist, and explain each option's role. A standalone DAM must be primarily marketed as a digital asset management product; do not label a DXP, CMS, content hub, or DAM module as the standalone DAM slot. Its officialUrl must be the vendor's exact DAM product page and contain DAM or digital-asset-management in the URL. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
                 shape: {
                   vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
@@ -7755,6 +7766,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       ));
       let discoveredVendors = isBrandLevelModelSelection
         ? normalizeDiscoveredVendors(rawDiscoveredVendors)
+        : isTitanWatchPortfolioDiscovery
+          ? selectOpenEndedElectricVehicleShortlist(
+              "Titan",
+              normalizeDiscoveredVendors(rawDiscoveredVendors),
+              requestedCount,
+            )
         : openEndedElectricVehicleBrandDiscovery
           ? selectOpenEndedElectricVehicleShortlist(
               concreteRequestedOptions[0],
@@ -7772,6 +7789,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       ) {
         const repairSystem = isBrandLevelModelSelection
           ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
+          : hasAmbiguousMahindraXuv
+            ? "Repair the vehicle-selection draft into one valid JSON object. Preserve every exact model named by the user and replace Mahindra XUV with exactly one current, locally sold, genuinely comparable Mahindra XUV model family verified on an official local Mahindra product page. Never choose a trim, a non-Mahindra model, or silently leave the ambiguous XUV label unresolved."
+          : isTitanWatchPortfolioDiscovery
+            ? `Repair the search-backed watch shortlist into one valid JSON object. Return exactly ${requestedCount} unique current watch model-family names sold in India. The first option must be one exact current Titan watch model, followed by ${requestedCount - 1} comparable watch models from distinct competing brands. Never return bare brands, generic collections, categories, request text, placeholders, or duplicate products. Verify every selected model with an official India brand product page in selectionRoles.`
           : openEndedElectricVehicleBrandDiscovery
             ? `Repair the search-backed electric-vehicle shortlist into one valid JSON object. Return exactly ${requestedCount} unique current battery-electric model-family names sold in the stated local market. The first option must be one exact current ${concreteRequestedOptions[0]} model, followed by ${requestedCount - 1} comparable EV models from ${requestedCount - 1} distinct competing manufacturers. Never return bare manufacturer names, multiple ${concreteRequestedOptions[0]} models, categories, trims, grades, packs, request text, placeholders, or duplicate products. Verify every selected model with an official local manufacturer product page in selectionRoles.`
           : isDealershipComparison
@@ -7859,6 +7880,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             rawDiscoveredVendors = discoveryVendorCandidates(discovery);
             discoveredVendors = isBrandLevelModelSelection
               ? normalizeDiscoveredVendors(rawDiscoveredVendors)
+              : isTitanWatchPortfolioDiscovery
+                ? selectOpenEndedElectricVehicleShortlist(
+                    "Titan",
+                    normalizeDiscoveredVendors(rawDiscoveredVendors),
+                    requestedCount,
+                  )
               : openEndedElectricVehicleBrandDiscovery
                 ? selectOpenEndedElectricVehicleShortlist(
                     concreteRequestedOptions[0],
@@ -8102,7 +8129,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         max_output_tokens: 16000,
         tools: [{
           type: "web_search",
-          search_context_size: "low",
+          // Vehicle decisions need separate official product/specification pages
+          // for every model plus independent safety/reliability evidence. A low
+          // context search has repeatedly returned a single video and one
+          // inaccessible manufacturer page, which cannot satisfy provenance
+          // gates or support a winner.
+          search_context_size: isVehicleComparison ? "high" : "low",
           external_web_access: true,
           user_location: {
             type: "approximate" as const,
@@ -8805,7 +8837,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       mustHaves,
       globalDigitalService: isAiModelComparison,
     });
-    preserveProvisionalLensWinner(normalized);
+    suppressUnqualifiedLensWinners(normalized);
     if (hasReviewSignalCoverage && !insufficientEvidence && normalized.recommendation !== "No exact winner") {
       normalized.recommendationReason = `Review-signal winner: ${normalized.recommendation} leads on comparable recent independent review ratings with verified multi-source coverage. ${normalized.recommendationReason}`;
     }

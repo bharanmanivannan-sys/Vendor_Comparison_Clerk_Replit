@@ -71,7 +71,7 @@ test("does not confirm a named option when its top score is tied without a uniqu
   assert.deepEqual(decision.alternatives.map((alternative) => alternative.option), ["Alpha", "Beta"]);
 });
 
-test("uses directional matrix scores for an evidence-limited recommendation instead of neutral model placeholders", () => {
+test("does not confirm or score a matrix leader when all options have insufficient evidence", () => {
   const decision = buildComparisonDecisionSet({
     vendors: ["Mahindra XUV700", "Tata Safari"],
     recommendation: "Mahindra XUV700",
@@ -89,14 +89,14 @@ test("uses directional matrix scores for an evidence-limited recommendation inst
   });
 
   assert.deepEqual(decision.confirmedRecommendation, {
-    status: "CONFIRMED",
-    option: "Mahindra XUV700",
-    score: 75,
-    basis: "EVIDENCE_LIMITED",
-    rationale: "Mahindra XUV700 leads the researched side-by-side matrix.",
+    status: "NO_CONFIRMED_RECOMMENDATION",
+    option: null,
+    score: null,
+    basis: "NONE",
+    rationale: "No unique recommendation was confirmed from the compared options.",
   });
-  assert.equal(decision.alternatives[0]?.score, 60);
-  assert.equal(decision.alternatives[0]?.scoreDifference, 15);
+  assert.deepEqual(decision.alternatives.map((alternative) => alternative.score), [null, null]);
+  assert.deepEqual(decision.alternatives.map((alternative) => alternative.scoreDifference), [null, null]);
 });
 
 test("repairs non-finite stored evidence numbers before returning a report", () => {
@@ -182,6 +182,56 @@ test("submission accepts the MG and Mahindra BaaS purchase when intent confidenc
   if ("error" in validated) return;
   assert.deepEqual(validated.vendors, ["MG", "Mahindra"]);
   assert.equal(validated.context.valid, true);
+});
+
+test("intake accepts all supported broad-brand and ambiguous-model examples", async () => {
+  const cases = [
+    { prompt: "Tata Safari vs Mahindra XUV", vendors: ["Tata Safari", "Mahindra XUV"], market: "IN" as const },
+    { prompt: "Tata vs Mahindra", vendors: ["Tata", "Mahindra"], market: "IN" as const },
+    { prompt: "Tata Diesel vehicles vs Mahindra Diesel vehicles", vendors: ["Tata", "Mahindra"], market: "IN" as const },
+    { prompt: "Gucci vs Prada", vendors: ["Gucci", "Prada"], market: "US" as const },
+    { prompt: "Titan watches vs other watch brands in India", vendors: ["Titan watches", "other watch brands"], market: "IN" as const },
+  ];
+
+  for (const example of cases) {
+    const validated = await validateComparisonInput(
+      { prompt: example.prompt, market: example.market, urls: [] },
+      async () => {
+        const parsed = parsePrompt(example.prompt);
+        return {
+          ...parsed,
+          comparisonIdentity: {
+            displayName: example.vendors.join(" vs "),
+            headline: example.prompt,
+            entities: example.vendors.map((name) => ({ name, role: "option" })),
+            entityCount: example.vendors.length,
+            comparisonType: "side_by_side",
+          },
+          intent: {
+            options: example.vendors,
+            subject: "",
+            decisionType: "comparison",
+            category: parsed.context.segment,
+            useCase: "Purchase decision",
+            qualifiers: [],
+            decisionCriterion: "best fit",
+            freshness: "current",
+            confidence: 1,
+            clarification: "",
+          },
+        } as never;
+      },
+    );
+    assert.ok(!("error" in validated), "error" in validated ? `${example.prompt}: ${validated.error}` : undefined);
+    if ("error" in validated) continue;
+    assert.deepEqual(validated.vendors, example.vendors, example.prompt);
+    assert.equal(validated.context.valid, true);
+    if (/Diesel/.test(example.prompt)) assert.match(validated.processingPrompt, /Diesel vehicles/i);
+    if (/Titan/.test(example.prompt)) {
+      assert.equal(validated.input.market, "IN");
+      assert.match(validated.processingPrompt, /India/);
+    }
+  }
 });
 
 test("submission preserves bounded structured BaaS scenario assumptions", async () => {

@@ -17,7 +17,9 @@ import {
   hasAdjustedTopScoreTie,
   hasOptionSpecificFrameworkEvidence,
   isVisibleSourceInList,
+  MarketPositionSection,
   pricingFeatureLensModel,
+  providerRolePresentation,
   scoreDifferenceLabel,
   shouldDisplayMarketHistory,
   weightedCriterionImpact,
@@ -493,7 +495,7 @@ test('shows a qualified pricing and feature lens winner when broader evidence is
   assert.doesNotMatch(html, /No definitive winner/);
 });
 
-test('shows an explicitly provisional lens leader and its evidence-limited score without presenting it as qualified', () => {
+test('does not show an unverified provisional lens leader or score from legacy matrix rows', () => {
   const comparison = comparisonFixture() as any;
   comparison.vendorScores.forEach((vendor: any) => {
     vendor.score = 50;
@@ -514,13 +516,69 @@ test('shows an explicitly provisional lens leader and its evidence-limited score
   const recommendedHtml = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
   const briefHtml = renderToStaticMarkup(<ExecutiveDecisionBrief comparison={comparison} />);
 
-  assert.match(recommendedHtml, /Evidence-limited leader/);
-  assert.match(recommendedHtml, /Alpha/);
-  assert.match(recommendedHtml, /broader evidence incomplete/);
+  assert.match(recommendedHtml, /Evidence-limited result/);
+  assert.match(recommendedHtml, /No definitive winner/);
+  assert.match(recommendedHtml, /No unique evidence-backed leader was established/);
   assert.doesNotMatch(recommendedHtml, /Best overall fit/);
-  assert.match(recommendedHtml, /score-ring-50/);
-  assert.match(briefHtml, /not a qualified overall recommendation/i);
-  assert.doesNotMatch(briefHtml, /No definitive winner/);
+  assert.doesNotMatch(recommendedHtml, /score-ring-50/);
+  assert.match(briefHtml, /No definitive winner/);
+});
+
+test('suppresses unsupported leader roles for new and legacy insufficient-evidence reports in browser and PDF', async () => {
+  const makeComparison = (withContract: boolean) => {
+    const comparison = comparisonFixture() as any;
+    comparison.recommendation = 'No qualified option';
+    comparison.score = 0;
+    comparison.recommendationReason = 'No option passed all mandatory qualification gates with sufficient validated evidence.';
+    comparison.executiveSummary = 'No qualified option was established.';
+    comparison.vendorScores = comparison.vendorScores.map((vendor: any) => ({
+      ...vendor,
+      score: 50,
+      providerRole: 'leader',
+      providerRoleRationale: 'Strong market presence.',
+      qualificationStatus: 'INSUFFICIENT_EVIDENCE',
+      evidenceConfidence: 0,
+      evidenceCoverage: 0,
+      weightedScores: vendor.weightedScores.map((criterion: any) => ({
+        ...criterion,
+        score: 50,
+        evidence: [{ evidenceKind: 'unverified', exactClaim: 'No verified evidence was returned.' }],
+      })),
+      marketPosition: {
+        marketShare: 'Reliable comparable figure not found',
+        market: 'India SUV segment',
+        marketSharePeriod: 'Current period',
+        evidence: 'No exact supporting URL was returned.',
+      },
+    }));
+    if (withContract) {
+      comparison.confirmedRecommendation = {
+        status: 'NO_CONFIRMED_RECOMMENDATION',
+        option: null,
+        score: null,
+        basis: 'NONE',
+        rationale: 'No unique recommendation was confirmed.',
+      };
+    }
+    return comparison;
+  };
+
+  for (const comparison of [makeComparison(true), makeComparison(false)]) {
+    assert.deepEqual(providerRolePresentation(comparison.vendorScores[0]), {
+      label: 'Not established',
+      rationale: 'Strategic role was not established from provenance-complete evidence.',
+    });
+    const html = renderToStaticMarkup(<MarketPositionSection vendorScores={comparison.vendorScores} />);
+    assert.match(html, /Not established/);
+    assert.match(html, /Strategic role was not established from provenance-complete evidence/);
+    assert.doesNotMatch(html, />leader</i);
+
+    const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+    assert.match(pdfText, /Strategic role: Not established/);
+    assert.match(pdfText, /Weighted score: Not scored/);
+    assert.doesNotMatch(pdfText, /Strategic role: leader/i);
+    assert.doesNotMatch(pdfText, /Weighted score: 50/);
+  }
 });
 
 test('shows ranked alternatives only from the same compared set beside a confirmed recommendation', () => {

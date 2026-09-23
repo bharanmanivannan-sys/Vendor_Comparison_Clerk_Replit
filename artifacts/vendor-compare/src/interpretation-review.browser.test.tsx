@@ -163,6 +163,122 @@ test('clears stale interpretation when the prompt changes', async () => {
   await waitFor(() => assert.deepEqual(researchRequest?.vendors, ['Gamma', 'Delta']));
 });
 
+test('repeated edited review cycles do not accumulate stale original requests', async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  installFetch(requests, (body: any) => {
+    const authoritative = body.prompt.split(/\boriginal\s+request\s*:/i)[0].trim();
+    const usesSpecificModel = /xuv\s*700/i.test(authoritative);
+    return {
+      ...validInterpretation(),
+      prompt: authoritative,
+      vendors: usesSpecificModel
+        ? ['Mahindra xuv 700', 'Tata Safari diesel AT']
+        : ['Mahindra', 'Tata Safari diesel AT'],
+      context: {
+        ...validInterpretation().context,
+        segment: 'Diesel automatic SUVs',
+      },
+    };
+  });
+  let researchRequest: any;
+  const view = render(
+    <ComparisonComposer pending={false} onSubmit={(data) => { researchRequest = data; }} />,
+  );
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), {
+    target: { value: 'Compare Mahindra vs Tata Safari diesel AT in India.' },
+  });
+  fireEvent.change(view.getByTestId('select-portal-market'), { target: { value: 'IN' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('input-phrased-comparison')));
+
+  const firstReview = view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement;
+  fireEvent.change(firstReview, {
+    target: {
+      value: firstReview.value
+        .replace('Mahindra and Tata Safari diesel AT', 'Mahindra xuv 700 and Tata Safari diesel AT')
+        + ' Original request: Compare Mahindra vs Tata Safari diesel AT in India.',
+    },
+  });
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+
+  await waitFor(() => {
+    const current = (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value;
+    assert.match(current, /Mahindra xuv 700 and Tata Safari diesel AT/i);
+    assert.ok((current.match(/Original request:/gi) ?? []).length <= 1);
+  });
+
+  const secondReview = view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement;
+  const secondEdit = /Original request:/i.test(secondReview.value)
+    ? secondReview.value.replace(/\s*Original request:/i, ' Prioritize comfort. Original request:')
+    : `${secondReview.value} Prioritize comfort.`;
+  fireEvent.change(secondReview, {
+    target: { value: secondEdit },
+  });
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => {
+    const current = (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value;
+    assert.match(current, /Prioritize comfort/i);
+    assert.ok((current.match(/Original request:/gi) ?? []).length <= 1);
+  });
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.ok(researchRequest));
+  assert.deepEqual(researchRequest.vendors, ['Mahindra xuv 700', 'Tata Safari diesel AT']);
+  assert.ok((researchRequest.prompt.match(/Original request:/gi) ?? []).length <= 1);
+});
+
+test('ignores a late parse response after the source prompt is edited', async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  let resolveFirst: ((response: Response) => void) | undefined;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push({ url, body });
+    if (requests.length === 1) {
+      return new Promise<Response>((resolve) => { resolveFirst = resolve; });
+    }
+    return Promise.resolve(new Response(JSON.stringify({
+      ...validInterpretation(),
+      prompt: body.prompt,
+      vendors: ['Mahindra xuv 700', 'Tata Safari diesel AT'],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  }) as typeof fetch;
+  const view = render(<ComparisonComposer pending={false} onSubmit={() => {}} />);
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), {
+    target: { value: 'Compare Mahindra and Tata Safari diesel AT in India.' },
+  });
+  fireEvent.change(view.getByTestId('select-portal-market'), { target: { value: 'IN' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.equal(requests.length, 1));
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), {
+    target: { value: 'Compare Mahindra xuv 700 and Tata Safari diesel AT in India.' },
+  });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.equal(requests.length, 2));
+  await waitFor(() => assert.match(
+    (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value,
+    /Mahindra xuv 700 and Tata Safari diesel AT/i,
+  ));
+
+  resolveFirst?.(new Response(JSON.stringify({
+    ...validInterpretation(),
+    prompt: requests[0].body.prompt,
+    vendors: ['Mahindra', 'Tata Safari diesel AT'],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(
+    (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value,
+    /Mahindra xuv 700 and Tata Safari diesel AT/i,
+  );
+  assert.doesNotMatch(
+    (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value,
+    /Compare Mahindra and Tata Safari/i,
+  );
+});
+
 test('keeps a market-incompatible interpretation blocked with its explanation visible', async () => {
   const requests: Array<{ url: string; body: any }> = [];
   installFetch(requests, {
