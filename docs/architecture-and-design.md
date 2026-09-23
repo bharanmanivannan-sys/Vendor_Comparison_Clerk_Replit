@@ -344,6 +344,12 @@ The parser extracts:
 
 Deterministic validation prevents model output from silently redefining the ranked comparison set. Objective phrases and categories cannot be treated as vendor names. When an open-ended objective requires product discovery, the system selects concrete products before full analysis.
 
+The executive decision brief uses the frozen canonical option order for its
+`Shortlist assessed` disclosure. It keeps the winner and closest-alternative
+callouts concise, while showing every compared option with its canonical score
+or an explicit not-scored status so presentation cannot imply that an option
+was dropped.
+
 ### 8.2 Portfolio-first product selection
 
 When a request names manufacturers but not exact products, the system evaluates

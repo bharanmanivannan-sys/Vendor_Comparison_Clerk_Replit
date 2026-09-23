@@ -7,6 +7,7 @@ import {
   addVerifiedElectricVehicleMatrixMetrics,
   addVerifiedElectricVehicleOfficialSpecs,
   addVerifiedBaasOfferEvidence,
+  addVerifiedAiModelEvidence,
   addVerifiedHomeLoanRateEvidence,
   addVerifiedQuickCommerceDeliveryEvidence,
   applyEvidenceBackedLensWinner,
@@ -43,6 +44,7 @@ import {
   hasRequiredDiscoveryLensCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
+  isAiModelComparisonContext,
   isVehicleComparisonContext,
   isDealershipComparisonRequest,
   isElectricVehiclePrompt,
@@ -62,11 +64,13 @@ import {
   normalizeTextField,
   normalizeVrioStatus,
   officialAustralianEvMarketPositionFallbacks,
+  officialAiModelSourcesFor,
   officialMarketSourcesFor,
   officialHomeLoanSourcesFor,
   parseJsonObject,
   parsePrompt,
   parsePromptWithIntent,
+  preserveProvisionalLensWinner,
   preferredIndiaEvModelSelection,
   preserveConcreteDiscoveryOptions,
   preserveReportedCriteriaLimitation,
@@ -629,6 +633,80 @@ test("preserves a pricing and feature lens winner when other parameters are insu
   assert.match(analysis.recommendationReason, /\*\*Note: .*AI can sometimes provide incorrect results\.\*\*/);
 });
 
+test("preserves only a provisional lens leader after every option fails evidence qualification", () => {
+  const analysis = {
+    recommendation: "No qualified option",
+    score: 0,
+    executiveSummary: "All options score equally.",
+    recommendationReason: "No option passed qualification.",
+    insights: [],
+    pricing: [
+      { dimension: "Input token price", values: {}, winner: "GPT 5.6 Luna fast" },
+      { dimension: "Output token price", values: {}, winner: "GPT 5.6 Luna fast" },
+    ],
+    features: [
+      { dimension: "Coding quality", values: {}, winner: "Not established" },
+    ],
+    vendorScores: [
+      "GPT 5.6 Luna fast",
+      "Claude Sonnet 4.6",
+      "Claude Sonnet 5",
+      "GPT 5.6 Terra",
+    ].map((vendor) => ({
+      vendor,
+      score: 50,
+      qualificationStatus: "INSUFFICIENT_EVIDENCE",
+    })),
+  } as unknown as AnalysisPayload;
+
+  assert.equal(preserveProvisionalLensWinner(analysis), true);
+  assert.equal(analysis.recommendation, "GPT 5.6 Luna fast");
+  assert.equal(analysis.score, 50);
+  assert.match(analysis.executiveSummary, /^Provisional lens winner — GPT 5\.6 Luna fast/);
+  assert.match(analysis.recommendationReason, /not a qualified overall recommendation/i);
+  assert.match(analysis.recommendationReason, /missing comparable evidence, not equal performance/i);
+  assert.ok(analysis.vendorScores.every((vendor) => (
+    (vendor as any).qualificationStatus === "INSUFFICIENT_EVIDENCE"
+  )));
+});
+
+test("does not invent a provisional leader when the available lenses are tied", () => {
+  const analysis = {
+    recommendation: "No qualified option",
+    score: 0,
+    executiveSummary: "Evidence is insufficient.",
+    recommendationReason: "No option passed qualification.",
+    insights: [],
+    pricing: [
+      { dimension: "Input token price", values: {}, winner: "Alpha" },
+      { dimension: "Output token price", values: {}, winner: "Beta" },
+    ],
+    features: [],
+    vendorScores: ["Alpha", "Beta"].map((vendor) => ({
+      vendor,
+      score: 50,
+      qualificationStatus: "INSUFFICIENT_EVIDENCE",
+    })),
+  } as unknown as AnalysisPayload;
+
+  assert.equal(preserveProvisionalLensWinner(analysis), false);
+  assert.equal(analysis.recommendation, "No qualified option");
+  assert.equal(analysis.score, 0);
+});
+
+test("preserves decimal model versions in multi-option comparison prompts", () => {
+  const parsed = parsePrompt(
+    "Compare GPT 5.6 Luna fast vs Claude Sonnet 4 .6 vs Claude Sonnet 5 vs GPT 5.6 Terra. Which one is better for coding?",
+  );
+
+  assert.deepEqual(parsed.vendors, [
+    "GPT 5.6 Luna fast",
+    "Claude Sonnet 4.6",
+    "Claude Sonnet 5",
+    "GPT 5.6 Terra",
+  ]);
+});
+
 test("uses feature breadth and provider role when DXP and DAM are requested without pricing", () => {
   const profile = capabilityLedSoftwarePriorityProfile(
     "Compare Adobe AEM with competitors for Digital Experience Platforms (DXP) and Digital Asset Management (DAM)",
@@ -783,6 +861,27 @@ test("reserves retrieval coverage for every vendor and a shared authority while 
   assert.ok(ranked.slice(0, 3).includes("https://www.anz.com.au/personal/home-loans/interest-rates"));
   assert.ok(ranked.slice(0, 3).includes("https://www.apra.gov.au/mortgage-lending-statistics"));
   assert.ok(ranked.filter((source) => new URL(source).hostname === "rates.example.com").length <= 4);
+});
+
+test("keeps the complete official Terminal-Bench provenance bundle despite the generic host cap", () => {
+  const benchmarkSources = [
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/leaderboard.yaml",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/submissions/luna.json",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/runs/luna.json",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/submissions/sol.json",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/runs/sol.json",
+  ];
+  const market = inferResearchMarket(
+    "Compare coding benchmark performance",
+    ["GPT 5.6 Luna", "GPT 5.6 Sol"],
+    "AU",
+  );
+  const ranked = rankEvidenceSources([
+    ...benchmarkSources,
+    "https://developers.openai.com/api/docs/pricing",
+  ], ["GPT 5.6 Luna", "GPT 5.6 Sol"], market, [], 5);
+
+  assert.deepEqual(benchmarkSources.filter((source) => ranked.includes(source)), benchmarkSources);
 });
 
 test("does not let a shared generic vendor token satisfy two retrieval reservations", () => {
@@ -1816,6 +1915,424 @@ test("allows ordinary comparison instructions containing select and from", () =>
   assert.equal(isSafeUserInput("SELECT * FROM users"), false);
 });
 
+test("adds provider developer docs as governed AI-model fallback sources", () => {
+  const vendors = [
+    "GPT 5.6 Luna fast",
+    "GPT 5.6 Terra",
+    "Claude Sonnet 4.6",
+    "Claude Sonnet 5",
+  ];
+  assert.equal(isAiModelComparisonContext(
+    "Which model has the optimum coding quality, token price and context window?",
+    vendors,
+  ), true);
+  assert.equal(isAiModelComparisonContext(
+    "Compare OpenAI and Anthropic enterprise support.",
+    ["OpenAI", "Anthropic"],
+  ), false);
+  assert.deepEqual(officialAiModelSourcesFor(vendors), [
+    "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+    "https://developers.openai.com/api/docs/pricing",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/leaderboard.yaml",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/submissions/2026-08-26-openai-gpt-5-6-luna-max-codex.json",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/runs/tb-4-0-0-gpt-5-6-luna-codex.json",
+    "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/submissions/2026-08-26-openai-gpt-5-6-terra-max-codex.json",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/runs/tb-4-0-0-gpt-5-6-terra-codex.json",
+    "https://platform.claude.com/docs/en/models/sonnet-4-6/overview",
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+    "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/submissions/2026-08-26-anthropic-claude-sonnet-5-max-claude-code.json",
+    "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/runs/tb-4-0-0-sonnet-5-claude-code.json",
+  ]);
+});
+
+test("recovers exact AI-model pricing and context without borrowing neighboring values", () => {
+  const document = (
+    finalUrl: string,
+    text: string,
+    hash: string,
+  ) => ({
+    url: finalUrl,
+    finalUrl,
+    contentType: "text/html",
+    text,
+    sha256: hash.repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  });
+  const parsed = {
+    vendorScores: [
+      { vendor: "GPT 5.6 Luna fast", weightedScores: [] },
+      { vendor: "GPT 5.6 Terra", weightedScores: [] },
+      { vendor: "Claude Sonnet 5", weightedScores: [] },
+      { vendor: "Claude Sonnet 4.6", weightedScores: [] },
+    ],
+  };
+  const documents = [
+    document(
+      "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "GPT-5.6 Luna\nInput $0.20 Cached input $0.02 Output $1.20\n1,050,000 context window\nBelow is a list of all available snapshots and aliases for GPT-5.6 Luna.",
+      "a",
+    ),
+    document(
+      "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+      "GPT-5.6 Terra\nInput $2.00 Cached input $0.20 Output $12.00\n1,050,000 context window\nBelow is a list of all available snapshots and aliases for GPT-5.6 Terra.",
+      "b",
+    ),
+    document(
+      "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+      "Claude Sonnet 5 This model\nInput $2 / MTok\nOutput $10 / MTok\nContext window 1M tokens\nModel IDs\nclaude-sonnet-5",
+      "c",
+    ),
+    document(
+      "https://platform.claude.com/docs/en/models/sonnet-4-6/overview",
+      "Claude Sonnet 4.6 This model Legacy\nInput $3 / MTok\nOutput $15 / MTok\nContext window 1M tokens\nModel IDs\nclaude-sonnet-4-6",
+      "d",
+    ),
+  ];
+
+  assert.equal(addVerifiedAiModelEvidence(parsed, documents), 16);
+  const rows = parsed.vendorScores.map((vendor) => ({
+    vendor: vendor.vendor,
+    evidence: vendor.weightedScores.flatMap((criterion: { evidence?: Array<Record<string, unknown>> }) => criterion.evidence ?? []),
+  }));
+  for (const row of rows) {
+    assert.deepEqual(
+      row.evidence.map((entry) => entry.metricKey).sort(),
+      ["context_window_tokens", "input_token_price", "model_availability", "output_token_price"],
+    );
+    assert.ok(row.evidence.every((entry) => entry.metricSubject === row.vendor));
+    assert.ok(row.evidence.every((entry) => entry.documentSha256));
+    assert.ok(row.evidence.every((entry) => Number(entry.sourceTextEnd) > Number(entry.sourceTextStart)));
+  }
+  assert.equal(rows[0].evidence.find((entry) => entry.metricKey === "input_token_price")?.rawMetricValue, 0.2);
+  assert.equal(rows[1].evidence.find((entry) => entry.metricKey === "input_token_price")?.rawMetricValue, 2);
+  assert.equal(rows[2].evidence.find((entry) => entry.metricKey === "input_token_price")?.rawMetricValue, 2);
+  assert.equal(rows[3].evidence.find((entry) => entry.metricKey === "input_token_price")?.rawMetricValue, 3);
+
+  const sharedNeighborDocument = document(
+    "https://example.com/ai-models",
+    "GPT-5.6 Terra Input $2.00 / MTok Output $12.00 / MTok\nGPT-5.6 Luna Input $0.20 / MTok Output $1.20 / MTok",
+    "e",
+  );
+  const neighborParsed = {
+    vendorScores: [{ vendor: "GPT 5.6 Luna fast", weightedScores: [] }],
+  };
+  assert.equal(addVerifiedAiModelEvidence(neighborParsed, [sharedNeighborDocument]), 2);
+  const neighborEvidence = neighborParsed.vendorScores[0].weightedScores
+    .flatMap((criterion: { evidence?: Array<Record<string, unknown>> }) => criterion.evidence ?? []);
+  assert.equal(
+    neighborEvidence.find((entry) => entry.metricKey === "input_token_price")?.rawMetricValue,
+    0.2,
+  );
+
+  const untrustedAvailability = { vendorScores: [{ vendor: "GPT 5.6 Luna fast", weightedScores: [] }] };
+  assert.equal(addVerifiedAiModelEvidence(
+    untrustedAvailability,
+    [document(
+      "https://example.com/gpt-5.6-luna",
+      "Below is a list of all available snapshots and aliases for GPT-5.6 Luna.",
+      "f",
+    )],
+  ), 0);
+});
+
+test("treats exact API model documentation as availability evidence for global digital services", () => {
+  const extension = calculateVendorScoreExtension({
+    vendor: "Claude Sonnet 5",
+    weightedScores: [{
+      criterion: "Meets Needs / Features",
+      score: 80,
+      evidence: [{
+        sourceId: "source-1",
+        exactClaim: "Model IDs claude-sonnet-5.",
+        metricSubject: "Claude Sonnet 5",
+        metricKey: "model_availability",
+        metricBasis: "current_provider_api_model_id_or_alias",
+        evidenceKind: "qualitative",
+        normalizedScore: 50,
+        confidence: 95,
+        normalizationMethod: "retrieved_document_model_availability",
+      }],
+    }],
+  }, {
+    market: "India IN",
+    globalDigitalService: true,
+  });
+
+  assert.equal(
+    extension.qualificationGates?.find((gate) => gate.gate === "Exact entity/variant identity")?.status,
+    "PASS",
+  );
+  assert.equal(
+    extension.qualificationGates?.find((gate) => gate.gate === "Market availability")?.status,
+    "PASS",
+  );
+
+  const pricingOnly = calculateVendorScoreExtension({
+    vendor: "Claude Sonnet 5",
+    weightedScores: [{
+      criterion: "Value for Money",
+      score: 80,
+      evidence: [{
+        sourceId: "source-2",
+        exactClaim: "Input $2 / MTok Output $10 / MTok.",
+        metricSubject: "Claude Sonnet 5",
+        metricKey: "input_token_price",
+        metricBasis: "standard_api_input_per_million_tokens",
+        evidenceKind: "quantitative",
+        normalizedScore: 80,
+        confidence: 95,
+        normalizationMethod: "retrieved_document_metric",
+      }],
+    }],
+  }, {
+    market: "India IN",
+    globalDigitalService: true,
+  });
+  assert.equal(
+    pricingOnly.qualificationGates?.find((gate) => gate.gate === "Market availability")?.status,
+    "UNKNOWN",
+  );
+});
+
+test("requires a versioned named coding benchmark before creating comparable evidence", () => {
+  const document = (text: string) => ({
+    url: "https://benchmark.example/models",
+    finalUrl: "https://benchmark.example/models",
+    contentType: "text/html",
+    text,
+    sha256: "f".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  });
+  const versioned = { vendorScores: [{ vendor: "GPT 5.6 Luna", weightedScores: [] }] };
+  assert.equal(addVerifiedAiModelEvidence(
+    versioned,
+    [document("GPT-5.6 Luna SWE-bench Verified v1.2 repository issue resolution pass@1 72.5%")],
+  ), 1);
+  const evidence = versioned.vendorScores[0].weightedScores
+    .flatMap((criterion: { evidence?: Array<Record<string, unknown>> }) => criterion.evidence ?? []);
+  assert.equal(
+    evidence[0].metricBasis,
+    "coding_benchmark:swe_bench_verified:v1.2:repository_issue_resolution:pass_at_1:percent_resolved",
+  );
+
+  const unversioned = { vendorScores: [{ vendor: "GPT 5.6 Luna", weightedScores: [] }] };
+  assert.equal(addVerifiedAiModelEvidence(
+    unversioned,
+    [document("GPT-5.6 Luna SWE-bench Verified repository issue resolution pass@1 72.5%")],
+  ), 0);
+
+  const missingConfiguration = { vendorScores: [{ vendor: "GPT 5.6 Luna", weightedScores: [] }] };
+  assert.equal(addVerifiedAiModelEvidence(
+    missingConfiguration,
+    [document("GPT-5.6 Luna SWE-bench Verified v1.2 repository issue resolution 72.5%")],
+  ), 0);
+});
+
+test("adds governed Terminal-Bench 4 results only with complete exact methodology", () => {
+  const document = (url: string, text: string) => ({
+    url,
+    finalUrl: url,
+    contentType: url.endsWith(".json") ? "application/json" : "text/plain",
+    text,
+    sha256: "a".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  });
+  const root = "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard";
+  const schema = document(
+    `${root}/leaderboard.yaml`,
+    "title: Terminal-Bench 4.0\nvisibility: public\nheader: Accuracy\naccessor: metrics.accuracy",
+  );
+  const submission = document(`${root}/submissions/luna.json`, JSON.stringify({
+    disqualified_trials: [],
+    metadata: { model_display: { label: "GPT-5.6 Luna" }, reasoning_effort: "max" },
+    metrics: { accuracy: 17.27, n_trials: 330, successes: 57 },
+    source_filter: {
+      agent: "codex",
+      agent_version: "0.149.1",
+      model_name: "openai/gpt-5.6-luna",
+      reasoning_effort: "max",
+    },
+    trials: Array.from({ length: 330 }, (_, index) => `trial-${index + 1}`),
+  }, null, 2));
+  const run = document(`${root}/runs/luna.json`, JSON.stringify({
+    agents: [{
+      name: "codex",
+      model_name: "openai/gpt-5.6-luna",
+      kwargs: { version: "0.149.1", reasoning_effort: "max" },
+    }],
+    datasets: [{ name: "terminal-bench/terminal-bench", ref: "v4.0.0" }],
+    n_attempts: 5,
+    n_concurrent_trials: 330,
+  }, null, 2));
+  const parsed = { vendorScores: [{ vendor: "GPT 5.6 Luna", weightedScores: [] }] };
+  assert.equal(addVerifiedAiModelEvidence(parsed, [schema, submission, run]), 1);
+  const evidence = parsed.vendorScores[0].weightedScores
+    .flatMap((criterion: { evidence?: Array<Record<string, unknown>> }) => criterion.evidence ?? [])[0];
+  assert.match(
+    String(evidence.metricBasis),
+    /^coding_benchmark:terminal_bench:v4\.0\.0:terminal_agent_tasks:accuracy:agent_codex:agent_version_0\.149\.1:reasoning_max:attempts_5:trials_330:configuration_sha256_[a-f0-9]{64}:percent$/,
+  );
+  assert.equal(evidence.rawMetricValue, 17.27);
+  assert.equal((evidence.methodologySources as Array<Record<string, unknown>>).length, 2);
+  assert.ok((evidence.methodologySources as Array<Record<string, number>>).every((source) => (
+    source.sourceTextEnd > source.sourceTextStart
+  )));
+
+  const mismatched = { vendorScores: [{ vendor: "GPT 5.6 Luna", weightedScores: [] }] };
+  const wrongRun = document(`${root}/runs/luna.json`, JSON.stringify({
+    agents: [{
+      name: "codex",
+      model_name: "openai/gpt-5.6-luna",
+      kwargs: { version: "0.149.1", reasoning_effort: "max" },
+    }],
+    datasets: [{ name: "terminal-bench/terminal-bench", ref: "v4.1.0" }],
+    n_attempts: 5,
+    n_concurrent_trials: 330,
+  }));
+  assert.equal(addVerifiedAiModelEvidence(mismatched, [schema, submission, wrongRun]), 1);
+  const limitation = mismatched.vendorScores[0].weightedScores
+    .flatMap((criterion: { evidence?: Array<Record<string, unknown>> }) => criterion.evidence ?? [])[0];
+  assert.equal(limitation.normalizationMethod, "benchmark_methodology_limitation");
+  assert.equal(limitation.rawMetricValue, undefined);
+
+  const incompleteTrials = document(`${root}/submissions/luna.json`, JSON.stringify({
+    ...JSON.parse(submission.text),
+    trials: ["trial-1"],
+  }));
+  const incomplete: {
+    vendorScores: Array<{
+      vendor: string;
+      weightedScores: Array<{ evidence?: Array<Record<string, unknown>> }>;
+    }>;
+  } = { vendorScores: [{ vendor: "GPT 5.6 Luna", weightedScores: [] }] };
+  assert.equal(addVerifiedAiModelEvidence(incomplete, [schema, incompleteTrials, run]), 1);
+  assert.equal(
+    incomplete.vendorScores[0].weightedScores[0]?.evidence?.[0]?.normalizationMethod,
+    "benchmark_methodology_limitation",
+  );
+
+  const reasoningConflict = document(`${root}/submissions/luna.json`, JSON.stringify({
+    ...JSON.parse(submission.text),
+    metadata: {
+      ...JSON.parse(submission.text).metadata,
+      reasoning_effort: "low",
+    },
+  }));
+  const conflictingReasoning: {
+    vendorScores: Array<{
+      vendor: string;
+      weightedScores: Array<{ evidence?: Array<Record<string, unknown>> }>;
+    }>;
+  } = { vendorScores: [{ vendor: "GPT 5.6 Luna", weightedScores: [] }] };
+  assert.equal(addVerifiedAiModelEvidence(conflictingReasoning, [schema, reasoningConflict, run]), 1);
+  assert.equal(
+    conflictingReasoning.vendorScores[0].weightedScores[0]?.evidence?.[0]?.normalizationMethod,
+    "benchmark_methodology_limitation",
+  );
+});
+
+test("scores Terminal-Bench results only when every methodology field matches", () => {
+  const root = "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard";
+  const document = (url: string, value: unknown) => ({
+    url,
+    finalUrl: url,
+    contentType: url.endsWith(".json") ? "application/json" : "text/plain",
+    text: typeof value === "string" ? value : JSON.stringify(value, null, 2),
+    sha256: "b".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  });
+  const schema = document(
+    `${root}/leaderboard.yaml`,
+    "title: Terminal-Bench 4.0\nvisibility: public\nheader: Accuracy\naccessor: metrics.accuracy",
+  );
+  const sourcesFor = (
+    vendor: string,
+    modelName: string,
+    accuracy: number,
+    agent: string,
+    agentVersion: string,
+    environment?: Record<string, string>,
+  ) => [
+    document(`${root}/submissions/${modelName}.json`, {
+      disqualified_trials: [],
+      metadata: {
+        model_display: { label: vendor.replace(/^Claude /, "") },
+        reasoning_effort: "max",
+      },
+      metrics: { accuracy, n_trials: 330, successes: Math.round(accuracy * 3.3) },
+      source_filter: {
+        agent,
+        agent_version: agentVersion,
+        model_name: `provider/${modelName}`,
+        reasoning_effort: "max",
+      },
+      trials: Array.from({ length: 330 }, (_, index) => `trial-${index + 1}`),
+    }),
+    document(`${root}/runs/${modelName}.json`, {
+      agents: [{
+        name: agent,
+        model_name: `provider/${modelName}`,
+        ...(environment ? { env: environment } : {}),
+        kwargs: { version: agentVersion, reasoning_effort: "max" },
+      }],
+      datasets: [{ name: "terminal-bench/terminal-bench", ref: "v4.0.0" }],
+      n_attempts: 5,
+      n_concurrent_trials: 330,
+    }),
+  ];
+  type BenchmarkAnalysisFixture = {
+    vendorScores: Array<{
+      vendor: string;
+      weightedScores: Array<{
+        score?: number;
+        evidence?: Array<Record<string, unknown>>;
+      }>;
+    }>;
+  };
+  const comparable: BenchmarkAnalysisFixture = {
+    vendorScores: [
+      { vendor: "GPT 5.6 Luna", weightedScores: [] },
+      { vendor: "GPT 5.6 Sol", weightedScores: [] },
+    ],
+  };
+  assert.equal(addVerifiedAiModelEvidence(comparable, [
+    schema,
+    ...sourcesFor("GPT 5.6 Luna", "gpt-5-6-luna", 17.27, "codex", "0.149.1"),
+    ...sourcesFor("GPT 5.6 Sol", "gpt-5-6-sol", 28.5, "codex", "0.149.1"),
+  ]), 2);
+  applyDeterministicQuantitativeScores(comparable as never);
+  assert.deepEqual(
+    comparable.vendorScores.map((vendor) => vendor.weightedScores[0]?.score),
+    [30, 100],
+  );
+
+  const conflicting: BenchmarkAnalysisFixture = {
+    vendorScores: [
+      { vendor: "GPT 5.6 Luna", weightedScores: [] },
+      { vendor: "Claude Sonnet 5", weightedScores: [] },
+    ],
+  };
+  assert.equal(addVerifiedAiModelEvidence(conflicting, [
+    schema,
+    ...sourcesFor("GPT 5.6 Luna", "gpt-5-6-luna", 17.27, "codex", "0.149.1"),
+    ...sourcesFor("Claude Sonnet 5", "claude-sonnet-5", 12.42, "codex", "0.149.1", {
+      CLAUDE_CODE_SIMPLE: "1",
+    }),
+  ]), 2);
+  applyDeterministicQuantitativeScores(conflicting as never);
+  assert.ok(conflicting.vendorScores.every((vendor) => vendor.weightedScores[0]?.score === 50));
+  assert.ok(conflicting.vendorScores.every((vendor) => (
+    vendor.weightedScores[0]?.evidence?.[0]?.normalizationMethod === "insufficient_comparable_evidence_neutral"
+  )));
+});
+
 test("uses portfolio discovery instead of forcing a predetermined manufacturer pair", () => {
   const prompt = "Compare MG vs Mahindra available in the requested market. Select the best-matching current model from each manufacturer. Compare official safety ratings, pricing, features, range, charging, warranty, and value for money";
   assert.equal(isElectricVehiclePrompt(prompt), true);
@@ -1993,6 +2510,47 @@ test("uses neutral low-confidence evidence when a criterion has no valid source"
   assert.equal(evidence.confidence, 0);
   assert.equal(evidence.normalizedScore, 50);
   assert.equal(evidence.weightedContribution, 10);
+});
+
+test("preserves verified benchmark methodology provenance and explicit limitation labels", () => {
+  const submissionUrl = "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/submissions/luna.json";
+  const runUrl = "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/runs/luna.json";
+  const schemaUrl = "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/leaderboard.yaml";
+  const methodologySources = [runUrl, schemaUrl].map((sourceUrl, index) => ({
+    sourceUrl,
+    exactClaim: index ? "Terminal-Bench 4.0 public accuracy schema" : "Exact Codex run configuration",
+    documentSha256: String(index + 1).repeat(64),
+    sourceTextStart: 0,
+    sourceTextEnd: 25,
+  }));
+  const [verified] = normalizeEvidenceRecords([{
+    sourceUrl: submissionUrl,
+    exactClaim: "GPT-5.6 Luna accuracy 17.27 across 330 trials.",
+    metricKey: "coding_benchmark_score",
+    metricBasis: "coding_benchmark:terminal_bench:v4.0.0:terminal_agent_tasks:accuracy:configuration_sha256_abc:percent",
+    rawMetricValue: 17.27,
+    rawMetricUnit: "percent",
+    normalizationDirection: "higher_is_better",
+    evidenceKind: "percentage",
+    supportDirection: "supports",
+    confidence: 95,
+    normalizationMethod: "retrieved_document_metric",
+    methodologySources,
+  }], "Meets Needs / Features", 25, [submissionUrl, runUrl, schemaUrl]);
+  assert.deepEqual(verified.methodologySources, methodologySources);
+
+  const [limitation] = normalizeEvidenceRecords([{
+    sourceUrl: submissionUrl,
+    exactClaim: "GPT-5.6 Luna accuracy 17.27 across 330 trials.",
+    metricKey: "coding_benchmark_score",
+    metricBasis: "coding_benchmark:terminal_bench:unsupported_or_conflicting_methodology",
+    evidenceKind: "unverified",
+    supportDirection: "neutral",
+    confidence: 0,
+    normalizationMethod: "benchmark_methodology_limitation",
+  }], "Meets Needs / Features", 25, [submissionUrl]);
+  assert.equal(limitation.normalizationMethod, "benchmark_methodology_limitation");
+  assert.equal(limitation.normalizedScore, 50);
 });
 
 test("downgrades access-restricted cited evidence to low-confidence analyst judgment", () => {
@@ -2395,6 +2953,40 @@ test("preserves all six providers in a supported comparison", async () => {
 
   assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest"]);
   assert.equal(parsed.comparisonIdentity.entityCount, 6);
+});
+
+test("preserves six options joined by repeated conjunctions", async () => {
+  const prompt = "Compare Westpac and ANZ and NAB and Commonwealth Bank and Macquarie and Bankwest for home loans";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Westpac", "ANZ"],
+      decisionType: "comparison",
+      category: "Home loans",
+      useCase: "Home loans",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest"]);
+});
+
+test("preserves six options separated by slashes", async () => {
+  const prompt = "Compare Westpac / ANZ / NAB / Commonwealth Bank / Macquarie / Bankwest for home loans";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Westpac", "ANZ"],
+      decisionType: "comparison",
+      category: "Home loans",
+      useCase: "Home loans",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest"]);
 });
 
 test("keeps Westpac when intent extraction omits the first bank in an against list", async () => {

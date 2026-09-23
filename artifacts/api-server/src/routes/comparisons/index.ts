@@ -36,6 +36,7 @@ import {
   validateComparisonContext,
   type AnalysisPayload,
   type AnalysisProgressStage,
+  type AnalysisTimingStage,
 } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
@@ -130,6 +131,8 @@ const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
 const JOB_TTL_MS = 15 * 60 * 1000;
 const COMPARISON_TARGET_SECONDS = 120;
+/** Internal benchmark for identifying slow comparisons; not a hard deadline. */
+export const COMPARISON_LATENCY_TARGET_SECONDS = 15;
 export const OUTSIDE_RESEARCH_SCOPE_MESSAGE = "This query is outside of the research scope, please provide a query to compare brand, product or services within the demographics of India, Australia, US and UK";
 const UNSUPPORTED_GULF_MARKET = /\b(?:gulf countries|gulf states|gulf region|gcc countries|gcc|uae|united arab emirates|saudi arabia|qatar|kuwait|bahrain|oman)\b/i;
 
@@ -162,6 +165,36 @@ function requestOwner(req: Request): string {
 
 export function comparisonJobElapsedMs(startedAt: number, now = Date.now()): number {
   return Math.max(0, now - startedAt);
+}
+
+export function comparisonMissedLatencyTarget(elapsedMs: number): boolean {
+  return elapsedMs > COMPARISON_LATENCY_TARGET_SECONDS * 1_000;
+}
+
+type ComparisonTimingStage = AnalysisProgressStage | "preparing_result";
+type ComparisonStageTransition = {
+  stage: ComparisonTimingStage;
+  at: number;
+};
+
+export function comparisonStageDurations(
+  startedAt: number,
+  transitions: ComparisonStageTransition[],
+  completedAt: number,
+): Partial<Record<ComparisonTimingStage, number>> {
+  const durations: Partial<Record<ComparisonTimingStage, number>> = {};
+  let currentStage: ComparisonTimingStage = "finding_official_sources";
+  let stageStartedAt = startedAt;
+  for (const transition of transitions) {
+    if (transition.stage === currentStage) continue;
+    const transitionAt = Math.max(stageStartedAt, transition.at);
+    durations[currentStage] = (durations[currentStage] ?? 0) + transitionAt - stageStartedAt;
+    currentStage = transition.stage;
+    stageStartedAt = transitionAt;
+  }
+  const endedAt = Math.max(stageStartedAt, completedAt);
+  durations[currentStage] = (durations[currentStage] ?? 0) + endedAt - stageStartedAt;
+  return durations;
 }
 
 function pruneComparisonJobs(): void {
@@ -251,9 +284,30 @@ function startComparisonJob(options: {
   });
   void (async () => {
     const urls = [...(options.input.urls ?? [])];
+    const stageTransitions: ComparisonStageTransition[] = [];
+    const analysisTimings: Partial<Record<AnalysisTimingStage, number>> = {};
     const updateStage = (stage: AnalysisProgressStage | "preparing_result"): void => {
+      stageTransitions.push({ stage, at: Date.now() });
       const current = comparisonJobs.get(id);
       if (current?.status === "processing") comparisonJobs.set(id, { ...current, stage });
+    };
+    const recordTiming = (stage: AnalysisTimingStage, durationMs: number): void => {
+      analysisTimings[stage] = (analysisTimings[stage] ?? 0) + durationMs;
+    };
+    const logTiming = (status: "complete" | "failed", endedAt: number): void => {
+      const elapsedMs = comparisonJobElapsedMs(startedAt, endedAt);
+      console.info("Comparison job timing", {
+        jobId: id,
+        ownerType: options.userId ? "authenticated" : "guest",
+        status,
+        vendorCount: options.vendors.length,
+        elapsedMs,
+        targetCompletionSeconds: COMPARISON_TARGET_SECONDS,
+        latencyTargetSeconds: COMPARISON_LATENCY_TARGET_SECONDS,
+        missedLatencyTarget: comparisonMissedLatencyTarget(elapsedMs),
+        stageDurationsMs: comparisonStageDurations(startedAt, stageTransitions, endedAt),
+        analysisTimingsMs: analysisTimings,
+      });
     };
     try {
       const analysis = await buildAnalysis({
@@ -263,6 +317,7 @@ function startComparisonJob(options: {
         criteria: options.criteria,
         urls,
         onProgress: updateStage,
+        onTiming: recordTiming,
       });
       updateStage("preparing_result");
       const payload = {
@@ -307,7 +362,9 @@ function startComparisonJob(options: {
           createdAt: Date.now(),
         });
       }
+      logTiming("complete", Date.now());
     } catch (error) {
+      logTiming("failed", Date.now());
       console.error("Comparison job failed", {
         jobId: id,
         ownerType: options.userId ? "authenticated" : "guest",

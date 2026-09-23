@@ -493,6 +493,54 @@ test('shows a qualified pricing and feature lens winner when broader evidence is
   assert.doesNotMatch(html, /No definitive winner/);
 });
 
+test('shows an explicitly provisional lens leader without presenting it as qualified', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendorScores.forEach((vendor: any) => {
+    vendor.score = 50;
+    vendor.qualificationStatus = 'INSUFFICIENT_EVIDENCE';
+  });
+  comparison.pricing = [
+    { dimension: 'Input token price', values: {}, winner: 'Alpha' },
+    { dimension: 'Output token price', values: {}, winner: 'Alpha' },
+  ];
+  comparison.features = [
+    { dimension: 'Coding quality', values: {}, winner: 'Not established' },
+  ];
+  comparison.recommendation = 'Alpha';
+  comparison.score = 50;
+  comparison.recommendationReason = 'Provisional lens winner — Alpha is the best available lens-specific choice. This is not a qualified overall recommendation; neutral 50/100 scores indicate missing comparable evidence, not equal performance.';
+  comparison.executiveSummary = 'Provisional lens winner — Alpha leads the available pricing lens.';
+
+  const recommendedHtml = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
+  const briefHtml = renderToStaticMarkup(<ExecutiveDecisionBrief comparison={comparison} />);
+
+  assert.match(recommendedHtml, /Evidence-limited leader/);
+  assert.match(recommendedHtml, /Alpha/);
+  assert.match(recommendedHtml, /broader evidence incomplete/);
+  assert.doesNotMatch(recommendedHtml, /Best overall fit/);
+  assert.doesNotMatch(recommendedHtml, /score-ring-50/);
+  assert.match(briefHtml, /not a qualified overall recommendation/i);
+  assert.doesNotMatch(briefHtml, /No definitive winner/);
+});
+
+test('does not show a named insufficient-evidence option without the provisional marker', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendorScores.forEach((vendor: any) => {
+    vendor.score = 50;
+    vendor.qualificationStatus = 'INSUFFICIENT_EVIDENCE';
+  });
+  comparison.pricing = [{ dimension: 'Input token price', values: {}, winner: 'Alpha' }];
+  comparison.recommendation = 'Alpha';
+  comparison.score = 50;
+  comparison.recommendationReason = 'Alpha appears to lead.';
+
+  const html = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
+
+  assert.match(html, /Evidence-limited result/);
+  assert.match(html, /No definitive winner/);
+  assert.doesNotMatch(html, /Evidence-limited leader/);
+});
+
 test('recalculates the quick pricing and feature comparison with user-selected weights', () => {
   const comparison = comparisonFixture() as any;
   comparison.prompt = 'Compare Alpha and Beta on price and features.';
@@ -535,6 +583,31 @@ test('passing release-quality fixture keeps the normal recommendation in browser
   assert.match(pdfText, /RECOMMENDED OPTION/);
   assert.match(pdfText, /Alpha/);
   assert.match(pdfText, /92\/100/);
+});
+
+test('shows every compared option and its score in the executive brief', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendors = [
+    'GPT 5.6 Luna fast',
+    'Claude sonnet 4.6',
+    'Claude sonnet 5',
+    'GPT 5.6 Terra',
+  ];
+  comparison.recommendation = 'GPT 5.6 Luna fast';
+  comparison.vendorScores = [
+    { vendor: 'GPT 5.6 Luna fast', score: 95 },
+    { vendor: 'Claude sonnet 4.6', score: 40 },
+    { vendor: 'Claude sonnet 5', score: 62 },
+    { vendor: 'GPT 5.6 Terra', score: 58 },
+  ];
+
+  const html = renderToStaticMarkup(<ExecutiveDecisionBrief comparison={comparison} />);
+
+  assert.match(html, /Shortlist assessed:/);
+  assert.match(html, /GPT 5\.6 Luna fast 95\/100/);
+  assert.match(html, /Claude sonnet 4\.6 40\/100/);
+  assert.match(html, /Claude sonnet 5 62\/100/);
+  assert.match(html, /GPT 5\.6 Terra 58\/100/);
 });
 
 test('renders the optional qualification and coverage extension in browser and PDF', async () => {

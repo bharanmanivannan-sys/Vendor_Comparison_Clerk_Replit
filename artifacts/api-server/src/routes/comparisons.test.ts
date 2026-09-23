@@ -4,7 +4,10 @@ import { isObjectivePhraseVendor, parsePrompt, parsePromptWithIntent } from "../
 import {
   comparisonFailureMessage,
   comparisonJobElapsedMs,
+  comparisonMissedLatencyTarget,
+  comparisonStageDurations,
   comparisonWorkaroundPrompt,
+  COMPARISON_LATENCY_TARGET_SECONDS,
   OUTSIDE_RESEARCH_SCOPE_MESSAGE,
   validateComparisonInput,
 } from "./comparisons";
@@ -14,6 +17,31 @@ test("keeps comparison job elapsed time monotonic across terminal retention time
   assert.equal(comparisonJobElapsedMs(startedAt, 11_000), 10_000);
   assert.equal(comparisonJobElapsedMs(startedAt, 71_000), 70_000);
   assert.equal(comparisonJobElapsedMs(startedAt, 87_760), 86_760);
+});
+
+test("records stage durations and flags only comparisons beyond the 15-second benchmark", () => {
+  assert.equal(COMPARISON_LATENCY_TARGET_SECONDS, 15);
+  assert.equal(comparisonMissedLatencyTarget(15_000), false);
+  assert.equal(comparisonMissedLatencyTarget(15_001), true);
+  assert.deepEqual(
+    comparisonStageDurations(
+      1_000,
+      [
+        { stage: "finding_official_sources", at: 1_000 },
+        { stage: "building_evidence", at: 2_500 },
+        { stage: "building_evidence", at: 4_000 },
+        { stage: "analysing_evidence", at: 9_000 },
+        { stage: "preparing_result", at: 10_000 },
+      ],
+      12_000,
+    ),
+    {
+      finding_official_sources: 1_500,
+      building_evidence: 6_500,
+      analysing_evidence: 1_000,
+      preparing_result: 2_000,
+    },
+  );
 });
 
 test("submission uses resolved comparison players instead of the subject as a heading", async () => {

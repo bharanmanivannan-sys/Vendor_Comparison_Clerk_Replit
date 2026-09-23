@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -20,7 +20,7 @@ import {
   recordVisitorSession,
   setAuthTokenGetter,
 } from '@workspace/api-client-react';
-import type { Comparison, Tenant } from '@workspace/api-client-react';
+import type { Comparison, ParsedComparison, Tenant } from '@workspace/api-client-react';
 import {
   Bar,
   BarChart,
@@ -133,9 +133,13 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const pageSize: [number, number] = [595.28, 841.89];
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
-  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL'
+  const decisionQuality = computeDecisionQuality(comparison);
+  const decisionUsable = decisionQuality.decision !== 'FAIL'
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
+  const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
+    && provisionalLensDecisionUsable(comparison);
+  const decisionVisible = decisionUsable || provisionalLensUsable;
   const clean = (value: unknown) => String(value ?? 'Not established')
     .normalize('NFKD')
     .replace(/[^\x20-\x7E]/g, ' ')
@@ -210,8 +214,8 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   y = drawLines(summary, comparison.prompt, margin, y, { size: 15, lineHeight: 18, font: bold, maxLines: 3 });
   y -= 10;
   summary.drawRectangle({ x: margin, y: y - 83, width: contentWidth, height: 83, color: teal });
-  summary.drawText(decisionUsable ? 'RECOMMENDED OPTION' : 'EVIDENCE-LIMITED RESULT', { x: margin + 16, y: y - 21, size: 8, font: bold, color: cream });
-  summary.drawText(clean(decisionUsable ? comparison.recommendation : 'No definitive winner'), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
+  summary.drawText(decisionUsable ? 'RECOMMENDED OPTION' : provisionalLensUsable ? 'EVIDENCE-LIMITED LEADER' : 'EVIDENCE-LIMITED RESULT', { x: margin + 16, y: y - 21, size: 8, font: bold, color: cream });
+  summary.drawText(clean(decisionVisible ? comparison.recommendation : 'No definitive winner'), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
   if (decisionUsable) summary.drawText(`${Math.round(Number(comparison.score) || 0)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
   y -= 105;
   summary.drawText('EXECUTIVE RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
@@ -1150,6 +1154,18 @@ function qualificationDecisionUsable(comparison: any): boolean {
   return modeled.some((vendor) => qualificationAllowsScore(vendor) && vendor.vendor === comparison.recommendation);
 }
 
+export function provisionalLensDecisionUsable(comparison: any): boolean {
+  const hasMarker = typeof comparison?.recommendationReason === 'string'
+    && comparison.recommendationReason.startsWith('Provisional lens winner —');
+  if (!hasMarker) return false;
+  const lensWinner = evidenceBackedLensWinner(comparison);
+  if (!lensWinner || lensWinner.winner !== comparison.recommendation) return false;
+  const modeled: any[] = (Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [])
+    .filter((vendor: any) => vendor?.qualificationStatus);
+  return modeled.length > 0
+    && modeled.every((vendor) => vendor.qualificationStatus === 'INSUFFICIENT_EVIDENCE');
+}
+
 function coverageLabel(status: unknown): string {
   return String(status || 'UNKNOWN').replaceAll('_', ' ');
 }
@@ -1185,12 +1201,15 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
   const decisionUsable = decisionQuality.decision !== 'FAIL'
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
+  const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
+    && provisionalLensDecisionUsable(comparison);
+  const decisionVisible = decisionUsable || provisionalLensUsable;
   return <div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]" data-testid="card-recommended">
-    <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionUsable ? 'Recommended' : 'Evidence-limited result'}</p>
+    <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionUsable ? 'Recommended' : provisionalLensUsable ? 'Evidence-limited leader' : 'Evidence-limited result'}</p>
     <div className="mt-5 flex items-center justify-between gap-4">
       <div>
-        <p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p>
-        <p className="mt-2 text-xs text-[#a8b0c2]">{decisionUsable ? 'Best overall fit' : hasAdjustedTopScoreTie(comparison) ? 'The adjusted model remains tied' : 'Resolve quality issues before commitment'}</p>
+        <p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{decisionVisible ? comparison.recommendation : 'No definitive winner'}</p>
+        <p className="mt-2 text-xs text-[#a8b0c2]">{decisionUsable ? 'Best overall fit' : provisionalLensUsable ? 'Best available pricing/feature fit; broader evidence incomplete' : hasAdjustedTopScoreTie(comparison) ? 'The adjusted model remains tied' : 'Resolve quality issues before commitment'}</p>
       </div>
       {decisionUsable && <ScoreRing score={Math.round(comparison.score)} />}
     </div>
@@ -1369,22 +1388,36 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 }
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
-  const decisionUsable = computeDecisionQuality(comparison).decision !== 'FAIL'
+  const decisionQuality = computeDecisionQuality(comparison);
+  const decisionUsable = decisionQuality.decision !== 'FAIL'
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
+  const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
+    && provisionalLensDecisionUsable(comparison);
+  const decisionVisible = decisionUsable || provisionalLensUsable;
   const decisionReason = stripDecisionNote(comparison.recommendationReason);
   const decisionNote = extractDecisionNote(comparison.recommendationReason);
   const runnerUp = [...(comparison.vendorScores || [])]
     .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
     .sort((a: any, b: any) => b.score - a.score)[0];
+  const shortlist = Array.isArray(comparison.vendors) && comparison.vendors.length
+    ? comparison.vendors
+    : (comparison.vendorScores || []).map((vendor: any) => vendor.vendor);
+  const shortlistSummary = shortlist
+    .map((vendorName: string) => {
+      const scoreEntry = (comparison.vendorScores || []).find((vendor: any) => vendor.vendor === vendorName);
+      const score = scoreEntry && qualificationAllowsScore(scoreEntry) ? overallVendorScore(scoreEntry) : null;
+      return `${vendorName} ${score === null ? '(not scored)' : `${score}/100`}`;
+    })
+    .join(' · ');
   return <section className={compact ? '' : 'mt-10'} data-testid={compact ? undefined : 'section-executive-brief'}>
     <div className="flex items-end justify-between gap-5">
       <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Executive decision brief</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Decision, rationale, and action</h2></div>
       <span className="mono text-[10px] uppercase text-[#85877f]">Prepared {new Date(comparison.createdAt || Date.now()).toLocaleDateString()}</span>
     </div>
     <div className="mt-5 grid gap-4 md:grid-cols-3">
-      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionUsable ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionUsable ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
-      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(comparison.executiveSummary)}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}</article>
+      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : provisionalLensUsable ? 'Evidence-limited leader' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionVisible ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionVisible ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
+      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(comparison.executiveSummary)}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}{shortlistSummary && <p className="mt-3 border-t border-[#e2dccf] pt-3 text-xs leading-5 text-[#687083]" data-testid="brief-shortlist"><strong>Shortlist assessed:</strong> {shortlistSummary}</p>}</article>
       <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
      </div>
      {decisionNote && <div className="mt-4 rounded-xl border border-[#d7c47b] bg-[#f5edc8] px-4 py-3 text-xs leading-5 text-[#715d16]" data-testid="decision-note"><strong>Note: {renderDecisionText(decisionNote)}</strong></div>}
@@ -2216,10 +2249,52 @@ class ComparisonJobError extends Error {
 }
 
 type ResearchMarketCode = 'IN' | 'AU' | 'US' | 'GB';
+const RESEARCH_MARKET_NAMES: Record<ResearchMarketCode, string> = {
+  IN: 'India',
+  AU: 'Australia',
+  US: 'the United States',
+  GB: 'the United Kingdom',
+};
+
+function formatNaturalList(values: string[]): string {
+  if (values.length <= 1) return values[0] ?? '';
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
+}
+
+function phraseComparisonPrompt(parsed: ParsedComparison, market: ResearchMarketCode): string {
+  const marketName = RESEARCH_MARKET_NAMES[market];
+  const category = parsed.context.segment && parsed.context.segment !== 'Product or service comparison'
+    ? ` for ${parsed.context.segment}`
+    : '';
+  const sentences = [
+    `Compare ${formatNaturalList(parsed.vendors)}${category} in ${marketName}.`,
+  ];
+  if (parsed.intent.useCase) sentences.push(`Use case: ${parsed.intent.useCase}.`);
+  const qualifiers = parsed.intent.qualifiers.filter((qualifier) => (
+    !new RegExp(`^(?:in\\s+)?${marketName.replace(/^the\s+/i, '(?:the )?')}$`, 'i').test(qualifier.trim())
+  ));
+  if (qualifiers.length > 0) {
+    sentences.push(`Apply these constraints: ${formatNaturalList(qualifiers)}.`);
+  }
+  if (parsed.criteria.length > 0) {
+    sentences.push(`Evaluate ${formatNaturalList(parsed.criteria)}.`);
+  }
+  if (
+    parsed.intent.decisionCriterion
+    && parsed.intent.decisionCriterion !== 'compare the options against the requested criteria'
+  ) {
+    sentences.push(`Recommend the ${parsed.intent.decisionCriterion}.`);
+  }
+  return sentences.join(' ');
+}
+
 type ComparisonRequest = {
   prompt: string;
   market: ResearchMarketCode;
   urls: string[];
+  vendors?: string[];
+  criteria?: string[];
   annualDistanceKm?: number;
   ownershipPeriodYears?: number;
 };
@@ -2314,9 +2389,38 @@ function useComparisonJob(guest: boolean) {
   return { ...mutation, jobState };
 }
 
-function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: ComparisonRequest) => void }) {
+export function RoutedComparisonComposer({
+  initialPrompt = '',
+  guest = false,
+  onSuccess,
+}: {
+  initialPrompt?: string;
+  guest?: boolean;
+  onSuccess?: (comparison: Comparison) => void;
+}) {
+  const create = useComparisonJob(guest);
+  return (
+    <ComparisonComposer
+      initialPrompt={initialPrompt}
+      guest={guest}
+      pending={create.isPending}
+      error={create.error}
+      jobState={create.jobState}
+      onSubmit={(data) => create.mutate(data, { onSuccess })}
+    />
+  );
+}
+
+export function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: ComparisonRequest) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [typoReview, setTypoReview] = useState<PromptTypoReview | null>(null);
+  const [interpretation, setInterpretation] = useState<ParsedComparison | null>(null);
+  const [interpretationPrompt, setInterpretationPrompt] = useState('');
+  const [phrasedPrompt, setPhrasedPrompt] = useState('');
+  const [phrasedPromptBaseline, setPhrasedPromptBaseline] = useState('');
+  const [interpretationPending, setInterpretationPending] = useState(false);
+  const [interpretationError, setInterpretationError] = useState('');
+  const interpretationRequestId = useRef(0);
   const [market, setMarket] = useState<ResearchMarketCode | ''>('');
   const [urls, setUrls] = useState<string[]>([]);
   const [urlDraft, setUrlDraft] = useState('');
@@ -2345,8 +2449,8 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     }
   };
 
-  const startResearch = async (confirmedPrompt: string) => {
-    if (pending || sourcePreflightPending || confirmedPrompt.length < 8 || !market) return;
+  const startResearch = async (confirmedPrompt: string, reviewedInterpretation?: ParsedComparison) => {
+    if (pending || sourcePreflightPending || interpretationPending || confirmedPrompt.length < 8 || !market) return;
     const listedOptions = confirmedPrompt.match(
       /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
     )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
@@ -2385,9 +2489,45 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
       prompt: confirmedPrompt,
       market,
       urls,
+      ...(reviewedInterpretation ? {
+        vendors: reviewedInterpretation.vendors,
+        criteria: reviewedInterpretation.criteria,
+      } : {}),
       ...(isVehicleComparison && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
       ...(isVehicleComparison && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
     });
+  };
+
+  const requestInterpretation = async (requestedPrompt: string) => {
+    if (pending || sourcePreflightPending || interpretationPending || requestedPrompt.length < 8 || !market) return;
+    const requestId = ++interpretationRequestId.current;
+    setInterpretationPending(true);
+    setInterpretationError('');
+    try {
+      const parsed = await customFetch<ParsedComparison>(
+        guest ? '/api/guest/comparisons/parse' : '/api/comparisons/parse',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: requestedPrompt }),
+        },
+      );
+      if (interpretationRequestId.current !== requestId) return;
+      const nextPhrasedPrompt = phraseComparisonPrompt(parsed, market);
+      setInterpretation(parsed);
+      setInterpretationPrompt(requestedPrompt);
+      setPhrasedPrompt(nextPhrasedPrompt);
+      setPhrasedPromptBaseline(nextPhrasedPrompt);
+    } catch (parseError) {
+      if (interpretationRequestId.current !== requestId) return;
+      setInterpretation(null);
+      setInterpretationPrompt('');
+      setPhrasedPrompt('');
+      setPhrasedPromptBaseline('');
+      setInterpretationError(comparisonErrorMessage(parseError));
+    } finally {
+      if (interpretationRequestId.current === requestId) setInterpretationPending(false);
+    }
   };
 
   const submit = (event: FormEvent) => {
@@ -2399,7 +2539,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
       setTypoReview(review);
       return;
     }
-    void startResearch(trimmedPrompt);
+    void requestInterpretation(trimmedPrompt);
   };
 
   const acceptTypoCorrection = () => {
@@ -2407,7 +2547,7 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     const revised = typoReview.revised;
     setPrompt(revised);
     setTypoReview(null);
-    void startResearch(revised);
+    void requestInterpretation(revised);
   };
 
   const editTypoCorrection = () => {
@@ -2432,6 +2572,44 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
     ...(jobState?.progress.entities ?? []).map((entity) => `Identified ${entity}`),
     ...(jobState?.progress.subject ? [`Identified ${jobState.progress.subject}`] : []),
   ];
+  const interpretedVendors = interpretation?.vendors ?? [];
+  const trimmedInterpretedVendors = interpretedVendors.map((vendor) => vendor.trim());
+  const interpretationOptionError = !interpretation
+    ? ''
+    : interpretedVendors.length < 2
+      ? 'Keep at least 2 options before research starts.'
+      : interpretedVendors.length > 6
+        ? 'You can compare up to 6 options at a time.'
+        : trimmedInterpretedVendors.some((vendor) => !vendor)
+          ? 'Name every option before research starts.'
+          : new Set(trimmedInterpretedVendors.map((vendor) => vendor.toLocaleLowerCase())).size !== trimmedInterpretedVendors.length
+            ? 'Each interpreted option must be unique.'
+            : '';
+  const interpretationConfirmable = Boolean(
+    interpretation
+    && interpretation.context.valid
+    && !interpretationOptionError,
+  );
+  const phrasedPromptChanged = phrasedPrompt.trim() !== phrasedPromptBaseline;
+  const confirmInterpretation = () => {
+    if (!interpretation) return;
+    const reviewedPrompt = phrasedPrompt.trim();
+    if (phrasedPromptChanged) {
+      if (reviewedPrompt.length < 8) return;
+      setPrompt(reviewedPrompt);
+      setInterpretation(null);
+      setInterpretationPrompt('');
+      setInterpretationError('');
+      void requestInterpretation(reviewedPrompt);
+      return;
+    }
+    if (!interpretationConfirmable) return;
+    void startResearch(reviewedPrompt, {
+      ...interpretation,
+      vendors: trimmedInterpretedVendors,
+      criteria: interpretation.criteria.map((criterion) => criterion.trim()).filter(Boolean),
+    });
+  };
 
   return (
     <div className={`animate-rise animate-rise-1 mt-9 max-w-4xl rounded-2xl border shadow-[5px_5px_0_#d9ef66] grid ${guest ? 'border-[#202840] bg-[#202840]' : 'border-[#bcb5a5] bg-[#f8f4e8]'} `} style={{ gridTemplateColumns: '1fr' }}>
@@ -2459,6 +2637,13 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           onChange={(event) => {
             setPrompt(event.target.value);
             setTypoReview(null);
+            interpretationRequestId.current += 1;
+            setInterpretation(null);
+            setInterpretationPrompt('');
+            setPhrasedPrompt('');
+            setPhrasedPromptBaseline('');
+            setInterpretationError('');
+            setInterpretationPending(false);
           }}
           data-testid={guest ? 'input-guest-prompt' : 'input-portal-prompt'}
         />
@@ -2478,6 +2663,79 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           </div>
         )}
 
+        {interpretation && interpretationPrompt === prompt.trim() && (
+          <div
+            className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#d9ef66] bg-[#29334e]' : interpretation.context.valid ? 'border-[#b7d9cb] bg-[#e5f2ec]' : 'border-[#e3b6ac] bg-[#f7e4df]'}`}
+            data-testid="interpretation-review"
+            role="alert"
+          >
+            <p className={`text-xs font-bold ${guest ? 'text-[#d9ef66]' : interpretation.context.valid ? 'text-[#35665c]' : 'text-[#8d5650]'}`}>
+              Review the interpreted comparison before research
+            </p>
+            <p className={`mt-1 text-[11px] leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+              {interpretation.context.valid
+                ? 'Confirm these options and criteria before any research begins.'
+                : interpretation.context.message}
+            </p>
+            <label
+              htmlFor={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
+              className={`mt-4 block text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#a8b0c2]' : 'text-[#85877f]'}`}
+            >
+              Phrased comparison request
+            </label>
+            <textarea
+              id={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
+              value={phrasedPrompt}
+              onChange={(event) => setPhrasedPrompt(event.target.value)}
+              className={`focus-ring mt-2 min-h-[150px] w-full resize-y rounded-lg border px-3 py-3 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c7dcd3] bg-white text-[#202840]'}`}
+              aria-label="Phrased comparison request"
+              data-testid="input-phrased-comparison"
+            />
+            <p className={`mt-2 text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#687083]'}`}>
+              {phrasedPromptChanged
+                ? 'Review the edited request again so the option list and criteria stay aligned.'
+                : `${interpretation.vendors.length} options identified. Edit this request if anything needs changing.`}
+            </p>
+            {interpretationOptionError && <p className="mt-2 text-xs font-bold text-[#b94d45]" data-testid="status-interpretation-options">{interpretationOptionError}</p>}
+            <p className={`mt-3 text-xs ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+              <strong>Context:</strong> {interpretation.context.segment}. {interpretation.context.message}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={interpretationPending || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 : !interpretationConfirmable)}
+                onClick={confirmInterpretation}
+                className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="button-confirm-interpretation"
+              >
+                {phrasedPromptChanged ? 'Review revised prompt' : 'Confirm and research'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPrompt(phrasedPrompt);
+                  setInterpretation(null);
+                  setInterpretationPrompt('');
+                  setPhrasedPrompt('');
+                  setPhrasedPromptBaseline('');
+                  setInterpretationError('');
+                  window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
+                }}
+                className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`}
+                data-testid="button-edit-interpretation"
+              >
+                Edit prompt
+              </button>
+            </div>
+          </div>
+        )}
+
+        {interpretationError && (
+          <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert" data-testid="status-interpretation-error">
+            {interpretationError}
+          </div>
+        )}
+
         <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
           <label htmlFor={guest ? 'guest-research-market' : 'research-market'} className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
             02 / Set your research market
@@ -2493,6 +2751,13 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
               setMarket(event.target.value as ResearchMarketCode | '');
               setSourcePreflight([]);
               setSourcePreflightKey('');
+              interpretationRequestId.current += 1;
+              setInterpretation(null);
+              setInterpretationPrompt('');
+              setPhrasedPrompt('');
+              setPhrasedPromptBaseline('');
+              setInterpretationError('');
+              setInterpretationPending(false);
             }}
             className={`focus-ring mt-3 w-full rounded-lg border px-3 py-3 text-sm font-semibold ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c9c1ae] bg-white text-[#202840]'}`}
             data-testid={guest ? 'select-guest-market' : 'select-portal-market'}
@@ -2628,15 +2893,17 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
           </p>
           <PrimaryButton
             type="submit"
-            disabled={pending || sourcePreflightPending || prompt.trim().length < 8 || !market}
+             disabled={pending || sourcePreflightPending || interpretationPending || prompt.trim().length < 8 || !market}
             className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
             testId={guest ? 'button-guest-research' : 'button-research-comparison'}
           >
-            {pending || sourcePreflightPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
+             {pending || sourcePreflightPending || interpretationPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
             {pending
               ? 'Researching and scoring'
               : sourcePreflightPending
                 ? 'Validating sources'
+                : interpretationPending
+                  ? 'Interpreting request'
                 : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
                   ? 'Validate supplied sources'
                   : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
@@ -2701,7 +2968,6 @@ function ComparisonComposer({ initialPrompt = '', guest = false, pending, error,
 }
 
 function Portal() {
-  const create = useComparisonJob(false);
   const { data: rawSummary } = useGetDashboardSummary();
   const summary = rawSummary
     ? {
@@ -2719,11 +2985,7 @@ function Portal() {
     window.sessionStorage.removeItem('vendor-compare-draft');
     return draft;
   }, []);
-  const createComparison = (data: ComparisonRequest) => create.mutate(
-    data,
-    { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) },
-  );
-   return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Last Compared', summary?.recentComparisons?.[0]?.category || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><ComparisonComposer initialPrompt={initialPrompt} pending={create.isPending} error={create.error} jobState={create.jobState} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
+   return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Last Compared', summary?.recentComparisons?.[0]?.category || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><RoutedComparisonComposer initialPrompt={initialPrompt} onSuccess={(comparison) => setLocation(`/comparisons/${comparison.id}`)} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
 }
 
 function BetaApiAccessPanel() {
@@ -2731,23 +2993,17 @@ function BetaApiAccessPanel() {
 }
 
 function GuestPortal() {
-  const create = useComparisonJob(true);
   const [, setLocation] = useLocation();
   const initialPrompt = useMemo(() => {
     const draft = window.sessionStorage.getItem('vendor-compare-draft') || '';
     window.sessionStorage.removeItem('vendor-compare-draft');
     return draft;
   }, []);
-  const createComparison = (data: ComparisonRequest) => create.mutate(
-    data,
-    {
-      onSuccess: (comparison) => {
-        window.sessionStorage.setItem('vendor-compare-guest-result', JSON.stringify(comparison));
-        setLocation('/guest/result');
-      },
-    },
-  );
-  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Describe the choice. We’ll research the rest.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Start with natural language. Add source URLs only if you have specific pages; otherwise the app will find current evidence for the comparison.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]"><ArrowLeft size={14} /> Back to home</Link></div><ComparisonComposer initialPrompt={initialPrompt} guest pending={create.isPending} error={create.error} jobState={create.jobState} onSubmit={createComparison} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div><div className="animate-rise animate-rise-2 mt-12 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / DESCRIBE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the products or brands, your intended outcome, budget, market, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / RESEARCH</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We find current product, pricing, reliability, support, and sustainability evidence.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / SCORE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Weighted charts make the trade-offs and recommendation visible.</p></div></div></div></GuestShell>;
+  const handleSuccess = (comparison: Comparison) => {
+    window.sessionStorage.setItem('vendor-compare-guest-result', JSON.stringify(comparison));
+    setLocation('/guest/result');
+  };
+  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Describe the choice. We’ll research the rest.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Start with natural language. Add source URLs only if you have specific pages; otherwise the app will find current evidence for the comparison.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]"><ArrowLeft size={14} /> Back to home</Link></div><RoutedComparisonComposer initialPrompt={initialPrompt} guest onSuccess={handleSuccess} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div><div className="animate-rise animate-rise-2 mt-12 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / DESCRIBE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the products or brands, your intended outcome, budget, market, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / RESEARCH</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We find current product, pricing, reliability, support, and sustainability evidence.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / SCORE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Weighted charts make the trade-offs and recommendation visible.</p></div></div></div></GuestShell>;
 }
 
 function ParsedBriefPortal() {
