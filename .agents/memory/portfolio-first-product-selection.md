@@ -15,6 +15,12 @@ Evidence readiness is part of product selection when the user requests a ranked,
 
 **How to apply:** Prefer a comparable pair with sufficient official evidence, explicitly disclose that evidence readiness constrained selection, and retain alternatives with the missing evidence or positioning trade-off. Protected selection disclosures must survive final narrative synthesis.
 
+When selected models still lack verified metrics after initial retrieval, recover sources per exact model rather than with one combined search. Prefer current official local specification, brochure, price, warranty, or safety pages; do not exclude a valid page merely because its hostname contains the manufacturer name.
+
+**Why:** A combined fallback can cite a page for only one option, leaving the other option permanently evidence-empty. Excluding manufacturer-hosted pages also removes the strongest available exact-model source.
+
+**How to apply:** Run bounded citation-only recovery separately for each missing model, merge and deduplicate the cited URLs, then apply the same permission, retrieval, identity, span, unit, basis, and freshness checks. Never treat a search citation alone as evidence.
+
 A server-validated current portfolio may bypass model-based discovery, adjudication, and correction stages.
 
 **Why:** Repeating model calls after the server already owns the current-model, comparability, and evidence-readiness boundary adds latency and structured-output failure modes without improving the decision.

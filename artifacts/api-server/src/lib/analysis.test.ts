@@ -413,6 +413,42 @@ test("runs at most one bounded citation-only fallback search when exact-model me
   assert.deepEqual(urls, ["https://publisher.example/xuv-7xo-test"]);
 });
 
+test("searches each evidence-missing vehicle model separately and combines cited pages", async () => {
+  const searched: string[][] = [];
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    {
+      vendorScores: [
+        { vendor: "Mahindra XUV 7XO", weightedScores: [] },
+        { vendor: "Tata Safari", weightedScores: [] },
+      ],
+    },
+    ["Mahindra XUV 7XO", "Tata Safari"],
+    async (missing) => {
+      searched.push(missing);
+      const slug = missing[0] === "Mahindra XUV 7XO" ? "xuv-7xo" : "safari";
+      return {
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "Exact-model specification source.",
+            annotations: [{
+              type: "url_citation",
+              url: `https://official.example/${slug}/specifications`,
+            }],
+          }],
+        }],
+      };
+    },
+  );
+
+  assert.deepEqual(searched, [["Mahindra XUV 7XO"], ["Tata Safari"]]);
+  assert.deepEqual(urls, [
+    "https://official.example/xuv-7xo/specifications",
+    "https://official.example/safari/specifications",
+  ]);
+});
+
 test("skips independent fallback search when every exact model already has span-backed metrics", async () => {
   let searches = 0;
   const parsed = {

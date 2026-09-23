@@ -6884,8 +6884,8 @@ export async function discoverIndependentVehicleFallbackUrls(
 ): Promise<string[]> {
   const missingVendors = missingExactModelVerifiedMetricVendors(parsed, vendors);
   if (!missingVendors.length) return [];
-  const output = await search(missingVendors);
-  return dedupeReferenceUrls(collectCitedHttpUrls(output)).slice(0, Math.max(0, maximum));
+  const outputs = await Promise.all(missingVendors.map((vendor) => search([vendor])));
+  return dedupeReferenceUrls(outputs.flatMap(collectCitedHttpUrls)).slice(0, Math.max(0, maximum));
 }
 
 /** Collect only URLs emitted as Responses web-search citations, never prose URLs. */
@@ -11328,14 +11328,14 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
             }],
             input: [{
               role: "system",
-              content: "Find recent reputable independent local automotive publication pages for the exact named vehicle models. Return concise source notes. Do not cite search snippets, forums, affiliate pages, videos, or manufacturer-controlled sites. Never change or alias a model name.",
+              content: "Find one current local page for the single exact named vehicle model. Prefer the manufacturer's official product, specification, brochure, price, or warranty page; otherwise use a recent reputable independent automotive specification or review page. The rendered page must visibly name the exact model and include at least one explicit comparable fact with a numeric value, label, and unit, such as price, power, torque, dimensions, economy, range, warranty, or safety rating. Return concise source notes. Do not cite search snippets, forums, affiliate pages, marketplaces, videos, category pages, or pages that only mention the model without a measurable fact. Never change or alias the model name.",
             }, {
               role: "user",
               content: JSON.stringify({
-                exactModelsMissingVerifiedEvidence: missingVendors,
+                exactModelMissingVerifiedEvidence: missingVendors[0],
                 market: researchMarket,
                 asOf: currentDate,
-                requiredFacts: "Comparable exact-model prices, specifications, measured performance, maintenance, reliability, ownership, or comfort. Prefer pages naming every compared model and publishing a date.",
+                requiredFacts: "One exact-model page with visible comparable price, specification, measured performance, maintenance, reliability, ownership, comfort, warranty, or safety metrics. Prefer an official current local page.",
               }),
             }],
           }, {
@@ -11356,12 +11356,7 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
         [],
         8,
       ).filter((url) => {
-        if (existingDocuments.has(canonicalDocumentKey(url))) return false;
-        const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-        return resolvedVendors.every((vendor) => {
-          const brandToken = normalizeComparisonOptionName(vendor).split(" ")[0] ?? "";
-          return brandToken.length < 3 || !hostname.includes(brandToken);
-        });
+        return !existingDocuments.has(canonicalDocumentKey(url));
       }).slice(0, 8);
       console.info("independent_vehicle_fallback_diagnostics", {
         invoked: missingBeforeFallback.length > 0,
