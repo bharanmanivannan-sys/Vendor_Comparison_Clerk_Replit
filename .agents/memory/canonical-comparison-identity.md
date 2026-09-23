@@ -20,3 +20,9 @@ Match exact normalized labels before applying lossy brand/model cleanup. Cleanup
 **Why:** Exact EV score and matrix rows were discarded after cleanup changed their identity, which removed verified evidence and turned differentiated results into neutral ties.
 
 **How to apply:** For score rows, matrix value keys, and winners, try case-insensitive exact canonical matching first. Use cleanup only when exact matching fails, and always emit the original frozen canonical label.
+
+A confirmed recommendation must have a canonical score row and no unresolved practical score tie. Ranked in-set alternatives come from the same frozen identity and exclude only a confirmed recommendation; without confirmation, retain every option.
+
+**Why:** Recommendation text alone can name one option despite a tie, while model-authored alternative text can introduce options that were never compared.
+
+**How to apply:** Make structured confirmation metadata authoritative in APIs and UIs. Keep outside-shortlist suggestions separate, and preserve all canonical options when the result has no confirmed recommendation.

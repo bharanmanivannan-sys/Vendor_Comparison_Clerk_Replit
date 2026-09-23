@@ -36,6 +36,7 @@ import {
   validateComparisonContext,
   type AnalysisPayload,
   type AnalysisProgressStage,
+  type AnalysisTimingStage,
 } from "../../lib/analysis";
 import { isSafeUserInput, validateHttpUrls } from "../../lib/security";
 import { recordVisitorSession } from "../../services/visitorSessions";
@@ -130,6 +131,8 @@ const GUEST_LIMIT = 12;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
 const JOB_TTL_MS = 15 * 60 * 1000;
 const COMPARISON_TARGET_SECONDS = 120;
+/** Internal benchmark for identifying slow comparisons; not a hard deadline. */
+export const COMPARISON_LATENCY_TARGET_SECONDS = 15;
 export const OUTSIDE_RESEARCH_SCOPE_MESSAGE = "This query is outside of the research scope, please provide a query to compare brand, product or services within the demographics of India, Australia, US and UK";
 const UNSUPPORTED_GULF_MARKET = /\b(?:gulf countries|gulf states|gulf region|gcc countries|gcc|uae|united arab emirates|saudi arabia|qatar|kuwait|bahrain|oman)\b/i;
 
@@ -162,6 +165,36 @@ function requestOwner(req: Request): string {
 
 export function comparisonJobElapsedMs(startedAt: number, now = Date.now()): number {
   return Math.max(0, now - startedAt);
+}
+
+export function comparisonMissedLatencyTarget(elapsedMs: number): boolean {
+  return elapsedMs > COMPARISON_LATENCY_TARGET_SECONDS * 1_000;
+}
+
+type ComparisonTimingStage = AnalysisProgressStage | "preparing_result";
+type ComparisonStageTransition = {
+  stage: ComparisonTimingStage;
+  at: number;
+};
+
+export function comparisonStageDurations(
+  startedAt: number,
+  transitions: ComparisonStageTransition[],
+  completedAt: number,
+): Partial<Record<ComparisonTimingStage, number>> {
+  const durations: Partial<Record<ComparisonTimingStage, number>> = {};
+  let currentStage: ComparisonTimingStage = "finding_official_sources";
+  let stageStartedAt = startedAt;
+  for (const transition of transitions) {
+    if (transition.stage === currentStage) continue;
+    const transitionAt = Math.max(stageStartedAt, transition.at);
+    durations[currentStage] = (durations[currentStage] ?? 0) + transitionAt - stageStartedAt;
+    currentStage = transition.stage;
+    stageStartedAt = transitionAt;
+  }
+  const endedAt = Math.max(stageStartedAt, completedAt);
+  durations[currentStage] = (durations[currentStage] ?? 0) + endedAt - stageStartedAt;
+  return durations;
 }
 
 function pruneComparisonJobs(): void {
@@ -251,9 +284,30 @@ function startComparisonJob(options: {
   });
   void (async () => {
     const urls = [...(options.input.urls ?? [])];
+    const stageTransitions: ComparisonStageTransition[] = [];
+    const analysisTimings: Partial<Record<AnalysisTimingStage, number>> = {};
     const updateStage = (stage: AnalysisProgressStage | "preparing_result"): void => {
+      stageTransitions.push({ stage, at: Date.now() });
       const current = comparisonJobs.get(id);
       if (current?.status === "processing") comparisonJobs.set(id, { ...current, stage });
+    };
+    const recordTiming = (stage: AnalysisTimingStage, durationMs: number): void => {
+      analysisTimings[stage] = (analysisTimings[stage] ?? 0) + durationMs;
+    };
+    const logTiming = (status: "complete" | "failed", endedAt: number): void => {
+      const elapsedMs = comparisonJobElapsedMs(startedAt, endedAt);
+      console.info("Comparison job timing", {
+        jobId: id,
+        ownerType: options.userId ? "authenticated" : "guest",
+        status,
+        vendorCount: options.vendors.length,
+        elapsedMs,
+        targetCompletionSeconds: COMPARISON_TARGET_SECONDS,
+        latencyTargetSeconds: COMPARISON_LATENCY_TARGET_SECONDS,
+        missedLatencyTarget: comparisonMissedLatencyTarget(elapsedMs),
+        stageDurationsMs: comparisonStageDurations(startedAt, stageTransitions, endedAt),
+        analysisTimingsMs: analysisTimings,
+      });
     };
     try {
       const analysis = await buildAnalysis({
@@ -263,6 +317,7 @@ function startComparisonJob(options: {
         criteria: options.criteria,
         urls,
         onProgress: updateStage,
+        onTiming: recordTiming,
       });
       updateStage("preparing_result");
       const payload = {
@@ -297,17 +352,23 @@ function startComparisonJob(options: {
           createdAt: Date.now(),
         });
       } else {
+        const guestPayload = {
+          ...payload,
+          ...buildComparisonDecisionSet(payload),
+        };
         comparisonJobs.set(id, {
           owner: options.owner,
           status: "complete",
           stage: "completed",
           progress: { entities: options.vendors, subject: options.subject },
-          result: CreateGuestComparisonResponse.parse(payload),
+          result: CreateGuestComparisonResponse.parse(guestPayload),
           startedAt,
           createdAt: Date.now(),
         });
       }
+      logTiming("complete", Date.now());
     } catch (error) {
+      logTiming("failed", Date.now());
       console.error("Comparison job failed", {
         jobId: id,
         ownerType: options.userId ? "authenticated" : "guest",
@@ -506,6 +567,149 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
   };
 }
 
+function responseNumber(value: unknown, fallback: number) {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value)
+      : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export function normalizeEvidenceForResponse(
+  evidence: Record<string, unknown>,
+  fallbackCriterionWeight: number,
+): Record<string, unknown> & {
+  confidence: number;
+  normalizedScore: number;
+  criterionWeight: number;
+  weightedContribution: number;
+} {
+  const normalizedScore = responseNumber(evidence.normalizedScore, 50);
+  const criterionWeight = responseNumber(evidence.criterionWeight, fallbackCriterionWeight);
+  const weightedContribution = responseNumber(
+    evidence.weightedContribution,
+    Number((normalizedScore * criterionWeight / 100).toFixed(2)),
+  );
+  return {
+    ...evidence,
+    confidence: responseNumber(evidence.confidence, 0),
+    normalizedScore,
+    criterionWeight,
+    weightedContribution,
+  };
+}
+
+export function buildComparisonDecisionSet(comparison: {
+  vendors?: string[];
+  vendorScores?: Array<Record<string, any>>;
+  recommendation?: string;
+  score?: number;
+  recommendationReason?: string;
+  pricing?: Array<Record<string, any>>;
+  features?: Array<Record<string, any>>;
+}) {
+  const vendors = Array.isArray(comparison.vendors)
+    ? comparison.vendors.map((vendor) => String(vendor).trim()).filter(Boolean)
+    : [];
+  const vendorScores = Array.isArray(comparison.vendorScores) ? comparison.vendorScores : [];
+  const canonicalOption = (value: unknown) => vendors.find(
+    (vendor) => vendor.toLowerCase() === String(value ?? "").trim().toLowerCase(),
+  );
+  const recommendation = canonicalOption(comparison.recommendation);
+  const recommendedVendor = recommendation
+    ? vendorScores.find((vendor) => canonicalOption(vendor.vendor) === recommendation)
+    : undefined;
+  const numericScore = (vendor: Record<string, any> | undefined): number | null => {
+    if (!vendor) return null;
+    const raw = Number(vendor.modelScore ?? vendor.score);
+    return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : null;
+  };
+  const scoredOptions = vendors.flatMap((option) => {
+    const vendor = vendorScores.find((entry) => canonicalOption(entry.vendor) === option);
+    const score = numericScore(vendor);
+    return score === null ? [] : [{ option, score }];
+  });
+  const recommendedScore = numericScore(recommendedVendor);
+  const higherScoredOptionExists = recommendedScore !== null
+    && scoredOptions.some((entry) => entry.option !== recommendation && entry.score > recommendedScore);
+  const practicalScoreTie = recommendedScore !== null
+    && scoredOptions.some((entry) => (
+      entry.option !== recommendation && Math.abs(entry.score - recommendedScore) < 1
+    ));
+  const lensWins = new Map(vendors.map((option) => [option, 0]));
+  for (const row of [...(comparison.pricing ?? []), ...(comparison.features ?? [])]) {
+    const winner = canonicalOption(row?.winner);
+    if (winner) lensWins.set(winner, (lensWins.get(winner) ?? 0) + 1);
+  }
+  const highestLensWins = Math.max(0, ...lensWins.values());
+  const uniqueLensWinner = highestLensWins > 0
+    ? [...lensWins.entries()].filter(([, wins]) => wins === highestLensWins).map(([option]) => option)
+    : [];
+  const recommendationConfirmed = Boolean(
+    recommendation
+    && recommendedVendor
+    && !higherScoredOptionExists
+    && (!practicalScoreTie || (uniqueLensWinner.length === 1 && uniqueLensWinner[0] === recommendation)),
+  );
+  const confirmedOption = recommendationConfirmed ? recommendation : undefined;
+  const basis = recommendedVendor?.qualificationStatus === "QUALIFIED"
+    ? "QUALIFIED"
+    : recommendedVendor?.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
+      ? "QUALIFIED_WITH_CONDITIONS"
+      : confirmedOption
+        ? "EVIDENCE_LIMITED"
+        : "NONE";
+  const confirmedScore = confirmedOption
+    ? recommendedScore ?? responseNumber(comparison.score, 0)
+    : null;
+  const confirmedRecommendation = confirmedOption
+    ? {
+        status: "CONFIRMED" as const,
+        option: confirmedOption,
+        score: confirmedScore,
+        basis,
+        rationale: String(comparison.recommendationReason ?? "").trim()
+          || `${confirmedOption} is the confirmed recommendation from the compared options.`,
+      }
+    : {
+        status: "NO_CONFIRMED_RECOMMENDATION" as const,
+        option: null,
+        score: null,
+        basis: "NONE" as const,
+        rationale: "No unique recommendation was confirmed from the compared options.",
+      };
+  const scoredAlternatives = vendors
+    .filter((option) => option !== confirmedOption)
+    .map((option, originalIndex) => {
+      const vendor = vendorScores.find((entry) => canonicalOption(entry.vendor) === option);
+      const score = numericScore(vendor);
+      const qualificationStatus = String(vendor?.qualificationStatus ?? "NOT_ESTABLISHED");
+      const rationale = String(
+        vendor?.verdict
+        || vendor?.strengths?.[0]
+        || vendor?.conditions?.[0]
+        || vendor?.limitations?.[0]
+        || `${option} remains an alternative from the original compared set.`,
+      ).trim();
+      return { option, score, qualificationStatus, rationale, originalIndex };
+    })
+    .sort((left, right) => (
+      (right.score ?? -1) - (left.score ?? -1) || left.originalIndex - right.originalIndex
+    ));
+  const alternatives = scoredAlternatives.map((alternative, index) => ({
+    option: alternative.option,
+    rank: index + 1,
+    score: alternative.score,
+    scoreDifference: confirmedScore !== null && alternative.score !== null
+      ? Math.max(0, confirmedScore - alternative.score)
+      : null,
+    qualificationStatus: alternative.qualificationStatus,
+    rationale: alternative.rationale,
+  }));
+  return { confirmedRecommendation, alternatives };
+}
+
 export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
   const normalizeStoredRows = (rows: typeof row.pricing) => rows.map((lensRow) => ({
     ...lensRow,
@@ -518,27 +722,44 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     ...vendor,
     weightedScores: vendor.weightedScores?.map((weightedScore) => ({
       ...weightedScore,
-      evidence: weightedScore.evidence?.map((evidence) => (
-        evidence.sourceId && /^docsha256:[a-f0-9]{64}$/i.test(evidence.sourceId)
-          ? evidence
+      evidence: weightedScore.evidence?.map((evidence) => {
+        const normalizedEvidence = normalizeEvidenceForResponse(
+          evidence as unknown as Record<string, unknown>,
+          weightedScore.weight,
+        );
+        return normalizedEvidence.sourceId && /^docsha256:[a-f0-9]{64}$/i.test(String(normalizedEvidence.sourceId))
+          ? normalizedEvidence
           : (() => {
-              const { sourceId: _sourceId, ...legacyEvidence } = evidence;
+              const { sourceId: _sourceId, ...legacyEvidence } = normalizedEvidence;
               return legacyEvidence;
-            })()
-      )),
+            })();
+      }),
     })),
   }));
+  const summary = summaryFromRow(row);
+  const pricing = normalizeStoredRows(row.pricing);
+  const features = normalizeStoredRows(row.features);
+  const decisionSet = buildComparisonDecisionSet({
+    vendors: row.vendors,
+    vendorScores,
+    recommendation: summary.recommendation,
+    score: summary.score,
+    recommendationReason: row.recommendationReason,
+    pricing,
+    features,
+  });
   return {
-    ...summaryFromRow(row),
+    ...summary,
     urls: row.urls,
     sourceAvailability: reportSources(row.sourceAvailability, row.urls),
     criteria: row.criteria,
     executiveSummary: row.executiveSummary,
     recommendationReason: row.recommendationReason,
+    ...decisionSet,
     weightAdjustments: row.weightAdjustments,
     vendorScores,
-    pricing: normalizeStoredRows(row.pricing),
-    features: normalizeStoredRows(row.features),
+    pricing,
+    features,
     swot: row.swot,
     opportunities: row.opportunities,
     insights: row.insights,
@@ -678,6 +899,15 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
     criteria: validated.criteria,
     createdAt: new Date(),
     ...analysis,
+    ...buildComparisonDecisionSet({
+      vendors: validated.vendors,
+      vendorScores: analysis.vendorScores,
+      recommendation: analysis.recommendation,
+      score: analysis.score,
+      recommendationReason: analysis.recommendationReason,
+      pricing: analysis.pricing,
+      features: analysis.features,
+    }),
   }));
 });
 

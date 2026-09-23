@@ -540,6 +540,19 @@ paths:
                 category: Electric vehicles
                 recommendation: BYD Seal
                 score: 84
+                confirmedRecommendation:
+                  status: CONFIRMED
+                  option: BYD Seal
+                  score: 84
+                  basis: QUALIFIED
+                  rationale: It remains within budget while preserving range and warranty value.
+                alternatives:
+                  - option: Tesla Model 3
+                    rank: 1
+                    score: 77
+                    scoreDifference: 7
+                    qualificationStatus: QUALIFIED
+                    rationale: Strong technology, above budget
                 executiveSummary: BYD Seal provides the stronger budget fit.
                 recommendationReason: It remains within budget while preserving range and warranty value.
                 vendors: [Tesla Model 3, BYD Seal]
@@ -1301,6 +1314,13 @@ components:
               type: string
             recommendationReason:
               type: string
+            confirmedRecommendation:
+              $ref: "#/components/schemas/ConfirmedRecommendation"
+            alternatives:
+              type: array
+              description: Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.
+              items:
+                $ref: "#/components/schemas/ComparedAlternative"
             weightAdjustments:
               type: array
               maxItems: 8
@@ -1360,7 +1380,7 @@ components:
               type: array
               description: Decision rights, evidence requirements, approvers, and approval gates.
               items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
-          required: [urls, sourceAvailability, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
+          required: [urls, sourceAvailability, criteria, executiveSummary, recommendationReason, confirmedRecommendation, alternatives, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
     GuestComparison:
       type: object
       properties:
@@ -1401,6 +1421,13 @@ components:
           type: string
         recommendationReason:
           type: string
+        confirmedRecommendation:
+          $ref: "#/components/schemas/ConfirmedRecommendation"
+        alternatives:
+          type: array
+          description: Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.
+          items:
+            $ref: "#/components/schemas/ComparedAlternative"
         vendorScores:
           type: array
           items:
@@ -1449,7 +1476,46 @@ components:
         decisionGovernance:
           type: array
           items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
-      required: [prompt, vendors, comparisonIdentity, category, recommendation, score, status, createdAt, urls, sourceAvailability, criteria, executiveSummary, recommendationReason, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
+      required: [prompt, vendors, comparisonIdentity, category, recommendation, score, status, createdAt, urls, sourceAvailability, criteria, executiveSummary, recommendationReason, confirmedRecommendation, alternatives, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
+    ConfirmedRecommendation:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [CONFIRMED, NO_CONFIRMED_RECOMMENDATION]
+        option:
+          type: [string, "null"]
+        score:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 100
+        basis:
+          type: string
+          enum: [QUALIFIED, QUALIFIED_WITH_CONDITIONS, EVIDENCE_LIMITED, NONE]
+        rationale:
+          type: string
+      required: [status, option, score, basis, rationale]
+    ComparedAlternative:
+      type: object
+      properties:
+        option:
+          type: string
+        rank:
+          type: integer
+          minimum: 1
+        score:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 100
+        scoreDifference:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 100
+        qualificationStatus:
+          type: string
+        rationale:
+          type: string
+      required: [option, rank, score, scoreDifference, qualificationStatus, rationale]
     ReportSource:
       type: object
       properties:

@@ -11,6 +11,7 @@
     "test:security": "node ./security-test.mjs",
     "test:citation-transport-config": "node --test ./citation-transport-matrix.test.mjs",
     "test:citation-transport-matrix": "pnpm run test:citation-transport-config && node ./citation-transport-matrix.mjs",
+    "test:ai-provider-contracts": "node ./ai-provider-contract-check.mjs",
     "eval:intent": "node ./intent-eval.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

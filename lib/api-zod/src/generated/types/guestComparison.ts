@@ -15,7 +15,9 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AnalysisRow } from './analysisRow';
+import type { ComparedAlternative } from './comparedAlternative';
 import type { ComparisonIdentity } from './comparisonIdentity';
+import type { ConfirmedRecommendation } from './confirmedRecommendation';
 import type { DecisionGovernanceItem } from './decisionGovernanceItem';
 import type { FunctionalGapItem } from './functionalGapItem';
 import type { GuestComparisonStatus } from './guestComparisonStatus';
@@ -41,6 +43,9 @@ export interface GuestComparison {
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  confirmedRecommendation: ConfirmedRecommendation;
+  /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
+  alternatives: ComparedAlternative[];
   vendorScores: VendorScore[];
   pricing: AnalysisRow[];
   features: AnalysisRow[];

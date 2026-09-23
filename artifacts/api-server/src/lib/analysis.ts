@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { InsertComparison } from "@workspace/db";
+import { createHash } from "node:crypto";
 import {
   checkEvidenceUrls,
   isSafeUserInput,
@@ -33,6 +34,13 @@ export function comparisonFailureCode(error: unknown): ComparisonFailureCode {
 type EvidenceRecord = NonNullable<NonNullable<NonNullable<AnalysisPayload["vendorScores"]>[number]["weightedScores"]>[number]["evidence"]>[number] & {
   /** Application-issued identifier for a validated document, never a model URL. */
   sourceId?: string;
+  methodologySources?: Array<{
+    sourceUrl: string;
+    exactClaim: string;
+    documentSha256: string;
+    sourceTextStart: number;
+    sourceTextEnd: number;
+  }>;
 };
 
 export type QualificationStatus =
@@ -92,6 +100,7 @@ export type VendorScoreModelOptions = {
   category?: string;
   prompt?: string;
   market?: string;
+  globalDigitalService?: boolean;
 };
 
 const QUALIFICATION_GATE_NAMES = [
@@ -194,8 +203,13 @@ export function calculateVendorScoreExtension(
   const marketTerms = marketCode ? marketAliases[marketCode]! : [marketValue].filter(Boolean);
   const marketEvidence = allEvidence.filter((evidence) => {
     const value = normalizedIdentity(evidenceText(evidence));
-    return /\b(?:available|availability|sold|offered|launched|shipping|distribution|market)\b/i.test(evidenceText(evidence))
+    const localAvailability = /\b(?:available|availability|sold|offered|launched|shipping|distribution|market)\b/i.test(evidenceText(evidence))
       && marketTerms.some((term) => new RegExp(`(?:^| )${term.replace(/ /g, " +")}(?: |$)`, "i").test(value));
+    const globalApiAvailability = options.globalDigitalService
+      && normalizedIdentity(evidence.metricSubject) === vendorIdentity
+      && evidence.metricKey === "model_availability"
+      && evidence.metricBasis === "current_provider_api_model_id_or_alias";
+    return localAvailability || globalApiAvailability;
   });
   const statusFromEvidence = (evidence: Array<Record<string, unknown>>): QualificationGateStatus => {
     const evidenceValue = evidence.map(evidenceText).join(" ");
@@ -421,6 +435,30 @@ export function normalizeEvidenceRecords(
       : "neutral";
     const exactClaim = typeof row.exactClaim === "string" ? row.exactClaim.trim() : "";
     if (!exactClaim) return [];
+    const methodologySources = Array.isArray(row.methodologySources)
+      ? row.methodologySources.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const source = item as Record<string, unknown>;
+        const sourceUrl = typeof source.sourceUrl === "string" ? cleanEvidenceUrl(source.sourceUrl) : null;
+        const methodologyClaim = typeof source.exactClaim === "string" ? source.exactClaim.trim() : "";
+        const documentSha256 = typeof source.documentSha256 === "string" && /^[a-f0-9]{64}$/.test(source.documentSha256)
+          ? source.documentSha256 : "";
+        const sourceTextStart = typeof source.sourceTextStart === "number" && Number.isInteger(source.sourceTextStart)
+          ? source.sourceTextStart : -1;
+        const sourceTextEnd = typeof source.sourceTextEnd === "number" && Number.isInteger(source.sourceTextEnd)
+          ? source.sourceTextEnd : -1;
+        if (
+          !sourceUrl
+          || !allowed.has(sourceUrl)
+          || !independentlyVerified.has(sourceUrl)
+          || !methodologyClaim
+          || !documentSha256
+          || sourceTextStart < 0
+          || sourceTextEnd <= sourceTextStart
+        ) return [];
+        return [{ sourceUrl, exactClaim: methodologyClaim, documentSha256, sourceTextStart, sourceTextEnd }];
+      })
+      : undefined;
     const normalizationHint = typeof row.normalizationMethod === "string"
       ? row.normalizationMethod.trim().toLowerCase()
       : "";
@@ -466,6 +504,7 @@ export function normalizeEvidenceRecords(
         : undefined,
       metricSubject: typeof row.metricSubject === "string" ? row.metricSubject.trim() : undefined,
       metricBasis: typeof row.metricBasis === "string" ? row.metricBasis.trim() : undefined,
+      methodologySources: methodologySources?.length ? methodologySources : undefined,
       sampleSize: typeof row.sampleSize === "number" && Number.isInteger(row.sampleSize) && row.sampleSize >= 0 ? row.sampleSize : undefined,
       evidenceKind,
       supportDirection,
@@ -474,7 +513,9 @@ export function normalizeEvidenceRecords(
       criterionWeight: weight,
       weightedContribution: Number((score * weight / 100).toFixed(2)),
       normalizationMethod: evidenceKind === "unverified"
-        ? "missing_evidence_neutral"
+        ? normalizationHint === "benchmark_methodology_limitation"
+          ? "benchmark_methodology_limitation"
+          : "missing_evidence_neutral"
         : evidenceKind === "analyst_judgment" && rawUrl && !independentlyVerified.has(rawUrl)
           ? "restricted_source_analyst_judgment"
         : normalizationHint === "retrieved_document_metric"
@@ -509,6 +550,7 @@ type AnalysisInput = {
   urls: string[];
   criteria: string[];
   onProgress?: (stage: AnalysisProgressStage) => void;
+  onTiming?: (stage: AnalysisTimingStage, durationMs: number) => void;
 };
 
 export type AnalysisProgressStage =
@@ -516,6 +558,30 @@ export type AnalysisProgressStage =
   | "building_evidence"
   | "analysing_evidence"
   | "validating_comparison";
+
+export type AnalysisTimingStage =
+  | "vendor_discovery"
+  | "portfolio_adjudication"
+  | "product_research"
+  | "research_repair"
+  | "evidence_url_validation"
+  | "direct_document_retrieval"
+  | "rendered_document_retrieval"
+  | "analysis_normalization"
+  | "decision_synthesis";
+
+async function measureAnalysisStage<T>(
+  input: AnalysisInput,
+  stage: AnalysisTimingStage,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await operation();
+  } finally {
+    input.onTiming?.(stage, Math.max(0, Date.now() - startedAt));
+  }
+}
 
 export type ComparisonContext = {
   valid: boolean;
@@ -878,6 +944,57 @@ export function annotateUnverifiableWinner(analysis: AnalysisPayload): void {
   if (!analysis.insights.includes(UNVERIFIABLE_WINNER_NOTE)) {
     analysis.insights.push(UNVERIFIABLE_WINNER_NOTE);
   }
+}
+
+export const PROVISIONAL_LENS_WINNER_PREFIX = "Provisional lens winner —";
+
+/**
+ * Preserve a unique pricing/features leader when the broader qualification model
+ * has only insufficient-evidence outcomes. This does not qualify the option or
+ * turn neutral placeholder scores into evidence of equal performance.
+ */
+export function preserveProvisionalLensWinner(analysis: AnalysisPayload): boolean {
+  const modeled = (analysis.vendorScores ?? []).filter((vendor) => (
+    Boolean((vendor as unknown as VendorScoreExtension).qualificationStatus)
+  ));
+  if (
+    analysis.recommendation !== "No qualified option"
+    || !modeled.length
+    || !modeled.every((vendor) => (
+      (vendor as unknown as VendorScoreExtension).qualificationStatus === "INSUFFICIENT_EVIDENCE"
+    ))
+  ) {
+    return false;
+  }
+  const decision = selectEvidenceBackedLensWinner(
+    analysis.pricing,
+    analysis.features,
+    modeled.map((vendor) => vendor.vendor),
+  );
+  if (!decision) return false;
+
+  const winnerScore = modeled.find((vendor) => (
+    vendor.vendor.toLowerCase() === decision.winner.toLowerCase()
+  ))?.score;
+  const lensLabel = decision.pricingWins && decision.featureWins
+    ? "pricing and feature lenses"
+    : decision.featureWins
+      ? "feature lens"
+      : "pricing lens";
+  const qualificationWarning = "This is not a qualified overall recommendation; neutral 50/100 scores indicate missing comparable evidence, not equal performance.";
+  analysis.recommendation = decision.winner;
+  analysis.score = Number.isFinite(winnerScore) ? winnerScore! : 50;
+  analysis.executiveSummary = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner} leads the available ${lensLabel}, winning ${decision.wins} of ${decision.decidedRows} decided dimensions. ${qualificationWarning}`;
+  analysis.recommendationReason = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner} is the best available lens-specific choice because it leads ${decision.wins} of ${decision.decidedRows} decided dimensions (${decision.pricingWins} pricing and ${decision.featureWins} feature). ${qualificationWarning} **Note: ${UNVERIFIABLE_WINNER_NOTE}**`;
+  analysis.insights ??= [];
+  const marker = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner}`;
+  if (!analysis.insights.some((insight) => insight.startsWith(PROVISIONAL_LENS_WINNER_PREFIX))) {
+    analysis.insights.unshift(marker);
+  }
+  if (!analysis.insights.includes(UNVERIFIABLE_WINNER_NOTE)) {
+    analysis.insights.push(UNVERIFIABLE_WINNER_NOTE);
+  }
+  return true;
 }
 
 export type ComparisonWeight = {
@@ -1248,13 +1365,14 @@ function criteriaFor(prompt: string): string[] {
 }
 
 function cleanVendorName(value: string): string {
-  const genericVehiclePhrase = value
+  const decimalNormalized = value.replace(/(\d)\s*\.\s*(\d)/g, "$1.$2");
+  const genericVehiclePhrase = decimalNormalized
     .replace(/^[("'`]+|[)"'`,.?!]+$/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .match(/^(?:other|another|any|different|similar|competing)\s+(?:electric\s+(?:evs?|cars?|vehicles?)|ev\s+(?:brand\s+)?(?:cars?|vehicles?)|evs?|cars?|vehicles?)$/i)?.[0];
   if (genericVehiclePhrase) return genericVehiclePhrase;
-  const cleaned = value
+  const cleaned = decimalNormalized
     .replace(/^[("'`]+|[)"'`,.?!]+$/g, "")
     .replace(/^(?:the|a|an)\s+/i, "")
     .replace(/\s+(?:battery[- ]electric|electric|ev)\s+(?:cars?|vehicles?)\s*(?:\([^)]*\)?)?\s*$/i, "")
@@ -1458,6 +1576,90 @@ export function officialMarketSourcesFor(prompt: string, vendors: string[], mark
     );
   }
   return officialSources;
+}
+
+function aiModelSlug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\b(?:fast|standard|api)\b/g, " ")
+    .match(/[a-z0-9]+(?:\.[0-9]+)*/g)
+    ?.join("-") ?? "";
+}
+
+const TERMINAL_BENCH_4_SCHEMA_URL = "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/leaderboard.yaml";
+const TERMINAL_BENCH_4_MODEL_SOURCES: Record<string, [submission: string, run: string]> = {
+  "claude-fable-5": [
+    "2026-08-26-anthropic-claude-fable-5-max-claude-code.json",
+    "tb-4-0-0-fable-5-claude-code.json",
+  ],
+  "claude-opus-4-8": [
+    "2026-08-26-anthropic-claude-opus-4-8-max-claude-code.json",
+    "tb-4-0-0-opus-4-8-claude-code.json",
+  ],
+  "claude-opus-5": [
+    "2026-08-26-anthropic-claude-opus-5-max-claude-code.json",
+    "tb-4-0-0-opus-5-claude-code.json",
+  ],
+  "claude-sonnet-5": [
+    "2026-08-26-anthropic-claude-sonnet-5-max-claude-code.json",
+    "tb-4-0-0-sonnet-5-claude-code.json",
+  ],
+  "gpt-5-6-luna": [
+    "2026-08-26-openai-gpt-5-6-luna-max-codex.json",
+    "tb-4-0-0-gpt-5-6-luna-codex.json",
+  ],
+  "gpt-5-6-sol": [
+    "2026-08-26-openai-gpt-5-6-sol-max-codex.json",
+    "tb-4-0-0-gpt-5-6-sol-codex.json",
+  ],
+  "gpt-5-6-terra": [
+    "2026-08-26-openai-gpt-5-6-terra-max-codex.json",
+    "tb-4-0-0-gpt-5-6-terra-codex.json",
+  ],
+};
+
+/** Public provider documentation used when launch or marketing pages deny retrieval. */
+export function officialAiModelSourcesFor(vendors: string[]): string[] {
+  const sources: string[] = [];
+  for (const vendor of vendors) {
+    const slug = aiModelSlug(vendor);
+    if (/^(?:openai\s+)?gpt[\s-]/i.test(vendor) && slug) {
+      sources.push(
+        `https://developers.openai.com/api/docs/models/${slug.replace(/^openai-/, "")}`,
+        "https://developers.openai.com/api/docs/pricing",
+      );
+    }
+    if (/^(?:anthropic\s+)?claude[\s-]/i.test(vendor) && slug) {
+      const modelSlug = slug.replace(/^(?:anthropic-)?claude-/, "").replace(/\./g, "-");
+      sources.push(
+        `https://platform.claude.com/docs/en/models/${modelSlug}/overview`,
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+      );
+    }
+    const benchmarkSources = TERMINAL_BENCH_4_MODEL_SOURCES[slug.replace(/\./g, "-")];
+    if (benchmarkSources) {
+      sources.push(
+        TERMINAL_BENCH_4_SCHEMA_URL,
+        `https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/submissions/${benchmarkSources[0]}`,
+        `https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/leaderboard/runs/${benchmarkSources[1]}`,
+      );
+    }
+  }
+  return dedupeReferenceUrls(sources);
+}
+
+export function isAiModelComparisonContext(
+  prompt: string,
+  vendors: string[],
+  segment?: string,
+): boolean {
+  const context = `${prompt} ${vendors.join(" ")} ${segment ?? ""}`;
+  const namedModels = vendors.filter((vendor) => (
+    /\b(?:gpt[- ]?\d|claude (?:sonnet|opus|haiku|fable|mythos)|gemini \d|llama \d|mistral (?:large|medium|small|codestral))\b/i.test(vendor)
+  ));
+  return namedModels.length >= 2
+    && /\b(?:ai|model|llm|token|context window|reasoning|coding|benchmark|api)\b/i.test(context);
 }
 
 export function sourceMatchesResearchMarket(source: string, market: ResearchMarket): boolean {
@@ -2251,6 +2453,15 @@ export function assertCanonicalComparisonConsistency(
 
 export function parsePrompt(prompt: string) {
   const normalized = prompt.replace(/\s+/g, " ").trim();
+  const splitComparisonOptions = (value: string): string[] => {
+    if (/^(?:on|by|based\s+on)\b/i.test(value.trim())) return [];
+    const hasListDelimiter = /,|\/|\b(?:vs\.?|versus|and|or)\b/i.test(value);
+    if (!hasListDelimiter) return [];
+    return value
+      .split(/\s*(?:,|\/|\bvs\.?\b|\bversus\b|\band\b|\bor\b)\s*/i)
+      .map(cleanVendorName)
+      .filter((option) => option && !isPlaceholderVendor(option));
+  };
   const chosen = normalized.match(
     /\b(?:choose|include|use|shortlist)\s+(.+?)(?=\.\s|\?|;\s|$)/i,
   );
@@ -2264,19 +2475,13 @@ export function parsePrompt(prompt: string) {
     /\b(?:across|among|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
   );
   const comparedLists = Array.from(normalized.matchAll(
-    /\bcompare\s+(.+?)(?=\s+for\b|[?.;]|$)/gi,
+    /\bcompare\s+(.+?)(?=\s+(?:for|in|within|when|which|among|across|against|based\s+on|using)\b|[?;]|\.(?:\s|$)|$)/gi,
   ));
   const comparedList = comparedLists[0];
   const comparisonChains = comparedLists
     .map((match, index) => ({
       index,
-      vendors: match[1]?.match(/\b(?:vs\.?|versus)\b/i)
-        ? match[1]
-          .split(/\s+(?:vs\.?|versus)\s+/i)
-          .flatMap((value) => value.split(/\s*,\s*|\s*,?\s+and\s+/i))
-          .map(cleanVendorName)
-          .filter((value) => value && !isPlaceholderVendor(value))
-        : [],
+      vendors: splitComparisonOptions(match[1] ?? ""),
     }))
     .filter(({ vendors }) => vendors.length >= 2)
     .sort((left, right) => right.vendors.length - left.vendors.length || right.index - left.index);
@@ -3651,6 +3856,11 @@ function comparableMetric(entry: EvidenceRecord): {
   unit: string;
   lowerIsBetter: boolean;
 } | null {
+  const terminalBenchMethodologyComplete = (
+    entry.metricKey !== "coding_benchmark_score"
+    || !entry.metricBasis?.startsWith("coding_benchmark:terminal_bench:")
+    || (entry.methodologySources?.length ?? 0) >= 2
+  );
   if (
     !entry.metricKey
     || !entry.normalizationDirection
@@ -3665,6 +3875,7 @@ function comparableMetric(entry: EvidenceRecord): {
     || !entry.metricBasis
     || entry.evidenceKind === "unverified"
     || entry.evidenceKind === "analyst_judgment"
+    || !terminalBenchMethodologyComplete
   ) return null;
   return {
     key: entry.metricKey,
@@ -3740,11 +3951,19 @@ export function applyDeterministicQuantitativeScores(
       if (scoredCriteria.has(criterion.criterion)) continue;
       criterion.score = 50;
       criterion.rationale = "A neutral score of 50/100 was assigned because a current, relevant, comparable verified metric was not available for every shortlisted option. This midpoint prevents missing evidence from favouring or penalising either option; it is not evidence that the options perform equally.";
+        const neutralEvidenceIndex = (criterion.evidence ?? []).findIndex((evidence) => (
+          evidence.metricKey !== "model_availability"
+        ));
       criterion.evidence = (criterion.evidence ?? []).map((evidence, index) => ({
         ...evidence,
         normalizedScore: 50,
-        weightedContribution: index === 0 ? Number((50 * criterion.weight / 100).toFixed(2)) : 0,
-        normalizationMethod: "insufficient_comparable_evidence_neutral",
+          weightedContribution: index === neutralEvidenceIndex ? Number((50 * criterion.weight / 100).toFixed(2)) : 0,
+          normalizationMethod: evidence.metricKey === "model_availability"
+            && evidence.metricBasis === "current_provider_api_model_id_or_alias"
+            ? "retrieved_document_model_availability"
+            : evidence.normalizationMethod === "benchmark_methodology_limitation"
+              ? "benchmark_methodology_limitation"
+              : "insufficient_comparable_evidence_neutral",
       }));
     }
   }
@@ -5904,6 +6123,479 @@ export function addVerifiedQuickCommerceDeliveryEvidence(
   return added;
 }
 
+type AiMetricCandidate = {
+  metricKey: "input_token_price" | "output_token_price" | "context_window_tokens" | "coding_benchmark_score";
+  value: number;
+  unit: "usd_per_million_tokens" | "tokens" | "percent" | "points";
+  direction: "higher_is_better" | "lower_is_better";
+  basis: string;
+  claim: string;
+  start: number;
+};
+
+type AiMetricProvenance = {
+  sourceUrl: string;
+  exactClaim: string;
+  documentSha256: string;
+  sourceTextStart: number;
+  sourceTextEnd: number;
+};
+
+type DocumentAiMetricCandidate = {
+  candidate?: AiMetricCandidate;
+  document: RetrievedEvidenceDocument;
+  methodologySources?: AiMetricProvenance[];
+  limitation?: string;
+  claim?: string;
+  start?: number;
+};
+
+function aiModelAliases(vendor: string): string[] {
+  const aliases = [
+    vendor,
+    vendor.replace(/\bfast\b/gi, "").replace(/\s+/g, " ").trim(),
+  ];
+  return Array.from(new Set(aliases.filter(Boolean)));
+}
+
+function exactAiModelPattern(vendor: string): RegExp {
+  const aliases = aiModelAliases(vendor).map((alias) => {
+    const tokens = alias.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    return tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]{0,6}");
+  });
+  return new RegExp(`\\b(?:${aliases.join("|")})\\b`, "i");
+}
+
+function aiMetricCandidates(
+  document: RetrievedEvidenceDocument,
+  vendor: string,
+): AiMetricCandidate[] {
+  const identity = exactAiModelPattern(vendor);
+  if (!identity.test(document.text)) return [];
+  const genericModelIdentitySource = "\\b(?:gpt[- ]?\\d+(?:\\.\\d+)*[- ]+(?:luna|terra|sol|mini|nano|turbo|fast)|claude\\s+(?:sonnet|opus|haiku|fable|mythos)\\s+\\d+(?:\\.\\d+)*)\\b";
+  const lineFor = (match: RegExpMatchArray): { text: string; start: number } => {
+    const start = match.index ?? 0;
+    const lineStart = document.text.lastIndexOf("\n", start) + 1;
+    const nextLine = document.text.indexOf("\n", start + match[0].length);
+    return {
+      text: document.text.slice(lineStart, nextLine === -1 ? document.text.length : nextLine),
+      start: lineStart,
+    };
+  };
+  const claimBelongsToModel = (match: RegExpMatchArray): boolean => {
+    const start = match.index ?? 0;
+    const line = lineFor(match);
+    const relativeStart = start - line.start;
+    const precedingLineModels = Array.from(line.text.matchAll(new RegExp(genericModelIdentitySource, "gi")))
+      .filter((candidate) => (candidate.index ?? 0) < relativeStart);
+    const nearestLineModel = precedingLineModels.at(-1);
+    if (nearestLineModel) return identity.test(nearestLineModel[0]);
+    const scopeStart = Math.max(0, start - 1_200);
+    const leadingScope = document.text.slice(scopeStart, start);
+    const identityMatches = Array.from(leadingScope.matchAll(new RegExp(identity.source, "gi")));
+    const nearestIdentity = identityMatches.at(-1);
+    if (!nearestIdentity || nearestIdentity.index === undefined) return false;
+    const between = leadingScope.slice(nearestIdentity.index + nearestIdentity[0].length);
+    return !new RegExp(genericModelIdentitySource, "i").test(between);
+  };
+  const firstScopedMatch = (patterns: RegExp[]): RegExpMatchArray | null => {
+    for (const pattern of patterns) {
+      const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+      for (const match of document.text.matchAll(new RegExp(pattern.source, flags))) {
+        if (claimBelongsToModel(match)) return match;
+      }
+    }
+    return null;
+  };
+  const candidates: AiMetricCandidate[] = [];
+  const add = (
+    match: RegExpMatchArray | null,
+    metricKey: AiMetricCandidate["metricKey"],
+    value: number,
+    unit: AiMetricCandidate["unit"],
+    direction: AiMetricCandidate["direction"],
+    basis: string,
+  ) => {
+    if (!match || match.index === undefined || !Number.isFinite(value)) return;
+    candidates.push({
+      metricKey,
+      value,
+      unit,
+      direction,
+      basis,
+      claim: match[0],
+      start: match.index,
+    });
+  };
+
+  const standardPrice = firstScopedMatch([
+    /Input\s*\$([\d.]+)\s*(?:\/\s*M(?:illion )?Tok(?:ens?)?)?\s*Cached input\s*\$[\d.]+\s*(?:\/\s*M(?:illion )?Tok(?:ens?)?)?\s*Output\s*\$([\d.]+)\s*(?:\/\s*M(?:illion )?Tok(?:ens?)?)?/i,
+    /Input\s*\$([\d.]+)\s*\/\s*MTok\s*Output\s*\$([\d.]+)\s*\/\s*MTok/i,
+  ]);
+  if (standardPrice) {
+    add(standardPrice, "input_token_price", Number(standardPrice[1]), "usd_per_million_tokens", "lower_is_better", "standard_api_input_per_million_tokens");
+    add(standardPrice, "output_token_price", Number(standardPrice[2]), "usd_per_million_tokens", "lower_is_better", "standard_api_output_per_million_tokens");
+  }
+
+  const contextMatch = firstScopedMatch([
+    /(?:\b1,?050,?000\b|\b1M\b)\s*(?:-|\s)?(?:token\s+)?context window/i,
+    /context window\s*(?:is\s*)?(?:\b1,?050,?000\b|\b1M\b)\s*tokens?/i,
+  ]);
+  if (contextMatch) {
+    const value = /\b1M\b/i.test(contextMatch[0]) ? 1_000_000 : 1_050_000;
+    add(contextMatch, "context_window_tokens", value, "tokens", "higher_is_better", "published_api_context_window");
+  }
+
+  const benchmarkPatterns = [{
+    pattern: /\b(SWE-bench Verified)\s+(v\d+(?:\.\d+)+)[^\n]{0,180}?\b(\d+(?:\.\d+)?)\s*%/i,
+    task: /\b(?:repository|github)\s+issue\s+resolution\b/i,
+    configuration: /\bpass\s*@\s*1\b/i,
+    taskKey: "repository_issue_resolution",
+    configurationKey: "pass_at_1",
+  }];
+  for (const definition of benchmarkPatterns) {
+    const match = firstScopedMatch([definition.pattern]);
+    if (!match) continue;
+    const benchmarkLine = lineFor(match).text;
+    if (!definition.task.test(benchmarkLine) || !definition.configuration.test(benchmarkLine)) continue;
+    const benchmark = match[1].toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    const version = match[2].toLowerCase().replace(/[^a-z0-9.]+/g, "_");
+    add(
+      match,
+      "coding_benchmark_score",
+      Number(match[3]),
+      "percent",
+      "higher_is_better",
+      `coding_benchmark:${benchmark}:${version}:${definition.taskKey}:${definition.configurationKey}:percent_resolved`,
+    );
+    break;
+  }
+  return candidates;
+}
+
+function terminalBenchMetricCandidate(
+  documents: RetrievedEvidenceDocument[],
+  vendor: string,
+): DocumentAiMetricCandidate | null {
+  const expectedModel = aiModelSlug(vendor).replace(/\./g, "-");
+  const parsedJson = documents.flatMap((document) => {
+    if (!/raw\.githubusercontent\.com\/harbor-framework\/terminal-bench\/main\/leaderboard\/(?:submissions|runs)\//i.test(document.finalUrl)) {
+      return [];
+    }
+    try {
+      return [{ document, value: JSON.parse(document.text) as Record<string, unknown> }];
+    } catch {
+      return [];
+    }
+  });
+  const modelIdFor = (value: unknown): string => (
+    typeof value === "string"
+      ? value.split("/").at(-1)?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ?? ""
+      : ""
+  );
+  const submission = parsedJson.find(({ document, value }) => {
+    if (!/\/submissions\//.test(document.finalUrl)) return false;
+    const filter = value.source_filter as Record<string, unknown> | undefined;
+    return modelIdFor(filter?.model_name) === expectedModel;
+  });
+  if (!submission) return null;
+  const submissionStart = Math.max(0, submission.document.text.indexOf("\"metadata\""));
+  const trialsStart = submission.document.text.indexOf("\"trials\"");
+  const submissionEnd = trialsStart > submissionStart ? trialsStart : submission.document.text.length;
+  const claim = submission.document.text.slice(submissionStart, submissionEnd).trimEnd();
+  const schema = documents.find((document) => (
+    document.finalUrl === TERMINAL_BENCH_4_SCHEMA_URL
+    && /\btitle:\s*Terminal-Bench 4\.0\b/i.test(document.text)
+    && /\bvisibility:\s*public\b/i.test(document.text)
+    && /\bheader:\s*Accuracy\b/i.test(document.text)
+    && /\baccessor:\s*metrics\.accuracy\b/i.test(document.text)
+  ));
+  const run = parsedJson.find(({ document, value }) => {
+    if (!/\/runs\//.test(document.finalUrl)) return false;
+    const agents = Array.isArray(value.agents) ? value.agents as Array<Record<string, unknown>> : [];
+    return agents.length === 1 && modelIdFor(agents[0]?.model_name) === expectedModel;
+  });
+  if (!schema || !run) {
+    return {
+      document: submission.document,
+      claim,
+      start: submissionStart,
+      limitation: "Terminal-Bench result was retained as a limitation because its official schema or exact run configuration was unavailable.",
+    };
+  }
+
+  const metadata = submission.value.metadata as Record<string, unknown> | undefined;
+  const metrics = submission.value.metrics as Record<string, unknown> | undefined;
+  const sourceFilter = submission.value.source_filter as Record<string, unknown> | undefined;
+  const runAgents = run.value.agents as Array<Record<string, unknown>>;
+  const runAgent = runAgents[0]!;
+  const runAgentKwargs = runAgent.kwargs as Record<string, unknown> | undefined;
+  const datasets = Array.isArray(run.value.datasets) ? run.value.datasets as Array<Record<string, unknown>> : [];
+  const modelDisplay = metadata?.model_display as Record<string, unknown> | undefined;
+  const accuracy = Number(metrics?.accuracy);
+  const submissionTrials = Number(metrics?.n_trials);
+  const submissionSuccesses = Number(metrics?.successes);
+  const trials = Array.isArray(submission.value.trials) ? submission.value.trials : [];
+  const runTrials = Number(run.value.n_concurrent_trials);
+  const attempts = Number(run.value.n_attempts);
+  const benchmarkVersion = datasets.length === 1 && datasets[0]?.name === "terminal-bench/terminal-bench"
+    ? String(datasets[0]?.ref ?? "")
+    : "";
+  const agent = typeof sourceFilter?.agent === "string" ? sourceFilter.agent : "";
+  const agentVersion = typeof sourceFilter?.agent_version === "string" ? sourceFilter.agent_version : "";
+  const reasoningEffort = typeof sourceFilter?.reasoning_effort === "string" ? sourceFilter.reasoning_effort : "";
+  const metadataReasoningEffort = typeof metadata?.reasoning_effort === "string" ? metadata.reasoning_effort : "";
+  const exactModelLabel = typeof modelDisplay?.label === "string" ? modelDisplay.label : "";
+  const displayIdentity = exactAiModelPattern(vendor.replace(/^Claude[\s-]+/i, ""));
+  const valid = (
+    displayIdentity.test(exactModelLabel)
+    && Array.isArray(submission.value.disqualified_trials)
+    && submission.value.disqualified_trials.length === 0
+    && Number.isFinite(accuracy) && accuracy >= 0 && accuracy <= 100
+    && Number.isInteger(submissionTrials) && submissionTrials > 0
+    && trials.length === submissionTrials
+    && Number.isInteger(submissionSuccesses) && submissionSuccesses >= 0 && submissionSuccesses <= submissionTrials
+    && Math.abs((submissionSuccesses / submissionTrials * 100) - accuracy) <= 0.051
+    && submissionTrials === runTrials
+    && Number.isInteger(attempts) && attempts > 0
+    && benchmarkVersion === "v4.0.0"
+    && agent.length > 0
+    && runAgent.name === agent
+    && agentVersion.length > 0
+    && runAgentKwargs?.version === agentVersion
+    && reasoningEffort.length > 0
+    && metadataReasoningEffort === reasoningEffort
+    && runAgentKwargs?.reasoning_effort === reasoningEffort
+  );
+  const methodologySources: AiMetricProvenance[] = [run, { document: schema, value: {} }].map(({ document }) => ({
+    sourceUrl: document.finalUrl,
+    exactClaim: document.text,
+    documentSha256: document.sha256,
+    sourceTextStart: 0,
+    sourceTextEnd: document.text.length,
+  }));
+  if (!valid) {
+    return {
+      document: submission.document,
+      methodologySources,
+      claim,
+      start: submissionStart,
+      limitation: "Terminal-Bench result was retained as a limitation because its model, version, task, configuration, trial count, or scale was incomplete or conflicting.",
+    };
+  }
+
+  const safe = (value: string) => value.toLowerCase().replace(/[^a-z0-9.]+/g, "_").replace(/^_|_$/g, "");
+  const stableJson = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+    if (value && typeof value === "object") {
+      return `{${Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+        .join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  const { model_name: _modelName, ...agentConfiguration } = runAgent;
+  const configurationHash = createHash("sha256").update(stableJson({
+    retry: run.value.retry,
+    agent: agentConfiguration,
+    datasets,
+    n_attempts: attempts,
+    n_concurrent_trials: runTrials,
+    credential_mode: run.value.credential_mode,
+  })).digest("hex");
+  return {
+    document: submission.document,
+    methodologySources,
+    candidate: {
+      metricKey: "coding_benchmark_score",
+      value: accuracy,
+      unit: "percent",
+      direction: "higher_is_better",
+      basis: [
+        "coding_benchmark:terminal_bench:v4.0.0:terminal_agent_tasks",
+        `accuracy:agent_${safe(agent)}:agent_version_${safe(agentVersion)}`,
+        `reasoning_${safe(reasoningEffort)}:attempts_${attempts}:trials_${submissionTrials}`,
+        `configuration_sha256_${configurationHash}:percent`,
+      ].join(":"),
+      claim,
+      start: submissionStart,
+    },
+  };
+}
+
+function aiAvailabilityClaim(
+  document: RetrievedEvidenceDocument,
+  vendor: string,
+): { claim: string; start: number } | null {
+  let hostname: string;
+  try {
+    hostname = new URL(document.finalUrl).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+  const identity = exactAiModelPattern(vendor);
+  const openAiClaim = hostname === "developers.openai.com" ? document.text.match(
+    /[^\n]{0,120}\ball available snapshots and aliases for\s+(?:GPT|gpt)[^\n]{0,120}/i,
+  ) : null;
+  if (openAiClaim?.index !== undefined && identity.test(openAiClaim[0])) {
+    return { claim: openAiClaim[0].trim(), start: openAiClaim.index + openAiClaim[0].indexOf(openAiClaim[0].trim()) };
+  }
+  const modelId = aiModelSlug(vendor)
+    .replace(/^anthropic-/, "")
+    .replace(/\./g, "-");
+  const modelIdPattern = modelId
+    .split("-")
+    .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[-_]");
+  const anthropicClaim = hostname === "platform.claude.com" && /\bclaude\b/i.test(vendor)
+    ? document.text.match(new RegExp(`Model IDs[\\s\\S]{0,500}?\\b${modelIdPattern}(?:[-_][a-z0-9-]+)?\\b`, "i"))
+    : null;
+  if (anthropicClaim?.index !== undefined) {
+    return { claim: anthropicClaim[0].trim(), start: anthropicClaim.index + anthropicClaim[0].indexOf(anthropicClaim[0].trim()) };
+  }
+  return null;
+}
+
+/** Recover exact-model API pricing, context and named coding benchmarks from retrieved documents. */
+export function addVerifiedAiModelEvidence(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const vendorScores = Array.isArray(parsed.vendorScores)
+    ? parsed.vendorScores as Array<Record<string, unknown>>
+    : [];
+  let added = 0;
+  for (const vendorScore of vendorScores) {
+    const vendorName = typeof vendorScore.vendor === "string" ? vendorScore.vendor.trim() : "";
+    if (!vendorName) continue;
+    const weightedScores = Array.isArray(vendorScore.weightedScores)
+      ? vendorScore.weightedScores as Array<Record<string, unknown>>
+      : [];
+    if (!Array.isArray(vendorScore.weightedScores)) vendorScore.weightedScores = weightedScores;
+    const ensureCriterion = (name: string, weight: number) => {
+      let criterion = weightedScores.find((row) => row.criterion === name);
+      if (!criterion) {
+        criterion = { criterion: name, weight, score: 50, rationale: "Verified current AI-model documentation.", evidence: [] };
+        weightedScores.push(criterion);
+      }
+      if (!Array.isArray(criterion.evidence)) criterion.evidence = [];
+      return criterion;
+    };
+    for (const document of documents) {
+      const availability = aiAvailabilityClaim(document, vendorName);
+      if (availability) {
+        const criterion = ensureCriterion("Meets Needs / Features", 25);
+        const evidence = criterion.evidence as Array<Record<string, unknown>>;
+        if (!evidence.some((row) => row.normalizationMethod === "retrieved_document_model_availability")) {
+          evidence.push({
+            sourceUrl: document.finalUrl,
+            sourceTitle: new URL(document.finalUrl).hostname,
+            exactClaim: availability.claim,
+            metricKey: "model_availability",
+            metricSubject: vendorName,
+            metricBasis: "current_provider_api_model_id_or_alias",
+            retrievalDate: document.retrievedAt.slice(0, 10),
+            documentSha256: document.sha256,
+            sourceTextStart: availability.start,
+            sourceTextEnd: availability.start + availability.claim.length,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 95,
+            criterionWeight: Number(criterion.weight) || 0,
+            normalizationMethod: "retrieved_document_model_availability",
+          });
+          added += 1;
+        }
+      }
+      for (const candidate of aiMetricCandidates(document, vendorName)) {
+        const criterion = ensureCriterion(
+          candidate.metricKey.includes("price") ? "Value for Money" : "Meets Needs / Features",
+          candidate.metricKey.includes("price") ? 20 : 25,
+        );
+        const evidence = criterion.evidence as Array<Record<string, unknown>>;
+        if (evidence.some((row) => row.metricKey === candidate.metricKey && row.metricBasis === candidate.basis)) continue;
+        evidence.push({
+          sourceUrl: document.finalUrl,
+          sourceTitle: new URL(document.finalUrl).hostname,
+          exactClaim: candidate.claim,
+          metricKey: candidate.metricKey,
+          rawMetricValue: candidate.value,
+          rawMetricUnit: candidate.unit,
+          normalizationDirection: candidate.direction,
+          metricSubject: vendorName,
+          metricBasis: candidate.basis,
+          retrievalDate: document.retrievedAt.slice(0, 10),
+          documentSha256: document.sha256,
+          sourceTextStart: candidate.start,
+          sourceTextEnd: candidate.start + candidate.claim.length,
+          evidenceKind: candidate.unit === "percent" ? "percentage" : "quantitative",
+          supportDirection: "supports",
+          confidence: 95,
+          criterionWeight: Number(criterion.weight) || 0,
+          normalizationMethod: "retrieved_document_metric",
+        });
+        added += 1;
+      }
+    }
+    const terminalBench = terminalBenchMetricCandidate(documents, vendorName);
+    if (terminalBench) {
+      const { candidate, document, methodologySources } = terminalBench;
+      const criterion = ensureCriterion("Meets Needs / Features", 25);
+      const evidence = criterion.evidence as Array<Record<string, unknown>>;
+      if (candidate && !evidence.some((row) => row.metricKey === candidate.metricKey && row.metricBasis === candidate.basis)) {
+        evidence.push({
+          sourceUrl: document.finalUrl,
+          sourceTitle: "Terminal-Bench",
+          exactClaim: candidate.claim,
+          metricKey: candidate.metricKey,
+          rawMetricValue: candidate.value,
+          rawMetricUnit: candidate.unit,
+          normalizationDirection: candidate.direction,
+          metricSubject: vendorName,
+          metricBasis: candidate.basis,
+          retrievalDate: document.retrievedAt.slice(0, 10),
+          documentSha256: document.sha256,
+          sourceTextStart: candidate.start,
+          sourceTextEnd: candidate.start + candidate.claim.length,
+          methodologySources,
+          evidenceKind: "percentage",
+          supportDirection: "supports",
+          confidence: 95,
+          criterionWeight: Number(criterion.weight) || 0,
+          normalizationMethod: "retrieved_document_metric",
+        });
+        added += 1;
+      } else if (terminalBench.limitation && !evidence.some((row) => (
+        row.metricKey === "coding_benchmark_score"
+        && row.sourceUrl === document.finalUrl
+        && row.normalizationMethod === "benchmark_methodology_limitation"
+      ))) {
+        evidence.push({
+          sourceUrl: document.finalUrl,
+          sourceTitle: "Terminal-Bench",
+          exactClaim: terminalBench.claim ?? document.text,
+          metricKey: "coding_benchmark_score",
+          metricSubject: vendorName,
+          metricBasis: "coding_benchmark:terminal_bench:unsupported_or_conflicting_methodology",
+          retrievalDate: document.retrievedAt.slice(0, 10),
+          documentSha256: document.sha256,
+          sourceTextStart: terminalBench.start ?? 0,
+          sourceTextEnd: (terminalBench.start ?? 0) + (terminalBench.claim ?? document.text).length,
+          methodologySources,
+          evidenceKind: "unverified",
+          supportDirection: "neutral",
+          confidence: 0,
+          criterionWeight: Number(criterion.weight) || 0,
+          normalizationMethod: "benchmark_methodology_limitation",
+        });
+        added += 1;
+      }
+    }
+  }
+  return added;
+}
+
 function addParsedSourceUrls(sources: unknown, urls: string[]): void {
   const approved = new Set(dedupeReferenceUrls(urls));
   if (!Array.isArray(sources)) return;
@@ -6016,6 +6708,10 @@ export function rankEvidenceSources(
     hostCounts.set(candidate.hostname, (hostCounts.get(candidate.hostname) ?? 0) + 1);
   };
   for (const candidate of scored.filter((entry) => supplied.has(entry.source))) add(candidate);
+  for (const candidate of scored.filter((entry) => (
+    /^raw\.githubusercontent\.com$/i.test(entry.hostname)
+    && /^\/harbor-framework\/terminal-bench\/main\/leaderboard\/(?:leaderboard\.yaml|submissions\/|runs\/)/i.test(new URL(entry.source).pathname)
+  ))) add(candidate);
   for (const vendor of vendors) {
     const vendorCandidate = scored.find((candidate) => (
       !selectedSet.has(candidate.source)
@@ -6692,7 +7388,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         && !preferredOpenEndedEvFallback
         && !preferredSydneyToyotaDealers
       ) {
-        const discoveryResponse = await client.responses.create({
+        const discoveryResponse = await measureAnalysisStage(input, "vendor_discovery", () => client.responses.create({
           model: "gpt-4.1-mini",
           max_output_tokens: 5000,
           tools: [{
@@ -6767,7 +7463,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               }),
             },
           ],
-        });
+        }));
         if (discoveryResponse.status === "completed" && discoveryResponse.output_text) {
           approvedDiscoveryCitationUrls = collectCitedHttpUrls(discoveryResponse.output);
           try {
@@ -6778,7 +7474,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         }
       }
       if (isBrandLevelModelSelection && !preferredIndiaEvModels && !isIndiaMgMahindraEvPortfolio) {
-        const adjudicationResponse = await client.chat.completions.create({
+        const adjudicationResponse = await measureAnalysisStage(input, "portfolio_adjudication", () => client.chat.completions.create({
           model: "gpt-4.1-mini",
           response_format: { type: "json_object" },
           messages: [
@@ -6815,7 +7511,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               }),
             },
           ],
-        });
+        }));
         const adjudicatedContent = adjudicationResponse.choices[0]?.message?.content;
         if (adjudicatedContent) {
           try {
@@ -7210,6 +7906,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.vendors,
       context.segment,
     );
+    const isAiModelComparison = isAiModelComparisonContext(
+      input.prompt,
+      input.vendors,
+      context.segment,
+    );
     const researchShapeVendors = input.vendors;
     const vendorDiscoveryInstructions = vendorDiscoveryWasRequired
       ? "The shortlist was selected from the user's objective. Preserve these exact product names throughout the scorecard, tables, winners, and recommendation. Put other credible products only in insights as outside-shortlist alternatives; do not rank them. "
@@ -7221,6 +7922,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const oldestFallbackDateText = oldestFallbackDate.toISOString().slice(0, 10);
     for (const sourceUrl of officialMarketSourcesFor(input.prompt, input.vendors, researchMarket)) {
       if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
+    }
+    if (isAiModelComparison) {
+      for (const sourceUrl of officialAiModelSourcesFor(input.vendors)) {
+        if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
+      }
     }
     const parameterPriorityInstructions = isSafetyFirstVehicleDecision
       ? "The user's first and controlling decision parameter is vehicle safety. Use a safety-focused score profile rather than the generic vendor emphasis. Prioritize official manufacturer India pages and Bharat NCAP. Compare exact current models and applicable variants using ncap_star_rating (stars), adult_occupant_score (points), child_occupant_score (points), airbag_count (airbags), esc_compliance (binary), pedestrian protection, and adas_feature_count (features). Include the exact NCAP program, protocol/version, tested variant, applicability, publication year, and score denominator. Compare NCAP results only when the program, protocol/version, and denominator match. Keep an exact tie when authoritative same-protocol evidence does not establish a safety winner."
@@ -7244,6 +7950,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       "When official product claims cannot establish a winner, evaluate independent review signals only from retrieved public pages. Use at least two independent sources per option where available; record review or update date, publisher, reviewer or methodology credibility, structured rating and scale, sample size or review count, balanced pros and cons, and any incentive or affiliate disclosure. Prefer recent named-methodology reviews and structured ratings. Penalize stale, one-sided, low-sample, anonymous, incentivized, or affiliate evidence. Never treat a search snippet or an unverified review summary as evidence. Explain the review-signal calculation and confidence. Declare a review-based winner only when comparable retrieved review evidence covers every ranked option and produces a meaningful score separation; otherwise keep 'No exact winner'. Use metricKey review_rating for comparable ratings and review_count for sample size.",
       vehicleIndependentEvidenceInstructions(isVehicleComparison),
       vehicleMarketPositionInstructions(isVehicleComparison, researchMarket),
+      isAiModelComparison
+        ? "For exact AI-model comparisons, use public provider developer documentation when launch or marketing pages deny access. Verify the exact model ID and current API availability before using token price, context-window, or benchmark evidence. Record input_token_price and output_token_price only as USD per million tokens, context_window_tokens only as explicit token counts, and coding_benchmark_score only when the exact same named benchmark, version, task, and scale cover every compared model. Never transfer a neighboring model's value."
+        : "",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
       "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
       "Set criteriaMet to false only when the named options are categorically incompatible with the requested decision, not when one criterion has missing, uncertain, or incomplete evidence. A requested ownership or retention period is a decision horizon; it does not require evidence covering that full future period. Continue the comparison with neutral treatment and an explicit evidence limitation for unsupported criteria.",
@@ -7272,7 +7981,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       }
     }
     input.onProgress?.("building_evidence");
-    const researchResponse = await retryAiStage("Product research", async () => {
+    const researchResponse = await measureAnalysisStage(input, "product_research", () => retryAiStage("Product research", async () => {
       const response = await client.responses.create({
         model: "gpt-4.1-mini",
         max_output_tokens: 16000,
@@ -7334,7 +8043,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       }
       if (!response.output_text) throw new Error("Product research returned no evidence.");
       return response;
-    });
+    }));
     for (const sourceUrl of collectCitedHttpUrls(researchResponse.output)) {
       if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
     }
@@ -7348,7 +8057,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       parsed = parseJsonObject(researchResponse.output_text);
     } catch (parseError) {
       console.warn("Product research JSON was malformed; repairing without repeating web research", parseError);
-      parsed = await retryAiStage("Product analysis repair", async () => {
+      parsed = await measureAnalysisStage(input, "research_repair", () => retryAiStage("Product analysis repair", async () => {
         const repairResponse = await client.chat.completions.create({
           model: "gpt-4.1-mini",
           response_format: { type: "json_object" },
@@ -7376,7 +8085,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         const content = repairResponse.choices[0]?.message?.content;
         if (!content) throw new Error("Product analysis repair returned no structured result.");
         return parseJsonObject(content);
-      });
+      }));
     }
     if (parsed.criteriaMet === false && !isProviderLevelCreditCardDiscovery) {
       console.warn("Product research reported an unmet criterion; continuing with evidence limitations", {
@@ -7725,16 +8434,25 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.urls.length,
       ...dedupeReferenceUrls([...rankedUrls, ...requiredHomeLoanRateUrls]),
     );
-    const evidenceAvailability = await validateFinalEvidenceUrls(input.urls, undefined, userSuppliedUrls);
+    const evidenceAvailability = await measureAnalysisStage(
+      input,
+      "evidence_url_validation",
+      () => validateFinalEvidenceUrls(input.urls, undefined, userSuppliedUrls),
+    );
     const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
     input.onProgress?.("building_evidence");
     const retrievalUrls = dedupeReferenceUrls([
       ...evidenceAvailability.reachable,
       ...requiredHomeLoanRateUrls,
     ]);
-    const retrievedResults = await retrieveEvidenceDocuments(retrievalUrls, {
-      permissionRegistry: publisherPermissionRegistry,
-    });
+    const retrievedResults = await measureAnalysisStage(
+      input,
+      "direct_document_retrieval",
+      () => retrieveEvidenceDocuments(retrievalUrls, {
+        permissionRegistry: publisherPermissionRegistry,
+        concurrency: 6,
+      }),
+    );
     const directDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
     let retrievedDocuments = directDocuments;
     if (isScrapyAiAcquisitionConfigured()) {
@@ -7745,9 +8463,14 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       });
       if (browserCandidates.length) {
         input.onProgress?.("building_evidence");
-        const renderedResults = await retrieveEvidenceDocumentsWithScrapyAi(browserCandidates, {
-          permissionRegistry: publisherPermissionRegistry,
-        });
+        const renderedResults = await measureAnalysisStage(
+          input,
+          "rendered_document_retrieval",
+          () => retrieveEvidenceDocumentsWithScrapyAi(browserCandidates, {
+            permissionRegistry: publisherPermissionRegistry,
+            concurrency: 4,
+          }),
+        );
         const renderedDocuments = renderedResults.flatMap((result) => result.document ? [result.document] : []);
         const renderedByUrl = new Map(renderedDocuments.map((document) => [document.url, document]));
         retrievedDocuments = retrievalUrls.flatMap((url) => renderedByUrl.get(url) ?? directByUrl.get(url) ?? []);
@@ -7777,6 +8500,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (isQuickCommerceComparison) {
       addVerifiedQuickCommerceDeliveryEvidence(parsed as Record<string, unknown>, retrievedDocuments);
     }
+    if (isAiModelComparison) {
+      addVerifiedAiModelEvidence(parsed as Record<string, unknown>, retrievedDocuments);
+    }
     input.urls.splice(0, input.urls.length, ...citationUrls);
     input.onProgress?.("analysing_evidence");
     if (isElectricVehicleComparison) {
@@ -7786,18 +8512,18 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       vendors?: unknown;
       prompt?: unknown;
     };
-    const normalized = normalizeAnalysis(
-      {
-        ...safeParsed,
-        category: typeof parsed.category === "string" ? parsed.category : normalizationFallback.category,
-        score: typeof parsed.score === "number" ? Math.round(parsed.score) : normalizationFallback.score,
-      },
-      normalizationFallback,
-      resolvedVendors,
-      isProviderLevelCreditCardDiscovery,
-      citationUrls,
-      scoreVerifiedUrls,
-    );
+    const normalized = await measureAnalysisStage(input, "analysis_normalization", async () => normalizeAnalysis(
+        {
+          ...safeParsed,
+          category: typeof parsed.category === "string" ? parsed.category : normalizationFallback.category,
+          score: typeof parsed.score === "number" ? Math.round(parsed.score) : normalizationFallback.score,
+        },
+        normalizationFallback,
+        resolvedVendors,
+        isProviderLevelCreditCardDiscovery,
+        citationUrls,
+        scoreVerifiedUrls,
+      ));
     if (isElectricVehicleComparison) {
       applyScopedVehicleMarketPositions(
         normalized,
@@ -7947,7 +8673,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       || insight.startsWith("Review-signal basis —")
     ));
     reconcileFinalRecommendationNarrative(normalized);
-    await synthesizeValidatedDecision(client, input, researchMarket, normalized);
+    await measureAnalysisStage(
+      input,
+      "decision_synthesis",
+      () => synthesizeValidatedDecision(client, input, researchMarket, normalized),
+    );
     const mustHaves = /\b(?:must.?have|required|mandatory|non-negotiable)\b/i.test(input.prompt)
       ? input.criteria
       : input.criteria.filter((criterion) => /\b(?:must.?have|required|mandatory|non-negotiable)\b/i.test(criterion));
@@ -7958,7 +8688,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       category: normalized.category,
       market: `${researchMarket.country} ${researchMarket.countryCode}`,
       mustHaves,
+      globalDigitalService: isAiModelComparison,
     });
+    preserveProvisionalLensWinner(normalized);
     if (hasReviewSignalCoverage && !insufficientEvidence && normalized.recommendation !== "No exact winner") {
       normalized.recommendationReason = `Review-signal winner: ${normalized.recommendation} leads on comparable recent independent review ratings with verified multi-source coverage. ${normalized.recommendationReason}`;
     }

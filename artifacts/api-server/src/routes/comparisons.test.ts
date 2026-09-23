@@ -4,16 +4,118 @@ import { isObjectivePhraseVendor, parsePrompt, parsePromptWithIntent } from "../
 import {
   comparisonFailureMessage,
   comparisonJobElapsedMs,
+  comparisonMissedLatencyTarget,
+  comparisonStageDurations,
   comparisonWorkaroundPrompt,
+  buildComparisonDecisionSet,
+  COMPARISON_LATENCY_TARGET_SECONDS,
+  normalizeEvidenceForResponse,
   OUTSIDE_RESEARCH_SCOPE_MESSAGE,
   validateComparisonInput,
 } from "./comparisons";
+
+test("confirms an in-set recommendation and ranks only the remaining compared options as alternatives", () => {
+  const decision = buildComparisonDecisionSet({
+    vendors: ["Alpha", "Beta", "Gamma"],
+    recommendation: "alpha",
+    score: 84,
+    recommendationReason: "Alpha is the strongest fit.",
+    vendorScores: [
+      { vendor: "Alpha", modelScore: 84, qualificationStatus: "QUALIFIED", verdict: "Recommended" },
+      { vendor: "Beta", modelScore: 79, qualificationStatus: "QUALIFIED_WITH_CONDITIONS", verdict: "Best for integrations" },
+      { vendor: "Gamma", modelScore: 71, qualificationStatus: "QUALIFIED", verdict: "Best for simplicity" },
+      { vendor: "Outside", modelScore: 99, qualificationStatus: "QUALIFIED", verdict: "Must not appear" },
+    ],
+  });
+
+  assert.deepEqual(decision.confirmedRecommendation, {
+    status: "CONFIRMED",
+    option: "Alpha",
+    score: 84,
+    basis: "QUALIFIED",
+    rationale: "Alpha is the strongest fit.",
+  });
+  assert.deepEqual(decision.alternatives.map((alternative) => alternative.option), ["Beta", "Gamma"]);
+  assert.deepEqual(decision.alternatives.map((alternative) => alternative.scoreDifference), [5, 13]);
+});
+
+test("does not invent a confirmed recommendation when the result uses a tie sentinel", () => {
+  const decision = buildComparisonDecisionSet({
+    vendors: ["Alpha", "Beta"],
+    recommendation: "No definitive winner",
+    score: 80,
+    vendorScores: [
+      { vendor: "Alpha", score: 80 },
+      { vendor: "Beta", score: 80 },
+    ],
+  });
+
+  assert.equal(decision.confirmedRecommendation.status, "NO_CONFIRMED_RECOMMENDATION");
+  assert.equal(decision.confirmedRecommendation.option, null);
+  assert.deepEqual(decision.alternatives.map((alternative) => alternative.option), ["Alpha", "Beta"]);
+});
+
+test("does not confirm a named option when its top score is tied without a unique lens leader", () => {
+  const decision = buildComparisonDecisionSet({
+    vendors: ["Alpha", "Beta"],
+    recommendation: "Alpha",
+    score: 80,
+    vendorScores: [
+      { vendor: "Alpha", score: 80 },
+      { vendor: "Beta", score: 80 },
+    ],
+  });
+
+  assert.equal(decision.confirmedRecommendation.status, "NO_CONFIRMED_RECOMMENDATION");
+  assert.equal(decision.confirmedRecommendation.option, null);
+  assert.deepEqual(decision.alternatives.map((alternative) => alternative.option), ["Alpha", "Beta"]);
+});
+
+test("repairs non-finite stored evidence numbers before returning a report", () => {
+  const repaired = normalizeEvidenceForResponse({
+    exactClaim: "Comparable evidence was unavailable.",
+    confidence: null,
+    normalizedScore: null,
+    criterionWeight: null,
+    weightedContribution: null,
+  }, 20);
+
+  assert.equal(repaired.confidence, 0);
+  assert.equal(repaired.normalizedScore, 50);
+  assert.equal(repaired.criterionWeight, 20);
+  assert.equal(repaired.weightedContribution, 10);
+});
 
 test("keeps comparison job elapsed time monotonic across terminal retention timestamps", () => {
   const startedAt = 1_000;
   assert.equal(comparisonJobElapsedMs(startedAt, 11_000), 10_000);
   assert.equal(comparisonJobElapsedMs(startedAt, 71_000), 70_000);
   assert.equal(comparisonJobElapsedMs(startedAt, 87_760), 86_760);
+});
+
+test("records stage durations and flags only comparisons beyond the 15-second benchmark", () => {
+  assert.equal(COMPARISON_LATENCY_TARGET_SECONDS, 15);
+  assert.equal(comparisonMissedLatencyTarget(15_000), false);
+  assert.equal(comparisonMissedLatencyTarget(15_001), true);
+  assert.deepEqual(
+    comparisonStageDurations(
+      1_000,
+      [
+        { stage: "finding_official_sources", at: 1_000 },
+        { stage: "building_evidence", at: 2_500 },
+        { stage: "building_evidence", at: 4_000 },
+        { stage: "analysing_evidence", at: 9_000 },
+        { stage: "preparing_result", at: 10_000 },
+      ],
+      12_000,
+    ),
+    {
+      finding_official_sources: 1_500,
+      building_evidence: 6_500,
+      analysing_evidence: 1_000,
+      preparing_result: 2_000,
+    },
+  );
 });
 
 test("submission uses resolved comparison players instead of the subject as a heading", async () => {

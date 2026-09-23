@@ -37,3 +37,7 @@
 - [Browser-style React tests](browser-react-tests.md) — initialize the DOM shim before importing React DOM or app modules that register browser event support.
 - [Actionable strategic frameworks](actionable-strategic-frameworks.md) — framework sections must contain option-specific decisions and acceptance gates, never instructions to “identify” or “define.”
 - [Alternative comparison expansion](alternative-comparison-expansion.md) — adding a suggested alternative must preserve the full original shortlist, context, and criteria.
+- [Divergent GitHub release sync](github-release-sync.md) — when local and remote histories diverge, create a narrow branch from remote main and use a review PR instead of force-pushing.
+- [Comparison latency objectives](comparison-latency-objectives.md) — use 15 seconds as an internal benchmark while preserving the public 120-second asynchronous objective.
+- [AI model fallback evidence](ai-model-fallback-evidence.md) — blocked launch pages may fall back to governed provider docs, but availability and metric attribution need separate exact-model proof.
+- [Coding benchmark comparability](coding-benchmark-comparability.md) — rank coding results only with complete, identical, independently verified methodology provenance.

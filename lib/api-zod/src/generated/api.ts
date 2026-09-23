@@ -167,6 +167,16 @@ export const createComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 export const createComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const createComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const createComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
+export const createComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const createComparisonResponseTwoAlternativesItemScoreMin = 0;
+export const createComparisonResponseTwoAlternativesItemScoreMax = 100;
+
+export const createComparisonResponseTwoAlternativesItemScoreDifferenceMin = 0;
+export const createComparisonResponseTwoAlternativesItemScoreDifferenceMax = 100;
+
 export const createComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
 
 export const createComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
@@ -270,6 +280,21 @@ export const CreateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(createComparisonResponseTwoConfirmedRecommendationScoreMin).max(createComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(createComparisonResponseTwoAlternativesItemScoreMin).max(createComparisonResponseTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(createComparisonResponseTwoAlternativesItemScoreDifferenceMin).max(createComparisonResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
   "criterion": zod.string().min(1).max(createComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(createComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(createComparisonResponseTwoWeightAdjustmentsItemWeightMax),
@@ -505,6 +530,16 @@ export const createGuestComparisonResponseComparisonIdentityEntitiesMax = 6;
 export const createGuestComparisonResponseComparisonIdentityEntityCountMin = 2;
 export const createGuestComparisonResponseComparisonIdentityEntityCountMax = 6;
 
+export const createGuestComparisonResponseConfirmedRecommendationScoreMin = 0;
+export const createGuestComparisonResponseConfirmedRecommendationScoreMax = 100;
+
+
+export const createGuestComparisonResponseAlternativesItemScoreMin = 0;
+export const createGuestComparisonResponseAlternativesItemScoreMax = 100;
+
+export const createGuestComparisonResponseAlternativesItemScoreDifferenceMin = 0;
+export const createGuestComparisonResponseAlternativesItemScoreDifferenceMax = 100;
+
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax = 100;
 
@@ -595,6 +630,21 @@ export const CreateGuestComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(createGuestComparisonResponseConfirmedRecommendationScoreMin).max(createGuestComparisonResponseConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(createGuestComparisonResponseAlternativesItemScoreMin).max(createGuestComparisonResponseAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(createGuestComparisonResponseAlternativesItemScoreDifferenceMin).max(createGuestComparisonResponseAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
@@ -1047,6 +1097,16 @@ export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMa
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
 
+export const getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const getComparisonJobResponseResultOneTwoAlternativesItemScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoAlternativesItemScoreMax = 100;
+
+export const getComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMin = 0;
+export const getComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMax = 100;
+
 export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax = 100;
 
 export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin = 0;
@@ -1101,6 +1161,16 @@ export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 6;
 
 export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
 export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
+
+export const getComparisonJobResponseResultTwoConfirmedRecommendationScoreMin = 0;
+export const getComparisonJobResponseResultTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const getComparisonJobResponseResultTwoAlternativesItemScoreMin = 0;
+export const getComparisonJobResponseResultTwoAlternativesItemScoreMax = 100;
+
+export const getComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMin = 0;
+export const getComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMax = 100;
 
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1205,6 +1275,21 @@ export const GetComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin).max(getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(getComparisonJobResponseResultOneTwoAlternativesItemScoreMin).max(getComparisonJobResponseResultOneTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(getComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMin).max(getComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
   "criterion": zod.string().min(1).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax),
@@ -1446,6 +1531,21 @@ export const GetComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(getComparisonJobResponseResultTwoConfirmedRecommendationScoreMin).max(getComparisonJobResponseResultTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(getComparisonJobResponseResultTwoAlternativesItemScoreMin).max(getComparisonJobResponseResultTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(getComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMin).max(getComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
@@ -1685,6 +1785,16 @@ export const regenerateComparisonResponseOneComparisonIdentityEntityCountMax = 6
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const regenerateComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
+export const regenerateComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const regenerateComparisonResponseTwoAlternativesItemScoreMin = 0;
+export const regenerateComparisonResponseTwoAlternativesItemScoreMax = 100;
+
+export const regenerateComparisonResponseTwoAlternativesItemScoreDifferenceMin = 0;
+export const regenerateComparisonResponseTwoAlternativesItemScoreDifferenceMax = 100;
+
 export const regenerateComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
 
 export const regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
@@ -1788,6 +1898,21 @@ export const RegenerateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(regenerateComparisonResponseTwoConfirmedRecommendationScoreMin).max(regenerateComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(regenerateComparisonResponseTwoAlternativesItemScoreMin).max(regenerateComparisonResponseTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(regenerateComparisonResponseTwoAlternativesItemScoreDifferenceMin).max(regenerateComparisonResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
   "criterion": zod.string().min(1).max(regenerateComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMax),
@@ -2057,6 +2182,16 @@ export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCo
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
 
+export const getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMax = 100;
+
 export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax = 100;
 
 export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin = 0;
@@ -2111,6 +2246,16 @@ export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMax
 
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
+
+export const getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const getGuestComparisonJobResponseResultTwoAlternativesItemScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoAlternativesItemScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMin = 0;
+export const getGuestComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMax = 100;
 
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -2215,6 +2360,21 @@ export const GetGuestComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin).max(getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreMin).max(getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMin).max(getGuestComparisonJobResponseResultOneTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
   "criterion": zod.string().min(1).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax),
@@ -2456,6 +2616,21 @@ export const GetGuestComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMin).max(getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoAlternativesItemScoreMin).max(getGuestComparisonJobResponseResultTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(getGuestComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMin).max(getGuestComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
@@ -2666,6 +2841,16 @@ export const getComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 export const getComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const getComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
+export const getComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const getComparisonResponseTwoAlternativesItemScoreMin = 0;
+export const getComparisonResponseTwoAlternativesItemScoreMax = 100;
+
+export const getComparisonResponseTwoAlternativesItemScoreDifferenceMin = 0;
+export const getComparisonResponseTwoAlternativesItemScoreDifferenceMax = 100;
+
 export const getComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
 
 export const getComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
@@ -2769,6 +2954,21 @@ export const GetComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(getComparisonResponseTwoConfirmedRecommendationScoreMin).max(getComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(getComparisonResponseTwoAlternativesItemScoreMin).max(getComparisonResponseTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(getComparisonResponseTwoAlternativesItemScoreDifferenceMin).max(getComparisonResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
   "criterion": zod.string().min(1).max(getComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(getComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(getComparisonResponseTwoWeightAdjustmentsItemWeightMax),
@@ -3081,6 +3281,16 @@ export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax
 export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const externalCreateComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
+export const externalCreateComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const externalCreateComparisonResponseTwoAlternativesItemScoreMin = 0;
+export const externalCreateComparisonResponseTwoAlternativesItemScoreMax = 100;
+
+export const externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMin = 0;
+export const externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMax = 100;
+
 export const externalCreateComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
 
 export const externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
@@ -3184,6 +3394,21 @@ export const ExternalCreateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(externalCreateComparisonResponseTwoConfirmedRecommendationScoreMin).max(externalCreateComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(externalCreateComparisonResponseTwoAlternativesItemScoreMin).max(externalCreateComparisonResponseTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMin).max(externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
   "criterion": zod.string().min(1).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMax),
@@ -3397,6 +3622,16 @@ export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
 
+export const externalGetComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
+export const externalGetComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const externalGetComparisonResponseTwoAlternativesItemScoreMin = 0;
+export const externalGetComparisonResponseTwoAlternativesItemScoreMax = 100;
+
+export const externalGetComparisonResponseTwoAlternativesItemScoreDifferenceMin = 0;
+export const externalGetComparisonResponseTwoAlternativesItemScoreDifferenceMax = 100;
+
 export const externalGetComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
 
 export const externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
@@ -3500,6 +3735,21 @@ export const ExternalGetComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(externalGetComparisonResponseTwoConfirmedRecommendationScoreMin).max(externalGetComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(externalGetComparisonResponseTwoAlternativesItemScoreMin).max(externalGetComparisonResponseTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(externalGetComparisonResponseTwoAlternativesItemScoreDifferenceMin).max(externalGetComparisonResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
   "criterion": zod.string().min(1).max(externalGetComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMax),

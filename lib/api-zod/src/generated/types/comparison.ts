@@ -16,8 +16,10 @@
  */
 import type { AdditionalComparisonWeight } from './additionalComparisonWeight';
 import type { AnalysisRow } from './analysisRow';
+import type { ComparedAlternative } from './comparedAlternative';
 import type { ComparisonSummary } from './comparisonSummary';
 import type { ComparisonSwot } from './comparisonSwot';
+import type { ConfirmedRecommendation } from './confirmedRecommendation';
 import type { DecisionGovernanceItem } from './decisionGovernanceItem';
 import type { FunctionalGapItem } from './functionalGapItem';
 import type { MigrationPhase } from './migrationPhase';
@@ -33,6 +35,9 @@ export type Comparison = ComparisonSummary & {
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  confirmedRecommendation: ConfirmedRecommendation;
+  /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
+  alternatives: ComparedAlternative[];
   /** @maxItems 8 */
   weightAdjustments?: AdditionalComparisonWeight[];
   vendorScores: VendorScore[];

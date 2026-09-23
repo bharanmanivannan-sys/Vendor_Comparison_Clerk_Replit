@@ -563,6 +563,58 @@ export interface ReportSource {
   registryDecision?: SourceRegistryDecision;
 }
 
+export type ConfirmedRecommendationStatus = typeof ConfirmedRecommendationStatus[keyof typeof ConfirmedRecommendationStatus];
+
+
+export const ConfirmedRecommendationStatus = {
+  CONFIRMED: 'CONFIRMED',
+  NO_CONFIRMED_RECOMMENDATION: 'NO_CONFIRMED_RECOMMENDATION',
+} as const;
+
+export type ConfirmedRecommendationBasis = typeof ConfirmedRecommendationBasis[keyof typeof ConfirmedRecommendationBasis];
+
+
+export const ConfirmedRecommendationBasis = {
+  QUALIFIED: 'QUALIFIED',
+  QUALIFIED_WITH_CONDITIONS: 'QUALIFIED_WITH_CONDITIONS',
+  EVIDENCE_LIMITED: 'EVIDENCE_LIMITED',
+  NONE: 'NONE',
+} as const;
+
+export interface ConfirmedRecommendation {
+  status: ConfirmedRecommendationStatus;
+  /** @nullable */
+  option: string | null;
+  /**
+     * @minimum 0
+     * @maximum 100
+     * @nullable
+     */
+  score: number | null;
+  basis: ConfirmedRecommendationBasis;
+  rationale: string;
+}
+
+export interface ComparedAlternative {
+  option: string;
+  /** @minimum 1 */
+  rank: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     * @nullable
+     */
+  score: number | null;
+  /**
+     * @minimum 0
+     * @maximum 100
+     * @nullable
+     */
+  scoreDifference: number | null;
+  qualificationStatus: string;
+  rationale: string;
+}
+
 /**
  * Strategic market role of the product, service, or brand in this decision context.
  */
@@ -1019,6 +1071,9 @@ export type Comparison = ComparisonSummary & {
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  confirmedRecommendation: ConfirmedRecommendation;
+  /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
+  alternatives: ComparedAlternative[];
   /** @maxItems 8 */
   weightAdjustments?: AdditionalComparisonWeight[];
   vendorScores: VendorScore[];
@@ -1068,6 +1123,9 @@ export interface GuestComparison {
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  confirmedRecommendation: ConfirmedRecommendation;
+  /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
+  alternatives: ComparedAlternative[];
   vendorScores: VendorScore[];
   pricing: AnalysisRow[];
   features: AnalysisRow[];
