@@ -4510,7 +4510,7 @@ test("keeps every canonical EV entity across supported comparison separators", a
     "Electric vehicles",
     ["Mahindra", "Tata", "MG"],
   );
-  assert.equal(identity.headline, "Compare Mahindra vs Tata vs MG for EV vehicles");
+  assert.equal(identity.headline, "Compare Mahindra vs Tata vs MG for Electric vehicles");
   assert.equal(identity.entityCount, 3);
   assert.equal(identity.comparisonType, "multi_entity");
 });
@@ -4553,7 +4553,7 @@ test("rejects an end-to-end analysis result that reduces the canonical three-ent
     }),
     /canonical comparison entities/,
   );
-  assert.equal(parsed.comparisonIdentity.headline, "Compare Mahindra vs Tata vs MG for EV vehicles");
+  assert.equal(parsed.comparisonIdentity.headline, "Compare Mahindra vs Tata vs MG for Electric vehicles");
 });
 
 test("accepts canonical matrix ties without treating the tie label as a new entity", () => {

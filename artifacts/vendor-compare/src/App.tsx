@@ -146,14 +146,19 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
   const decisionQuality = computeDecisionQuality(comparison);
-  const confirmedContractUsable = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
-    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
+  const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && Boolean(comparison?.confirmedRecommendation?.option);
+  const confirmedContractUsable = contractConfirmed
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED'].includes(String(comparison.confirmedRecommendation.basis));
   const decisionUsable = (decisionQuality.decision !== 'FAIL' || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
     && provisionalLensDecisionUsable(comparison);
-  const decisionVisible = decisionUsable || provisionalLensUsable;
+  const decisionVisible = contractConfirmed || decisionUsable || provisionalLensUsable;
+  const visibleRecommendation = contractConfirmed
+    ? String(comparison.confirmedRecommendation.option)
+    : comparison.recommendation;
   const clean = (value: unknown) => String(value ?? 'Not established')
     .normalize('NFKD')
     .replace(/[^\x20-\x7E]/g, ' ')
@@ -225,11 +230,11 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   };
   const summary = pdf.addPage(pageSize);
   let y = addHeader(summary, 'C-Suite Decision Summary', clean(comparison.category || 'Product and service comparison'));
-  y = drawLines(summary, comparison.prompt, margin, y, { size: 15, lineHeight: 18, font: bold, maxLines: 3 });
+  y = drawLines(summary, comparison.comparisonIdentity?.headline || comparison.prompt, margin, y, { size: 15, lineHeight: 18, font: bold, maxLines: 3 });
   y -= 10;
   summary.drawRectangle({ x: margin, y: y - 83, width: contentWidth, height: 83, color: teal });
   summary.drawText(decisionUsable ? 'RECOMMENDED OPTION' : provisionalLensUsable ? 'EVIDENCE-LIMITED LEADER' : 'EVIDENCE-LIMITED RESULT', { x: margin + 16, y: y - 21, size: 8, font: bold, color: cream });
-  summary.drawText(clean(decisionVisible ? comparison.recommendation : 'No definitive winner'), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
+  summary.drawText(clean(decisionVisible ? visibleRecommendation : 'No definitive winner'), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
   if (decisionUsable) summary.drawText(`${Math.round(Number(comparison.score) || 0)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
   y -= 105;
   summary.drawText('EXECUTIVE RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
@@ -249,10 +254,10 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   y -= 3;
   const keyRisk = comparison.functionalGaps?.find((gap: any) => ['critical', 'high'].includes(String(gap.severity).toLowerCase())) ?? comparison.functionalGaps?.[0];
   const firstGate = comparison.decisionGovernance?.[0];
-  const actions = toTextList(comparison.nextSteps).slice(0, 3);
+  const actions = decisionAlignedActions(comparison).slice(0, 3);
   summary.drawText('C-SUITE FOCUS', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 16;
-    y = drawDecisionLines(summary, `Strategic impact: ${decisionUsable ? comparison.recommendationReason : 'No commitment-grade winner is available until the release-quality issues are resolved.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
+    y = drawDecisionLines(summary, `Strategic impact: ${decisionVisible ? evidenceSafeExecutiveSummary(comparison) : 'No commitment-grade winner is available until the release-quality issues are resolved.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
   y -= 5;
   y = drawLines(summary, `Primary gap or risk: ${keyRisk ? `${keyRisk.capability} - ${keyRisk.gap} (${keyRisk.severity})` : 'Validate material functional, delivery, security, and compliance risks.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
   y -= 5;
@@ -1322,12 +1327,42 @@ function vendorVerdictPresentation(vendor: any): string {
 }
 
 function evidenceSafeExecutiveSummary(comparison: any): string {
+  const confirmed = comparison?.confirmedRecommendation;
+  if (confirmed?.status === 'CONFIRMED' && confirmed.option) {
+    const winner = String(confirmed.option);
+    const supplied = String(
+      comparison?.executiveSummary
+      || confirmed.rationale
+      || comparison?.recommendationReason
+      || '',
+    ).replace(/\bNo definitive winner\b/gi, `${winner} is the recommended option`);
+    return supplied.toLowerCase().includes(winner.toLowerCase())
+      ? supplied
+      : `${winner} is the recommended option. ${supplied}`.trim();
+  }
   return qualificationDecisionUsable(comparison)
     ? String(comparison?.executiveSummary || comparison?.recommendationReason || '')
     : String(
-        comparison?.recommendationReason
-        || 'No option passed the mandatory qualification gates with sufficient provenance-complete evidence.',
-      );
+      comparison?.recommendationReason
+      || 'No option passed the mandatory qualification gates with sufficient provenance-complete evidence.',
+    );
+}
+
+function decisionAlignedActions(comparison: any): string[] {
+  const actions = Array.isArray(comparison?.nextSteps)
+    ? comparison.nextSteps.map((step: unknown) => String(step).trim()).filter(Boolean)
+    : [];
+  const confirmed = comparison?.confirmedRecommendation;
+  if (confirmed?.status !== 'CONFIRMED' || !confirmed.option) return actions;
+  const winner = String(confirmed.option);
+  const aligned = actions.map((action: string) => (
+    action.replace(/\bNo definitive winner\b/gi, `${winner} as the recommended option`)
+  ));
+  if (aligned.some((action: string) => action.toLowerCase().includes(winner.toLowerCase()))) return aligned;
+  return [
+    `Advance ${winner} as the recommended option, subject to the stated evidence conditions.`,
+    ...aligned,
+  ];
 }
 
 function qualificationDecisionUsable(comparison: any): boolean {
@@ -1701,14 +1736,26 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
   comparison = reconcileReportScores(comparison);
   const decisionQuality = computeDecisionQuality(comparison);
-  const decisionUsable = decisionQuality.decision !== 'FAIL'
+  const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && Boolean(comparison?.confirmedRecommendation?.option);
+  const confirmedContractUsable = contractConfirmed
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED'].includes(String(comparison.confirmedRecommendation.basis));
+  const decisionUsable = (decisionQuality.decision !== 'FAIL' || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
     && provisionalLensDecisionUsable(comparison);
-  const decisionVisible = decisionUsable || provisionalLensUsable;
-  const decisionReason = stripDecisionNote(comparison.recommendationReason);
+  const decisionVisible = contractConfirmed || decisionUsable || provisionalLensUsable;
+  const visibleRecommendation = contractConfirmed
+    ? String(comparison.confirmedRecommendation.option)
+    : comparison.recommendation;
+  const decisionReason = stripDecisionNote(
+    contractConfirmed
+      ? String(comparison.confirmedRecommendation.rationale || comparison.recommendationReason || '')
+      : comparison.recommendationReason,
+  ).replace(/\bNo definitive winner\b/gi, `${visibleRecommendation} is the recommended option`);
   const decisionNote = extractDecisionNote(comparison.recommendationReason);
+  const immediateActions = decisionAlignedActions(comparison);
   const runnerUp = [...(comparison.vendorScores || [])]
     .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
     .sort((a: any, b: any) => b.score - a.score)[0];
@@ -1731,9 +1778,9 @@ export function ExecutiveDecisionBrief({ comparison, compact = false }: { compar
       <span className="mono text-[10px] uppercase text-[#85877f]">Prepared {new Date(comparison.createdAt || Date.now()).toLocaleDateString()}</span>
     </div>
     <div className="mt-5 grid gap-4 md:grid-cols-3">
-      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : provisionalLensUsable ? 'Evidence-limited leader' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionVisible ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionVisible ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
+      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : provisionalLensUsable || contractConfirmed ? 'Evidence-limited leader' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionVisible ? visibleRecommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionVisible ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
       <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(evidenceSafeExecutiveSummary(comparison))}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}{shortlistSummary && <p className="mt-3 border-t border-[#e2dccf] pt-3 text-xs leading-5 text-[#687083]" data-testid="brief-shortlist"><strong>Shortlist assessed:</strong> {shortlistSummary}</p>}</article>
-      <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
+      <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{immediateActions.slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
      </div>
      {decisionNote && <div className="mt-4 rounded-xl border border-[#d7c47b] bg-[#f5edc8] px-4 py-3 text-xs leading-5 text-[#715d16]" data-testid="decision-note"><strong>Note: {renderDecisionText(decisionNote)}</strong></div>}
   </section>;
