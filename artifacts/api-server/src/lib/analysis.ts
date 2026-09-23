@@ -1993,8 +1993,11 @@ export function comparisonMarketAvailabilityIssue(
 ): string | undefined {
   const market = inferResearchMarket(prompt, vendors, selectedMarket);
   const explicitMarkets = explicitPromptMarketCodes(prompt);
-  if (selectedMarket && explicitMarkets.length && !explicitMarkets.includes(selectedMarket)) {
-    const requested = explicitMarkets.map((code) => RESEARCH_MARKETS[code].country).join(" and ");
+  const conflictingMarkets = selectedMarket
+    ? explicitMarkets.filter((code) => code !== selectedMarket)
+    : [];
+  if (selectedMarket && conflictingMarkets.length) {
+    const requested = conflictingMarkets.map((code) => RESEARCH_MARKETS[code].country).join(" and ");
     return `The prompt asks for ${requested}, but the selected research market is ${market.country}. Make the prompt and market selection match before research starts.`;
   }
   for (const vendor of vendors) {

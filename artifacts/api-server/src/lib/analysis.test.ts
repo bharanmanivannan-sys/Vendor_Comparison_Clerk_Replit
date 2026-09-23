@@ -3966,6 +3966,18 @@ test("rejects a prompt country that conflicts with the selected research market"
   assert.match(context.message, /selected research market is Australia/i);
 });
 
+test("rejects a generated brief that contains both the selected and a conflicting market", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra and Tata for vehicles in India. Apply these constraints: Australia.",
+    ["Mahindra", "Tata"],
+    "IN",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /prompt asks for Australia/i);
+  assert.match(context.message, /selected research market is India/i);
+});
+
 test("accepts manufacturer-only automobile comparisons for governed portfolio discovery", () => {
   const context = validateComparisonContext(
     "Compare Mahindra vs Tata for automobiles. Use case: long-term ownership for 20 years.",

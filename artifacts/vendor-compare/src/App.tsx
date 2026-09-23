@@ -2655,32 +2655,17 @@ function sourceComparisonPrompt(prompt: string): string {
   return editedRequest.length >= 8 ? editedRequest : normalized;
 }
 
-function phraseComparisonPrompt(parsed: ParsedComparison, market: ResearchMarketCode): string {
+function phraseComparisonPrompt(
+  parsed: ParsedComparison,
+  market: ResearchMarketCode,
+  sourcePrompt: string,
+): string {
   const marketName = RESEARCH_MARKET_NAMES[market];
-  const category = parsed.context.segment && parsed.context.segment !== 'Product or service comparison'
-    ? ` for ${parsed.context.segment}`
-    : '';
-  const sentences = [
-    `Compare ${formatNaturalList(parsed.vendors)}${category} in ${marketName}.`,
-  ];
-  if (parsed.intent.useCase) sentences.push(`Use case: ${parsed.intent.useCase}.`);
-  const qualifiers = parsed.intent.qualifiers.filter((qualifier) => (
-    !new RegExp(`^(?:in\\s+)?${marketName.replace(/^the\s+/i, '(?:the )?')}$`, 'i').test(qualifier.trim())
-  ));
-  if (qualifiers.length > 0) {
-    sentences.push(`Apply these constraints: ${formatNaturalList(qualifiers)}.`);
-  }
-  if (parsed.criteria.length > 0) {
-    sentences.push(`Evaluate ${formatNaturalList(parsed.criteria)}.`);
-  }
-  if (
-    parsed.intent.decisionCriterion
-    && parsed.intent.decisionCriterion !== 'compare the options against the requested criteria'
-  ) {
-    sentences.push(`Recommend the ${parsed.intent.decisionCriterion}.`);
-  }
-  const phrased = sentences.join(' ');
-  const original = sourceComparisonPrompt(parsed.prompt);
+  // The interpretation service may normalize labels, but it cannot author new
+  // use cases, criteria, or geography. Keep those user-owned details in the
+  // source request rather than copying model-inferred fields into a new prompt.
+  const phrased = `Compare ${formatNaturalList(parsed.vendors)} in ${marketName}.`;
+  const original = sourceComparisonPrompt(sourcePrompt);
   if (!original || phrased === original) return phrased;
   const intentPreservingPrompt = `${phrased} Original request: ${original}`;
   return intentPreservingPrompt.length <= 2000 ? intentPreservingPrompt : original;
@@ -2952,7 +2937,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
         },
       );
       if (interpretationRequestId.current !== requestId) return;
-      const nextPhrasedPrompt = phraseComparisonPrompt(parsed, market);
+      const nextPhrasedPrompt = phraseComparisonPrompt(parsed, market, requestedPrompt);
       setInterpretation(parsed);
       setInterpretationPrompt(requestedPrompt);
       setPhrasedPrompt(nextPhrasedPrompt);
@@ -3050,7 +3035,9 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
     };
     setInterpretation(null);
     setInterpretationPrompt('');
-    void startResearch(reviewedPrompt, reviewedInterpretation);
+    // The phrased review is display-only. Submit the exact request that was
+    // parsed and reviewed so inferred fields cannot replace user intent.
+    void startResearch(interpretationPrompt, reviewedInterpretation);
   };
   const editInterpretation = () => {
     setPrompt(phrasedPrompt);

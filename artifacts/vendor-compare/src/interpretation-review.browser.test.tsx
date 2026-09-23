@@ -58,6 +58,7 @@ test('requires authenticated users to review interpreted options before research
   assert.deepEqual(researchRequest?.body.vendors, ['Alpha', 'Beta']);
   assert.deepEqual(researchRequest?.body.criteria, ['Price', 'Support']);
   assert.equal(researchRequest?.body.market, 'AU');
+  assert.equal(researchRequest?.body.prompt, 'Compare Alpha and Beta for customer service in Australia.');
 });
 
 test('keeps a unique evidence-backed recommendation visible and moves validation into a modal', () => {
@@ -123,14 +124,52 @@ test('phrases all six interpreted options instead of opening an option-entry for
 
   const phrased = view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement;
   assert.match(phrased.value, /Alpha, Beta, Gamma, Delta, Epsilon, and Zeta/);
-  assert.match(phrased.value, /Evaluate Price and Support/);
+  assert.match(phrased.value, /Original request: Compare Alpha \/ Beta \/ Gamma \/ Delta \/ Epsilon \/ Zeta/);
   assert.equal(view.queryByTestId('button-add-interpreted-option'), null);
   fireEvent.click(view.getByTestId('button-confirm-interpretation'));
 
   await waitFor(() => assert.ok(researchRequest));
   assert.deepEqual(researchRequest.vendors, ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta']);
   assert.deepEqual(researchRequest.criteria, ['Price', 'Support']);
-  assert.equal(researchRequest.prompt, phrased.value);
+  assert.equal(
+    researchRequest.prompt,
+    'Compare Alpha / Beta / Gamma / Delta / Epsilon / Zeta for customer service in Australia.',
+  );
+});
+
+test('does not submit hallucinated interpretation details as user intent', async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  const sourcePrompt = 'Compare Mahindra and Tata for vehicles in Australia.';
+  installFetch(requests, {
+    ...validInterpretation(),
+    prompt: sourcePrompt,
+    vendors: ['Mahindra', 'Tata'],
+    criteria: ['Annual fee', 'Total card cost'],
+    intent: {
+      ...validInterpretation().intent,
+      options: ['Mahindra', 'Tata'],
+      useCase: 'Australian retail banking',
+      qualifiers: ['Australia'],
+      decisionCriterion: 'best value for money',
+    },
+  });
+  let researchRequest: any;
+  const view = render(
+    <ComparisonComposer pending={false} onSubmit={(data) => { researchRequest = data; }} />,
+  );
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), { target: { value: sourcePrompt } });
+  fireEvent.change(view.getByTestId('select-portal-market'), { target: { value: 'IN' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('interpretation-review')));
+
+  const review = (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value;
+  assert.doesNotMatch(review, /retail banking|annual fee|card cost/i);
+  assert.match(review, /Original request: Compare Mahindra and Tata for vehicles in Australia/i);
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+
+  await waitFor(() => assert.ok(researchRequest));
+  assert.equal(researchRequest.prompt, sourcePrompt);
 });
 
 test('clears stale interpretation when the prompt changes', async () => {
@@ -460,9 +499,10 @@ test('keeps original intent and the 2,000-character schema limit in generated ph
   await waitFor(() => assert.ok(view.queryByTestId('input-phrased-comparison')));
 
   const phrased = (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value;
-  assert.equal(phrased, original);
+  assert.equal(phrased, `Compare Alpha and Beta in Australia. Original request: ${original}`);
   assert.ok(phrased.length <= 2000);
   assert.match(phrased, /unusual migration constraint/);
+  assert.doesNotMatch(phrased, /Criterion x/);
 });
 
 function submitPrompt(view: ReturnType<typeof render>, guest: boolean) {
