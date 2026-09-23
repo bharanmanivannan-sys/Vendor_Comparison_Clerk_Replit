@@ -145,7 +145,9 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
   const decisionQuality = computeDecisionQuality(comparison);
-  const decisionUsable = decisionQuality.decision !== 'FAIL'
+  const confirmedContractUsable = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
+  const decisionUsable = (decisionQuality.decision !== 'FAIL' || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
@@ -1329,6 +1331,8 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
   const decisionQuality = computeDecisionQuality(comparison);
   const hasConfirmedRecommendationContract = Boolean(comparison?.confirmedRecommendation);
   const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED';
+  const confirmedContractUsable = contractConfirmed
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
   const recommendation = String(
     contractConfirmed ? comparison.confirmedRecommendation.option : comparison?.recommendation || '',
   ).trim();
@@ -1340,7 +1344,7 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
     && decisionQuality.lensWinner.winner.toLowerCase() === recommendation.toLowerCase(),
   );
   const decisionUsable = Boolean(recommendedVendor)
-    && (decisionQuality.decision !== 'FAIL' || recommendationMatchesLens)
+    && (decisionQuality.decision !== 'FAIL' || recommendationMatchesLens || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = provisionalLensDecisionUsable(comparison)

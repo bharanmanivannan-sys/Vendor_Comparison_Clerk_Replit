@@ -121,6 +121,8 @@ export type VendorScoreModelOptions = {
   prompt?: string;
   market?: string;
   globalDigitalService?: boolean;
+  /** Global enterprise software is not qualified by a country-name mention on a product page. */
+  globalServiceMarketAvailability?: boolean;
 };
 
 const QUALIFICATION_GATE_NAMES = [
@@ -184,10 +186,91 @@ function evidenceConfidenceFor(evidence: Array<Record<string, unknown>>): number
 
 function isScorableEvidence(evidence: Record<string, unknown>): boolean {
   const method = String(evidence.normalizationMethod ?? "");
-  return Boolean(evidence.sourceId)
+  const sourceId = String(evidence.sourceId ?? "");
+  const documentSha256 = String(evidence.documentSha256 ?? "");
+  return /^docsha256:[a-f0-9]{64}$/i.test(sourceId)
+    && sourceId.slice("docsha256:".length).toLowerCase() === documentSha256.toLowerCase()
+    && Number.isInteger(evidence.sourceTextStart)
+    && Number.isInteger(evidence.sourceTextEnd)
+    && Number(evidence.sourceTextStart) >= 0
+    && Number(evidence.sourceTextEnd) > Number(evidence.sourceTextStart)
     && (evidence.evidenceKind === "quantitative" || evidence.evidenceKind === "percentage")
     && Number.isFinite(Number(evidence.normalizedScore))
     && !/(?:winner_share|analyst_judgment|missing_evidence|insufficient_comparable|provider_role|strategic_provider_role)/i.test(method);
+}
+
+export function assertHasProvenanceCompleteScorableEvidence(
+  analysis: AnalysisPayload,
+  excludedVendors: string[] = [],
+): void {
+  const excluded = new Set(excludedVendors.map(normalizedIdentity));
+  const evidence = analysis.vendorScores
+    .filter((vendor) => !excluded.has(normalizedIdentity(vendor.vendor)))
+    .flatMap((vendor) => vendor.weightedScores ?? [])
+    .flatMap((criterion) => criterion.evidence ?? [])
+    .filter((entry) => isScorableEvidence(entry as unknown as Record<string, unknown>));
+  if (evidence.length || validatedQualitativeLensDecision(analysis, excludedVendors)) return;
+  throw new Error("Insufficient quantitative evidence: no provenance-complete scorable evidence or uniquely decisive validated feature-lens evidence was found for the compared options.");
+}
+
+export function validatedQualitativeLensDecision(
+  analysis: AnalysisPayload,
+  excludedVendors: string[] = [],
+): EvidenceBackedLensWinner | null {
+  const excluded = new Set(excludedVendors.map(normalizedIdentity));
+  const vendors = analysis.vendorScores
+    .map((vendor) => vendor.vendor)
+    .filter((vendor) => !excluded.has(normalizedIdentity(vendor)));
+  const canonicalVendor = (value: unknown) => vendors.find(
+    (vendor) => vendor.toLowerCase() === String(value ?? "").trim().toLowerCase(),
+  );
+  const meaningfulTokens = (value: string) => normalizedIdentity(value)
+    .split(" ")
+    .filter((token) => token.length >= 4 && !["feature", "features", "pricing", "price", "capability"].includes(token));
+  const rowHasProvenanceSupport = (row: AnalysisPayload["features"][number]): boolean => {
+    const winner = canonicalVendor(row.winner);
+    if (!winner) return false;
+    const winnerScore = analysis.vendorScores.find((vendor) => vendor.vendor === winner);
+    const tokens = meaningfulTokens(`${row.dimension} ${row.values?.[winner] ?? ""}`);
+    if (!tokens.length) return false;
+    return (winnerScore?.weightedScores ?? []).some((criterion) => (
+      (criterion.evidence ?? []).some((evidence) => {
+        const sourceId = String(evidence.sourceId ?? "");
+        const documentSha256 = String(evidence.documentSha256 ?? "");
+        const sourceTextStart = evidence.sourceTextStart;
+        const sourceTextEnd = evidence.sourceTextEnd;
+        const kind = String(evidence.evidenceKind ?? "");
+        const subject = normalizedIdentity(evidence.metricSubject);
+        const support = String(evidence.supportDirection ?? "supports");
+        const evidenceTextValue = normalizedIdentity([
+          criterion.criterion,
+          evidence.exactClaim,
+          evidence.metricKey,
+          evidence.metricBasis,
+        ].join(" "));
+        return /^docsha256:[a-f0-9]{64}$/i.test(sourceId)
+          && sourceId.slice("docsha256:".length).toLowerCase() === documentSha256.toLowerCase()
+          && Number.isInteger(sourceTextStart)
+          && Number.isInteger(sourceTextEnd)
+          && Number(sourceTextStart) >= 0
+          && Number(sourceTextEnd) > Number(sourceTextStart)
+          && ["qualitative", "quantitative", "percentage"].includes(kind)
+          && subject === normalizedIdentity(winner)
+          && support !== "contradicts"
+          && support !== "neutral"
+          && tokens.some((token) => evidenceTextValue.includes(token));
+      })
+    ));
+  };
+  const supportedPricing = (analysis.pricing ?? []).filter(rowHasProvenanceSupport);
+  const supportedFeatures = (analysis.features ?? []).filter(rowHasProvenanceSupport);
+  const decision = selectEvidenceBackedLensWinner(supportedPricing, supportedFeatures, vendors);
+  if (!decision) return null;
+  const winner = analysis.vendorScores.find((vendor) => vendor.vendor === decision.winner);
+  const status = (winner as unknown as VendorScoreExtension | undefined)?.qualificationStatus;
+  return status === "QUALIFIED" || status === "QUALIFIED_WITH_CONDITIONS"
+    ? decision
+    : null;
 }
 
 function normalizedIdentity(value: unknown): string {
@@ -247,7 +330,9 @@ export function calculateVendorScoreExtension(
   });
   const inferredStatuses: Record<(typeof QUALIFICATION_GATE_NAMES)[number], QualificationGateStatus> = {
     "Exact entity/variant identity": statusFromEvidence(identityEvidence),
-    "Market availability": options.market ? statusFromEvidence(marketEvidence) : "UNKNOWN",
+    "Market availability": options.globalServiceMarketAvailability
+      ? (identityEvidence.length ? "CONDITIONAL" : "UNKNOWN")
+      : options.market ? statusFromEvidence(marketEvidence) : "UNKNOWN",
     "Applicable local regulatory compliance": compliancePattern.test(context)
       ? statusFromEvidence(gateEvidence(compliancePattern))
       : "NOT_APPLICABLE",
@@ -376,8 +461,8 @@ function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScor
   const runnerUpScore = runnerUp
     ? ((runnerUp as unknown as VendorScoreExtension).modelScore ?? runnerUp.score)
     : undefined;
-  const difference = runnerUpScore === undefined ? winnerScore : winnerScore - runnerUpScore;
-  const band = scoreDifferenceBand(difference);
+  const difference = runnerUpScore === undefined ? undefined : winnerScore - runnerUpScore;
+  const band = difference === undefined ? "CLEAR_ADVANTAGE" : scoreDifferenceBand(difference);
   analysis.recommendation = band === "PRACTICAL_TIE" ? "No definitive winner" : winner.vendor;
   analysis.score = Math.round(winnerScore);
   analysis.recommendationReason = band === "PRACTICAL_TIE"
@@ -600,6 +685,7 @@ export type AnalysisProgressStage =
 export type AnalysisTimingStage =
   | "vendor_discovery"
   | "portfolio_adjudication"
+  | "software_source_fallback"
   | "product_research"
   | "research_repair"
   | "evidence_url_validation"
@@ -2028,33 +2114,137 @@ export function preserveConcreteDiscoveryOptions(
   const normalizedTokens = (value: string): string[] => value
     .toLowerCase()
     .match(/[\p{L}\p{N}]+/gu) ?? [];
-  const preserved = concrete.map((vendor) => ({
-    exact: vendor.toLowerCase(),
-    tokens: normalizedTokens(vendor),
-  }));
+  const optionIdentity = (value: string) => {
+    const tokens = normalizedTokens(value);
+    const meaningfulTokens = tokens.filter((token) => !["and", "the", "of", "for"].includes(token));
+    return {
+      exact: tokens.join(" "),
+      compact: tokens.join(""),
+      tokens,
+      acronym: meaningfulTokens.length >= 2
+        ? meaningfulTokens.map((token) => token[0]).join("")
+        : "",
+    };
+  };
+  const sameOrAlias = (left: string, right: string): boolean => {
+    const first = optionIdentity(left);
+    const second = optionIdentity(right);
+    if (!first.exact || !second.exact) return false;
+    return first.exact === second.exact
+      || Boolean(first.acronym && first.acronym === second.compact)
+      || Boolean(second.acronym && second.acronym === first.compact)
+      || Boolean(
+        first.acronym.length >= 2
+        && second.tokens.includes(first.acronym)
+        && first.tokens.some((token) => second.tokens.includes(token)),
+      )
+      || Boolean(
+        second.acronym.length >= 2
+        && first.tokens.includes(second.acronym)
+        && second.tokens.some((token) => first.tokens.includes(token)),
+      )
+      || (
+        first.tokens.length === 1
+        && second.tokens[0] === first.tokens[0]
+      )
+      || (
+        second.tokens.length === 1
+        && first.tokens[0] === second.tokens[0]
+      )
+      || (
+        first.tokens.length >= 2
+        && first.tokens.every((token) => second.tokens.includes(token))
+      )
+      || (
+        second.tokens.length >= 2
+        && second.tokens.every((token) => first.tokens.includes(token))
+      );
+  };
+  const accepted = [...concrete];
   const alternatives = discovered.filter((vendor) => {
     if (isObjectivePhraseVendor(vendor)) return false;
-    const candidateTokens = normalizedTokens(vendor);
-    const candidateAcronym = candidateTokens.map((token) => token[0]).join("");
-    return !preserved.some((option) => (
-      option.exact === vendor.toLowerCase()
-      || (
-        option.tokens.length === 1
-        && candidateTokens[0] === option.tokens[0]
-      )
-      || (
-        option.tokens.length >= 2
-        && option.tokens.every((token) => candidateTokens.includes(token))
-      )
-      || (
-        candidateAcronym.length >= 2
-        && option.tokens.includes(candidateAcronym)
-        && option.tokens.some((token) => candidateTokens.includes(token))
-      )
-    ));
+    if (accepted.some((option) => sameOrAlias(option, vendor))) return false;
+    accepted.push(vendor);
+    return true;
   });
-  return Array.from(new Set([...concrete, ...alternatives])).slice(0, targetCount);
+  return [...concrete, ...alternatives].slice(0, targetCount);
 }
+
+export function requestsBestAlternative(prompt: string): boolean {
+  return /\bbest\s+alternatives?\b/i.test(prompt);
+}
+
+export function applyBestAlternativeDecision(
+  analysis: AnalysisPayload,
+  anchor: string,
+): void {
+  // Single-anchor alternative intent ranks only non-anchor options. The anchor
+  // remains the benchmark, never the answer; the rationale must say why the
+  // selected competitor leads the supported alternative-only decision set.
+  const normalizedAnchor = normalizeComparisonOptionName(anchor);
+  const anchorAcronym = normalizedAnchor
+    .split(/\s+/)
+    .filter((token) => token && !["and", "the", "of", "for"].includes(token))
+    .map((token) => token[0])
+    .join("");
+  const isAnchor = (vendor: string) => {
+    const normalizedVendor = normalizeComparisonOptionName(vendor);
+    return normalizedVendor === normalizedAnchor
+      || (anchorAcronym.length >= 2 && normalizedVendor.replace(/\s+/g, "") === anchorAcronym);
+  };
+  const eligible = analysis.vendorScores.filter((vendor) => {
+    if (isAnchor(vendor.vendor)) return false;
+    const status = (vendor as unknown as VendorScoreExtension).qualificationStatus;
+    return status === "QUALIFIED" || status === "QUALIFIED_WITH_CONDITIONS";
+  });
+  if (!eligible.length) {
+    analysis.recommendation = "No qualified alternative";
+    analysis.score = 0;
+    analysis.recommendationReason = `No competitor to ${anchor} passed the existing qualification and validated-evidence gates.`;
+    return;
+  }
+  const qualitativeDecision = validatedQualitativeLensDecision(analysis, [anchor]);
+  if (qualitativeDecision) {
+    const winner = eligible.find((vendor) => vendor.vendor === qualitativeDecision.winner);
+    if (winner) {
+      analysis.recommendation = winner.vendor;
+      analysis.score = Math.round((winner as unknown as VendorScoreExtension).modelScore ?? winner.score);
+      analysis.recommendationReason = `${winner.vendor} is the best-qualified alternative to ${anchor} because it uniquely leads the provenance-validated competitor feature lens, winning ${qualitativeDecision.wins} of ${qualitativeDecision.decidedRows} supported dimensions.`;
+      analysis.executiveSummary = alignOverallWinnerAssertions(
+        analysis.executiveSummary,
+        analysis.recommendation,
+        analysis.vendorScores.map((vendorScore) => vendorScore.vendor),
+      );
+      return;
+    }
+  }
+  const ranked = [...eligible].sort((left, right) => (
+    ((right as unknown as VendorScoreExtension).modelScore ?? right.score)
+    - ((left as unknown as VendorScoreExtension).modelScore ?? left.score)
+  ));
+  const winner = ranked[0];
+  const runnerUp = ranked[1];
+  const winnerScore = (winner as unknown as VendorScoreExtension).modelScore ?? winner.score;
+  const runnerUpScore = runnerUp
+    ? ((runnerUp as unknown as VendorScoreExtension).modelScore ?? runnerUp.score)
+    : undefined;
+  const difference = runnerUpScore === undefined ? undefined : winnerScore - runnerUpScore;
+  const band = difference === undefined ? "CLEAR_ADVANTAGE" : scoreDifferenceBand(difference);
+  analysis.recommendation = band === "PRACTICAL_TIE" ? "No definitive alternative" : winner.vendor;
+  analysis.score = Math.round(winnerScore);
+  analysis.recommendationReason = band === "PRACTICAL_TIE"
+    ? `${winner.vendor} and ${runnerUp?.vendor ?? "the leading competitors"} are a practical tie as alternatives to ${anchor} under the existing qualification and weighted evidence model.`
+    : `${winner.vendor} is the best-qualified alternative to ${anchor}, leading the other eligible competitors with a ${band.toLowerCase().replaceAll("_", " ")} (${winnerScore.toFixed(2)} vs ${runnerUpScore?.toFixed(2) ?? "n/a"}).`;
+  analysis.executiveSummary = alignOverallWinnerAssertions(
+    analysis.executiveSummary,
+    analysis.recommendation,
+    analysis.vendorScores.map((vendor) => vendor.vendor),
+  );
+}
+
+// Kept as a source-compatible alias for callers introduced during the
+// best-alternative discovery rollout.
+export const applyBestAlternativeRecommendation = applyBestAlternativeDecision;
 
 export function selectOpenEndedElectricVehicleShortlist(
   anchorBrand: string,
@@ -5386,6 +5576,30 @@ export async function discoverIndependentVehicleFallbackUrls(
   return dedupeReferenceUrls(collectCitedHttpUrls(output)).slice(0, Math.max(0, maximum));
 }
 
+/** Collect only URLs emitted as Responses web-search citations, never prose URLs. */
+export async function discoverGeneralSoftwareFallbackUrls(
+  vendors: string[],
+  search: (vendors: string[]) => Promise<unknown>,
+  maximum = 8,
+): Promise<string[]> {
+  if (!vendors.length || maximum <= 0) return [];
+  const output = await search(vendors);
+  return dedupeReferenceUrls(collectCitedHttpUrls(output)).slice(0, maximum);
+}
+
+export function requiresGeneralSoftwareSourceFallback(
+  prompt: string,
+  segment: string,
+  bestAlternativeAnchor: string | undefined,
+  admittedUrls: string[],
+): boolean {
+  return Boolean(bestAlternativeAnchor)
+    && admittedUrls.length === 0
+    && /\b(?:software|saas|digital experience|DXP|content management|CMS|digital asset management|DAM|Adobe Experience Manager|AEM)\b/i.test(
+      `${prompt} ${segment}`,
+    );
+}
+
 function normalizeKnownEvidenceUrls(value: string, allowedUrls: string[]): string {
   if (!allowedUrls.length) return value;
   const allowed = new Set(dedupeReferenceUrls(allowedUrls));
@@ -5811,6 +6025,82 @@ export function validateQuantitativeEvidenceAgainstDocuments(
     verifiedCount: verified,
     rejected,
   });
+  return verified;
+}
+
+/**
+ * Admits qualitative feature evidence only when the model's exact claim is a
+ * verbatim span in the retrieved document and names the exact compared entity.
+ * This is deliberately separate from quantitative normalization.
+ */
+export function validateQualitativeEvidenceAgainstDocuments(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const byUrl = new Map<string, RetrievedEvidenceDocument>();
+  for (const document of documents) {
+    byUrl.set(canonicalDocumentKey(document.url), document);
+    byUrl.set(canonicalDocumentKey(document.finalUrl), document);
+  }
+  let verified = 0;
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
+  for (const vendor of vendorScores) {
+    if (!vendor || typeof vendor !== "object") continue;
+    const vendorName = String((vendor as Record<string, unknown>).vendor ?? "").trim();
+    const vendorIdentity = normalizedIdentity(vendorName);
+    const vendorTokens = vendorIdentity.split(" ").filter((token) => token.length >= 3);
+    const vendorAcronym = vendorTokens.map((token) => token[0]).join("");
+    const weightedScores = Array.isArray((vendor as Record<string, unknown>).weightedScores)
+      ? (vendor as Record<string, unknown>).weightedScores as unknown[]
+      : [];
+    for (const criterion of weightedScores) {
+      if (!criterion || typeof criterion !== "object") continue;
+      const evidenceRows = Array.isArray((criterion as Record<string, unknown>).evidence)
+        ? (criterion as Record<string, unknown>).evidence as unknown[]
+        : [];
+      for (const item of evidenceRows) {
+        if (!item || typeof item !== "object") continue;
+        const row = item as Record<string, unknown>;
+        if (row.evidenceKind !== "qualitative" || typeof row.rawMetricValue === "number") continue;
+        const claim = typeof row.exactClaim === "string" ? row.exactClaim.trim() : "";
+        const sourceUrl = typeof row.sourceUrl === "string" ? canonicalDocumentKey(row.sourceUrl) : "";
+        const document = byUrl.get(sourceUrl);
+        if (!document || claim.length < 12) {
+          row.evidenceKind = "unverified";
+          row.normalizationMethod = "document_claim_not_verified";
+          continue;
+        }
+        const claimPattern = claim
+          .split(/\s+/)
+          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("\\s+");
+        const match = new RegExp(claimPattern, "i").exec(document.text);
+        const claimIdentity = normalizedIdentity(match?.[0]);
+        const namesExactEntity = vendorTokens.every((token) => claimIdentity.includes(token))
+          || Boolean(vendorAcronym.length >= 3 && claimIdentity.split(" ").includes(vendorAcronym));
+        if (!match || !namesExactEntity) {
+          row.evidenceKind = "unverified";
+          row.normalizationMethod = "document_claim_not_verified";
+          delete row.metricSubject;
+          delete row.documentSha256;
+          delete row.sourceTextStart;
+          delete row.sourceTextEnd;
+          continue;
+        }
+        row.exactClaim = match[0];
+        row.metricSubject = vendorName;
+        row.metricBasis = typeof row.metricBasis === "string" && row.metricBasis.trim()
+          ? row.metricBasis.trim()
+          : "retrieved_document_qualitative_feature";
+        row.retrievalDate = document.retrievedAt.slice(0, 10);
+        row.documentSha256 = document.sha256;
+        row.sourceTextStart = match.index;
+        row.sourceTextEnd = match.index + match[0].length;
+        row.normalizationMethod = "retrieved_document_qualitative_claim";
+        verified += 1;
+      }
+    }
+  }
   return verified;
 }
 
@@ -7672,6 +7962,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor)
       || isBrandLevelBaasComparison
       || isBrandLevelModelSelection;
+    const bestAlternativeAnchor = vendorDiscoveryWasRequired
+      && requestsBestAlternative(input.prompt)
+      ? input.vendors.find((vendor) => !isObjectivePhraseVendor(vendor))
+      : undefined;
     const isDealershipComparison = isDealershipComparisonRequest(input.prompt, input.vendors);
     let discoveredAlternativeInsights: string[] = [];
     let discoveredSelectionRationale = "";
@@ -8302,6 +8596,61 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
       }
     }
+    let generalSoftwareSourceNotes = "";
+    if (requiresGeneralSoftwareSourceFallback(
+      input.prompt,
+      context.segment,
+      bestAlternativeAnchor,
+      input.urls,
+    )) {
+      const fallbackResponse = await measureAnalysisStage(input, "software_source_fallback", () => client.responses.create({
+        model: "gpt-4.1-mini",
+        max_output_tokens: 2200,
+        tool_choice: "required",
+        tools: [{
+          type: "web_search",
+          search_context_size: "medium",
+          external_web_access: true,
+          user_location: {
+            type: "approximate" as const,
+            country: researchMarket.countryCode,
+            timezone: researchMarket.timezone,
+          },
+        }],
+        input: [{
+          role: "system",
+          content: "Use web search now. Find exact current official product, feature, pricing, integration, security, and support pages for the named enterprise-software products. Quote concise verbatim source excerpts that name the exact product and establish a concrete capability or commercial fact. Cite every excerpt with the web-search citation. Do not emit guessed or reconstructed URLs.",
+        }, {
+          role: "user",
+          content: JSON.stringify({
+            prompt: input.prompt,
+            exactProducts: input.vendors,
+            market: researchMarket,
+            maximumCitedPages: 8,
+          }),
+        }],
+      }, {
+        timeout: 15_000,
+        maxRetries: 0,
+      }));
+      const fallbackUrls = await discoverGeneralSoftwareFallbackUrls(
+        input.vendors,
+        async () => fallbackResponse.output,
+        8,
+      );
+      if (!fallbackUrls.length) {
+        throw new Error("Insufficient source coverage: forced software source search returned no explicit retrieval citations.");
+      }
+      input.urls.push(...fallbackUrls);
+      generalSoftwareSourceNotes = fallbackResponse.status === "completed"
+        ? fallbackResponse.output_text.slice(0, 12_000)
+        : "";
+      console.info("general_software_source_fallback_diagnostics", {
+        invoked: true,
+        citedUrlCount: fallbackUrls.length,
+        admittedUrlCount: input.urls.length,
+      });
+    }
     const parameterPriorityInstructions = isSafetyFirstVehicleDecision
       ? "The user's first and controlling decision parameter is vehicle safety. Use a safety-focused score profile rather than the generic vendor emphasis. Prioritize official manufacturer India pages and Bharat NCAP. Compare exact current models and applicable variants using ncap_star_rating (stars), adult_occupant_score (points), child_occupant_score (points), airbag_count (airbags), esc_compliance (binary), pedestrian protection, and adas_feature_count (features). Include the exact NCAP program, protocol/version, tested variant, applicability, publication year, and score denominator. Compare NCAP results only when the program, protocol/version, and denominator match. Keep an exact tie when authoritative same-protocol evidence does not establish a safety winner."
       : explicitDecisionPriority
@@ -8400,6 +8749,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 `Reputable independent ${researchMarket.country} publications`,
               ],
               suppliedUrls: input.urls,
+              sourceAcquisitionNotes: generalSoftwareSourceNotes || undefined,
               criteria: input.criteria,
               shape: analysisOutputShape(researchShapeVendors, isProviderLevelHomeLoanDiscovery, isElectricVehicleComparison),
               frameworkAdherenceInstructions: frameworkAdherenceInstructions(researchShapeVendors),
@@ -8861,6 +9211,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       ? addVerifiedElectricVehicleMatrixMetrics(parsed as Record<string, unknown>, retrievedDocuments)
       : 0;
     validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+    validateQualitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
     let officialSpecEvidenceAdded = isElectricVehicleComparison
       ? addVerifiedElectricVehicleOfficialSpecs(
         parsed as Record<string, unknown>,
@@ -8957,6 +9308,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             fallbackDocuments,
           );
           validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+          validateQualitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
           if (isElectricVehicleComparison) {
             officialSpecEvidenceAdded += addVerifiedElectricVehicleOfficialSpecs(
               parsed as Record<string, unknown>,
@@ -9169,8 +9521,14 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       market: `${researchMarket.country} ${researchMarket.countryCode}`,
       mustHaves,
       globalDigitalService: isAiModelComparison,
+      globalServiceMarketAvailability: /\b(?:digital experience platforms?|DXP|digital asset management|DAM|content management systems?|CMS)\b/i.test(
+        `${input.prompt} ${normalized.category}`,
+      ),
     });
     suppressUnqualifiedLensWinners(normalized);
+    if (bestAlternativeAnchor) {
+      applyBestAlternativeDecision(normalized, bestAlternativeAnchor);
+    }
     if (hasReviewSignalCoverage && !insufficientEvidence && normalized.recommendation !== "No exact winner") {
       normalized.recommendationReason = `Review-signal winner: ${normalized.recommendation} leads on comparable recent independent review ratings with verified multi-source coverage. ${normalized.recommendationReason}`;
     }
@@ -9194,6 +9552,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (insufficientEvidence && !hasQualificationModel) {
       annotateUnverifiableWinner(normalized);
     }
+    assertHasProvenanceCompleteScorableEvidence(
+      normalized,
+      bestAlternativeAnchor ? [bestAlternativeAnchor] : [],
+    );
     return normalized;
   } catch (error) {
     console.error("Product research failed", error instanceof Error

@@ -41,3 +41,4 @@
 - [Comparison latency objectives](comparison-latency-objectives.md) — use 15 seconds as an internal benchmark while preserving the public 120-second asynchronous objective.
 - [AI model fallback evidence](ai-model-fallback-evidence.md) — blocked launch pages may fall back to governed provider docs, but availability and metric attribution need separate exact-model proof.
 - [Coding benchmark comparability](coding-benchmark-comparability.md) — rank coding results only with complete, identical, independently verified methodology provenance.
+- [Software source acquisition and alternative winners](software-source-acquisition.md) — force citation-backed acquisition when discovered software starts with no URLs, and keep single-anchor winners non-anchor and evidence-qualified.

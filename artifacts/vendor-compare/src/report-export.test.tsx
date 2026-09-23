@@ -613,6 +613,46 @@ test('shows ranked alternatives only from the same compared set beside a confirm
   assert.doesNotMatch(html, /Outside/);
 });
 
+test('renders a conditionally qualified confirmed winner in the browser and PDF', async () => {
+  const comparison = comparisonFixture({ mismatchedHistory: true }) as any;
+  comparison.recommendation = 'Beta';
+  comparison.score = 81;
+  comparison.vendorScores = [
+    {
+      ...comparison.vendorScores[0],
+      vendor: 'Alpha',
+      score: 91,
+      modelScore: 91,
+      qualificationStatus: 'QUALIFIED',
+    },
+    {
+      ...comparison.vendorScores[1],
+      vendor: 'Beta',
+      score: 81,
+      modelScore: 81,
+      qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+      conditions: ['Confirm regional support coverage before contracting.'],
+    },
+  ];
+  comparison.confirmedRecommendation = {
+    status: 'CONFIRMED',
+    option: 'Beta',
+    score: 81,
+    basis: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: 'Beta is the best-qualified alternative, conditional on regional support coverage.',
+  };
+
+  const html = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+
+  assert.match(html, /Beta/);
+  assert.match(html, /81/);
+  assert.doesNotMatch(html, /No definitive winner/);
+  assert.match(pdfText, /Beta/);
+  assert.match(pdfText, /81\/100/);
+  assert.doesNotMatch(pdfText, /No definitive winner/);
+});
+
 test('treats the confirmed recommendation contract as authoritative for tied results', () => {
   const comparison = comparisonFixture() as any;
   comparison.vendors = ['Alpha', 'Beta'];

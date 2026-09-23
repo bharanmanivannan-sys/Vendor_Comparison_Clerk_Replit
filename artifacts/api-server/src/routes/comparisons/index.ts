@@ -33,6 +33,7 @@ import {
   parsePromptWithIntent,
   reconcileRecommendationDecision,
   refineComparisonPrompt,
+  requestsBestAlternative,
   reweightAnalysis,
   validateComparisonContext,
   type AnalysisPayload,
@@ -242,11 +243,11 @@ export function comparisonFailureMessage(error: unknown, prompt: string, vendors
   if (/insufficient source coverage|fewer than three independently reachable/i.test(message)) {
     const missingVendor = message.match(/no official product source was found for (.+?)(?:\.|$)/i)?.[1];
     return missingVendor
-      ? `The comparison options were understood, but an exact official product source could not be verified for ${missingVendor}. Any 50/100 weighted score would be a neutral midpoint for missing evidence, not proof that the options are equal. On your next attempt, add an exact current model page for that option; irrelevant or outdated resources will not be used.`
-      : "There is not enough comparable verified evidence to rank these options reliably. A 50/100 weighted score is the neutral midpoint used when evidence is missing, not proof that the options are equal. On your next attempt, add exact current URLs for each option; irrelevant or outdated resources will not be used.";
+      ? `Automatic research could not verify an exact official source for ${missingVendor}. Your request is safe to retry; optionally include a current official page for that exact option if the next attempt has the same problem.`
+      : "Automatic research did not recover enough comparable verified evidence on this attempt. Your request is safe to retry; optional current official sources can help when public pages are difficult to retrieve.";
   }
   if (/insufficient quantitative evidence/i.test(message)) {
-    return "There is not enough comparable verified evidence to rank these options reliably. A 50/100 weighted score is the neutral midpoint used when evidence is missing, not proof that the options are equal. On your next attempt, add exact current URLs for each option; irrelevant or outdated resources will not be used.";
+    return "Automatic research did not recover enough provenance-complete evidence to make an honest recommendation on this attempt. Your request is safe to retry; you may optionally include current official sources, but they are not required.";
   }
   if (/failed query|column .* does not exist|relation .* does not exist/i.test(message)) {
     return "The analysis finished, but the report could not be saved. Please try again shortly.";
@@ -696,7 +697,13 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
     vendor.qualificationStatus === "QUALIFIED" || vendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
   ));
   if (qualificationRows.length) {
-    const ranked = [...qualifiedRows].sort((left, right) => (right.modelScore ?? right.score) - (left.modelScore ?? left.score));
+    const bestAlternativeAnchor = requestsBestAlternative(row.prompt)
+      ? row.vendors[0]
+      : undefined;
+    const decisionRows = bestAlternativeAnchor
+      ? qualifiedRows.filter((vendor) => vendor.vendor.toLowerCase() !== bestAlternativeAnchor.toLowerCase())
+      : qualifiedRows;
+    const ranked = [...decisionRows].sort((left, right) => (right.modelScore ?? right.score) - (left.modelScore ?? left.score));
     const leader = ranked[0];
     const runnerUp = ranked[1];
     const leaderScore = leader ? (leader.modelScore ?? leader.score) : 0;
@@ -776,6 +783,7 @@ export function normalizeEvidenceForResponse(
 }
 
 export function buildComparisonDecisionSet(comparison: {
+  prompt?: string;
   vendors?: string[];
   vendorScores?: Array<Record<string, any>>;
   recommendation?: string;
@@ -792,6 +800,9 @@ export function buildComparisonDecisionSet(comparison: {
     (vendor) => vendor.toLowerCase() === String(value ?? "").trim().toLowerCase(),
   );
   const recommendation = canonicalOption(comparison.recommendation);
+  const bestAlternativeAnchor = requestsBestAlternative(String(comparison.prompt ?? ""))
+    ? vendors[0]
+    : undefined;
   const recommendedVendor = recommendation
     ? vendorScores.find((vendor) => canonicalOption(vendor.vendor) === recommendation)
     : undefined;
@@ -804,6 +815,7 @@ export function buildComparisonDecisionSet(comparison: {
     return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : null;
   };
   const scoredOptions = vendors.flatMap((option) => {
+    if (bestAlternativeAnchor && option === bestAlternativeAnchor) return [];
     const vendor = vendorScores.find((entry) => canonicalOption(entry.vendor) === option);
     const score = numericScore(vendor);
     return score === null ? [] : [{ option, score }];
@@ -863,7 +875,7 @@ export function buildComparisonDecisionSet(comparison: {
         rationale: "No unique recommendation was confirmed from the compared options.",
       };
   const scoredAlternatives = vendors
-    .filter((option) => option !== confirmedOption)
+    .filter((option) => option !== confirmedOption && option !== bestAlternativeAnchor)
     .map((option, originalIndex) => {
       const vendor = vendorScores.find((entry) => canonicalOption(entry.vendor) === option);
       const score = numericScore(vendor);
@@ -923,6 +935,7 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
   const pricing = normalizeStoredRows(row.pricing);
   const features = normalizeStoredRows(row.features);
   const decisionSet = buildComparisonDecisionSet({
+    prompt: row.prompt,
     vendors: row.vendors,
     vendorScores,
     recommendation: summary.recommendation,
@@ -1087,6 +1100,7 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
     createdAt: new Date(),
     ...analysis,
     ...buildComparisonDecisionSet({
+      prompt: validated.input.prompt,
       vendors: validated.vendors,
       vendorScores: analysis.vendorScores,
       recommendation: analysis.recommendation,

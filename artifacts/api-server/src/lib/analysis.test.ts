@@ -11,6 +11,8 @@ import {
   addVerifiedHomeLoanRateEvidence,
   addVerifiedQuickCommerceDeliveryEvidence,
   applyEvidenceBackedLensWinner,
+  applyBestAlternativeRecommendation,
+  assertHasProvenanceCompleteScorableEvidence,
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
   applySoftwareCapabilityMatrixDecision,
@@ -28,6 +30,7 @@ import {
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
   deterministicOpenEndedEvFallback,
+  discoverGeneralSoftwareFallbackUrls,
   discoverIndependentVehicleFallbackUrls,
   discoveryTargetCount,
   electricVehicleFinalQualityIssues,
@@ -85,17 +88,21 @@ import {
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
   requestsCurrentModelSelection,
+  requestsBestAlternative,
+  requiresGeneralSoftwareSourceFallback,
   scoreDifferenceBand,
   sanitizeOutsideAlternativeInsights,
   vehicleIndependentEvidenceInstructions,
   vehicleMarketPositionInstructions,
   selectRecommendationLabel,
   selectOpenEndedElectricVehicleShortlist,
+  validatedQualitativeLensDecision,
   sourceMatchesResearchMarket,
   uniqueHighestDeterministicWeightedVendor,
   userSuppliedSourceInstructions,
   UNVERIFIABLE_WINNER_NOTE,
   validateFinalEvidenceUrls,
+  validateQualitativeEvidenceAgainstDocuments,
   validateQuantitativeEvidenceAgainstDocuments,
   validateComparisonContext,
 } from "./analysis";
@@ -444,6 +451,9 @@ function qualificationEvidence(
 ) {
   return {
     sourceId: `docsha256:${hashCharacter.repeat(64)}`,
+    documentSha256: hashCharacter.repeat(64),
+    sourceTextStart: 0,
+    sourceTextEnd: 64,
     sourceUrl: `https://official.example/${vendor.toLowerCase().replaceAll(" ", "-")}`,
     exactClaim: `${vendor} is available in Australia; verified product metric`,
     metricKey: "capability_score",
@@ -4461,6 +4471,445 @@ test("treats generic AEM competitor wording as discovery objectives", () => {
     ]),
     ["Adobe AEM", "Sitecore Experience Platform", "Acquia DXP"],
   );
+});
+
+test("parses the full AEM anchor and apostrophe variants as competitor discovery", () => {
+  for (const possessive of ["its", "it's", "it’s"]) {
+    const prompt = `Compare Adobe experience manager against ${possessive} competitors which is the best alternatives for AEM?`;
+    const parsed = parsePrompt(prompt);
+    assert.deepEqual(parsed.vendors, ["Adobe experience manager", `${possessive} competitors`]);
+    assert.equal(parsed.vendors.some(isObjectivePhraseVendor), true);
+    assert.equal(discoveryTargetCount(parsed.vendors), 4);
+    assert.equal(requestsBestAlternative(prompt), true);
+  }
+});
+
+test("keeps the full AEM anchor and removes expanded and acronym duplicates from discovery", () => {
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(
+      ["Adobe Experience Manager", "its competitors"],
+      [
+        "AEM",
+        "Adobe Experience Manager",
+        "Sitecore XM Cloud",
+        "sitecore xm cloud",
+        "Optimizely One",
+        "Acquia DXP",
+      ],
+      4,
+    ),
+    ["Adobe Experience Manager", "Sitecore XM Cloud", "Optimizely One", "Acquia DXP"],
+  );
+});
+
+test("selects the strongest qualified competitor for a best-alternative request", () => {
+  const analysis = {
+    executiveSummary: "Adobe Experience Manager is the best overall option.",
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "Adobe Experience Manager leads overall.",
+    score: 91,
+    vendorScores: [
+      { vendor: "Adobe Experience Manager", score: 91, modelScore: 91, qualificationStatus: "QUALIFIED" },
+      { vendor: "Sitecore XM Cloud", score: 84, modelScore: 84, qualificationStatus: "QUALIFIED" },
+      { vendor: "Optimizely One", score: 82, modelScore: 82, qualificationStatus: "QUALIFIED_WITH_CONDITIONS" },
+      { vendor: "Acquia DXP", score: 95, modelScore: 95, qualificationStatus: "INSUFFICIENT_EVIDENCE" },
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+
+  assert.equal(analysis.recommendation, "Sitecore XM Cloud");
+  assert.equal(analysis.score, 84);
+  assert.match(analysis.recommendationReason, /best-qualified alternative to Adobe Experience Manager/i);
+  assert.doesNotMatch(analysis.recommendationReason, /Acquia DXP is the best/i);
+});
+
+test("rejects completion when every option has zero provenance-complete scorable evidence", () => {
+  const analysis = {
+    vendorScores: [
+      {
+        vendor: "Alpha",
+        score: 50,
+        weightedScores: [{
+          criterion: "Price",
+          evidence: [{ evidenceKind: "unverified", normalizedScore: 90 }],
+        }],
+      },
+      {
+        vendor: "Beta",
+        score: 50,
+        weightedScores: [{
+          criterion: "Features",
+          evidence: [{
+            evidenceKind: "quantitative",
+            normalizedScore: 80,
+            normalizationMethod: "direct_numeric",
+            sourceUrl: "https://example.com/beta",
+          }],
+        }],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.throws(
+    () => assertHasProvenanceCompleteScorableEvidence(analysis),
+    /Insufficient quantitative evidence/i,
+  );
+});
+
+test("accepts a feature-only decision only when qualitative row support is provenance-complete and uniquely decisive", () => {
+  const qualitativeFeatureEvidence = (vendor: string, claim: string, hashCharacter: string) => ({
+    sourceId: `docsha256:${hashCharacter.repeat(64)}`,
+    documentSha256: hashCharacter.repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 10 + claim.length,
+    sourceUrl: `https://official.example/${vendor.toLowerCase().replaceAll(" ", "-")}`,
+    exactClaim: claim,
+    metricSubject: vendor,
+    metricKey: "managed_service_capability",
+    metricBasis: "current official service capability",
+    evidenceKind: "qualitative",
+    supportDirection: "supports",
+    confidence: 90,
+    normalizationMethod: "qualitative_explicit",
+  });
+  const analysis = {
+    recommendation: "AEM",
+    recommendationReason: "Provisional lens winner — AEM leads the provenance-backed feature comparison.",
+    score: 80,
+    pricing: [],
+    features: [
+      {
+        dimension: "Managed service coverage",
+        values: { AEM: "Broad", Sitecore: "Limited" },
+        winner: "AEM",
+      },
+      {
+        dimension: "Implementation support",
+        values: { AEM: "Included", Sitecore: "Partner-led" },
+        winner: "AEM",
+      },
+    ],
+    vendorScores: [
+      {
+        vendor: "AEM",
+        score: 80,
+        qualificationStatus: "QUALIFIED_WITH_CONDITIONS",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [
+            qualitativeFeatureEvidence("AEM", "AEM provides managed service coverage.", "a"),
+            qualitativeFeatureEvidence("AEM", "AEM includes implementation support.", "b"),
+          ],
+        }],
+      },
+      {
+        vendor: "Sitecore",
+        score: 78,
+        qualificationStatus: "QUALIFIED",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{ evidenceKind: "unverified", exactClaim: "Sitecore may offer similar services." }],
+        }],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.equal(validatedQualitativeLensDecision(analysis)?.winner, "AEM");
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(analysis));
+  assert.match(analysis.recommendationReason, /^Provisional lens winner —/);
+
+  const unverified = structuredClone(analysis);
+  for (const vendor of unverified.vendorScores) {
+    for (const criterion of vendor.weightedScores ?? []) {
+      for (const evidence of criterion.evidence ?? []) delete (evidence as { sourceId?: string }).sourceId;
+    }
+  }
+  assert.equal(validatedQualitativeLensDecision(unverified), null);
+  assert.throws(
+    () => assertHasProvenanceCompleteScorableEvidence(unverified),
+    /Insufficient quantitative evidence/i,
+  );
+});
+
+test("admits a feature-only best alternative through retrieved-document validation and normalization", () => {
+  const contentstackUrl = "https://www.contentstack.com/product";
+  const bynderUrl = "https://www.bynder.com/product";
+  const contentstackClaim = "Contentstack provides visual editing workflows for enterprise content teams.";
+  const bynderClaim = "Bynder provides digital asset library governance for brand teams.";
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: contentstackUrl,
+      finalUrl: contentstackUrl,
+      contentType: "text/html",
+      text: contentstackClaim,
+      sha256: "c".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: bynderUrl,
+      finalUrl: bynderUrl,
+      contentType: "text/html",
+      text: bynderClaim,
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+  const parsed = {
+    vendorScores: [
+      {
+        vendor: "Contentstack",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{
+            sourceUrl: contentstackUrl,
+            exactClaim: contentstackClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizationMethod: "qualitative_explicit",
+          }],
+        }],
+      },
+      {
+        vendor: "Bynder",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{
+            sourceUrl: bynderUrl,
+            exactClaim: bynderClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizationMethod: "qualitative_explicit",
+          }],
+        }],
+      },
+    ],
+  };
+
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, documents), 2);
+  const vendorScores = parsed.vendorScores.map((vendor) => ({
+    vendor: vendor.vendor,
+    score: 50,
+    weightedScores: [{
+      criterion: "Meets Needs / Features",
+      weight: 25,
+      score: 50,
+      rationale: "Verified feature evidence.",
+      evidence: normalizeEvidenceRecords(
+        vendor.weightedScores[0].evidence,
+        "Meets Needs / Features",
+        25,
+        [contentstackUrl, bynderUrl],
+        [contentstackUrl, bynderUrl],
+      ),
+    }],
+  }));
+  const analysis = {
+    executiveSummary: "The feature comparison is complete.",
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "Compare the supported service features.",
+    score: 50,
+    pricing: [],
+    features: [
+      {
+        dimension: "Visual editing workflows",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Visual editing workflows",
+          Bynder: "Not established",
+        },
+        winner: "Contentstack",
+      },
+      {
+        dimension: "Enterprise content workflows",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Enterprise content teams",
+          Bynder: "Not established",
+        },
+        winner: "Contentstack",
+      },
+      {
+        dimension: "Digital asset governance",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Not established",
+          Bynder: "Digital asset library governance",
+        },
+        winner: "Bynder",
+      },
+    ],
+    vendorScores: [
+      { vendor: "Adobe Experience Manager", score: 50, weightedScores: [] },
+      ...vendorScores,
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyVendorScoreModel(analysis, {
+    prompt: "Compare Adobe Experience Manager and recommend the best alternative DXP.",
+    category: "Digital experience platforms",
+    market: "United States US",
+    globalServiceMarketAvailability: true,
+  });
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+
+  assert.equal(analysis.vendorScores[1].qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+  assert.equal(analysis.recommendation, "Contentstack");
+  assert.match(analysis.recommendationReason, /provenance-validated competitor feature lens/i);
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(
+    analysis,
+    ["Adobe Experience Manager"],
+  ));
+});
+
+test("forces cited source acquisition when single-anchor software research starts with zero URLs", async () => {
+  const citedUrl = "https://official.example/contentstack/features";
+  const proseOnlyUrl = "https://invented.example/not-a-tool-citation";
+  const initialUrls: string[] = [];
+  assert.equal(requiresGeneralSoftwareSourceFallback(
+    "Compare Adobe Experience Manager against its competitors. Which is the best alternative for AEM?",
+    "Product or service comparison",
+    "Adobe Experience Manager",
+    initialUrls,
+  ), true);
+  let searchCalls = 0;
+  const admitted = await discoverGeneralSoftwareFallbackUrls(
+    ["Adobe Experience Manager", "Contentstack"],
+    async () => {
+      searchCalls += 1;
+      return [{
+        type: "message",
+        content: [{
+          type: "output_text",
+          text: `Ignore this prose URL: ${proseOnlyUrl}`,
+          annotations: [{ type: "url_citation", url: citedUrl }],
+        }],
+      }];
+    },
+  );
+  initialUrls.push(...admitted);
+
+  assert.equal(searchCalls, 1);
+  assert.deepEqual(initialUrls, [citedUrl]);
+  assert.equal(initialUrls.includes(proseOnlyUrl), false);
+
+  const exactClaim = "Contentstack provides visual editing workflows for enterprise content teams.";
+  const quantitativeClaim = "Contentstack monthly fee is USD 99 per month.";
+  const transportDocuments = new Map<string, RetrievedEvidenceDocument>([[
+    citedUrl,
+    {
+      url: citedUrl,
+      finalUrl: citedUrl,
+      contentType: "text/html",
+      text: `${quantitativeClaim}\n${exactClaim}`,
+      sha256: "e".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+  ]]);
+  const retrieved = initialUrls.flatMap((url) => transportDocuments.get(url) ?? []);
+  const parsed = {
+    vendorScores: [{
+      vendor: "Contentstack",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [
+          {
+            sourceUrl: citedUrl,
+            exactClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+          },
+          {
+            sourceUrl: citedUrl,
+            exactClaim: quantitativeClaim,
+            metricKey: "monthly_fee",
+            rawMetricValue: 99,
+            rawMetricUnit: "USD",
+            evidenceKind: "quantitative",
+            supportDirection: "supports",
+            confidence: 90,
+          },
+        ],
+      }],
+    }],
+  };
+
+  assert.equal(retrieved.length, 1);
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, retrieved), 1);
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, retrieved), 1);
+  const evidence = normalizeEvidenceRecords(
+    parsed.vendorScores[0].weightedScores[0].evidence,
+    "Meets Needs / Features",
+    25,
+    initialUrls,
+    initialUrls,
+  );
+  const qualification = calculateVendorScoreExtension({
+    vendor: "Contentstack",
+    weightedScores: [{ criterion: "Meets Needs / Features", evidence }],
+  }, {
+    market: "United States US",
+    globalServiceMarketAvailability: true,
+  });
+
+  assert.equal(evidence[0]?.sourceId, `docsha256:${"e".repeat(64)}`);
+  assert.equal(evidence[1]?.normalizationMethod, "retrieved_document_metric");
+  assert.equal(qualification.qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+});
+
+test("does not attach a sibling product's qualitative claim to another compared option", () => {
+  const url = "https://www.example.com/content-products";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Contentful",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{
+          sourceUrl: url,
+          exactClaim: "Contentstack provides visual editing workflows for enterprise content teams.",
+          evidenceKind: "qualitative",
+          supportDirection: "supports",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text: "Contentstack provides visual editing workflows for enterprise content teams.",
+    sha256: "d".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, documents), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+  assert.equal("documentSha256" in parsed.vendorScores[0].weightedScores[0].evidence[0], false);
+});
+
+test("selects a sole eligible best alternative without treating its own score as a tie gap", () => {
+  const analysis = {
+    executiveSummary: "Anchor leads overall.",
+    recommendation: "Anchor",
+    recommendationReason: "Anchor leads overall.",
+    score: 92,
+    vendorScores: [
+      { vendor: "Anchor", score: 92, modelScore: 92, qualificationStatus: "QUALIFIED" },
+      { vendor: "Only Alternative", score: 0, modelScore: 0, qualificationStatus: "QUALIFIED_WITH_CONDITIONS" },
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyBestAlternativeRecommendation(analysis, "Anchor");
+
+  assert.equal(analysis.recommendation, "Only Alternative");
+  assert.doesNotMatch(analysis.recommendationReason, /practical tie/i);
 });
 
 test("treats a domain brand plus other ecommerce sites as competitor discovery", () => {

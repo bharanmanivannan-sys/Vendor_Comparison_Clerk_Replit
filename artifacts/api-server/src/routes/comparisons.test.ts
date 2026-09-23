@@ -11,6 +11,7 @@ import {
   COMPARISON_LATENCY_TARGET_SECONDS,
   normalizeEvidenceForResponse,
   OUTSIDE_RESEARCH_SCOPE_MESSAGE,
+  summaryFromRow,
   validateComparisonInput,
 } from "./comparisons";
 
@@ -37,6 +38,28 @@ test("confirms an in-set recommendation and ranks only the remaining compared op
   });
   assert.deepEqual(decision.alternatives.map((alternative) => alternative.option), ["Beta", "Gamma"]);
   assert.deepEqual(decision.alternatives.map((alternative) => alternative.scoreDifference), [5, 13]);
+});
+
+test("confirms a conditionally qualified recommendation with a supported unique score", () => {
+  const decision = buildComparisonDecisionSet({
+    vendors: ["Alpha", "Beta"],
+    recommendation: "Beta",
+    score: 83,
+    recommendationReason: "Beta leads conditionally; verify regional support before contracting.",
+    vendorScores: [
+      { vendor: "Alpha", modelScore: 79, qualificationStatus: "QUALIFIED" },
+      {
+        vendor: "Beta",
+        modelScore: 83,
+        qualificationStatus: "QUALIFIED_WITH_CONDITIONS",
+        conditions: ["Verify regional support before contracting."],
+      },
+    ],
+  });
+
+  assert.equal(decision.confirmedRecommendation.status, "CONFIRMED");
+  assert.equal(decision.confirmedRecommendation.option, "Beta");
+  assert.equal(decision.confirmedRecommendation.basis, "QUALIFIED_WITH_CONDITIONS");
 });
 
 test("does not invent a confirmed recommendation when the result uses a tie sentinel", () => {
@@ -97,6 +120,44 @@ test("does not confirm or score a matrix leader when all options have insufficie
   });
   assert.deepEqual(decision.alternatives.map((alternative) => alternative.score), [null, null]);
   assert.deepEqual(decision.alternatives.map((alternative) => alternative.scoreDifference), [null, null]);
+});
+
+test("preserves a best-alternative winner instead of restoring the higher-scoring anchor", () => {
+  const row = {
+    id: 42,
+    prompt: "Compare Adobe Experience Manager with its competitors and recommend the best alternative.",
+    vendors: ["Adobe Experience Manager", "Sitecore XM Cloud", "Optimizely One"],
+    category: "Digital experience platforms",
+    recommendation: "Sitecore XM Cloud",
+    score: 84,
+    executiveSummary: "Sitecore XM Cloud is the best alternative.",
+    recommendationReason: "Sitecore XM Cloud is the best-qualified alternative.",
+    insights: [],
+    status: "complete",
+    createdAt: new Date(),
+    vendorScores: [
+      { vendor: "Adobe Experience Manager", score: 94, modelScore: 94, qualificationStatus: "QUALIFIED" },
+      { vendor: "Sitecore XM Cloud", score: 84, modelScore: 84, qualificationStatus: "QUALIFIED" },
+      { vendor: "Optimizely One", score: 80, modelScore: 80, qualificationStatus: "QUALIFIED_WITH_CONDITIONS" },
+    ],
+  } as any;
+
+  const summary = summaryFromRow(row);
+  const decision = buildComparisonDecisionSet({
+    prompt: row.prompt,
+    vendors: row.vendors,
+    recommendation: summary.recommendation,
+    score: summary.score,
+    recommendationReason: "Sitecore XM Cloud is the best-qualified alternative.",
+    vendorScores: row.vendorScores,
+    pricing: [],
+    features: [],
+  });
+
+  assert.equal(summary.recommendation, "Sitecore XM Cloud");
+  assert.equal(decision.confirmedRecommendation.status, "CONFIRMED");
+  assert.equal(decision.confirmedRecommendation.option, "Sitecore XM Cloud");
+  assert.deepEqual(decision.alternatives.map((alternative) => alternative.option), ["Optimizely One"]);
 });
 
 test("repairs non-finite stored evidence numbers before returning a report", () => {
@@ -399,6 +460,31 @@ test("routes generic AEM competitor wording into concrete option discovery", asy
   assert.equal(isObjectivePhraseVendor(validated.vendors[2]), true);
 });
 
+test("accepts the full AEM best-alternative request without requiring named competitors", async () => {
+  const prompt = "Compare Adobe experience manager against it’s competitors which is the best alternatives for AEM?";
+  const validated = await validateComparisonInput(
+    { prompt, market: "US", urls: [] },
+    (value) => parsePromptWithIntent(value, async () => ({
+      options: ["Adobe experience manager"],
+      subject: "Enterprise content management and digital experience platforms",
+      decisionType: "choice",
+      category: "Digital experience platforms",
+      useCase: "Enterprise content management",
+      qualifiers: [],
+      decisionCriterion: "best alternative to AEM",
+      freshness: "current",
+      confidence: 0.9,
+      clarification: "",
+    })),
+  );
+
+  assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+  if ("error" in validated) return;
+  assert.deepEqual(validated.vendors, ["Adobe experience manager", "it’s competitors"]);
+  assert.equal(validated.criteria.length >= 1, true);
+  assert.match(validated.processingPrompt, /concrete locally available products before scoring/i);
+});
+
 test("accepts one domain brand plus an open-ended competitor request", async () => {
   const prompt = "Compare Cardekho.com with other e-commerce sites. Which one is a strong contender for cardekho.com?";
   const validated = await validateComparisonInput(
@@ -565,7 +651,7 @@ test("offers an actionable workaround when a multi-brand EV request is mis-group
   );
 });
 
-test("reports missing official product evidence instead of blaming a valid refined prompt", () => {
+test("reports missing official product evidence as retryable with optional source help", () => {
   const prompt = "Compare current electric vehicle models from BYD EV car and Tesla available in the requested market.";
   const message = comparisonFailureMessage(
     new Error("Insufficient source coverage: no official product source was found for BYD."),
@@ -573,26 +659,24 @@ test("reports missing official product evidence instead of blaming a valid refin
     ["BYD", "Tesla"],
   );
 
-  assert.match(message, /comparison options were understood/i);
-  assert.match(message, /exact official product source/i);
+  assert.match(message, /could not verify an exact official source/i);
   assert.match(message, /BYD/);
-  assert.match(message, /50\/100 weighted score/i);
-  assert.match(message, /neutral midpoint/i);
-  assert.match(message, /next attempt, add an exact current model page/i);
-  assert.match(message, /irrelevant or outdated resources will not be used/i);
+  assert.match(message, /safe to retry/i);
+  assert.match(message, /optionally include a current official page/i);
+  assert.doesNotMatch(message, /50\/100|neutral midpoint/i);
   assert.doesNotMatch(message, /try this phrase instead/i);
 });
 
-test("explains neutral 50 scores and asks for current relevant URLs on the next attempt", () => {
+test("describes insufficient evidence as an automatic retry without requiring URLs", () => {
   const message = comparisonFailureMessage(
     new Error("Insufficient quantitative evidence"),
     "Compare Alpha and Beta.",
     ["Alpha", "Beta"],
   );
 
-  assert.match(message, /50\/100 weighted score/i);
-  assert.match(message, /neutral midpoint/i);
-  assert.match(message, /not proof that the options are equal/i);
-  assert.match(message, /next attempt, add exact current URLs/i);
-  assert.match(message, /irrelevant or outdated resources will not be used/i);
+  assert.match(message, /automatic research/i);
+  assert.match(message, /safe to retry/i);
+  assert.match(message, /optionally include current official sources/i);
+  assert.match(message, /not required/i);
+  assert.doesNotMatch(message, /50\/100|neutral midpoint|add exact current URLs/i);
 });
