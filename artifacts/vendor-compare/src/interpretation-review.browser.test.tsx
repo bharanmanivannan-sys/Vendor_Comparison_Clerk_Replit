@@ -185,8 +185,9 @@ test('keeps a market-incompatible interpretation blocked with its explanation vi
 
   submitPrompt(view, true);
   await waitFor(() => assert.ok(view.queryByTestId('interpretation-review')));
-  assert.match(view.getByTestId('interpretation-review').textContent || '', /not in the same market for Australia/i);
-  assert.equal((view.getByTestId('button-confirm-interpretation') as HTMLButtonElement).disabled, true);
+  assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /not in the same market for Australia/i);
+  assert.equal(view.queryByTestId('button-confirm-interpretation'), null);
+  assert.equal(view.getAllByRole('button').filter((button) => button.textContent === 'Edit prompt').length, 1);
   assert.equal(researchRequest, undefined);
 });
 

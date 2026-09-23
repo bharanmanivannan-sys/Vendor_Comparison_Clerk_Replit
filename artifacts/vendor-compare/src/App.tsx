@@ -2737,6 +2737,15 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
     setInterpretationPrompt('');
     void startResearch(reviewedPrompt, reviewedInterpretation);
   };
+  const editInterpretation = () => {
+    setPrompt(phrasedPrompt);
+    setInterpretation(null);
+    setInterpretationPrompt('');
+    setPhrasedPrompt('');
+    setPhrasedPromptBaseline('');
+    setInterpretationError('');
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
+  };
 
   return (
     <div className={`animate-rise animate-rise-1 mt-9 max-w-4xl rounded-2xl border shadow-[5px_5px_0_#d9ef66] grid ${guest ? 'border-[#202840] bg-[#202840]' : 'border-[#bcb5a5] bg-[#f8f4e8]'} `} style={{ gridTemplateColumns: '1fr' }}>
@@ -2799,11 +2808,20 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
               <p className={`mono text-[10px] font-bold uppercase tracking-[.16em] ${guest ? 'text-[#d9ef66]' : interpretation.context.valid ? 'text-[#35665c]' : 'text-[#8d5650]'}`}>Comparison validation</p>
               <AlertDialogTitle className="display text-2xl font-bold tracking-[-.04em]">Review the interpreted comparison</AlertDialogTitle>
               <AlertDialogDescription className={`text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-              {interpretation.context.valid
-                ? 'Confirm these options and criteria before any research begins.'
-                : interpretation.context.message}
+                {interpretation.context.valid
+                  ? 'Confirm these options and criteria before any research begins.'
+                  : 'This comparison cannot proceed until the prompt is corrected.'}
               </AlertDialogDescription>
             </AlertDialogHeader>
+            {!interpretation.context.valid && (
+              <div
+                className={`mt-4 rounded-xl border px-4 py-3 text-sm font-bold leading-6 ${guest ? 'border-[#d9ef66] bg-[#29334e] text-[#f8f4e8]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`}
+                role="alert"
+                data-testid="status-comparison-validation-error"
+              >
+                {interpretation.context.message}
+              </div>
+            )}
             <label
               htmlFor={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
               className={`mt-4 block text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#a8b0c2]' : 'text-[#85877f]'}`}
@@ -2828,25 +2846,19 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
               <strong>Context:</strong> {interpretation.context.segment}. {interpretation.context.message}
             </p>
             <AlertDialogFooter className="mt-3">
-              <AlertDialogAction
-                disabled={interpretationPending || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 : !interpretationConfirmable)}
-                onClick={confirmInterpretation}
-                className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                data-testid="button-confirm-interpretation"
-              >
-                {phrasedPromptChanged ? 'Review revised prompt' : 'Confirm and research'}
-              </AlertDialogAction>
+              {interpretation.context.valid && (
+                <AlertDialogAction
+                  disabled={interpretationPending || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 : !interpretationConfirmable)}
+                  onClick={confirmInterpretation}
+                  className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="button-confirm-interpretation"
+                >
+                  {phrasedPromptChanged ? 'Review revised prompt' : 'Confirm and research'}
+                </AlertDialogAction>
+              )}
               <AlertDialogCancel
-                onClick={() => {
-                  setPrompt(phrasedPrompt);
-                  setInterpretation(null);
-                  setInterpretationPrompt('');
-                  setPhrasedPrompt('');
-                  setPhrasedPromptBaseline('');
-                  setInterpretationError('');
-                  window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
-                }}
-                className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`}
+                onClick={editInterpretation}
+                className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${!interpretation.context.valid ? 'border-[#b94d45] bg-[#b94d45] text-white hover:bg-[#a4423b]' : guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`}
                 data-testid="button-edit-interpretation"
               >
                 Edit prompt
