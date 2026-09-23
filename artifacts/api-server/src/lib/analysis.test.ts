@@ -100,6 +100,7 @@ import {
 import type { RetrievedEvidenceDocument } from "./security";
 import { flattenComparisonEvidence } from "../services/comparisonPersistence";
 import { isSafeUserInput } from "./security";
+import { CreateComparisonBody } from "@workspace/api-zod";
 
 const extracted = (value: object) => async () => value;
 const intent = (value: object) => ({
@@ -394,6 +395,101 @@ test("uses every named non-price criterion without treating long ownership as a 
   assert.equal(profile.weights.reduce((total, entry) => total + entry.weight, 0), 100);
   assert.ok((profile.weights.find(({ criterion }) => criterion === "Quality & Reliability")?.weight ?? 0) >= 20);
   assert.ok((profile.weights.find(({ criterion }) => criterion === "Regulatory Compliance")?.weight ?? 0) > 3);
+});
+
+test("preserves mixed vehicle specificity when intent extraction returns only manufacturers", async () => {
+  const prompt = "Compare Mahindra vs Tata Safari diesel AT. I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance.";
+  assert.deepEqual(parsePrompt(prompt).vendors, ["Mahindra", "Tata Safari diesel AT"]);
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    async () => ({
+      options: ["Mahindra", "Tata"],
+      subject: "SUV vehicle",
+      decisionType: "comparison",
+      category: "automotive",
+      useCase: "long-term ownership",
+      qualifiers: ["20 years", "performance", "reliability", "safety features", "maintenance"],
+      decisionCriterion: "best safety outcome",
+      freshness: "current",
+      confidence: 0.9,
+      clarification: "",
+    }),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata Safari diesel AT"]);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /manufacturer.*specific model/i);
+});
+
+test("preserves the exact mixed-specificity AI prompt and its validation correction at low confidence", async () => {
+  const prompt = "Compare Mahindra vs Tata Safari diesel AI. I am planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+  const deterministic = parsePrompt(prompt);
+  assert.deepEqual(deterministic.vendors, ["Mahindra", "Tata Safari diesel AI"]);
+  assert.equal(deterministic.context.valid, false);
+  assert.match(deterministic.context.message, /Mahindra is a manufacturer.*Tata Safari diesel AI is a specific model/i);
+
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra", "Tata"],
+      category: "Automotive",
+      useCase: "Long-term ownership",
+      confidence: 0.42,
+      clarification: "What outcome or use case should decide between these options?",
+    })),
+    { market: "IN" },
+  );
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata Safari diesel AI"]);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /Mahindra is a manufacturer.*Tata Safari diesel AI is a specific model/i);
+  assert.doesNotMatch(parsed.context.message, /what outcome or use case/i);
+});
+
+test("keeps the first exact vehicle pair when a later compare sentence lists only criteria", async () => {
+  const prompt = "Compare Mahindra XUV700 diesel automatic versus Tata Safari diesel automatic in India. Compare performance, reliability, safety features and maintenance for 20-year ownership.";
+  assert.deepEqual(
+    parsePrompt(prompt).vendors,
+    ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"],
+  );
+
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra", "Tata"],
+      category: "Automotive",
+      useCase: "20-year ownership",
+      confidence: 0.95,
+      clarification: "",
+    })),
+    { market: "IN" },
+  );
+  assert.deepEqual(
+    parsed.vendors,
+    ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"],
+  );
+  assert.equal(parsed.context.valid, true);
+});
+
+test("keeps corrected and multi-model vehicle option chains out of later criteria sentences", () => {
+  const corrected = parsePrompt(
+    "Compare Mahindra XUV700 diesel AT vs Tata Safari diesel AT. Compare the vehicle on performance, reliability, safety features and maintenance.",
+  );
+  assert.deepEqual(corrected.vendors, ["Mahindra XUV700 diesel AT", "Tata Safari diesel AT"]);
+  assert.equal(corrected.context.valid, true);
+
+  const multiModel = parsePrompt(
+    "Compare Mahindra XUV700 vs Tata Safari vs MG Hector for family vehicles. Compare the vehicles on performance, safety and maintenance.",
+  );
+  assert.deepEqual(multiModel.vendors, ["Mahindra XUV700", "Tata Safari", "MG Hector"]);
+  assert.equal(multiModel.context.valid, true);
+});
+
+test("does not use model words in later criteria to reject a broad vehicle-class comparison", () => {
+  const parsed = parsePrompt(
+    "Compare Mahindra vs Tata for SUVs in India. Compare the vehicles on performance, Safari-like comfort, safety and maintenance.",
+  );
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata"]);
+  assert.equal(parsed.context.valid, true);
 });
 
 test("keeps a valid long-horizon vehicle comparison when research reports incomplete criterion evidence", () => {
@@ -2971,6 +3067,41 @@ test("does not append model-inferred factors when the user explicitly names comp
     "Delivery time and reliability",
     "Product quality",
   ]);
+});
+
+test("normalizes criteria-heavy parser output to the create-comparison contract", async () => {
+  const prompt = "Compare Mahindra XUV700 and Tata Safari in India based on performance, safety, features, reliability, maintenance, resale value, warranty, budget, security, ease of use, customer outcomes and long-term sustainability.";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra XUV700", "Tata Safari"],
+      subject: "Current family SUVs with privacy, integration and implementation requirements",
+      category: "Automotive technology",
+      useCase: "Customer support and market positioning",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.equal(parsed.criteria.length, 8);
+  assert.deepEqual(parsed.criteria, parsePrompt(prompt).criteria);
+  assert.ok(parsed.criteria.every((criterion) => criterion.length <= 100));
+  assert.equal(CreateComparisonBody.safeParse({
+    prompt: parsed.prompt,
+    vendors: parsed.vendors,
+    urls: parsed.urls,
+    criteria: parsed.criteria,
+  }).success, true);
+});
+
+test("rejects a seventh explicit option without truncating the option chain", () => {
+  const parsed = parsePrompt(
+    "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank vs Macquarie vs Bankwest vs ING for home loans",
+  );
+
+  assert.equal(parsed.vendors.length, 7);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /two and 6 distinct options/i);
 });
 
 test("preserves all six providers in a supported comparison", async () => {

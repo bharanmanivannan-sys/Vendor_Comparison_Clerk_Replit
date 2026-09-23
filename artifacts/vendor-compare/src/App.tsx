@@ -2348,12 +2348,17 @@ function ParsedBrief({ parsed, onCreate, pending }: { parsed: any; onCreate: (in
 }
 
 function comparisonErrorMessage(error: unknown) {
-  const data = (error as { data?: { error?: string; message?: string } } | null)?.data;
+  const data = (error as { data?: { error?: string; message?: string; code?: string } } | null)?.data;
   const message = error instanceof Error ? error.message.replace(/^HTTP \d+\s*[^:]*:\s*/, '') : '';
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return 'The research connection was interrupted before the result arrived. Your request is safe to retry.';
   }
   return data?.error || data?.message || message || 'The comparison research could not be completed. Please try again.';
+}
+
+function isInvalidComparisonError(error: unknown): boolean {
+  const responseError = error as { status?: number; data?: { code?: string } } | null;
+  return responseError?.status === 400 && responseError.data?.code === 'invalid_comparison';
 }
 
 type ComparisonJobState = {
@@ -2410,7 +2415,11 @@ function phraseComparisonPrompt(parsed: ParsedComparison, market: ResearchMarket
   ) {
     sentences.push(`Recommend the ${parsed.intent.decisionCriterion}.`);
   }
-  return sentences.join(' ');
+  const phrased = sentences.join(' ');
+  const original = parsed.prompt.trim();
+  if (!original || phrased === original) return phrased;
+  const intentPreservingPrompt = `${phrased} Original request: ${original}`;
+  return intentPreservingPrompt.length <= 2000 ? intentPreservingPrompt : original;
 }
 
 type ComparisonRequest = {
@@ -2555,12 +2564,46 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   const [sourcePreflightPending, setSourcePreflightPending] = useState(false);
   const [annualDistanceKm, setAnnualDistanceKm] = useState('');
   const [ownershipPeriodYears, setOwnershipPeriodYears] = useState('');
-  const isVehicleComparison = /\b(?:vehicle|car|suv|ev|electric vehicle|baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
+  const [dismissedResearchError, setDismissedResearchError] = useState(false);
+  const isBaasScenario = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
   const researchErrorMessage = error ? comparisonErrorMessage(error) : '';
-  const blockingValidationError = Boolean(error) && /not specific enough|same market|same product|same segment|must use providers|enter a comparison|does not offer the requested products or services|incompatible comparison/i.test(researchErrorMessage);
+  const blockingValidationError = !dismissedResearchError && isInvalidComparisonError(error);
+  const promptLengthError = prompt.trim().length > 2000
+    ? 'Keep the comparison prompt to 2,000 characters or fewer.'
+    : '';
+  const annualDistance = Number(annualDistanceKm);
+  const ownershipPeriod = Number(ownershipPeriodYears);
+  const baasValidationError = !isBaasScenario
+    ? ''
+    : Boolean(annualDistanceKm) !== Boolean(ownershipPeriodYears)
+      ? 'Enter both annual distance and ownership period, or leave both blank.'
+      : annualDistanceKm && (!Number.isInteger(annualDistance) || annualDistance < 1 || annualDistance > 500000)
+        ? 'Annual driving distance must be a whole number from 1 to 500,000 km.'
+        : ownershipPeriodYears && (ownershipPeriod < 0.5 || ownershipPeriod > 30 || !Number.isInteger(ownershipPeriod * 2))
+          ? 'Ownership period must be from 0.5 to 30 years in half-year increments.'
+          : '';
+  const actionableValidationMessage = interpretationError
+    || (blockingValidationError ? researchErrorMessage : '')
+    || promptLengthError;
+  useEffect(() => {
+    if (!isBaasScenario) {
+      setAnnualDistanceKm('');
+      setOwnershipPeriodYears('');
+    }
+  }, [isBaasScenario]);
+  useEffect(() => {
+    setDismissedResearchError(false);
+  }, [error]);
   const focusPromptForEdit = () => {
     onReset?.();
+    setDismissedResearchError(true);
+    interpretationRequestId.current += 1;
+    setInterpretation(null);
+    setInterpretationPrompt('');
+    setPhrasedPrompt('');
+    setPhrasedPromptBaseline('');
     setInterpretationError('');
+    setInterpretationPending(false);
     window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
   };
 
@@ -2582,7 +2625,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   };
 
   const startResearch = async (confirmedPrompt: string, reviewedInterpretation?: ParsedComparison) => {
-    if (pending || sourcePreflightPending || interpretationPending || confirmedPrompt.length < 8 || !market) return;
+    if (pending || sourcePreflightPending || interpretationPending || confirmedPrompt.length < 8 || confirmedPrompt.length > 2000 || !market || baasValidationError) return;
     const listedOptions = confirmedPrompt.match(
       /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
     )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
@@ -2625,13 +2668,13 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
         vendors: reviewedInterpretation.vendors,
         criteria: reviewedInterpretation.criteria,
       } : {}),
-      ...(isVehicleComparison && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
-      ...(isVehicleComparison && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
+      ...(isBaasScenario && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
+      ...(isBaasScenario && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
     });
   };
 
   const requestInterpretation = async (requestedPrompt: string) => {
-    if (pending || sourcePreflightPending || interpretationPending || requestedPrompt.length < 8 || !market) return;
+    if (pending || sourcePreflightPending || interpretationPending || requestedPrompt.length < 8 || requestedPrompt.length > 2000 || !market || baasValidationError) return;
     const requestId = ++interpretationRequestId.current;
     setInterpretationPending(true);
     setInterpretationError('');
@@ -2665,7 +2708,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const trimmedPrompt = prompt.trim();
-    if (pending || trimmedPrompt.length < 8 || !market) return;
+    if (pending || trimmedPrompt.length < 8 || trimmedPrompt.length > 2000 || !market || baasValidationError) return;
     const review = reviewPromptTypos(trimmedPrompt);
     if (review) {
       setTypoReview(review);
@@ -2727,7 +2770,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
     if (!interpretation) return;
     const reviewedPrompt = phrasedPrompt.trim();
     if (phrasedPromptChanged) {
-      if (reviewedPrompt.length < 8) return;
+      if (reviewedPrompt.length < 8 || reviewedPrompt.length > 2000) return;
       setPrompt(reviewedPrompt);
       setInterpretation(null);
       setInterpretationPrompt('');
@@ -2735,7 +2778,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
       void requestInterpretation(reviewedPrompt);
       return;
     }
-    if (!interpretationConfirmable) return;
+    if (!interpretationConfirmable || baasValidationError) return;
     const reviewedInterpretation = {
       ...interpretation,
       vendors: trimmedInterpretedVendors,
@@ -2778,9 +2821,11 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           className={`focus-ring mt-4 min-h-[170px] w-full resize-y rounded-xl border p-4 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#2b344e] text-[#f8f4e8] placeholder:text-[#8d98ae]' : 'border-[#d0c8b7] bg-white text-[#202840] placeholder:text-[#9a9a90]'}`}
           placeholder="Example: Compare BYD vs Tesla for an electric car I’ll own for five years in Australia. My budget is A$50,000 and I care about maintenance, features, range, and resale value."
           value={prompt}
+          maxLength={2000}
           onChange={(event) => {
             setPrompt(event.target.value);
             onReset?.();
+            setDismissedResearchError(true);
             setTypoReview(null);
             interpretationRequestId.current += 1;
             setInterpretation(null);
@@ -2841,6 +2886,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
               id={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
               value={phrasedPrompt}
               onChange={(event) => setPhrasedPrompt(event.target.value)}
+              maxLength={2000}
               className={`focus-ring mt-2 min-h-[150px] w-full resize-y rounded-lg border px-3 py-3 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c7dcd3] bg-white text-[#202840]'}`}
               aria-label="Phrased comparison request"
               data-testid="input-phrased-comparison"
@@ -2852,12 +2898,12 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
             </p>
             {interpretationOptionError && <p className="mt-2 text-xs font-bold text-[#b94d45]" data-testid="status-interpretation-options">{interpretationOptionError}</p>}
             <p className={`mt-3 text-xs ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-              <strong>Context:</strong> {interpretation.context.segment}. {interpretation.context.message}
+              <strong>Context:</strong> {interpretation.context.segment}.{interpretation.context.valid ? ` ${interpretation.context.message}` : ''}
             </p>
             <AlertDialogFooter className="mt-3">
               {interpretation.context.valid && (
                 <AlertDialogAction
-                  disabled={interpretationPending || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 : !interpretationConfirmable)}
+                  disabled={interpretationPending || Boolean(baasValidationError) || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 || phrasedPrompt.trim().length > 2000 : !interpretationConfirmable)}
                   onClick={confirmInterpretation}
                   className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="button-confirm-interpretation"
@@ -2875,12 +2921,6 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
             </AlertDialogFooter>
           </AlertDialogContent>}
         </AlertDialog>
-
-        {interpretationError && !error && (
-          <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert" data-testid="status-interpretation-error">
-            {interpretationError}
-          </div>
-        )}
 
         <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
           <label htmlFor={guest ? 'guest-research-market' : 'research-market'} className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
@@ -2916,7 +2956,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           </select>
         </div>
 
-        {isVehicleComparison && (
+        {isBaasScenario && (
           <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
             <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
               03 / Set a BaaS cost scenario <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
@@ -2962,8 +3002,8 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
                 </div>
               </label>
             </div>
-            {Boolean(annualDistanceKm) !== Boolean(ownershipPeriodYears) && (
-              <p className="mt-2 text-[11px] font-bold text-[#b94d45]">Enter both values to include a scenario total.</p>
+            {baasValidationError && (
+              <p className="mt-2 text-[11px] font-bold text-[#b94d45]" role="alert" data-testid="status-baas-validation">{baasValidationError}</p>
             )}
           </div>
         )}
@@ -2972,7 +3012,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           <div className="flex items-center gap-2">
             <Link2 size={14} className={guest ? 'text-[#bde3d8]' : 'text-[#0f766e]'} />
             <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
-              {isVehicleComparison ? '04' : '03'} / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
+              {isBaasScenario ? '04' : '03'} / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
             </p>
           </div>
 
@@ -3033,10 +3073,9 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           )}
         </div>
 
-        {blockingValidationError && (
+        {actionableValidationMessage && (
           <div className={`mt-5 rounded-xl border px-4 py-3 ${guest ? 'border-[#d9ef66] bg-[#29334e] text-[#f8f4e8]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`} role="alert" data-testid="status-comparison-validation-error">
-            <p className="text-xs font-bold">Update your prompt to continue</p>
-            <p className="mt-1 text-xs leading-5">{researchErrorMessage}</p>
+            <p className="text-xs font-bold">{actionableValidationMessage}</p>
           </div>
         )}
 
@@ -3044,14 +3083,14 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           <p className={`max-w-lg text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
             Your selected market controls the rates, currency, regulations, availability, and sources used in the comparison.
           </p>
-          {blockingValidationError ? (
+          {actionableValidationMessage ? (
             <button type="button" onClick={focusPromptForEdit} className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-xs font-bold ${guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : 'bg-[#b94d45] text-white hover:bg-[#a4423b]'}`} data-testid="button-edit-prompt-action">
               Edit prompt
             </button>
           ) : (
             <PrimaryButton
               type="submit"
-              disabled={pending || sourcePreflightPending || interpretationPending || prompt.trim().length < 8 || !market}
+              disabled={pending || sourcePreflightPending || interpretationPending || Boolean(baasValidationError) || prompt.trim().length < 8 || prompt.trim().length > 2000 || !market}
               className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
               testId={guest ? 'button-guest-research' : 'button-research-comparison'}
             >
@@ -3064,7 +3103,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
                     ? 'Interpreting request'
                     : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
                       ? 'Validate supplied sources'
-                      : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
+                      : `${isBaasScenario ? '05' : '04'} / Research and compare`}
             </PrimaryButton>
           )}
         </div>
@@ -3608,7 +3647,7 @@ return {
   return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex gap-3"><Link href="/" className="focus-ring rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075]">Home</Link><Link href="/sign-up" className="focus-ring rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66]">Get beta access</Link></div></header><main className="mx-auto max-w-7xl px-5 pb-20 pt-10 lg:px-10">
     <section className="grid gap-10 lg:grid-cols-[1fr_340px]"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">Developer API / free beta</p><h1 className="display mt-4 text-5xl font-bold tracking-[-.06em] text-[#202840] sm:text-7xl">Add researched decisions to any AI workflow.</h1><p className="mt-6 max-w-3xl text-base leading-7 text-[#667083]">Send a natural-language buying question and receive a structured comparison with weighted recommendations, evidence, strategic frameworks, risks, migration planning, and next steps. Beta access does not require payment.</p></div><aside className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[10px] uppercase tracking-[.16em] text-[#bde3d8]">Authentication standard</p><p className="display mt-4 text-2xl font-bold text-[#d9ef66]">HTTP Bearer API key</p><code className="mt-5 block rounded-lg bg-[#151b2c] p-3 text-[11px] text-[#bde3d8]">Authorization: Bearer vc_beta_...</code><p className="mt-4 text-xs leading-5 text-[#c9cfdb]">Create a scoped key once using your signed-in Clerk session. Store it in your workflow tool’s encrypted credential or secret store. Never place it in a prompt, browser URL, or client-side application.</p></aside></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Create an API key</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Use Clerk once, then automate with a bearer key</h2><p className="mt-3 max-w-3xl text-sm leading-6 text-[#687083]">Clerk protects account administration. The generated DecisionIntel key is the standard credential your server, agent, n8n workflow, Zapier action, Make scenario, or other HTTP-capable tool sends on every <code>/api/v1</code> request.</p><pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{createKeyExample}</pre></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / NLP request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Submit the decision in plain language</h2><p className="mt-3 text-sm leading-6 text-[#687083]"><code>prompt</code> is required. The API infers vendors and criteria when possible. You may supply two to five <code>vendors</code>, optional <code>criteria</code>, and trusted <code>urls</code>. Use a unique <code>Idempotency-Key</code> for every workflow execution so retries cannot create duplicate comparisons or consume allowance twice.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{requestExample}</pre></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Structured response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Map fields into downstream agents</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns HTTP <code>201</code> after research completes. Configure workflow HTTP steps with a timeout of at least 120 seconds. Route <code>recommendation</code> and <code>executiveSummary</code> into concise outputs, while retaining evidence, assumptions, gaps, and governance fields for audit and review.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / NLP request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Submit the decision in plain language</h2><p className="mt-3 text-sm leading-6 text-[#687083]"><code>prompt</code> is required. The API infers vendors and criteria when possible. You may supply two to six <code>vendors</code>, optional <code>criteria</code>, and trusted <code>urls</code>. Use a unique <code>Idempotency-Key</code> for every workflow execution so retries cannot create duplicate comparisons or consume allowance twice.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{requestExample}</pre></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Structured response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Map fields into downstream agents</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns HTTP <code>201</code> after research completes. Configure workflow HTTP steps with a timeout of at least 120 seconds. Route <code>recommendation</code> and <code>executiveSummary</code> into concise outputs, while retaining evidence, assumptions, gaps, and governance fields for audit and review.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / White-label architecture</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Your product owns the customer experience</h2><div className="mt-6 grid gap-4 md:grid-cols-3"><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Call from your backend</h3><p className="mt-2 text-xs leading-5 text-[#687083]">Your branded web app, mobile app, chatbot, or agent calls your own server. Your server adds the bearer key and calls this API. Never expose the key or call the API directly from customer browsers.</p></article><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Render neutral JSON</h3><p className="mt-2 text-xs leading-5 text-[#687083]">The API returns data, not provider-branded HTML. Select the fields you need and apply your own product name, terminology, components, colours, reports, notifications, and approval flow.</p></article><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Keep decisions traceable</h3><p className="mt-2 text-xs leading-5 text-[#687083]">Map the returned comparison ID and your idempotency key to your own customer or case ID. Preserve sources, assumptions, confidence limits, and material warnings even when changing presentation.</p></article></div><pre className="mt-5 max-h-[620px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{whiteLabelExample}</pre></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Endpoint reference</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Versioned integration surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_250px_1fr_230px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
     <section className="mt-14 grid gap-5 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">Retries</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Retry transient <code>502</code> responses with exponential backoff and the same idempotency key. A completed key replays its original response.</p></div><div><h3 className="font-bold text-[#202840]">Limits</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>429</code> includes <code>Retry-After</code>. Usage responses and comparison responses include quota headers. Beta allowances may change before general availability.</p></div><div><h3 className="font-bold text-[#202840]">Security</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Use the minimum scopes required, rotate exposed keys, keep calls server-side, validate returned evidence, and require human approval before procurement or migration actions.</p></div></section>
@@ -3683,7 +3722,7 @@ function LegacyApiDocsPage() {
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Get access</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">From signup to your first API call</h2><div className="mt-6 grid gap-4 md:grid-cols-2">{[['1', 'Create an account', 'Sign in with Clerk. The app creates your tenant workspace.'], ['2', 'Create an API key', 'Create a scoped key, copy it once, and store it in a server-side secret manager.']].map(([number, title, text]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={number}><span className="mono text-xs font-bold text-[#b94d45]">{number}</span><h3 className="mt-3 font-bold text-[#202840]">{title}</h3><p className="mt-2 text-xs leading-5 text-[#687083]">{text}</p></article>)}</div><div className="mt-5 rounded-xl border border-[#c8d99a] bg-[#e8f2bd] px-5 py-4 text-xs leading-5 text-[#35665c]"><strong>Beta availability:</strong> No checkout or payment setup is required.</div><Link href="/user-portal" className="focus-ring mt-5 inline-flex rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]">Sign in to manage API access</Link></section>
     <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Authentication</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Two credentials, two purposes</h2><div className="mt-5 space-y-3"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Beta API key</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer vc_beta_...</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use this for every <code>/api/v1</code> request. Grant only the needed scopes: <code>comparisons:read</code>, <code>comparisons:write</code>, and <code>usage:read</code>.</p></div><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Clerk session token</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer &lt;Clerk session token&gt;</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use only for account and key management. Tenant operations also require <code>X-Tenant-Id</code> and owner/admin membership. Do not use a Clerk token for <code>/api/v1</code>.</p></div></div></div></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">04 / Endpoints</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Current API surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_240px_1fr_220px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to five named options and any number of distinct HTTP/HTTPS evidence URLs. Include current and target arrangements, constraints, regulatory and security requirements, integrations, migration scope, budget, and timing when known; omitted context is returned as explicit assumptions.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The contract includes weighted score rationale, product equivalency, functional gaps, service/product arrangements, migration phases, decision governance, VRIO, SWOT, alternatives, and every distinct collected source. Cost never determines the recommendation by itself.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[620px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to six named options and any number of distinct HTTP/HTTPS evidence URLs. Include current and target arrangements, constraints, regulatory and security requirements, integrations, migration scope, budget, and timing when known; omitted context is returned as explicit assumptions.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The contract includes weighted score rationale, product equivalency, functional gaps, service/product arrangements, migration phases, decision governance, VRIO, SWOT, alternatives, and every distinct collected source. Cost never determines the recommendation by itself.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[620px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
      <section className="mt-14 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">07 / Errors and limits</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Build for explicit failure states</h2><div className="mt-6 grid gap-5 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">401 / 403</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Missing or invalid keys return <code>invalid_api_key</code>. A valid key without the operation scope returns <code>insufficient_scope</code>.</p></div><div><h3 className="font-bold text-[#202840]">402 / 429</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>quota_exhausted</code> means the prepaid allowance is consumed. <code>rate_limit_exceeded</code> includes a <code>Retry-After</code> header.</p></div><div><h3 className="font-bold text-[#202840]">409 / 502</h3><p className="mt-2 text-xs leading-5 text-[#566074]">A changed body cannot reuse an idempotency key. Upstream research failures do not consume quota and may be retried with the same key.</p></div></div><pre className="mt-5 overflow-x-auto rounded-xl bg-[#202840] p-4 text-[11px] text-[#d9ef66]">{`{ "code": "insufficient_scope", "message": "The API key requires the comparisons:write scope." }`}</pre></section>
   </main></div>;
 }

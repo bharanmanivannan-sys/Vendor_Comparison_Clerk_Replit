@@ -1321,6 +1321,20 @@ export function requestsFiveYearHomeLoanTrend(prompt: string): boolean {
     && /\b(?:summary|trend|history|performance|written by|reported by)\b/i.test(prompt);
 }
 
+function normalizeParserCriteria(...groups: string[][]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const criterion of groups.flat()) {
+    const value = criterion.replace(/\s+/g, " ").trim().slice(0, 100);
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(value);
+    if (normalized.length === 8) break;
+  }
+  return normalized;
+}
+
 function criteriaFor(prompt: string): string[] {
   const normalized = prompt.toLowerCase();
   if (/\bquick[ -]?commerce\b/.test(normalized)) {
@@ -1330,7 +1344,7 @@ function criteriaFor(prompt: string): string[] {
       { label: "Delivery time and reliability", pattern: /\b(?:time to delivery|delivery time|delivery speed|speed of delivery|fast delivery)\b/ },
       { label: "Product quality", pattern: /\b(?:quality|freshness|condition)\b/ },
     ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
-    if (quickCommerceCriteria.length) return quickCommerceCriteria;
+    if (quickCommerceCriteria.length) return normalizeParserCriteria(quickCommerceCriteria);
   }
   const criteria = [
     { label: "Premium, excess and total insurance cost", pattern: /\b(?:insurance premium|premium|excess|deductible|insurance cost|quote)\b/ },
@@ -1377,14 +1391,18 @@ function criteriaFor(prompt: string): string[] {
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
   const selected = Array.from(new Set([...criteria, ...contextual]));
   if (/\b(?:home loans?|mortgages?|housing loans?)\b/.test(normalized)) {
-    return Array.from(new Set([
-      "Variable rate, discounts and comparison rate",
-      "Fixed-rate terms, revert rate and break costs",
-      ...(requestsFiveYearHomeLoanTrend(normalized) ? ["Five-year home-loan product and market trend"] : []),
-      ...selected.filter((criterion) => criterion !== "Five-year ownership cost"),
-    ]));
+    return normalizeParserCriteria(
+      selected.filter((criterion) => criterion !== "Five-year ownership cost"),
+      [
+        "Variable rate, discounts and comparison rate",
+        "Fixed-rate terms, revert rate and break costs",
+        ...(requestsFiveYearHomeLoanTrend(normalized) ? ["Five-year home-loan product and market trend"] : []),
+      ],
+    );
   }
-  return selected.length ? selected : ["Customer outcomes", "Ease of use", "Value for money", "Quality and reliability"];
+  return normalizeParserCriteria(
+    selected.length ? selected : ["Customer outcomes", "Ease of use", "Value for money", "Quality and reliability"],
+  );
 }
 
 function cleanVendorName(value: string): string {
@@ -2497,13 +2515,21 @@ export function assertCanonicalComparisonConsistency(
 export function parsePrompt(prompt: string) {
   const normalized = prompt.replace(/\s+/g, " ").trim();
   const splitComparisonOptions = (value: string): string[] => {
-    if (/^(?:on|by|based\s+on)\b/i.test(value.trim())) return [];
+    const candidate = value.trim();
+    if (
+      /^(?:on|by|based\s+on)\b/i.test(candidate)
+      || /^(?:the\s+)?(?:vehicles?|cars?|options?|products?|services?|vendors?|providers?)\s+(?:on|by|based\s+on|according\s+to)\b/i.test(candidate)
+    ) return [];
     const hasListDelimiter = /,|\/|\b(?:vs\.?|versus|and|or)\b/i.test(value);
     if (!hasListDelimiter) return [];
-    return value
+    const options = value
       .split(/\s*(?:,|\/|\bvs\.?\b|\bversus\b|\band\b|\bor\b)\s*/i)
       .map(cleanVendorName)
       .filter((option) => option && !isPlaceholderVendor(option));
+    const criterionPhrase = /^(?:performance|reliability|quality|safety(?:\s+features?)?|maintenance|servicing|price|pricing|cost|value|features?|technology|comfort|range|charging|battery|warranty|resale(?:\s+value)?|security|privacy|support|customer\s+service|ease\s+of\s+use)$/i;
+    return options.length >= 2 && options.every((option) => criterionPhrase.test(option))
+      ? []
+      : options;
   };
   const chosen = normalized.match(
     /\b(?:choose|include|use|shortlist)\s+(.+?)(?=\.\s|\?|;\s|$)/i,
@@ -2869,7 +2895,8 @@ export async function parsePromptWithIntent(
     : intent.options.length >= 2
       ? intent.options
       : parsed.vendors;
-  const hasClearDeterministicDecision = parsed.context.valid && parsed.vendors.length >= 2;
+  const hasClearDeterministicDecision = parsed.vendors.length >= 2
+    && (parsed.context.valid || parsed.hasExplicitVendorList);
   const requiresClarification = vendors.length < 2
     || (intent.confidence < 0.7 && !hasClearDeterministicDecision);
   if (requiresClarification) {
@@ -2909,11 +2936,11 @@ export async function parsePromptWithIntent(
     vendors,
     comparisonIdentity: buildComparisonIdentity(parsed.prompt, segment, vendors),
     criteria: hasExplicitCriteria
-      ? parsed.criteria
-      : Array.from(new Set([
-        ...parsed.criteria,
-        ...criteriaFor(`${intent.subject} ${intent.category} ${intent.useCase}`),
-      ])),
+      ? normalizeParserCriteria(parsed.criteria)
+      : normalizeParserCriteria(
+        parsed.criteria,
+        criteriaFor(`${intent.subject} ${intent.category} ${intent.useCase}`),
+      ),
     intent: { ...intent, options: vendors, clarification: "" },
     context: {
       ...context,
@@ -3074,8 +3101,19 @@ export function validateComparisonContext(
       ? "Consumer purchase"
       : "";
   const industry = industryMatches[0] ?? inferredUseCase;
-  if (vendors.length < 2 || vendors.some(isPlaceholderVendor)) {
+  const distinctVendors = new Set(
+    vendors.map((vendor) => cleanVendorName(vendor).toLocaleLowerCase()).filter(Boolean),
+  );
+  if (distinctVendors.size < 2 || vendors.some(isPlaceholderVendor)) {
     return { valid: false, segment, industry, message: "Enter at least two actual product or service names to compare." };
+  }
+  if (distinctVendors.size > MAX_COMPARISON_OPTIONS) {
+    return {
+      valid: false,
+      segment,
+      industry,
+      message: `Compare between two and ${MAX_COMPARISON_OPTIONS} distinct options at a time.`,
+    };
   }
   const explicitMarkets = explicitPromptMarketCodes(prompt);
   if (selectedMarket && explicitMarkets.length && !explicitMarkets.includes(selectedMarket)) {

@@ -191,9 +191,11 @@ test('keeps a market-incompatible interpretation blocked with its explanation vi
   assert.equal(researchRequest, undefined);
 });
 
-test('turns a server-side validation failure into one edit-prompt action', () => {
+test('uses a structured invalid_comparison response for one server-side edit action', () => {
   const error = Object.assign(new Error('HTTP 400 Bad Request'), {
+    status: 400,
     data: {
+      code: 'invalid_comparison',
       error: 'Name the vehicle type or exact current models to compare. A manufacturer-only automobile comparison is not specific enough for an executable decision.',
     },
   });
@@ -208,6 +210,143 @@ test('turns a server-side validation failure into one edit-prompt action', () =>
   assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /manufacturer-only automobile comparison/i);
   assert.equal(view.queryByTestId('button-research-comparison'), null);
   assert.equal(view.getAllByRole('button').filter((button) => button.textContent === 'Edit prompt').length, 1);
+  fireEvent.click(view.getByText('Edit prompt'));
+  assert.equal(view.queryByTestId('status-comparison-validation-error'), null);
+  assert.ok(view.getByTestId('button-research-comparison'));
+});
+
+test('does not classify an unstructured message as an invalid comparison', () => {
+  const error = Object.assign(new Error('same market wording from an unrelated failure'), {
+    status: 503,
+    data: { error: 'same market wording from an unrelated failure' },
+  });
+  const view = render(<ComparisonComposer pending={false} error={error} onSubmit={() => {}} />);
+
+  assert.equal(view.queryByTestId('status-comparison-validation-error'), null);
+  assert.ok(view.getByTestId('button-research-comparison'));
+});
+
+for (const guest of [false, true]) {
+  test(`makes a ${guest ? 'guest' : 'portal'} parse validation failure actionable with one edit action`, async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 'invalid_comparison',
+      error: 'Name two current models in the same product segment.',
+      message: 'Name two current models in the same product segment.',
+    }), {
+      status: 400,
+      statusText: 'Bad Request',
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+    const view = render(
+      <ComparisonComposer guest={guest} pending={false} onSubmit={() => {}} />,
+    );
+
+    submitPrompt(view, guest);
+    await waitFor(() => assert.ok(view.queryByTestId('status-comparison-validation-error')));
+    assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /Name two current models/);
+    assert.equal(view.queryByTestId(guest ? 'button-guest-research' : 'button-research-comparison'), null);
+    assert.equal(view.getAllByRole('button').filter((button) => button.textContent === 'Edit prompt').length, 1);
+
+    fireEvent.click(view.getByText('Edit prompt'));
+    assert.equal(view.queryByTestId('status-comparison-validation-error'), null);
+    assert.ok(view.getByTestId(guest ? 'button-guest-research' : 'button-research-comparison'));
+  });
+}
+
+test('recovers from a mixed-model validation without retaining its interpretation or error', async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  installFetch(requests, (body: any) => body.prompt.includes('forklift')
+    ? {
+      ...validInterpretation(),
+      prompt: body.prompt,
+      vendors: ['Alpha city car', 'Beta forklift'],
+      context: {
+        valid: false,
+        segment: 'Mixed vehicle models',
+        industry: 'Vehicles',
+        message: 'A city car and a forklift are not comparable models in the same segment.',
+      },
+    }
+    : { ...validInterpretation(), prompt: body.prompt });
+  const view = render(<ComparisonComposer pending={false} onSubmit={() => {}} />);
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), {
+    target: { value: 'Compare Alpha city car and Beta forklift in Australia.' },
+  });
+  fireEvent.change(view.getByTestId('select-portal-market'), { target: { value: 'AU' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /not comparable models/i));
+  assert.equal((view.getByTestId('interpretation-review').textContent || '').match(/not comparable models/gi)?.length, 1);
+
+  fireEvent.click(view.getByTestId('button-edit-interpretation'));
+  fireEvent.change(view.getByTestId('input-portal-prompt'), {
+    target: { value: 'Compare Alpha and Beta for customer service in Australia.' },
+  });
+  assert.equal(view.queryByTestId('interpretation-review'), null);
+  assert.equal(view.queryByTestId('status-comparison-validation-error'), null);
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('button-confirm-interpretation')));
+});
+
+test('validates paired BaaS bounds on confirm and clears stale values after switching prompts', async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  installFetch(requests, (body: any) => ({ ...validInterpretation(), prompt: body.prompt }));
+  let researchRequest: any;
+  const view = render(
+    <ComparisonComposer pending={false} onSubmit={(data) => { researchRequest = data; }} />,
+  );
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), {
+    target: { value: 'Compare Alpha and Beta battery-as-a-service plans in Australia.' },
+  });
+  fireEvent.change(view.getByTestId('select-portal-market'), { target: { value: 'AU' } });
+  fireEvent.change(view.getByTestId('input-annual-distance-km'), { target: { value: '0' } });
+  fireEvent.change(view.getByTestId('input-ownership-period-years'), { target: { value: '5.25' } });
+  assert.match(view.getByTestId('status-baas-validation').textContent || '', /whole number from 1 to 500,000/);
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  assert.equal(requests.length, 0);
+
+  fireEvent.change(view.getByTestId('input-annual-distance-km'), { target: { value: '15000' } });
+  assert.match(view.getByTestId('status-baas-validation').textContent || '', /half-year increments/);
+  fireEvent.change(view.getByTestId('input-ownership-period-years'), { target: { value: '5.5' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('button-confirm-interpretation')));
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.equal(researchRequest?.annualDistanceKm, 15000));
+  assert.equal(researchRequest?.ownershipPeriodYears, 5.5);
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), {
+    target: { value: 'Compare Alpha and Beta customer service providers in Australia.' },
+  });
+  assert.equal(view.queryByTestId('input-annual-distance-km'), null);
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('button-confirm-interpretation')));
+  researchRequest = undefined;
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.ok(researchRequest));
+  assert.equal('annualDistanceKm' in researchRequest, false);
+  assert.equal('ownershipPeriodYears' in researchRequest, false);
+});
+
+test('keeps original intent and the 2,000-character schema limit in generated phrasing', async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  const original = 'Compare Alpha and Beta in Australia, preserving my unusual migration constraint.';
+  installFetch(requests, {
+    ...validInterpretation(),
+    prompt: original,
+    criteria: [`Criterion ${'x'.repeat(1950)}`],
+  });
+  const view = render(<ComparisonComposer pending={false} onSubmit={() => {}} />);
+
+  fireEvent.change(view.getByTestId('input-portal-prompt'), { target: { value: original } });
+  fireEvent.change(view.getByTestId('select-portal-market'), { target: { value: 'AU' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('input-phrased-comparison')));
+
+  const phrased = (view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value;
+  assert.equal(phrased, original);
+  assert.ok(phrased.length <= 2000);
+  assert.match(phrased, /unusual migration constraint/);
 });
 
 function submitPrompt(view: ReturnType<typeof render>, guest: boolean) {
