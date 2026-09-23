@@ -3800,8 +3800,17 @@ test("derives the compact diesel vehicle winner from retrieved comparable spans"
     contract as unknown as Record<string, unknown>,
     documents,
   ) >= 4);
-  const documentUrls = documents.flatMap((document) => [document.url, document.finalUrl]);
-  const normalized = normalizeAnalysis(contract, contract, vendors, false, documentUrls, documentUrls);
+  const scoreVerifiedUrls = documents.flatMap((document) => [document.url, document.finalUrl]);
+  const allowedEvidenceUrls = evidenceAdmissionUrls([], documents);
+  assert.deepEqual(allowedEvidenceUrls, dedupeReferenceUrls(scoreVerifiedUrls));
+  const normalized = normalizeAnalysis(
+    contract,
+    contract,
+    vendors,
+    false,
+    allowedEvidenceUrls,
+    scoreVerifiedUrls,
+  );
   const safariPower = contract.vendorScores.find((vendor) => vendor.vendor === "Tata Safari diesel")
     ?.weightedScores?.flatMap((criterion) => criterion.evidence ?? [])
     .find((evidence) => evidence.metricKey === "engine_power");
