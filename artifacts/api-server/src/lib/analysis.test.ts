@@ -7188,6 +7188,39 @@ test("selects the complete analysis when research returns multiple JSON objects"
   });
 });
 
+test("recovers a top-level research object truncated inside a nested evidence value", () => {
+  assert.deepEqual(parseJsonObject(
+    '{"category":"AI models","recommendation":"Claude Sonnet 4","vendorScores":[{"vendor":"Claude Sonnet 4","weightedScores":[{"criterion":"Meets Needs / Features","evidence":[{"exactClaim":"Verified coding',
+  ), {
+    category: "AI models",
+    recommendation: "Claude Sonnet 4",
+    vendorScores: [{
+      vendor: "Claude Sonnet 4",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{ exactClaim: "Verified coding" }],
+      }],
+    }],
+  });
+});
+
+test("recovers a top-level research object truncated after a completed field", () => {
+  assert.deepEqual(parseJsonObject(
+    '{"category":"AI models","recommendation":"Claude Sonnet 4","vendorScores":[',
+  ), {
+    category: "AI models",
+    recommendation: "Claude Sonnet 4",
+    vendorScores: [],
+  });
+});
+
+test("does not reinterpret non-JSON research prose as a structured result", () => {
+  assert.throws(
+    () => parseJsonObject("Research could not establish a current exact-model comparison."),
+    /incomplete structured result/,
+  );
+});
+
 test("rejects explanatory text disguised as an evidence URL", () => {
   assert.deepEqual(dedupeReferenceUrls([
     "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",

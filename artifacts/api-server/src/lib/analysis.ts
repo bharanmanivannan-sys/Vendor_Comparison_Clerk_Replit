@@ -6605,8 +6605,84 @@ export function parseJsonObject(text: string): Partial<AnalysisPayload> & { sour
         return score(b) - score(a);
       })[0];
     }
+    const repaired = parseTruncatedJsonObject(unfenced);
+    if (repaired) return repaired;
     throw new Error("Product research returned an incomplete structured result.");
   }
+}
+
+/**
+ * Recover a response that was cut off after the model had already started a
+ * top-level JSON object. This only closes or removes an unfinished suffix; it
+ * never creates analysis facts. Missing fields are supplied later by the
+ * normalizer and still have to pass the provenance gate.
+ */
+function parseTruncatedJsonObject(
+  text: string,
+): (Partial<AnalysisPayload> & { sources?: unknown }) | null {
+  const rootStart = text.indexOf("{");
+  if (rootStart < 0) return null;
+  const root = text.slice(rootStart);
+  const cutPoints = [root.length];
+  for (let index = root.length - 1; index >= 0 && cutPoints.length < 128; index -= 1) {
+    if (root[index] === ",") cutPoints.push(index);
+  }
+  for (const cutPoint of cutPoints) {
+    let candidate = root.slice(0, cutPoint).trimEnd();
+    if (!candidate.startsWith("{")) continue;
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    let invalid = false;
+    for (const character of candidate) {
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+      if (character === "\"") {
+        inString = true;
+      } else if (character === "{" || character === "[") {
+        stack.push(character);
+      } else if (character === "}" || character === "]") {
+        const expected = character === "}" ? "{" : "[";
+        if (stack.pop() !== expected) {
+          invalid = true;
+          break;
+        }
+      }
+    }
+    if (invalid || !stack.length) continue;
+    if (inString) {
+      if (escaped) candidate = candidate.slice(0, -1);
+      candidate += "\"";
+    }
+    candidate = candidate.trimEnd();
+    if (candidate.endsWith(",")) candidate = candidate.slice(0, -1).trimEnd();
+    if (candidate.endsWith(":")) candidate += "null";
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      candidate += stack[index] === "{" ? "}" : "]";
+    }
+    try {
+      const parsed = JSON.parse(candidate) as Partial<AnalysisPayload> & { sources?: unknown };
+      const analysisKeys = new Set([
+        "category", "executiveSummary", "vendorScores", "pricing", "features",
+        "recommendation", "recommendationReason", "sources",
+      ]);
+      const meaningfulKeyCount = parsed && typeof parsed === "object"
+        ? Object.keys(parsed).filter((key) => analysisKeys.has(key)).length
+        : 0;
+      if (meaningfulKeyCount >= 2) return parsed;
+    } catch {
+      // Try the next earlier comma boundary.
+    }
+  }
+  return null;
 }
 
 async function retryAiStage<T>(stage: string, operation: () => Promise<T>): Promise<T> {
@@ -10774,10 +10850,7 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
           )
         : parseJsonObject(researchResponse.output_text));
     } catch (parseError) {
-      console.warn("Product research JSON was malformed; repairing without repeating web research", parseError);
-      // The bounded synthesis is the only synthesis attempt. The parser already
-      // recovers the largest complete object; never put a serial repair call on
-      // the terminal path.
+      console.warn("Product research JSON was malformed and could not be recovered without repeating web research", parseError);
       throw parseError;
     }
     if (parsed.criteriaMet === false && !isProviderLevelCreditCardDiscovery) {
