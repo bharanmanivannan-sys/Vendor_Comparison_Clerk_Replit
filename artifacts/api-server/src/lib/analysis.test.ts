@@ -44,6 +44,7 @@ import {
   discoverIndependentVehicleFallbackUrls,
   discoveryTargetCount,
   electricVehicleFinalQualityIssues,
+  evidenceAdmissionUrls,
   evidenceSufficiency,
   enforceBaasTotalCostAssumptions,
   enforceIndianMgBaasFact,
@@ -6873,6 +6874,70 @@ test("derives EV score evidence from displayed matrix winners", () => {
     hyundai.find((row) => row.criterion === "Quality & Reliability")?.evidence?.[0]?.exactClaim ?? "",
     /No reliability evidence/,
   );
+});
+
+test("admits retrieved fallback and redirect URLs for provenance normalization", () => {
+  const citationUrl = "https://official.example/product";
+  const redirectedUrl = "https://official.example/current-product";
+  const fallbackUrl = "https://official.example/product-brochure.pdf";
+  assert.deepEqual(
+    evidenceAdmissionUrls([citationUrl], [
+      { url: citationUrl, finalUrl: redirectedUrl },
+      { url: fallbackUrl, finalUrl: fallbackUrl },
+    ]),
+    [citationUrl, redirectedUrl, fallbackUrl],
+  );
+});
+
+test("does not overwrite provenance-complete EV evidence with matrix judgment", () => {
+  const claim = "The certified range is 510 km.";
+  const verifiedEvidence = {
+    sourceUrl: "https://www.hyundai.com/in/en/find-a-car/creta-electric/specification",
+    exactClaim: claim,
+    documentSha256: "a".repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 10 + claim.length,
+    evidenceKind: "quantitative" as const,
+    normalizedScore: 80,
+    normalizationMethod: "retrieved_document_metric",
+  };
+  const analysis = {
+    pricing: [],
+    features: [{
+      dimension: "Battery and range",
+      values: { "Hyundai Creta Electric": "51.4 kWh, 510 km", "Mahindra BE 6": "79 kWh, 683 km" },
+      winner: "Mahindra BE 6",
+    }],
+    vendorScores: [
+      {
+        vendor: "Hyundai Creta Electric",
+        score: 80,
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          weight: 25,
+          score: 80,
+          rationale: "Verified official range.",
+          evidence: [verifiedEvidence],
+        }],
+      },
+      { vendor: "Mahindra BE 6", score: 50, weightedScores: [] },
+    ],
+  } as unknown as Partial<AnalysisPayload>;
+
+  addElectricVehicleMatrixEvidence(
+    analysis,
+    ["Hyundai Creta Electric", "Mahindra BE 6"],
+    [
+      "https://www.hyundai.com/in/en/find-a-car/creta-electric/specification",
+      "https://www.mahindraelectricsuv.com/esuv/be-6/MBE6.html",
+    ],
+  );
+
+  const evidence = analysis.vendorScores?.[0]?.weightedScores
+    ?.find((row) => row.criterion === "Meets Needs / Features")?.evidence ?? [];
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0]?.exactClaim, claim);
+  assert.equal(evidence[0]?.normalizationMethod, "retrieved_document_metric");
 });
 
 test("verifies EV matrix metrics against exact official product documents before scoring", () => {

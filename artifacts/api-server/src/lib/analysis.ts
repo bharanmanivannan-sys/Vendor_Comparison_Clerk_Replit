@@ -615,6 +615,16 @@ function sourceIdForEvidence(row: Record<string, unknown>): string | undefined {
     ? `docsha256:${hash}` : undefined;
 }
 
+export function evidenceAdmissionUrls(
+  citationUrls: string[],
+  retrievedDocuments: Array<Pick<RetrievedEvidenceDocument, "url" | "finalUrl">>,
+): string[] {
+  return dedupeReferenceUrls([
+    ...citationUrls,
+    ...retrievedDocuments.flatMap((document) => [document.url, document.finalUrl]),
+  ]);
+}
+
 function clampScore(value: unknown, fallback = 0): number {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(100, Math.round(number))) : fallback;
@@ -6190,6 +6200,13 @@ export function addElectricVehicleMatrixEvidence(
       }];
       const existing = weightedScores.find((entry) => entry?.criterion === group.criterion);
       if (existing) {
+        const hasProvenanceCompleteEvidence = (existing.evidence ?? []).some((entry) => {
+          if (!entry || typeof entry !== "object") return false;
+          const record = entry as unknown as Record<string, unknown>;
+          return Boolean(sourceIdForEvidence(record))
+            && (record.evidenceKind === "quantitative" || record.evidenceKind === "percentage");
+        });
+        if (hasProvenanceCompleteEvidence) continue;
         existing.evidence = evidence;
         existing.score = normalizedScore;
       } else {
@@ -11261,6 +11278,7 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
       document.url,
       document.finalUrl,
     ]));
+    const allowedEvidenceUrls = evidenceAdmissionUrls(citationUrls, retrievedDocuments);
     if (batteryServiceInstructions) {
       addVerifiedBaasOfferEvidence(parsed as Record<string, unknown>, retrievedDocuments);
     }
@@ -11296,7 +11314,7 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
         normalizationFallback,
         resolvedVendors,
         isProviderLevelCreditCardDiscovery,
-        citationUrls,
+        allowedEvidenceUrls,
         scoreVerifiedUrls,
       ));
     if (isElectricVehicleComparison) {
