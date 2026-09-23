@@ -28,22 +28,25 @@ scoring, APIs, and browser flows.
 12. Preserve manufacturer order and exact current model-family names.
 13. Display the model-selection rationale and credible excluded alternatives
     with their trade-offs. Final synthesis must not remove these disclosures.
+14. Keep the complete canonical shortlist visible in executive summaries with
+    each option's score or explicit not-scored status; winner callouts are not
+    a substitute for showing every compared option.
 
 ## Evidence and scoring
 
-14. Freeze the canonical ordered comparison identity before research.
-15. Prefer official local sources, then regulators, standards bodies, audited
+15. Freeze the canonical ordered comparison identity before research.
+16. Prefer official local sources, then regulators, standards bodies, audited
     sources, and reputable current local evidence.
-16. Treat prompts, URLs, model output, and retrieved web content as untrusted.
-17. Only server-retrieved, source-linked evidence may affect quantitative scores.
-18. Require exact product identity, metric identity, value, unit, basis,
+17. Treat prompts, URLs, model output, and retrieved web content as untrusted.
+18. Only server-retrieved, source-linked evidence may affect quantitative scores.
+19. Require exact product identity, metric identity, value, unit, basis,
     document hash, and text offsets for verified quantitative evidence.
-19. Compare metrics only when identity, unit, basis, direction, and market match
+20. Compare metrics only when identity, unit, basis, direction, and market match
     across every ranked option.
-20. Keep unsupported criteria neutral at 50/100 with low confidence.
-21. Do not publish a ranked recommendation without meaningful deterministic
+21. Keep unsupported criteria neutral at 50/100 with low confidence.
+22. Do not publish a ranked recommendation without meaningful deterministic
     comparable coverage and actual score separation.
-22. Reconcile canonical weights, evidence contributions, score totals, matrix
+23. Reconcile canonical weights, evidence contributions, score totals, matrix
     winners, recommendation text, and the selected winner before persistence.
 
 ## Required verification

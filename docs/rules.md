@@ -181,6 +181,7 @@ A capability-led software report that relies on authorised search-provider evide
 8. Successful mutations must update or invalidate all affected views.
 9. Keep supplied-source validation distinct from research progress: the first submission validates sources, and research starts only after every retained source is accepted.
 10. Identify accepted supplied pages as primary context in completed browser and PDF reports.
+11. Executive summaries must show the complete canonical shortlist with each option's score or explicit not-scored status; winner and closest-alternative callouts must not replace the full list.
 
 ## 12. Testing and Verification
 
