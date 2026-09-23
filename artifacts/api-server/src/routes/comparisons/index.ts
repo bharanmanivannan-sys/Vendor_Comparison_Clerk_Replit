@@ -495,11 +495,8 @@ export async function validateComparisonInput(
   const criteria = input.criteria?.length ? input.criteria : parsedPrompt.criteria;
   const context = validateComparisonContext(input.prompt, vendors, input.market);
   if (!context.valid) {
-    const isEntityCompatibilityError = /not in the same product or service segment|must use providers|does not offer the requested products or services/i.test(context.message);
     return {
-      error: isEntityCompatibilityError
-        ? context.message
-        : `${context.message} Oops. Sorry, I might have missed that. Can you try this phrase instead: “${comparisonWorkaroundPrompt(input.prompt, vendors)}”`,
+      error: context.message,
     } as const;
   }
   const market = input.market

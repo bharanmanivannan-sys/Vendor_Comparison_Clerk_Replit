@@ -191,6 +191,25 @@ test('keeps a market-incompatible interpretation blocked with its explanation vi
   assert.equal(researchRequest, undefined);
 });
 
+test('turns a server-side validation failure into one edit-prompt action', () => {
+  const error = Object.assign(new Error('HTTP 400 Bad Request'), {
+    data: {
+      error: 'Name the vehicle type or exact current models to compare. A manufacturer-only automobile comparison is not specific enough for an executable decision.',
+    },
+  });
+  const view = render(
+    <ComparisonComposer
+      pending={false}
+      error={error}
+      onSubmit={() => {}}
+    />,
+  );
+
+  assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /manufacturer-only automobile comparison/i);
+  assert.equal(view.queryByTestId('button-research-comparison'), null);
+  assert.equal(view.getAllByRole('button').filter((button) => button.textContent === 'Edit prompt').length, 1);
+});
+
 function submitPrompt(view: ReturnType<typeof render>, guest: boolean) {
   fireEvent.change(view.getByTestId(guest ? 'input-guest-prompt' : 'input-portal-prompt'), {
     target: { value: 'Compare Alpha and Beta for customer service in Australia.' },

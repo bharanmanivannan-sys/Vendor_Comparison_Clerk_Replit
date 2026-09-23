@@ -2530,12 +2530,13 @@ export function RoutedComparisonComposer({
       pending={create.isPending}
       error={create.error}
       jobState={create.jobState}
+      onReset={create.reset}
       onSubmit={(data) => create.mutate(data, { onSuccess })}
     />
   );
 }
 
-export function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: ComparisonRequest) => void }) {
+export function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onReset, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onReset?: () => void; onSubmit: (data: ComparisonRequest) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [typoReview, setTypoReview] = useState<PromptTypoReview | null>(null);
   const [interpretation, setInterpretation] = useState<ParsedComparison | null>(null);
@@ -2555,6 +2556,13 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   const [annualDistanceKm, setAnnualDistanceKm] = useState('');
   const [ownershipPeriodYears, setOwnershipPeriodYears] = useState('');
   const isVehicleComparison = /\b(?:vehicle|car|suv|ev|electric vehicle|baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
+  const researchErrorMessage = error ? comparisonErrorMessage(error) : '';
+  const blockingValidationError = Boolean(error) && /not specific enough|same market|same product|same segment|must use providers|enter a comparison|does not offer the requested products or services|incompatible comparison/i.test(researchErrorMessage);
+  const focusPromptForEdit = () => {
+    onReset?.();
+    setInterpretationError('');
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
+  };
 
   const addUrl = () => {
     const value = urlDraft.trim();
@@ -2772,6 +2780,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           value={prompt}
           onChange={(event) => {
             setPrompt(event.target.value);
+            onReset?.();
             setTypoReview(null);
             interpretationRequestId.current += 1;
             setInterpretation(null);
@@ -2867,7 +2876,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           </AlertDialogContent>}
         </AlertDialog>
 
-        {interpretationError && (
+        {interpretationError && !error && (
           <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert" data-testid="status-interpretation-error">
             {interpretationError}
           </div>
@@ -3024,32 +3033,45 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           )}
         </div>
 
+        {blockingValidationError && (
+          <div className={`mt-5 rounded-xl border px-4 py-3 ${guest ? 'border-[#d9ef66] bg-[#29334e] text-[#f8f4e8]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`} role="alert" data-testid="status-comparison-validation-error">
+            <p className="text-xs font-bold">Update your prompt to continue</p>
+            <p className="mt-1 text-xs leading-5">{researchErrorMessage}</p>
+          </div>
+        )}
+
         <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className={`max-w-lg text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
             Your selected market controls the rates, currency, regulations, availability, and sources used in the comparison.
           </p>
-          <PrimaryButton
-            type="submit"
-             disabled={pending || sourcePreflightPending || interpretationPending || prompt.trim().length < 8 || !market}
-            className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
-            testId={guest ? 'button-guest-research' : 'button-research-comparison'}
-          >
-             {pending || sourcePreflightPending || interpretationPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
-            {pending
-              ? 'Researching and scoring'
-              : sourcePreflightPending
-                ? 'Validating sources'
-                : interpretationPending
-                  ? 'Interpreting request'
-                : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
-                  ? 'Validate supplied sources'
-                  : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
-          </PrimaryButton>
+          {blockingValidationError ? (
+            <button type="button" onClick={focusPromptForEdit} className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-xs font-bold ${guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : 'bg-[#b94d45] text-white hover:bg-[#a4423b]'}`} data-testid="button-edit-prompt-action">
+              Edit prompt
+            </button>
+          ) : (
+            <PrimaryButton
+              type="submit"
+              disabled={pending || sourcePreflightPending || interpretationPending || prompt.trim().length < 8 || !market}
+              className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
+              testId={guest ? 'button-guest-research' : 'button-research-comparison'}
+            >
+              {pending || sourcePreflightPending || interpretationPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
+              {pending
+                ? 'Researching and scoring'
+                : sourcePreflightPending
+                  ? 'Validating sources'
+                  : interpretationPending
+                    ? 'Interpreting request'
+                    : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
+                      ? 'Validate supplied sources'
+                      : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
+            </PrimaryButton>
+          )}
         </div>
 
-        {Boolean(error) && (
+        {Boolean(error) && !blockingValidationError && (
           <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert">
-            {comparisonErrorMessage(error)}
+            {researchErrorMessage}
           </div>
         )}
       </form>
