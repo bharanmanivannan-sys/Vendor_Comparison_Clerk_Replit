@@ -3853,6 +3853,74 @@ test("derives the compact diesel vehicle winner from retrieved comparable spans"
   assert.ok(normalized.vendorScores.every((vendor) => vendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"));
 });
 
+test("scores production diesel power evidence reported as hp versus PS on a common kW basis", () => {
+  const prompt = "Compare Mahindra XUV700 diesel vs Tata Safari diesel in India on performance";
+  const vendors = ["Mahindra XUV700 diesel", "Tata Safari diesel"];
+  const analysis = buildDeterministicIndiaDieselVehicleContract({
+    prompt,
+    market: "IN",
+    vendors,
+    urls: [],
+    criteria: ["Performance"],
+  });
+  const powerEvidence = [
+    {
+      vendor: vendors[0],
+      value: 185,
+      unit: "hp",
+      basis: "engine_power:hp:diesel_automatic_powertrain_output",
+    },
+    {
+      vendor: vendors[1],
+      value: 170,
+      unit: "ps",
+      basis: "engine_power:ps:diesel_automatic_powertrain_output",
+    },
+  ];
+  for (const item of powerEvidence) {
+    const vendor = analysis.vendorScores.find((row) => row.vendor === item.vendor)!;
+    const criterion = vendor.weightedScores!.find((row) => row.criterion === "Meets Needs / Features")!;
+    criterion.evidence = [{
+      sourceUrl: `https://publisher.example/${encodeURIComponent(item.vendor)}`,
+      sourceTitle: `${item.vendor} specifications`,
+      exactClaim: `${item.value} ${item.unit}`,
+      metricKey: "engine_power",
+      rawMetricValue: item.value,
+      rawMetricUnit: item.unit,
+      normalizationDirection: "higher_is_better",
+      metricSubject: item.vendor,
+      metricBasis: item.basis,
+      documentSha256: "a".repeat(64),
+      sourceTextStart: 0,
+      sourceTextEnd: 10,
+      evidenceKind: "quantitative",
+      supportDirection: "context",
+      confidence: 90,
+      normalizedScore: 50,
+      criterionWeight: criterion.weight,
+      weightedContribution: 0,
+      normalizationMethod: "retrieved_document_metric",
+    }];
+  }
+
+  const deterministicWeight = applyDeterministicQuantitativeScores(analysis);
+  assert.equal(deterministicWeight, 25);
+  assert.equal(
+    analysis.vendorScores.find((vendor) => vendor.vendor === "Mahindra XUV700 diesel")
+      ?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score,
+    100,
+  );
+  assert.equal(
+    analysis.vendorScores.find((vendor) => vendor.vendor === "Tata Safari diesel")
+      ?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score,
+    30,
+  );
+  assert.ok(analysis.vendorScores.every((vendor) => (
+    vendor.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")
+      ?.evidence?.some((entry) => entry.normalizationMethod === "direct_comparable_metric")
+  )));
+});
+
 test("accepts an unresolved named provider for business credit cards", () => {
   const parsed = parsePrompt(
     "Compare Westpac vs Cape vs NAB vs ANZ for Business Credit Cards",

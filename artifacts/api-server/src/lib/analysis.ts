@@ -5215,14 +5215,16 @@ function comparableMetric(entry: EvidenceRecord): {
   const rawUnit = (entry.rawMetricUnit || "number").trim().toLowerCase().replace(/\s+/g, " ");
   const metricValue = entry.metricKey === "engine_power" && rawUnit === "ps"
     ? entry.rawMetricValue * 0.73549875
-    : entry.rawMetricValue;
-  const metricUnit = entry.metricKey === "engine_power" && rawUnit === "ps"
+    : entry.metricKey === "engine_power" && rawUnit === "hp"
+      ? entry.rawMetricValue * 0.745699872
+      : entry.rawMetricValue;
+  const metricUnit = entry.metricKey === "engine_power" && (rawUnit === "ps" || rawUnit === "hp")
     ? "kw"
     : rawUnit;
   let comparableBasis = entry.metricBasis;
   if (entry.metricKey === "engine_power" || entry.metricKey === "engine_torque") {
     comparableBasis = comparableBasis
-      .replace(/^engine_power:(?:ps|kw):/, "engine_power:kw:")
+      .replace(/^engine_power:(?:hp|ps|kw):/, "engine_power:kw:")
       .replace(/_(?:automatic|manual|dct|cvt|amt|at|unspecified_transmission)_powertrain_/, "_powertrain_");
   }
   return {
