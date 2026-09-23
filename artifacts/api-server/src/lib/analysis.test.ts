@@ -3675,6 +3675,8 @@ test("canonicalizes both long-horizon diesel request shapes through the bounded 
       ["Mahindra XUV700 diesel", "Tata Safari diesel"],
     );
     assert.deepEqual(deterministicIndiaDieselEvidenceUrls(prompt, resolvedVendors, "IN"), [
+      "https://www.autocarindia.com/car-news/mahindra-xuv700-variant-line-up-revealed-422043",
+      "https://cars.tatamotors.com/safari/ice/specifications.html",
       "https://auto.mahindra.com/on/demandware.static/-/Sites-amc-Library/default/dw92486f5b/X700/brochure/XUV700_BROCHURE_27_06_2024.pdf",
       "https://www.mahindra.com/print/pdf/node/3646",
       "https://www.tata.com/newsroom/business/new-tata-safari",
@@ -3685,7 +3687,7 @@ test("canonicalizes both long-horizon diesel request shapes through the bounded 
         prompt,
         resolvedVendors,
         "IN",
-      ).slice(0, 3),
+      ).slice(0, 5),
       deterministicIndiaDieselEvidenceUrls(prompt, resolvedVendors, "IN"),
     );
   }

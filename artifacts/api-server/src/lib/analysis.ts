@@ -1674,6 +1674,8 @@ export function deterministicIndiaDieselEvidenceUrls(
 ): string[] {
   if (!isDeterministicIndiaDieselComparison(prompt, vendors, market)) return [];
   return [
+    "https://www.autocarindia.com/car-news/mahindra-xuv700-variant-line-up-revealed-422043",
+    "https://cars.tatamotors.com/safari/ice/specifications.html",
     "https://auto.mahindra.com/on/demandware.static/-/Sites-amc-Library/default/dw92486f5b/X700/brochure/XUV700_BROCHURE_27_06_2024.pdf",
     "https://www.mahindra.com/print/pdf/node/3646",
     "https://www.tata.com/newsroom/business/new-tata-safari",
@@ -10853,8 +10855,38 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
           )
         : parseJsonObject(researchResponse.output_text));
     } catch (parseError) {
-      console.warn("Product research JSON was malformed and could not be recovered without repeating web research", parseError);
-      throw parseError;
+      if (deterministicIndiaDieselContract || isProviderLevelHomeLoanDiscovery) {
+        console.warn("Product research JSON was malformed and could not be recovered", parseError);
+        throw parseError;
+      }
+      console.warn("Product research JSON was malformed; attempting one structure-only repair", parseError);
+      const repairedResearch = await measureAnalysisStage(
+        input,
+        "research_repair",
+        () => withinAnalysisBudget(input, () => client.responses.create({
+          model: "gpt-4.1-mini",
+          max_output_tokens: 12000,
+          input: [{
+            role: "system",
+            content: "Repair the supplied malformed JSON into one valid JSON object. Preserve only facts, names, scores, claims, evidence, and URLs already present in the supplied text. You may close truncated arrays, objects, and strings and add empty structural fields required by the requested shape. Do not research, infer, estimate, complete missing facts, introduce URLs, or change vendor identities. Return only JSON with no markdown or prose.",
+          }, {
+            role: "user",
+            content: JSON.stringify({
+              vendors: researchShapeVendors,
+              requestedShape: analysisOutputShape(researchShapeVendors, false, isElectricVehicleComparison),
+              malformedJson: researchResponse.output_text,
+            }),
+          }],
+        }, {
+          timeout: Math.max(1, remainingAnalysisBudget(input)),
+          maxRetries: 0,
+          signal: input.signal,
+        })),
+      );
+      if (repairedResearch.status !== "completed" || !repairedResearch.output_text) {
+        throw parseError;
+      }
+      parsed = parseJsonObject(repairedResearch.output_text);
     }
     if (parsed.criteriaMet === false && !isProviderLevelCreditCardDiscovery) {
       console.warn("Product research reported an unmet criterion; continuing with evidence limitations", {
