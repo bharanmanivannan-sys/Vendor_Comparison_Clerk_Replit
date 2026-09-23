@@ -45,6 +45,7 @@ export * from './comparisonJobState';
 export * from './comparisonJobStateErrorCode';
 export * from './comparisonJobStateStatus';
 export * from './comparisonPromptInput';
+export * from './comparisonPromptInputMarket';
 export * from './comparisonSummary';
 export * from './comparisonSummaryStatus';
 export * from './comparisonSwot';

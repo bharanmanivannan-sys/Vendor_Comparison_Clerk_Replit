@@ -1047,6 +1047,9 @@ components:
           type: string
           minLength: 8
           maxLength: 2000
+        market:
+          type: string
+          enum: [IN, AU, US, GB]
       required: [prompt]
     SourcePreflightInput:
       type: object

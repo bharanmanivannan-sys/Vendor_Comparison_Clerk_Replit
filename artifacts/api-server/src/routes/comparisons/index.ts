@@ -26,12 +26,14 @@ import {
   buildComparisonIdentity,
   comparisonFailureCode,
   inferResearchMarket,
+  isObjectivePhraseVendor,
   MAX_COMPARISON_OPTIONS,
   normalizeLensWinner,
   parsePrompt,
   parsePromptWithIntent,
   reconcileRecommendationDecision,
   refineComparisonPrompt,
+  requestsBestAlternative,
   reweightAnalysis,
   validateComparisonContext,
   type AnalysisPayload,
@@ -241,11 +243,11 @@ export function comparisonFailureMessage(error: unknown, prompt: string, vendors
   if (/insufficient source coverage|fewer than three independently reachable/i.test(message)) {
     const missingVendor = message.match(/no official product source was found for (.+?)(?:\.|$)/i)?.[1];
     return missingVendor
-      ? `The comparison options were understood, but an exact official product source could not be verified for ${missingVendor}. Any 50/100 weighted score would be a neutral midpoint for missing evidence, not proof that the options are equal. On your next attempt, add an exact current model page for that option; irrelevant or outdated resources will not be used.`
-      : "There is not enough comparable verified evidence to rank these options reliably. A 50/100 weighted score is the neutral midpoint used when evidence is missing, not proof that the options are equal. On your next attempt, add exact current URLs for each option; irrelevant or outdated resources will not be used.";
+      ? `Automatic research could not verify an exact official source for ${missingVendor}. Your request is safe to retry; optionally include a current official page for that exact option if the next attempt has the same problem.`
+      : "Automatic research did not recover enough comparable verified evidence on this attempt. Your request is safe to retry; optional current official sources can help when public pages are difficult to retrieve.";
   }
   if (/insufficient quantitative evidence/i.test(message)) {
-    return "There is not enough comparable verified evidence to rank these options reliably. A 50/100 weighted score is the neutral midpoint used when evidence is missing, not proof that the options are equal. On your next attempt, add exact current URLs for each option; irrelevant or outdated resources will not be used.";
+    return "Automatic research did not recover enough provenance-complete evidence to make an honest recommendation on this attempt. Your request is safe to retry; you may optionally include current official sources, but they are not required.";
   }
   if (/failed query|column .* does not exist|relation .* does not exist/i.test(message)) {
     return "The analysis finished, but the report could not be saved. Please try again shortly.";
@@ -457,53 +459,227 @@ function allowGuestPreflight(req: Request, res: Response, owner?: string): boole
   return true;
 }
 
+const SUPPORTED_MARKETS = ["IN", "AU", "US", "GB"] as const;
+const OPEN_ENDED_COMPARISON = /\b(?:competitors?|alternatives?|other|another|similar|comparable|contenders?|against the market)\b/i;
+
+function comparisonRequestShapeError(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return "Send the comparison settings as a JSON object.";
+  }
+  const candidate = body as Record<string, unknown>;
+  if (typeof candidate.prompt !== "string") {
+    return "Enter the comparison prompt as text.";
+  }
+  if (candidate.prompt.length < 8) {
+    return "Enter a comparison prompt with at least 8 characters and name what you want compared.";
+  }
+  if (candidate.prompt.length > 2_000) {
+    return "Shorten the comparison prompt to 2,000 characters or fewer.";
+  }
+  if (
+    candidate.market !== undefined
+    && (typeof candidate.market !== "string" || !SUPPORTED_MARKETS.includes(candidate.market as typeof SUPPORTED_MARKETS[number]))
+  ) {
+    return "Select a supported market: IN (India), AU (Australia), US (United States), or GB (United Kingdom).";
+  }
+  if (candidate.vendors !== undefined) {
+    if (!Array.isArray(candidate.vendors)) {
+      return "Provide vendors as a list of 2 to 6 option names.";
+    }
+    if (candidate.vendors.length < 2) {
+      return "Provide at least two vendor or product names, or omit vendors so the options can be identified from the prompt.";
+    }
+    if (candidate.vendors.length > MAX_COMPARISON_OPTIONS) {
+      return `You can compare up to ${MAX_COMPARISON_OPTIONS} products or vendors at a time. Remove one or more options and try again.`;
+    }
+    const invalidVendor = candidate.vendors.find((vendor) => (
+      typeof vendor !== "string" || !vendor.trim() || vendor.length > 120
+    ));
+    if (invalidVendor !== undefined) {
+      return "Each vendor must be a non-empty text name no longer than 120 characters.";
+    }
+  }
+  if (candidate.urls !== undefined) {
+    if (!Array.isArray(candidate.urls)) {
+      return "Provide source URLs as a list of HTTP or HTTPS links.";
+    }
+    if (candidate.urls.length > 12) {
+      return "Provide no more than 12 source URLs.";
+    }
+    if (
+      candidate.urls.some((url) => typeof url !== "string")
+      || !validateHttpUrls(candidate.urls as string[])
+    ) {
+      return "Each source URL must be a complete HTTP or HTTPS link, for example https://vendor.example/product.";
+    }
+  }
+  if (candidate.criteria !== undefined) {
+    if (!Array.isArray(candidate.criteria)) {
+      return "Provide criteria as a list of up to 8 text labels.";
+    }
+    if (candidate.criteria.length > 8) {
+      return "Provide no more than 8 comparison criteria.";
+    }
+    const invalidCriterion = candidate.criteria.find((criterion) => (
+      typeof criterion !== "string" || !criterion.trim() || criterion.length > 100
+    ));
+    if (invalidCriterion !== undefined) {
+      return "Each comparison criterion must be non-empty text no longer than 100 characters.";
+    }
+  }
+  if (candidate.annualDistanceKm !== undefined) {
+    if (
+      typeof candidate.annualDistanceKm !== "number"
+      || !Number.isInteger(candidate.annualDistanceKm)
+      || candidate.annualDistanceKm < 1
+      || candidate.annualDistanceKm > 500_000
+    ) {
+      return "Annual distance must be a whole number from 1 to 500,000 kilometres.";
+    }
+  }
+  if (candidate.ownershipPeriodYears !== undefined) {
+    if (
+      typeof candidate.ownershipPeriodYears !== "number"
+      || !Number.isFinite(candidate.ownershipPeriodYears)
+      || candidate.ownershipPeriodYears < 0.5
+      || candidate.ownershipPeriodYears > 30
+      || !Number.isInteger(candidate.ownershipPeriodYears * 2)
+    ) {
+      return "Ownership period must be from 0.5 to 30 years in half-year increments.";
+    }
+  }
+  return undefined;
+}
+
+function normalizedOptionName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\.(?:com|co|org|net)\b/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function optionAcronym(value: string): string {
+  const words = normalizedOptionName(value)
+    .split(/\s+/)
+    .filter((word) => word && !["and", "the", "of", "for"].includes(word));
+  return words.length >= 2 ? words.map((word) => word[0]).join("") : "";
+}
+
+function sameComparisonOption(left: string, right: string): boolean {
+  const normalizedLeft = normalizedOptionName(left);
+  const normalizedRight = normalizedOptionName(right);
+  if (normalizedLeft === normalizedRight) return true;
+  const compactLeft = normalizedLeft.replace(/\s+/g, "");
+  const compactRight = normalizedRight.replace(/\s+/g, "");
+  return Boolean(
+    compactLeft
+    && compactRight
+    && (optionAcronym(left) === compactRight || optionAcronym(right) === compactLeft),
+  );
+}
+
+function optionIsExplicitInPrompt(prompt: string, option: string): boolean {
+  const normalizedPrompt = ` ${normalizedOptionName(prompt)} `;
+  const normalizedOption = normalizedOptionName(option);
+  if (normalizedOption && normalizedPrompt.includes(` ${normalizedOption} `)) return true;
+  const acronym = optionAcronym(option);
+  return acronym.length >= 2 && normalizedPrompt.includes(` ${acronym} `);
+}
+
+function isPromptGroundedDiscoveryOption(prompt: string, option: string): boolean {
+  if (!OPEN_ENDED_COMPARISON.test(prompt)) return false;
+  if (isObjectivePhraseVendor(option)) return true;
+  const normalizedOption = normalizedOptionName(option);
+  if (!/^(?:another|any|best|leading|main|other|similar|strongest|top)\b/.test(normalizedOption)) return false;
+  if (!/\b(?:alternatives?|brands?|competitors?|contenders?|marketplaces?|platforms?|products?|providers?|services?|sites?)\b/.test(normalizedOption)) {
+    return false;
+  }
+  const genericWords = new Set([
+    "a", "an", "and", "another", "any", "best", "competitor", "competitors",
+    "contender", "contenders", "leading", "main", "other", "similar", "strongest",
+    "the", "top",
+  ]);
+  const groundingWords = normalizedOption.split(/\s+/).filter((word) => !genericWords.has(word));
+  if (!groundingWords.length) return false;
+  const promptWords = new Set(normalizedOptionName(prompt).split(/\s+/));
+  return groundingWords.every((word) => promptWords.has(word));
+}
+
 export async function validateComparisonInput(
   body: unknown,
   parseWithIntent = parsePromptWithIntent,
 ) {
-  if (
-    body && typeof body === "object" && "vendors" in body
-    && Array.isArray(body.vendors) && body.vendors.length > MAX_COMPARISON_OPTIONS
-  ) {
-    return { error: `You can compare up to ${MAX_COMPARISON_OPTIONS} products or vendors at a time. Remove one or more options and try again.` } as const;
-  }
+  const shapeError = comparisonRequestShapeError(body);
+  if (shapeError) return { error: shapeError } as const;
   const parsed = CreateComparisonBody.safeParse(body);
-  if (!parsed.success || !isSafeUserInput(parsed.data?.prompt ?? "")) {
-    return { error: "Comparison input contains invalid or unsafe content." } as const;
+  if (!parsed.success) {
+    return { error: "Correct the invalid comparison field and try again." } as const;
+  }
+  if (!isSafeUserInput(parsed.data.prompt)) {
+    return { error: "Remove markup, SQL, or instructions that try to override the research process, then describe the comparison in plain language." } as const;
   }
   const input = parsed.data;
   if (UNSUPPORTED_GULF_MARKET.test(input.prompt)) {
     return { error: OUTSIDE_RESEARCH_SCOPE_MESSAGE } as const;
   }
-  const urls = input.urls ?? [];
-  if (!validateHttpUrls(urls) || (input.vendors ?? []).some((vendor) => !isSafeUserInput(vendor))) {
-    return { error: "Use valid HTTPS or HTTP URLs and plain vendor names." } as const;
+  if ((input.vendors ?? []).some((vendor) => !isSafeUserInput(vendor))) {
+    return { error: "Use plain vendor or product names without markup, SQL, or instructions that override the research process." } as const;
+  }
+  if ((input.criteria ?? []).some((criterion) => !isSafeUserInput(criterion))) {
+    return { error: "Use plain comparison criteria without markup, SQL, or instructions that override the research process." } as const;
   }
   const hasProvidedVendors = (input.vendors?.length ?? 0) >= 2;
   const parsedPrompt = hasProvidedVendors
     ? parsePrompt(input.prompt)
-    : await parseWithIntent(input.prompt);
+    : await parseWithIntent(input.prompt, undefined, { market: input.market });
   if (parsedPrompt.vendors.length > MAX_COMPARISON_OPTIONS) {
     return { error: `You can compare up to ${MAX_COMPARISON_OPTIONS} products or vendors at a time. Remove one or more options and try again.` } as const;
   }
   const vendors = hasProvidedVendors ? input.vendors as string[] : parsedPrompt.vendors;
+  if (hasProvidedVendors) {
+    const duplicate = vendors.find((vendor, index) => (
+      vendors.some((candidate, candidateIndex) => candidateIndex < index && sameComparisonOption(vendor, candidate))
+    ));
+    if (duplicate) {
+      return { error: `Remove the duplicate or alias entry "${duplicate}" so every comparison option is unique.` } as const;
+    }
+    const allowsDiscoveryOption = OPEN_ENDED_COMPARISON.test(input.prompt);
+    const unrelated = vendors.find((vendor) => (
+      !optionIsExplicitInPrompt(input.prompt, vendor)
+      && !parsedPrompt.vendors.some((parsedVendor) => sameComparisonOption(vendor, parsedVendor))
+      && !(allowsDiscoveryOption && isPromptGroundedDiscoveryOption(input.prompt, vendor))
+    ));
+    if (unrelated) {
+      return { error: `The provided option "${unrelated}" is not named or requested in the prompt. Add it to the prompt or remove it from vendors.` } as const;
+    }
+    if (parsedPrompt.hasExplicitVendorList) {
+      const hasGroundedDiscoveryOption = vendors.some((vendor) => (
+        isPromptGroundedDiscoveryOption(input.prompt, vendor)
+      ));
+      const omitted = parsedPrompt.vendors.find((parsedVendor) => (
+        !vendors.some((vendor) => sameComparisonOption(vendor, parsedVendor))
+        && !(isObjectivePhraseVendor(parsedVendor) && hasGroundedDiscoveryOption)
+      ));
+      if (omitted) {
+        return { error: `The prompt explicitly names "${omitted}", but it is missing from vendors. Include every named option or update the prompt.` } as const;
+      }
+    }
+  }
   if (vendors.length < 2 && !/\b(?:against|versus|vs\.?|benchmark)\b/i.test(input.prompt)) {
     return {
       error: "Enter a comparison with at least two named products, services, brands, or providers.",
     } as const;
   }
   const criteria = input.criteria?.length ? input.criteria : parsedPrompt.criteria;
-  const context = validateComparisonContext(input.prompt, vendors, input.market);
-  if (!context.valid) {
-    const isEntityCompatibilityError = /not in the same product or service segment|must use providers|does not offer the requested products or services/i.test(context.message);
-    return {
-      error: isEntityCompatibilityError
-        ? context.message
-        : `${context.message} Oops. Sorry, I might have missed that. Can you try this phrase instead: “${comparisonWorkaroundPrompt(input.prompt, vendors)}”`,
-    } as const;
-  }
   const market = input.market
     ?? inferResearchMarket(input.prompt, vendors).countryCode;
+  const context = validateComparisonContext(input.prompt, vendors, market);
+  if (!context.valid) {
+    return {
+      error: context.message,
+    } as const;
+  }
   const normalizedInput = { ...input, market };
   const processingPrompt = refineComparisonPrompt(
     input.prompt,
@@ -521,14 +697,26 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
     vendor.qualificationStatus === "QUALIFIED" || vendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
   ));
   if (qualificationRows.length) {
-    const ranked = [...qualifiedRows].sort((left, right) => (right.modelScore ?? right.score) - (left.modelScore ?? left.score));
+    const bestAlternativeAnchor = requestsBestAlternative(row.prompt)
+      ? row.vendors[0]
+      : undefined;
+    const decisionRows = bestAlternativeAnchor
+      ? qualifiedRows.filter((vendor) => vendor.vendor.toLowerCase() !== bestAlternativeAnchor.toLowerCase())
+      : qualifiedRows;
+    const ranked = [...decisionRows].sort((left, right) => (right.modelScore ?? right.score) - (left.modelScore ?? left.score));
     const leader = ranked[0];
     const runnerUp = ranked[1];
     const leaderScore = leader ? (leader.modelScore ?? leader.score) : 0;
     const runnerUpScore = runnerUp ? (runnerUp.modelScore ?? runnerUp.score) : undefined;
     const practicalTie = runnerUpScore !== undefined && Math.abs(leaderScore - runnerUpScore) < 1;
+    const persistedConditional = /\bconditional (?:winner|recommendation)\b|\bsupported .+ comparison\b/i.test(row.recommendationReason ?? "")
+      && row.vendors.some((vendor) => vendor.toLowerCase() === row.recommendation.toLowerCase())
+      && Number.isFinite(row.score)
+      && row.score > Math.max(...decisionRows.map((vendor) => vendor.modelScore ?? vendor.score), 0);
     const decision = !leader
       ? { recommendation: "No qualified option", score: 0 }
+      : persistedConditional
+        ? { recommendation: row.recommendation, score: Math.round(row.score) }
       : practicalTie
         ? { recommendation: "No definitive winner", score: Math.round(leaderScore) }
         : { recommendation: leader.vendor, score: Math.round(leaderScore) };
@@ -601,6 +789,7 @@ export function normalizeEvidenceForResponse(
 }
 
 export function buildComparisonDecisionSet(comparison: {
+  prompt?: string;
   vendors?: string[];
   vendorScores?: Array<Record<string, any>>;
   recommendation?: string;
@@ -617,20 +806,40 @@ export function buildComparisonDecisionSet(comparison: {
     (vendor) => vendor.toLowerCase() === String(value ?? "").trim().toLowerCase(),
   );
   const recommendation = canonicalOption(comparison.recommendation);
+  const bestAlternativeAnchor = requestsBestAlternative(String(comparison.prompt ?? ""))
+    ? vendors[0]
+    : undefined;
   const recommendedVendor = recommendation
     ? vendorScores.find((vendor) => canonicalOption(vendor.vendor) === recommendation)
     : undefined;
   const numericScore = (vendor: Record<string, any> | undefined): number | null => {
     if (!vendor) return null;
+    if (vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE" || vendor.qualificationStatus === "NOT_QUALIFIED") {
+      return null;
+    }
     const raw = Number(vendor.modelScore ?? vendor.score);
     return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : null;
   };
+  // Conditional decisions are finalized from the supported evidence model.
+  // Older persisted rows may still contain neutral vendor scores while the
+  // top-level decision already carries the canonical derived score. Prefer
+  // that score only when the rationale identifies the evidence-backed
+  // conditional path; otherwise retain the vendor score and report a tie.
+  const rationaleText = String(comparison.recommendationReason ?? "");
+  const canonicalDecisionScore = recommendation
+    && /\bconditional (?:winner|recommendation)\b|\bsupported .+ comparison\b/i.test(rationaleText)
+    && Number.isFinite(Number(comparison.score))
+    ? Math.max(0, Math.min(100, Math.round(Number(comparison.score))))
+    : null;
   const scoredOptions = vendors.flatMap((option) => {
+    if (bestAlternativeAnchor && option === bestAlternativeAnchor) return [];
     const vendor = vendorScores.find((entry) => canonicalOption(entry.vendor) === option);
-    const score = numericScore(vendor);
+    const score = option === recommendation && canonicalDecisionScore !== null
+      ? canonicalDecisionScore
+      : numericScore(vendor);
     return score === null ? [] : [{ option, score }];
   });
-  const recommendedScore = numericScore(recommendedVendor);
+  const recommendedScore = canonicalDecisionScore ?? numericScore(recommendedVendor);
   const higherScoredOptionExists = recommendedScore !== null
     && scoredOptions.some((entry) => entry.option !== recommendation && entry.score > recommendedScore);
   const practicalScoreTie = recommendedScore !== null
@@ -649,6 +858,11 @@ export function buildComparisonDecisionSet(comparison: {
   const recommendationConfirmed = Boolean(
     recommendation
     && recommendedVendor
+    && (
+      recommendedVendor.qualificationStatus === undefined
+      || recommendedVendor.qualificationStatus === "QUALIFIED"
+      || recommendedVendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"
+    )
     && !higherScoredOptionExists
     && (!practicalScoreTie || (uniqueLensWinner.length === 1 && uniqueLensWinner[0] === recommendation)),
   );
@@ -680,7 +894,7 @@ export function buildComparisonDecisionSet(comparison: {
         rationale: "No unique recommendation was confirmed from the compared options.",
       };
   const scoredAlternatives = vendors
-    .filter((option) => option !== confirmedOption)
+    .filter((option) => option !== confirmedOption && option !== bestAlternativeAnchor)
     .map((option, originalIndex) => {
       const vendor = vendorScores.find((entry) => canonicalOption(entry.vendor) === option);
       const score = numericScore(vendor);
@@ -740,6 +954,7 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
   const pricing = normalizeStoredRows(row.pricing);
   const features = normalizeStoredRows(row.features);
   const decisionSet = buildComparisonDecisionSet({
+    prompt: row.prompt,
     vendors: row.vendors,
     vendorScores,
     recommendation: summary.recommendation,
@@ -747,6 +962,20 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     recommendationReason: row.recommendationReason,
     pricing,
     features,
+  });
+  // Repair persisted conditional reports at the authoritative response
+  // boundary. Evidence remains untouched; only the rendered vendor score
+  // fields are synchronized with the confirmed/alternative contract.
+  const repairedVendorScores = vendorScores.map((vendor) => {
+    const confirmed = decisionSet.confirmedRecommendation.option === vendor.vendor
+      ? decisionSet.confirmedRecommendation.score
+      : decisionSet.alternatives.find((alternative) => alternative.option === vendor.vendor)?.score;
+    if (confirmed === null || confirmed === undefined) return vendor;
+    return {
+      ...vendor,
+      score: confirmed,
+      modelScore: confirmed,
+    };
   });
   return {
     ...summary,
@@ -757,7 +986,7 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     recommendationReason: row.recommendationReason,
     ...decisionSet,
     weightAdjustments: row.weightAdjustments,
-    vendorScores,
+    vendorScores: repairedVendorScores,
     pricing,
     features,
     swot: row.swot,
@@ -820,7 +1049,11 @@ router.post("/guest/comparisons/parse", async (req: Request, res): Promise<void>
     sendError(res, 400, "invalid_prompt", "Enter a plain-language comparison without markup, SQL, or instruction injection.");
     return;
   }
-  res.json(ParseGuestComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
+  res.json(ParseGuestComparisonPromptResponse.parse(await parsePromptWithIntent(
+    parsed.data.prompt,
+    undefined,
+    { market: parsed.data.market },
+  )));
 });
 
 router.post("/guest/comparisons/source-preflight", async (req: Request, res): Promise<void> => {
@@ -900,6 +1133,7 @@ router.post("/guest/comparisons", async (req: Request, res): Promise<void> => {
     createdAt: new Date(),
     ...analysis,
     ...buildComparisonDecisionSet({
+      prompt: validated.input.prompt,
       vendors: validated.vendors,
       vendorScores: analysis.vendorScores,
       recommendation: analysis.recommendation,
@@ -917,7 +1151,11 @@ router.post("/comparisons/parse", requireAuth, async (req: AuthedRequest, res): 
     sendError(res, 400, "invalid_prompt", "Enter a plain-language comparison without markup, SQL, or instruction injection.");
     return;
   }
-  res.json(ParseComparisonPromptResponse.parse(await parsePromptWithIntent(parsed.data.prompt)));
+  res.json(ParseComparisonPromptResponse.parse(await parsePromptWithIntent(
+    parsed.data.prompt,
+    undefined,
+    { market: parsed.data.market },
+  )));
 });
 
 router.post("/comparisons/source-preflight", requireAuth, async (req: AuthedRequest, res): Promise<void> => {

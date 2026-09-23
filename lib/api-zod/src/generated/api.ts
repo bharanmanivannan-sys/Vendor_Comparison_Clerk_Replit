@@ -843,7 +843,8 @@ export const parseComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
 export const parseComparisonPromptResponseVendorsMin = 2;
@@ -937,7 +938,8 @@ export const parseGuestComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseGuestComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
 export const parseGuestComparisonPromptResponseVendorsMin = 2;

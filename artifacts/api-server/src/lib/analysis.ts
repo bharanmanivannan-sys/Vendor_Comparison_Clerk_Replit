@@ -5,9 +5,29 @@ import {
   checkEvidenceUrls,
   isSafeUserInput,
   retrieveEvidenceDocuments,
+  type EvidenceDocumentResult,
   type EvidenceUrlResult,
   type RetrievedEvidenceDocument,
 } from "./security";
+
+function logRetrievalDiagnostics(stage: "initial" | "rendered" | "independent_fallback", results: EvidenceDocumentResult[]): void {
+  const reasons: Record<string, number> = {};
+  let documentCount = 0;
+  for (const result of results) {
+    if (result.document) documentCount += 1;
+    else {
+      const reason = result.reason ?? "unknown";
+      reasons[reason] = (reasons[reason] ?? 0) + 1;
+    }
+  }
+  console.info("evidence_retrieval_diagnostics", {
+    stage,
+    requestedCount: results.length,
+    documentCount,
+    rejectedCount: results.length - documentCount,
+    reasons,
+  });
+}
 import { publisherPermissionRegistry } from "../services/publisherPermissionRegistry";
 import {
   isScrapyAiAcquisitionConfigured,
@@ -82,6 +102,8 @@ export type VendorDimensionScore = {
 };
 export type VendorScoreExtension = {
   modelScore?: number;
+  /** Pre-conditional score retained for audit; rendering uses modelScore. */
+  rawModelScore?: number;
   qualificationStatus?: QualificationStatus;
   qualificationGates?: QualificationGate[];
   dimensionScores?: VendorDimensionScore[];
@@ -101,6 +123,10 @@ export type VendorScoreModelOptions = {
   prompt?: string;
   market?: string;
   globalDigitalService?: boolean;
+  /** Global enterprise software is not qualified by a country-name mention on a product page. */
+  globalServiceMarketAvailability?: boolean;
+  /** Discovery-only labels require retrieved exact-product category provenance before qualification. */
+  unverifiedDiscoveryVendors?: string[];
 };
 
 const QUALIFICATION_GATE_NAMES = [
@@ -164,10 +190,91 @@ function evidenceConfidenceFor(evidence: Array<Record<string, unknown>>): number
 
 function isScorableEvidence(evidence: Record<string, unknown>): boolean {
   const method = String(evidence.normalizationMethod ?? "");
-  return Boolean(evidence.sourceId)
+  const sourceId = String(evidence.sourceId ?? "");
+  const documentSha256 = String(evidence.documentSha256 ?? "");
+  return /^docsha256:[a-f0-9]{64}$/i.test(sourceId)
+    && sourceId.slice("docsha256:".length).toLowerCase() === documentSha256.toLowerCase()
+    && Number.isInteger(evidence.sourceTextStart)
+    && Number.isInteger(evidence.sourceTextEnd)
+    && Number(evidence.sourceTextStart) >= 0
+    && Number(evidence.sourceTextEnd) > Number(evidence.sourceTextStart)
     && (evidence.evidenceKind === "quantitative" || evidence.evidenceKind === "percentage")
     && Number.isFinite(Number(evidence.normalizedScore))
     && !/(?:winner_share|analyst_judgment|missing_evidence|insufficient_comparable|provider_role|strategic_provider_role)/i.test(method);
+}
+
+export function assertHasProvenanceCompleteScorableEvidence(
+  analysis: AnalysisPayload,
+  excludedVendors: string[] = [],
+): void {
+  const excluded = new Set(excludedVendors.map(normalizedIdentity));
+  const evidence = analysis.vendorScores
+    .filter((vendor) => !excluded.has(normalizedIdentity(vendor.vendor)))
+    .flatMap((vendor) => vendor.weightedScores ?? [])
+    .flatMap((criterion) => criterion.evidence ?? [])
+    .filter((entry) => isScorableEvidence(entry as unknown as Record<string, unknown>));
+  if (evidence.length || validatedQualitativeLensDecision(analysis, excludedVendors)) return;
+  throw new Error("Insufficient quantitative evidence: no provenance-complete scorable evidence or uniquely decisive validated feature-lens evidence was found for the compared options.");
+}
+
+export function validatedQualitativeLensDecision(
+  analysis: AnalysisPayload,
+  excludedVendors: string[] = [],
+): EvidenceBackedLensWinner | null {
+  const excluded = new Set(excludedVendors.map(normalizedIdentity));
+  const vendors = analysis.vendorScores
+    .map((vendor) => vendor.vendor)
+    .filter((vendor) => !excluded.has(normalizedIdentity(vendor)));
+  const canonicalVendor = (value: unknown) => vendors.find(
+    (vendor) => vendor.toLowerCase() === String(value ?? "").trim().toLowerCase(),
+  );
+  const meaningfulTokens = (value: string) => normalizedIdentity(value)
+    .split(" ")
+    .filter((token) => token.length >= 4 && !["feature", "features", "pricing", "price", "capability"].includes(token));
+  const rowHasProvenanceSupport = (row: AnalysisPayload["features"][number]): boolean => {
+    const winner = canonicalVendor(row.winner);
+    if (!winner) return false;
+    const winnerScore = analysis.vendorScores.find((vendor) => vendor.vendor === winner);
+    const tokens = meaningfulTokens(`${row.dimension} ${row.values?.[winner] ?? ""}`);
+    if (!tokens.length) return false;
+    return (winnerScore?.weightedScores ?? []).some((criterion) => (
+      (criterion.evidence ?? []).some((evidence) => {
+        const sourceId = String(evidence.sourceId ?? "");
+        const documentSha256 = String(evidence.documentSha256 ?? "");
+        const sourceTextStart = evidence.sourceTextStart;
+        const sourceTextEnd = evidence.sourceTextEnd;
+        const kind = String(evidence.evidenceKind ?? "");
+        const subject = normalizedIdentity(evidence.metricSubject);
+        const support = String(evidence.supportDirection ?? "supports");
+        const evidenceTextValue = normalizedIdentity([
+          criterion.criterion,
+          evidence.exactClaim,
+          evidence.metricKey,
+          evidence.metricBasis,
+        ].join(" "));
+        return /^docsha256:[a-f0-9]{64}$/i.test(sourceId)
+          && sourceId.slice("docsha256:".length).toLowerCase() === documentSha256.toLowerCase()
+          && Number.isInteger(sourceTextStart)
+          && Number.isInteger(sourceTextEnd)
+          && Number(sourceTextStart) >= 0
+          && Number(sourceTextEnd) > Number(sourceTextStart)
+          && ["qualitative", "quantitative", "percentage"].includes(kind)
+          && subject === normalizedIdentity(winner)
+          && support !== "contradicts"
+          && support !== "neutral"
+          && tokens.some((token) => evidenceTextValue.includes(token));
+      })
+    ));
+  };
+  const supportedPricing = (analysis.pricing ?? []).filter(rowHasProvenanceSupport);
+  const supportedFeatures = (analysis.features ?? []).filter(rowHasProvenanceSupport);
+  const decision = selectEvidenceBackedLensWinner(supportedPricing, supportedFeatures, vendors);
+  if (!decision) return null;
+  const winner = analysis.vendorScores.find((vendor) => vendor.vendor === decision.winner);
+  const status = (winner as unknown as VendorScoreExtension | undefined)?.qualificationStatus;
+  return status === "QUALIFIED" || status === "QUALIFIED_WITH_CONDITIONS"
+    ? decision
+    : null;
 }
 
 function normalizedIdentity(value: unknown): string {
@@ -185,9 +292,14 @@ export function calculateVendorScoreExtension(
   const text = allEvidence.map(evidenceText).join(" ");
   const context = `${options.prompt ?? ""} ${options.category ?? ""}`.trim();
   const vendorIdentity = normalizedIdentity(vendor.vendor);
+  const requiresDiscoveryCategoryProof = (options.unverifiedDiscoveryVendors ?? []).some((candidate) => (
+    normalizedIdentity(candidate) === vendorIdentity
+  ));
+  const discoveryCategoryPattern = /\b(?:dxp|cms|wcm|dam)\b|digital experience platforms?|content management systems?|web content management|digital asset management/i;
   const identityEvidence = allEvidence.filter((evidence) => {
     const subject = normalizedIdentity(evidence.metricSubject);
-    return subject === vendorIdentity;
+    return subject === vendorIdentity
+      && (!requiresDiscoveryCategoryProof || discoveryCategoryPattern.test(evidenceText(evidence)));
   });
   const compliancePattern = /\b(?:regulat|compliance|certif|approved|homolog|license|licen[cs]e|safety|ncap)\b/i;
   const securityPattern = /\b(?:security|privacy|data protection|encryption|soc ?2|iso ?27001|gdpr|pci)\b/i;
@@ -227,7 +339,9 @@ export function calculateVendorScoreExtension(
   });
   const inferredStatuses: Record<(typeof QUALIFICATION_GATE_NAMES)[number], QualificationGateStatus> = {
     "Exact entity/variant identity": statusFromEvidence(identityEvidence),
-    "Market availability": options.market ? statusFromEvidence(marketEvidence) : "UNKNOWN",
+    "Market availability": options.globalServiceMarketAvailability
+      ? (identityEvidence.length ? "CONDITIONAL" : "UNKNOWN")
+      : options.market ? statusFromEvidence(marketEvidence) : "UNKNOWN",
     "Applicable local regulatory compliance": compliancePattern.test(context)
       ? statusFromEvidence(gateEvidence(compliancePattern))
       : "NOT_APPLICABLE",
@@ -334,10 +448,47 @@ export function scoreDifferenceBand(difference: number): ScoreDifferenceBand {
       : absolute < 7 ? "MODERATE_ADVANTAGE" : "CLEAR_ADVANTAGE";
 }
 
-function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScoreModelOptions = {}): void {
+export function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScoreModelOptions = {}): void {
   // This function runs only while building a new analysis. Legacy saved rows are
   // serialized directly and keep their original optional extension fields.
   applyVendorScoreModel(analysis, options);
+  const conditional = conditionalComparableWinner(analysis, options.prompt ?? "");
+  if (conditional) {
+    for (const vendor of analysis.vendorScores) {
+      const extension = vendor as unknown as VendorScoreExtension;
+      if (extension.qualificationStatus === "INSUFFICIENT_EVIDENCE") {
+        extension.qualificationStatus = "QUALIFIED_WITH_CONDITIONS";
+        extension.conditions = [
+          ...(extension.conditions ?? []),
+          "Long-horizon reliability and maintenance evidence is not established; verify these before purchase.",
+        ];
+      }
+    }
+    analysis.recommendation = conditional.vendor;
+    analysis.score = Math.round(conditional.score);
+    const winningVendor = analysis.vendorScores.find((vendor) => vendor.vendor === conditional.vendor);
+    if (winningVendor) {
+      const extension = winningVendor as unknown as VendorScoreExtension;
+      extension.rawModelScore = extension.modelScore ?? winningVendor.score;
+      extension.modelScore = conditional.score;
+      winningVendor.score = Math.round(conditional.score);
+    }
+    analysis.recommendationReason = `${conditional.vendor} is the conditional winner on the supported ${conditional.label} comparison (${conditional.score.toFixed(1)}/100). Long-horizon reliability, maintenance, and ownership-cost claims remain unverified assumptions, not established facts.`;
+    analysis.executiveSummary = `${conditional.vendor} is the conditional recommendation because it uniquely leads the provenance-complete ${conditional.label} evidence. The result does not assert 20-year reliability or service cost: those remain explicit verification conditions.`;
+    for (const row of [...(analysis.pricing ?? []), ...(analysis.features ?? [])]) {
+      if (new RegExp(conditional.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(row.dimension)
+        || (conditional.label === "performance" && /\bperformance|power|torque|acceleration\b/i.test(row.dimension))
+        || (conditional.label === "safety" && /\bsafety|crash|airbag|ncap\b/i.test(row.dimension))) {
+        row.winner = conditional.vendor;
+      }
+    }
+    analysis.insights ??= [];
+    const limitation = "Missing-priority disclosure — Long-horizon reliability, maintenance, and 20-year ownership cost lack comparable verified evidence; confirm service coverage, parts availability, warranty terms, and actual costs before committing.";
+    if (!analysis.insights.some((insight) => insight.startsWith("Missing-priority disclosure —"))) {
+      analysis.insights.unshift(limitation);
+    }
+    return;
+  }
   const eligible = (analysis.vendorScores ?? []).filter((vendor) =>
     (vendor as unknown as VendorScoreExtension).qualificationStatus === "QUALIFIED"
     || (vendor as unknown as VendorScoreExtension).qualificationStatus === "QUALIFIED_WITH_CONDITIONS");
@@ -356,13 +507,78 @@ function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScor
   const runnerUpScore = runnerUp
     ? ((runnerUp as unknown as VendorScoreExtension).modelScore ?? runnerUp.score)
     : undefined;
-  const difference = runnerUpScore === undefined ? winnerScore : winnerScore - runnerUpScore;
-  const band = scoreDifferenceBand(difference);
+  const difference = runnerUpScore === undefined ? undefined : winnerScore - runnerUpScore;
+  const band = difference === undefined ? "CLEAR_ADVANTAGE" : scoreDifferenceBand(difference);
   analysis.recommendation = band === "PRACTICAL_TIE" ? "No definitive winner" : winner.vendor;
   analysis.score = Math.round(winnerScore);
   analysis.recommendationReason = band === "PRACTICAL_TIE"
     ? `${winner.vendor} and ${runnerUp?.vendor ?? "the leading options"} are a practical tie under the qualification and weighted evidence model.`
     : `${winner.vendor} leads with a ${band.toLowerCase().replaceAll("_", " ")} (${winnerScore.toFixed(2)} vs ${runnerUpScore?.toFixed(2) ?? "n/a"}).`;
+}
+
+type ConditionalWinner = { vendor: string; score: number; label: string };
+
+function conditionalComparableWinner(analysis: AnalysisPayload, prompt: string): ConditionalWinner | null {
+  const vendors = analysis.vendorScores ?? [];
+  if (vendors.length < 2 || !/\b(?:car|cars|vehicle|vehicles|suv|automotive|automobile|diesel|electric vehicle|aem|adobe experience manager)\b/i.test(`${prompt} ${analysis.category}`)) return null;
+  const failed = vendors.some((vendor) => vendor.qualificationStatus === "NOT_QUALIFIED"
+    || (vendor.qualificationGates ?? []).some((gate) => gate.mandatory && gate.status === "FAIL"));
+  if (failed) return null;
+  const groups = new Map<string, Array<{ vendor: string; score: number }>>();
+  for (const vendor of vendors) for (const row of vendor.weightedScores ?? []) for (const evidence of row.evidence ?? []) {
+    if (!isScorableEvidence(evidence) || evidence.supportDirection === "contradicts") continue;
+    const key = String(evidence.metricKey ?? "").trim();
+    if (!key) continue;
+    const list = groups.get(key) ?? [];
+    list.push({ vendor: vendor.vendor, score: Number(evidence.normalizedScore) });
+    groups.set(key, list);
+  }
+  const priorityTerms = [
+    { terms: /\bsafety\b/i, keys: /safety|ncap|airbag|crash|adas/i, label: "safety" },
+    { terms: /\bperformance\b/i, keys: /power|torque|acceleration|range|charging/i, label: "performance" },
+    { terms: /\b(?:price|cost|value)\b/i, keys: /price|cost|consumption/i, label: "price and value" },
+    { terms: /\b(?:maintenance|service|reliability)\b/i, keys: /maintenance|service|reliab/i, label: "maintenance and reliability" },
+  ];
+  const candidates = [...groups.entries()].flatMap(([key, rows]) => {
+    const scores = new Map<string, number>();
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      scores.set(row.vendor, (scores.get(row.vendor) ?? 0) + row.score);
+      counts.set(row.vendor, (counts.get(row.vendor) ?? 0) + 1);
+    }
+    if (scores.size !== vendors.length) return [];
+    const priority = priorityTerms.findIndex((entry) => entry.terms.test(prompt) && entry.keys.test(key));
+    const ranked = [...scores.entries()].map(([vendor, total]) => [vendor, total / (counts.get(vendor) ?? 1)] as const)
+      .sort((a, b) => b[1] - a[1]);
+    if (!ranked[1]) return [];
+    if (ranked[0]![1] <= ranked[1][1]) {
+      // A score tie may only be resolved by an explicit user priority and
+      // stronger provenance support for that same comparable row. Never use
+      // vendor array order as a tie-break.
+      if (priority < 0) return [];
+      const supportCounts = new Map(rows.map((row) => [row.vendor, (supportCountsForMetric(analysis, row.vendor, key))]));
+      const firstSupport = supportCounts.get(ranked[0]![0]) ?? 0;
+      const secondSupport = supportCounts.get(ranked[1][0]) ?? 0;
+      if (firstSupport <= secondSupport) {
+        const supportedLeader = [...supportCounts.entries()].sort((a, b) => b[1] - a[1]);
+        if (!supportedLeader[1] || supportedLeader[0]![1] <= supportedLeader[1][1]) return [];
+        return [{ vendor: supportedLeader[0]![0], score: ranked[0]![1], priority, label: priorityTerms[priority]?.label ?? key }];
+      }
+      return [{ vendor: ranked[0]![0], score: ranked[0]![1], priority, label: priorityTerms[priority]?.label ?? key }];
+    }
+    return [{ vendor: ranked[0]![0], score: ranked[0]![1], priority: priority < 0 ? 99 : priority, label: priorityTerms[priority]?.label ?? key }];
+  }).sort((a, b) => a.priority - b.priority || b.score - a.score);
+  const winner = candidates[0];
+  return winner ? { vendor: winner.vendor, score: winner.score, label: winner.label } : null;
+}
+
+function supportCountsForMetric(analysis: AnalysisPayload, vendorName: string, metricKey: string): number {
+  return (analysis.vendorScores.find((vendor) => vendor.vendor === vendorName)?.weightedScores ?? [])
+    .flatMap((row) => row.evidence ?? [])
+    .filter((evidence) => isScorableEvidence(evidence) && evidence.metricKey === metricKey)
+    .map((evidence) => String(evidence.sourceId))
+    .filter((sourceId, index, sourceIds) => sourceIds.indexOf(sourceId) === index)
+    .length;
 }
 
 function sourceIdForEvidence(row: Record<string, unknown>): string | undefined {
@@ -388,6 +604,24 @@ function normalizeDate(value: unknown): string | undefined {
   return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized
     ? undefined
     : normalized;
+}
+
+function publishedDateFromDocument(document: RetrievedEvidenceDocument): string | undefined {
+  const iso = document.text.match(/\b(?:published|updated|date)\s*:?\s*(20\d{2}-\d{2}-\d{2})\b/i)?.[1];
+  if (iso) return normalizeDate(iso);
+  const prose = document.text.match(/\b(?:published|updated|date)\s*:?\s*((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+20\d{2})\b/i)?.[1];
+  if (!prose) return undefined;
+  const parsedDate = new Date(`${prose} UTC`);
+  return Number.isNaN(parsedDate.getTime()) ? undefined : parsedDate.toISOString().slice(0, 10);
+}
+
+function publisherDomainForHostname(hostname: string): string {
+  const labels = hostname.toLowerCase().replace(/^www\./, "").split(".");
+  const secondLevelCountrySuffix = /^(?:co|com|net|org|gov|ac)\.[a-z]{2}$/;
+  const suffix = labels.slice(-2).join(".");
+  return labels.length >= 3 && secondLevelCountrySuffix.test(suffix)
+    ? labels.slice(-3).join(".")
+    : suffix;
 }
 
 /** Strictly canonicalize AI evidence before it can affect a score or be persisted. */
@@ -562,6 +796,7 @@ export type AnalysisProgressStage =
 export type AnalysisTimingStage =
   | "vendor_discovery"
   | "portfolio_adjudication"
+  | "software_source_fallback"
   | "product_research"
   | "research_repair"
   | "evidence_url_validation"
@@ -713,6 +948,9 @@ export function isSafetyFirstVehicleQuery(prompt: string): boolean {
 
 function criterionTargets(criterion: string): string[] {
   const normalized = criterion.toLowerCase();
+  if (/(?:reliability|quality|durability|uptime|failure|maintenance|servicing|repair|upkeep)/.test(normalized)) {
+    return ["Quality & Reliability", "Value for Money"];
+  }
   if (/(?:price|pricing|cost|affordability|budget|value for money|cheapest|lowest fee)/.test(normalized)) {
     return ["Value for Money"];
   }
@@ -722,10 +960,7 @@ function criterionTargets(criterion: string): string[] {
   if (/(?:safety|crash|ncap|airbag|adas|occupant protection)/.test(normalized)) {
     return ["Meets Needs / Features", "Regulatory Compliance"];
   }
-  if (/(?:reliability|quality|durability|uptime|failure|maintenance|servicing|repair|upkeep)/.test(normalized)) {
-    return ["Quality & Reliability", "Value for Money"];
-  }
-  if (/(?:feature|capabilit|functionality|ease of use|usability|selection|range|variety)/.test(normalized)) {
+  if (/(?:feature|capabilit|functionality|ease of use|usability|selection|range|variety|comfort|ride quality|cabin)/.test(normalized)) {
     return ["Meets Needs / Features"];
   }
   if (/(?:reputation|brand)/.test(normalized)) return ["Brand Reputation"];
@@ -746,8 +981,8 @@ function explicitCriteriaFromPrompt(prompt: string, criteria: string[]): string[
     ["Reliability", /\b(?:reliability|reliable|durability|uptime|failure rate)\b/],
     ["Safety features", /\b(?:safety|crash|ncap|airbags?|adas|occupant protection)\b/],
     ["Maintenance", /\b(?:maintenance|servicing|service costs?|repair|upkeep)\b/],
-    ["Price", /\b(?:price|pricing|cost|affordability|budget|value for money|cheapest|lowest fee)\b/],
-    ["Features", /\b(?:features?|capabilities|functionality|ease of use|usability)\b/],
+    ["Price", /\b(?:price|pricing|affordability|budget|value for money|cheapest|lowest fee|total cost|purchase cost|upfront cost)\b/],
+    ["Features", /\b(?:features?|capabilities|functionality|ease of use|usability|comfort|ride quality|cabin)\b/],
   ];
   for (const [label, pattern] of promptTerms) {
     if (pattern.test(normalized)) detected.add(label);
@@ -949,52 +1184,32 @@ export function annotateUnverifiableWinner(analysis: AnalysisPayload): void {
 export const PROVISIONAL_LENS_WINNER_PREFIX = "Provisional lens winner —";
 
 /**
- * Preserve a unique pricing/features leader when the broader qualification model
- * has only insufficient-evidence outcomes. This does not qualify the option or
- * turn neutral placeholder scores into evidence of equal performance.
+ * Legacy compatibility hook. An unqualified matrix leader is deliberately not
+ * promoted; callers and older tests can retain the symbol without reopening the
+ * evidence bypass.
  */
-export function preserveProvisionalLensWinner(analysis: AnalysisPayload): boolean {
-  const modeled = (analysis.vendorScores ?? []).filter((vendor) => (
-    Boolean((vendor as unknown as VendorScoreExtension).qualificationStatus)
-  ));
-  if (
-    analysis.recommendation !== "No qualified option"
-    || !modeled.length
-    || !modeled.every((vendor) => (
-      (vendor as unknown as VendorScoreExtension).qualificationStatus === "INSUFFICIENT_EVIDENCE"
-    ))
-  ) {
-    return false;
-  }
-  const decision = selectEvidenceBackedLensWinner(
-    analysis.pricing,
-    analysis.features,
-    modeled.map((vendor) => vendor.vendor),
-  );
-  if (!decision) return false;
+export function preserveProvisionalLensWinner(_analysis: AnalysisPayload): boolean {
+  // A model-authored matrix row is not independently verified evidence. In
+  // particular, reachable source URLs alone do not prove that a displayed row
+  // value occurs in the retrieved document. Qualification requires
+  // provenance-complete evidence (document hash and cited span), so an option
+  // that failed those gates must never regain a score or recommendation from
+  // unverified matrix winners.
+  return false;
+}
 
-  const winnerScore = modeled.find((vendor) => (
-    vendor.vendor.toLowerCase() === decision.winner.toLowerCase()
-  ))?.score;
-  const lensLabel = decision.pricingWins && decision.featureWins
-    ? "pricing and feature lenses"
-    : decision.featureWins
-      ? "feature lens"
-      : "pricing lens";
-  const qualificationWarning = "This is not a qualified overall recommendation; neutral 50/100 scores indicate missing comparable evidence, not equal performance.";
-  analysis.recommendation = decision.winner;
-  analysis.score = Number.isFinite(winnerScore) ? winnerScore! : 50;
-  analysis.executiveSummary = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner} leads the available ${lensLabel}, winning ${decision.wins} of ${decision.decidedRows} decided dimensions. ${qualificationWarning}`;
-  analysis.recommendationReason = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner} is the best available lens-specific choice because it leads ${decision.wins} of ${decision.decidedRows} decided dimensions (${decision.pricingWins} pricing and ${decision.featureWins} feature). ${qualificationWarning} **Note: ${UNVERIFIABLE_WINNER_NOTE}**`;
-  analysis.insights ??= [];
-  const marker = `${PROVISIONAL_LENS_WINNER_PREFIX} ${decision.winner}`;
-  if (!analysis.insights.some((insight) => insight.startsWith(PROVISIONAL_LENS_WINNER_PREFIX))) {
-    analysis.insights.unshift(marker);
+function suppressUnqualifiedLensWinners(analysis: AnalysisPayload): void {
+  const modeled = analysis.vendorScores ?? [];
+  if (!modeled.length || modeled.some((vendor) => {
+    const status = (vendor as unknown as VendorScoreExtension).qualificationStatus;
+    return status === "QUALIFIED" || status === "QUALIFIED_WITH_CONDITIONS";
+  })) return;
+  for (const row of [...(analysis.pricing ?? []), ...(analysis.features ?? [])]) {
+    row.winner = "Not established";
   }
-  if (!analysis.insights.includes(UNVERIFIABLE_WINNER_NOTE)) {
-    analysis.insights.push(UNVERIFIABLE_WINNER_NOTE);
-  }
-  return true;
+  analysis.insights = (analysis.insights ?? []).filter(
+    (insight) => !insight.startsWith(PROVISIONAL_LENS_WINNER_PREFIX),
+  );
 }
 
 export type ComparisonWeight = {
@@ -1259,6 +1474,23 @@ export function requestsCurrentModelSelection(prompt: string): boolean {
   return /\bselect\s+the\s+best[- ]matching\s+current\s+model\s+from\s+each\s+manufacturer\b/i.test(prompt);
 }
 
+const AUTOMOTIVE_MANUFACTURER_NAME = "(?:byd|ford|hyundai|kia|mahindra|mg|tata|tesla|toyota|volvo|bmw|mercedes(?:-benz)?)";
+const AUTOMOTIVE_MANUFACTURER_ONLY = new RegExp(`^${AUTOMOTIVE_MANUFACTURER_NAME}$`, "i");
+
+function normalizeAutomotivePortfolioLabel(value: string): string {
+  const match = value.trim().match(new RegExp(
+    `^(${AUTOMOTIVE_MANUFACTURER_NAME})\\s+(?:(?:diesel|petrol|gasoline|hybrid|electric|ev)\\s+)?(?:cars?|vehicles?|automobiles?|suvs?)$`,
+    "i",
+  ));
+  return match?.[1] ?? value;
+}
+
+export function requestsVehiclePortfolioSelection(prompt: string, vendors: string[]): boolean {
+  return vendors.length >= 2
+    && vendors.every((vendor) => AUTOMOTIVE_MANUFACTURER_ONLY.test(normalizeAutomotivePortfolioLabel(vendor)))
+    && /\b(?:compare|comparison|versus|vs\.?|against|which|choose|recommend)\b/i.test(prompt);
+}
+
 export function normalizeCurrentModelSelectionName(value: string): string {
   return value
     .replace(/\s+(?:executive|exclusive(?:\s+pro)?|excite(?:\s+pro)?|essence|ec\s+pro|el\s+pro|pack\s+(?:one|two|three|1|2|3))\b.*$/i, "")
@@ -1298,6 +1530,20 @@ export function requestsFiveYearHomeLoanTrend(prompt: string): boolean {
     && /\b(?:summary|trend|history|performance|written by|reported by)\b/i.test(prompt);
 }
 
+function normalizeParserCriteria(...groups: string[][]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const criterion of groups.flat()) {
+    const value = criterion.replace(/\s+/g, " ").trim().slice(0, 100);
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(value);
+    if (normalized.length === 8) break;
+  }
+  return normalized;
+}
+
 function criteriaFor(prompt: string): string[] {
   const normalized = prompt.toLowerCase();
   if (/\bquick[ -]?commerce\b/.test(normalized)) {
@@ -1307,7 +1553,7 @@ function criteriaFor(prompt: string): string[] {
       { label: "Delivery time and reliability", pattern: /\b(?:time to delivery|delivery time|delivery speed|speed of delivery|fast delivery)\b/ },
       { label: "Product quality", pattern: /\b(?:quality|freshness|condition)\b/ },
     ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
-    if (quickCommerceCriteria.length) return quickCommerceCriteria;
+    if (quickCommerceCriteria.length) return normalizeParserCriteria(quickCommerceCriteria);
   }
   const criteria = [
     { label: "Premium, excess and total insurance cost", pattern: /\b(?:insurance premium|premium|excess|deductible|insurance cost|quote)\b/ },
@@ -1354,14 +1600,18 @@ function criteriaFor(prompt: string): string[] {
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
   const selected = Array.from(new Set([...criteria, ...contextual]));
   if (/\b(?:home loans?|mortgages?|housing loans?)\b/.test(normalized)) {
-    return Array.from(new Set([
-      "Variable rate, discounts and comparison rate",
-      "Fixed-rate terms, revert rate and break costs",
-      ...(requestsFiveYearHomeLoanTrend(normalized) ? ["Five-year home-loan product and market trend"] : []),
-      ...selected.filter((criterion) => criterion !== "Five-year ownership cost"),
-    ]));
+    return normalizeParserCriteria(
+      selected.filter((criterion) => criterion !== "Five-year ownership cost"),
+      [
+        "Variable rate, discounts and comparison rate",
+        "Fixed-rate terms, revert rate and break costs",
+        ...(requestsFiveYearHomeLoanTrend(normalized) ? ["Five-year home-loan product and market trend"] : []),
+      ],
+    );
   }
-  return selected.length ? selected : ["Customer outcomes", "Ease of use", "Value for money", "Quality and reliability"];
+  return normalizeParserCriteria(
+    selected.length ? selected : ["Customer outcomes", "Ease of use", "Value for money", "Quality and reliability"],
+  );
 }
 
 function cleanVendorName(value: string): string {
@@ -1468,7 +1718,22 @@ const ENTITY_MARKET_AVAILABILITY: Array<{
     availableIn: ["IN"],
     footprint: "India",
   },
+  {
+    entity: /^tata(?:\s+motors?)?$/i,
+    availableIn: ["IN"],
+    footprint: "India for the passenger-vehicle comparison requested here",
+  },
 ];
+
+function explicitPromptMarketCodes(prompt: string): ResearchMarketCode[] {
+  const normalized = prompt.toLowerCase();
+  return ([
+    ["IN", /\b(?:india|indian|inr|rupees?|₹)\b/],
+    ["AU", /\b(?:australia|australian|aud|a\$)\b/],
+    ["US", /\b(?:united states|usa|u\.s\.|usd|us dollars?)\b/],
+    ["GB", /\b(?:united kingdom|britain|british|uk|gbp|pounds?|£)\b/],
+  ] as const).filter(([, pattern]) => pattern.test(normalized)).map(([code]) => code);
+}
 
 export function comparisonMarketAvailabilityIssue(
   prompt: string,
@@ -1476,6 +1741,11 @@ export function comparisonMarketAvailabilityIssue(
   selectedMarket?: ResearchMarketCode,
 ): string | undefined {
   const market = inferResearchMarket(prompt, vendors, selectedMarket);
+  const explicitMarkets = explicitPromptMarketCodes(prompt);
+  if (selectedMarket && explicitMarkets.length && !explicitMarkets.includes(selectedMarket)) {
+    const requested = explicitMarkets.map((code) => RESEARCH_MARKETS[code].country).join(" and ");
+    return `The prompt asks for ${requested}, but the selected research market is ${market.country}. Make the prompt and market selection match before research starts.`;
+  }
   for (const vendor of vendors) {
     const rule = ENTITY_MARKET_AVAILABILITY.find(({ entity }) => entity.test(vendor.trim()));
     if (rule && !rule.availableIn.includes(market.countryCode)) {
@@ -1931,8 +2201,9 @@ function isPlaceholderVendor(value: string): boolean {
 export function isObjectivePhraseVendor(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return isPlaceholderVendor(value)
+    || /^mahindra\s+xuv$/i.test(value.trim())
     || /^(?:(?:it(?:'|’)?s|its|their|the|other|main|top|leading)\s+)?competitors?$/.test(normalized)
-    || /^(?:other|main|top|leading|strongest|best)\s+(?:e-?commerce\s+)?(?:sites?|platforms?|marketplaces?|providers?|services?|brands?|electric\s+vehicles?|electric\s+cars?|ev\s+vehicles?|ev\s+(?:brand\s+)?cars?|evs?|cars?)$/.test(normalized)
+    || /^(?:other|main|top|leading|strongest|best)\s+(?:(?:e-?commerce|watch)\s+)?(?:sites?|platforms?|marketplaces?|providers?|services?|brands?|electric\s+vehicles?|electric\s+cars?|ev\s+vehicles?|ev\s+(?:brand\s+)?cars?|evs?|cars?)$/.test(normalized)
     || /^let\s+me\s+know\b.*\bwhere\b.*\bstands?\b/.test(normalized)
     || /^(?:across|among|within|for)\b/.test(normalized)
     || /\b(?:my|our|your|their)\s+(?:products?|services?|business|customers?|market|team|organisation|organization)\b/.test(normalized)
@@ -1954,33 +2225,137 @@ export function preserveConcreteDiscoveryOptions(
   const normalizedTokens = (value: string): string[] => value
     .toLowerCase()
     .match(/[\p{L}\p{N}]+/gu) ?? [];
-  const preserved = concrete.map((vendor) => ({
-    exact: vendor.toLowerCase(),
-    tokens: normalizedTokens(vendor),
-  }));
+  const optionIdentity = (value: string) => {
+    const tokens = normalizedTokens(value);
+    const meaningfulTokens = tokens.filter((token) => !["and", "the", "of", "for"].includes(token));
+    return {
+      exact: tokens.join(" "),
+      compact: tokens.join(""),
+      tokens,
+      acronym: meaningfulTokens.length >= 2
+        ? meaningfulTokens.map((token) => token[0]).join("")
+        : "",
+    };
+  };
+  const sameOrAlias = (left: string, right: string): boolean => {
+    const first = optionIdentity(left);
+    const second = optionIdentity(right);
+    if (!first.exact || !second.exact) return false;
+    return first.exact === second.exact
+      || Boolean(first.acronym && first.acronym === second.compact)
+      || Boolean(second.acronym && second.acronym === first.compact)
+      || Boolean(
+        first.acronym.length >= 2
+        && second.tokens.includes(first.acronym)
+        && first.tokens.some((token) => second.tokens.includes(token)),
+      )
+      || Boolean(
+        second.acronym.length >= 2
+        && first.tokens.includes(second.acronym)
+        && second.tokens.some((token) => first.tokens.includes(token)),
+      )
+      || (
+        first.tokens.length === 1
+        && second.tokens[0] === first.tokens[0]
+      )
+      || (
+        second.tokens.length === 1
+        && first.tokens[0] === second.tokens[0]
+      )
+      || (
+        first.tokens.length >= 2
+        && first.tokens.every((token) => second.tokens.includes(token))
+      )
+      || (
+        second.tokens.length >= 2
+        && second.tokens.every((token) => first.tokens.includes(token))
+      );
+  };
+  const accepted = [...concrete];
   const alternatives = discovered.filter((vendor) => {
     if (isObjectivePhraseVendor(vendor)) return false;
-    const candidateTokens = normalizedTokens(vendor);
-    const candidateAcronym = candidateTokens.map((token) => token[0]).join("");
-    return !preserved.some((option) => (
-      option.exact === vendor.toLowerCase()
-      || (
-        option.tokens.length === 1
-        && candidateTokens[0] === option.tokens[0]
-      )
-      || (
-        option.tokens.length >= 2
-        && option.tokens.every((token) => candidateTokens.includes(token))
-      )
-      || (
-        candidateAcronym.length >= 2
-        && option.tokens.includes(candidateAcronym)
-        && option.tokens.some((token) => candidateTokens.includes(token))
-      )
-    ));
+    if (accepted.some((option) => sameOrAlias(option, vendor))) return false;
+    accepted.push(vendor);
+    return true;
   });
-  return Array.from(new Set([...concrete, ...alternatives])).slice(0, targetCount);
+  return [...concrete, ...alternatives].slice(0, targetCount);
 }
+
+export function requestsBestAlternative(prompt: string): boolean {
+  return /\bbest\s+alternatives?\b/i.test(prompt);
+}
+
+export function applyBestAlternativeDecision(
+  analysis: AnalysisPayload,
+  anchor: string,
+): void {
+  // Single-anchor alternative intent ranks only non-anchor options. The anchor
+  // remains the benchmark, never the answer; the rationale must say why the
+  // selected competitor leads the supported alternative-only decision set.
+  const normalizedAnchor = normalizeComparisonOptionName(anchor);
+  const anchorAcronym = normalizedAnchor
+    .split(/\s+/)
+    .filter((token) => token && !["and", "the", "of", "for"].includes(token))
+    .map((token) => token[0])
+    .join("");
+  const isAnchor = (vendor: string) => {
+    const normalizedVendor = normalizeComparisonOptionName(vendor);
+    return normalizedVendor === normalizedAnchor
+      || (anchorAcronym.length >= 2 && normalizedVendor.replace(/\s+/g, "") === anchorAcronym);
+  };
+  const eligible = analysis.vendorScores.filter((vendor) => {
+    if (isAnchor(vendor.vendor)) return false;
+    const status = (vendor as unknown as VendorScoreExtension).qualificationStatus;
+    return status === "QUALIFIED" || status === "QUALIFIED_WITH_CONDITIONS";
+  });
+  if (!eligible.length) {
+    analysis.recommendation = "No qualified alternative";
+    analysis.score = 0;
+    analysis.recommendationReason = `No competitor to ${anchor} passed the existing qualification and validated-evidence gates.`;
+    return;
+  }
+  const qualitativeDecision = validatedQualitativeLensDecision(analysis, [anchor]);
+  if (qualitativeDecision) {
+    const winner = eligible.find((vendor) => vendor.vendor === qualitativeDecision.winner);
+    if (winner) {
+      analysis.recommendation = winner.vendor;
+      analysis.score = Math.round((winner as unknown as VendorScoreExtension).modelScore ?? winner.score);
+      analysis.recommendationReason = `${winner.vendor} is the best-qualified alternative to ${anchor} because it uniquely leads the provenance-validated competitor feature lens, winning ${qualitativeDecision.wins} of ${qualitativeDecision.decidedRows} supported dimensions.`;
+      analysis.executiveSummary = alignOverallWinnerAssertions(
+        analysis.executiveSummary,
+        analysis.recommendation,
+        analysis.vendorScores.map((vendorScore) => vendorScore.vendor),
+      );
+      return;
+    }
+  }
+  const ranked = [...eligible].sort((left, right) => (
+    ((right as unknown as VendorScoreExtension).modelScore ?? right.score)
+    - ((left as unknown as VendorScoreExtension).modelScore ?? left.score)
+  ));
+  const winner = ranked[0];
+  const runnerUp = ranked[1];
+  const winnerScore = (winner as unknown as VendorScoreExtension).modelScore ?? winner.score;
+  const runnerUpScore = runnerUp
+    ? ((runnerUp as unknown as VendorScoreExtension).modelScore ?? runnerUp.score)
+    : undefined;
+  const difference = runnerUpScore === undefined ? undefined : winnerScore - runnerUpScore;
+  const band = difference === undefined ? "CLEAR_ADVANTAGE" : scoreDifferenceBand(difference);
+  analysis.recommendation = band === "PRACTICAL_TIE" ? "No definitive alternative" : winner.vendor;
+  analysis.score = Math.round(winnerScore);
+  analysis.recommendationReason = band === "PRACTICAL_TIE"
+    ? `${winner.vendor} and ${runnerUp?.vendor ?? "the leading competitors"} are a practical tie as alternatives to ${anchor} under the existing qualification and weighted evidence model.`
+    : `${winner.vendor} is the best-qualified alternative to ${anchor}, leading the other eligible competitors with a ${band.toLowerCase().replaceAll("_", " ")} (${winnerScore.toFixed(2)} vs ${runnerUpScore?.toFixed(2) ?? "n/a"}).`;
+  analysis.executiveSummary = alignOverallWinnerAssertions(
+    analysis.executiveSummary,
+    analysis.recommendation,
+    analysis.vendorScores.map((vendor) => vendor.vendor),
+  );
+}
+
+// Kept as a source-compatible alias for callers introduced during the
+// best-alternative discovery rollout.
+export const applyBestAlternativeRecommendation = applyBestAlternativeDecision;
 
 export function selectOpenEndedElectricVehicleShortlist(
   anchorBrand: string,
@@ -2451,16 +2826,37 @@ export function assertCanonicalComparisonConsistency(
   }
 }
 
-export function parsePrompt(prompt: string) {
+function authoritativeComparisonPrompt(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, " ").trim();
+  const generatedOriginalRequest = normalized.search(/\boriginal\s+request\s*:/i);
+  if (generatedOriginalRequest < 0) return normalized;
+
+  // "Original request:" is metadata added by the review UI. Once that review
+  // text is edited, the clause before the marker is the new user-authored
+  // source of truth. Parsing the metadata again lets an older option list win
+  // through the parser's intentional later-chain precedence.
+  const editedRequest = normalized.slice(0, generatedOriginalRequest).trim();
+  return editedRequest.length >= 8 ? editedRequest : normalized;
+}
+
+export function parsePrompt(prompt: string) {
+  const normalized = authoritativeComparisonPrompt(prompt);
   const splitComparisonOptions = (value: string): string[] => {
-    if (/^(?:on|by|based\s+on)\b/i.test(value.trim())) return [];
+    const candidate = value.trim();
+    if (
+      /^(?:on|by|based\s+on)\b/i.test(candidate)
+      || /^(?:the\s+)?(?:vehicles?|cars?|options?|products?|services?|vendors?|providers?)\s+(?:on|by|based\s+on|according\s+to)\b/i.test(candidate)
+    ) return [];
     const hasListDelimiter = /,|\/|\b(?:vs\.?|versus|and|or)\b/i.test(value);
     if (!hasListDelimiter) return [];
-    return value
+    const options = value
       .split(/\s*(?:,|\/|\bvs\.?\b|\bversus\b|\band\b|\bor\b)\s*/i)
       .map(cleanVendorName)
       .filter((option) => option && !isPlaceholderVendor(option));
+    const criterionPhrase = /^(?:performance|reliability|quality|safety(?:\s+features?)?|maintenance|servicing|price|pricing|cost|value|features?|technology|comfort|range|charging|battery|warranty|resale(?:\s+value)?|security|privacy|support|customer\s+service|ease\s+of\s+use)$/i;
+    return options.length >= 2 && options.every((option) => criterionPhrase.test(option))
+      ? []
+      : options;
   };
   const chosen = normalized.match(
     /\b(?:choose|include|use|shortlist)\s+(.+?)(?=\.\s|\?|;\s|$)/i,
@@ -2596,6 +2992,7 @@ export function parsePrompt(prompt: string) {
     ));
     if (genericVehicleObjective) vendors.push(genericVehicleObjective);
   }
+  vendors = vendors.map(normalizeAutomotivePortfolioLabel);
   if (
     vendors.length < MAX_COMPARISON_OPTIONS
     && /\bany\s+other\s+relevant\s+provider\b/i.test(normalized)
@@ -2800,7 +3197,7 @@ export async function extractIntentWithOpenAI(prompt: string): Promise<unknown> 
 export async function parsePromptWithIntent(
   prompt: string,
   extractor: IntentExtractor = extractIntentWithOpenAI,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; market?: ResearchMarketCode } = {},
 ) {
   const parsed = parsePrompt(prompt);
   let extracted: ComparisonIntent | null = null;
@@ -2826,7 +3223,8 @@ export async function parsePromptWithIntent(
     : intent.options.length >= 2
       ? intent.options
       : parsed.vendors;
-  const hasClearDeterministicDecision = parsed.context.valid && parsed.vendors.length >= 2;
+  const hasClearDeterministicDecision = parsed.vendors.length >= 2
+    && (parsed.context.valid || parsed.hasExplicitVendorList);
   const requiresClarification = vendors.length < 2
     || (intent.confidence < 0.7 && !hasClearDeterministicDecision);
   if (requiresClarification) {
@@ -2840,7 +3238,7 @@ export async function parsePromptWithIntent(
       comparisonIdentity: buildComparisonIdentity(parsed.prompt, intent.category || parsed.context.segment, vendors),
       intent: { ...intent, options: vendors, clarification },
       context: {
-        ...validateComparisonContext(parsed.prompt, vendors),
+        ...validateComparisonContext(parsed.prompt, vendors, options.market),
         valid: false,
         message: clarification,
       },
@@ -2849,7 +3247,7 @@ export async function parsePromptWithIntent(
   const validationPrompt = /\b(?:compare|comparing|comparison|comparative(?:\s+analysis)?|versus|vs\.?|which|choose|recommend|should i)\b/i.test(parsed.prompt)
     ? parsed.prompt
     : `${parsed.prompt} Compare these options.`;
-  const context = validateComparisonContext(validationPrompt, vendors);
+  const context = validateComparisonContext(validationPrompt, vendors, options.market);
   const isBatteryServicePrompt = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(parsed.prompt);
   const segment = context.segment === "Product or service comparison" && isBatteryServicePrompt
     ? "Battery as a Service"
@@ -2866,11 +3264,11 @@ export async function parsePromptWithIntent(
     vendors,
     comparisonIdentity: buildComparisonIdentity(parsed.prompt, segment, vendors),
     criteria: hasExplicitCriteria
-      ? parsed.criteria
-      : Array.from(new Set([
-        ...parsed.criteria,
-        ...criteriaFor(`${intent.subject} ${intent.category} ${intent.useCase}`),
-      ])),
+      ? normalizeParserCriteria(parsed.criteria)
+      : normalizeParserCriteria(
+        parsed.criteria,
+        criteriaFor(`${intent.subject} ${intent.category} ${intent.useCase}`),
+      ),
     intent: { ...intent, options: vendors, clarification: "" },
     context: {
       ...context,
@@ -2915,6 +3313,10 @@ export function refineComparisonPrompt(
   const optionInstruction = discoveryObjectives.length
     ? `Preserve these named anchors: ${concreteOptions.join(", ") || "none"}. Resolve these open-ended objectives into concrete locally available products before scoring: ${discoveryObjectives.join(" | ")}.`
     : `Compare only these resolved options: ${concreteOptions.join(", ")}.`;
+  const vehicleScopeInstruction = /\bdiesel\b/i.test(original)
+    && /\b(?:cars?|vehicles?|automotive|suvs?|tata|mahindra)\b/i.test(original)
+    ? "- Vehicle scope constraint: preserve the requested diesel powertrain. Discover and score only current diesel vehicles; do not substitute petrol, electric, or hybrid models."
+    : "";
   const criteriaText = criteria.length ? criteria.join(", ") : "the decision criteria implied by the full request";
 
   return [
@@ -2925,10 +3327,11 @@ export function refineComparisonPrompt(
     `- Decision context: ${context.segment}${context.industry ? ` for ${context.industry}` : ""}.`,
     `- Decision criteria: ${criteriaText}.`,
     `- ${optionInstruction}`,
+    vehicleScopeInstruction,
     "- Enforce a like-for-like comparison: same product or service category, same broad use case, current availability in the selected market, and a comparable customer segment, capability level, size, and price band where those dimensions apply.",
     "- Do not rank raw request text, generic categories, placeholders, parent-brand aliases, unavailable products, or offerings aimed at a materially different demographic.",
     "- If the request names only a manufacturer or provider portfolio, select exact locally available offerings that satisfy the like-for-like and demographic constraints before research and scoring.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export function validateComparisonContext(
@@ -2937,6 +3340,8 @@ export function validateComparisonContext(
   selectedMarket?: ResearchMarketCode,
 ): ComparisonContext {
   const normalized = prompt.toLowerCase();
+  const hasKnownAutomotiveManufacturerPair = vendors.length >= 2
+    && vendors.every((vendor) => AUTOMOTIVE_MANUFACTURER_ONLY.test(normalizeAutomotivePortfolioLabel(vendor)));
   const hasVehicleBrandPair = /\b(?:tesla|byd)\b/.test(normalized)
     && vendors.some((vendor) => /\b(?:tesla|byd)\b/i.test(vendor));
   const hasBroadMarketInsightIntent = /\b(?:market insights?|market analysis|share prices?|market performance)\b/.test(normalized);
@@ -2952,6 +3357,14 @@ export function validateComparisonContext(
         ? /\b(?:electric cars?|electric vehicles?|electric suvs?|electric 4[ -]?wheelers?|electric four[ -]?wheelers?|evs?|battery electric|tesla|byd)\b/
         : /\b(?:electric cars?|electric vehicles?|electric suvs?|electric 4[ -]?wheelers?|electric four[ -]?wheelers?|evs?|battery electric|creta\s+(?:electric|ev)|be\s*6e?|xev\s*9e)\b/,
     },
+    ...(
+      hasKnownAutomotiveManufacturerPair
+      && !isElectricVehiclePrompt(prompt)
+      && !hasBroadMarketInsightIntent
+      && !/\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt)
+        ? [{ label: "Vehicles", pattern: /(?:)/ }]
+        : []
+    ),
     { label: "Computers and laptops", pattern: /\b(?:computers?|laptops?|notebooks?|workstations?|macbooks?|chromebooks?)\b/ },
     { label: "CRM", pattern: /\b(?:crm|salesforce|customer relationship)\b/ },
     { label: "Customer support", pattern: /\b(?:customer support|help desk|shared inbox|customer service|after.?sales support)\b/ },
@@ -2963,14 +3376,15 @@ export function validateComparisonContext(
     { label: "Communication", pattern: /\b(?:team chat|messaging|video conferencing)\b/ },
     { label: "Market insights", pattern: /\b(?:market insights?|market analysis|investment insights?|share prices?|market performance)\b/ },
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
-  const isConsumerVehicleDecision = /\b(?:car|vehicle|automotive|buy|purchase|driv(?:e|ing)|owner(?:ship)?)\b/.test(normalized);
+  const isConsumerVehicleDecision = hasKnownAutomotiveManufacturerPair
+    || /\b(?:car|vehicle|automotive|buy|purchase|driv(?:e|ing)|owner(?:ship)?)\b/.test(normalized);
   const isAustralianMarket = /\b(?:australia|australian|aud|a\$)\b/.test(normalized);
   const isRetailBankingDecision = /\b(?:home loans?|mortgages?|bank|lender|deposit|lvr|loan term|credit cards?|annual fees?|interest rates?|balance transfers?|rewards points?)\b/.test(normalized);
   const isInsuranceDecision = /\b(?:insurance|insurer|premium|excess|policy|claims?)\b/.test(normalized);
   const namesAustralianInsurer = /\b(?:youi|allianz|aami|nrma|qbe|budget direct|toyota insurance)\b/.test(normalized);
   const namesAustralianBank = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz)\b/.test(normalized);
   const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank|bank|credit union)\b/i;
-  const automotiveBrands = /\b(?:car\s*dekho|cardekho(?:\.com)?|tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra)\b/i;
+  const automotiveBrands = /\b(?:car\s*dekho|cardekho(?:\.com)?|tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra|tata)\b/i;
   const technologyBrands = /\b(?:apple|hp|microsoft|google|samsung|dell|lenovo|asus|acer)\b/i;
   const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon)\b/i;
   const investmentBrands = /\b(?:vanguard|betashares|ishares)\b/i;
@@ -3030,8 +3444,47 @@ export function validateComparisonContext(
       ? "Consumer purchase"
       : "";
   const industry = industryMatches[0] ?? inferredUseCase;
-  if (vendors.length < 2 || vendors.some(isPlaceholderVendor)) {
+  const distinctVendors = new Set(
+    vendors.map((vendor) => cleanVendorName(vendor).toLocaleLowerCase()).filter(Boolean),
+  );
+  if (distinctVendors.size < 2 || vendors.some(isPlaceholderVendor)) {
     return { valid: false, segment, industry, message: "Enter at least two actual product or service names to compare." };
+  }
+  if (distinctVendors.size > MAX_COMPARISON_OPTIONS) {
+    return {
+      valid: false,
+      segment,
+      industry,
+      message: `Compare between two and ${MAX_COMPARISON_OPTIONS} distinct options at a time.`,
+    };
+  }
+  const explicitMarkets = explicitPromptMarketCodes(prompt);
+  if (selectedMarket && explicitMarkets.length && !explicitMarkets.includes(selectedMarket)) {
+    return {
+      valid: false,
+      segment,
+      industry,
+      message: comparisonMarketAvailabilityIssue(prompt, vendors, selectedMarket)!,
+    };
+  }
+  if (isConsumerVehicleDecision) {
+    const manufacturerOnly = vendors.filter((vendor) => AUTOMOTIVE_MANUFACTURER_ONLY.test(vendor.trim()));
+    const specificModels = vendors.filter((vendor) => (
+      !AUTOMOTIVE_MANUFACTURER_ONLY.test(vendor.trim()) && !isObjectivePhraseVendor(vendor)
+    ));
+    if (manufacturerOnly.length && specificModels.length) {
+      return {
+        valid: false,
+        segment,
+        industry,
+        message: `Compare like-for-like vehicles. ${manufacturerOnly.join(", ")} ${manufacturerOnly.length === 1 ? "is a manufacturer" : "are manufacturers"}, while ${specificModels.join(", ")} ${specificModels.length === 1 ? "is a specific model" : "are specific models"}. Name an exact current model for every manufacturer.`,
+      };
+    }
+    const hasVehicleClass = hasVehicleBrandPair
+      || /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|electric|ev|diesel|petrol|gasoline|hybrid|suv|sedan|hatchback|ute|pickup|truck|van|motorcycle|two-wheeler|4x4|awd)\b/i.test(prompt);
+    // A manufacturer-only request is an executable portfolio-selection
+    // decision. Exact local models are selected under the governed discovery
+    // and evidence-readiness gates before any scoring occurs.
   }
   if (knownDomains.size > 1 && !isCrossSegmentIntent) {
     return {
@@ -4969,7 +5422,35 @@ export function electricVehicleFinalQualityIssues(
     issues.push("required product pricing and feature rows are incomplete");
   }
   const missingOfficial = missingElectricVehicleSourceVendors(vendors, citationUrls);
-  if (missingOfficial.length) issues.push(`official product sources are missing for ${missingOfficial.join(", ")}`);
+  const lacksCorroboratedIndependentFallback = missingOfficial.filter((vendor) => {
+    const vendorScore = analysis.vendorScores.find((row) => row.vendor.toLowerCase() === vendor.toLowerCase());
+    if (!vendorScore) return true;
+    const domains = new Set((vendorScore.weightedScores ?? []).flatMap((criterion) => (
+      (criterion.evidence ?? []).flatMap((evidence) => {
+        if (
+          evidence.evidenceKind === "unverified"
+          || evidence.evidenceKind === "analyst_judgment"
+          || evidence.normalizationMethod !== "retrieved_document_metric"
+          || !evidence.documentSha256
+          || !evidence.sourceDate
+          || !evidence.sourceUrl
+          || !evidence.metricSubject
+          || normalizeComparisonOptionName(evidence.metricSubject) !== normalizeComparisonOptionName(vendor)
+        ) return [];
+        try {
+          const hostname = new URL(evidence.sourceUrl).hostname.toLowerCase().replace(/^www\./, "");
+          const brandToken = normalizeComparisonOptionName(vendor).split(" ")[0] ?? "";
+          return brandToken.length >= 3 && hostname.includes(brandToken) ? [] : [publisherDomainForHostname(hostname)];
+        } catch {
+          return [];
+        }
+      })
+    )));
+    return domains.size < 2;
+  });
+  if (lacksCorroboratedIndependentFallback.length) {
+    issues.push(`official product sources or two dated independent exact-model sources are missing for ${lacksCorroboratedIndependentFallback.join(", ")}`);
+  }
 
   const verified = new Set(dedupeReferenceUrls(scoreVerifiedUrls));
   for (const vendorScore of analysis.vendorScores) {
@@ -5122,25 +5603,472 @@ function collectHttpUrls(value: unknown, found = new Set<string>()): string[] {
 }
 
 /**
- * Only collect URLs attached to an explicit web-search citation annotation.
- * URLs embedded in model prose or JSON fields are not provenance.
+ * Collect only explicit Responses tool provenance. Model prose and JSON URLs
+ * are never admitted unless the same URL is present in one of these locations.
  */
-export function collectCitedHttpUrls(value: unknown, found = new Set<string>()): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value) collectCitedHttpUrls(item, found);
-  } else if (value && typeof value === "object") {
-    const row = value as Record<string, unknown>;
-    if (row.type === "url_citation" && typeof row.url === "string") {
-      const cleanUrl = cleanEvidenceUrl(row.url);
-      if (cleanUrl) found.add(cleanUrl);
+export function collectExplicitWebSearchSources(value: unknown): {
+  urls: string[];
+  messageAnnotationCount: number;
+  toolSourceCount: number;
+} {
+  const found = new Set<string>();
+  let messageAnnotationCount = 0;
+  let toolSourceCount = 0;
+  const root = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  const output = Array.isArray(value)
+    ? value
+    : root && Array.isArray(root.output) ? root.output : [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    if (row.type === "message" && Array.isArray(row.content)) {
+      for (const content of row.content) {
+        if (!content || typeof content !== "object") continue;
+        const annotations = (content as Record<string, unknown>).annotations;
+        if (!Array.isArray(annotations)) continue;
+        for (const annotation of annotations) {
+          if (!annotation || typeof annotation !== "object") continue;
+          const citation = annotation as Record<string, unknown>;
+          if (citation.type !== "url_citation" || typeof citation.url !== "string") continue;
+          const cleanUrl = cleanEvidenceUrl(citation.url);
+          if (!cleanUrl) continue;
+          messageAnnotationCount += 1;
+          found.add(cleanUrl);
+        }
+      }
     }
-    for (const item of Object.values(row)) {
-      if (Array.isArray(item) || (item && typeof item === "object")) {
-        collectCitedHttpUrls(item, found);
+    if (row.type === "web_search_call" && row.action && typeof row.action === "object") {
+      const sources = (row.action as Record<string, unknown>).sources;
+      if (!Array.isArray(sources)) continue;
+      for (const source of sources) {
+        if (!source || typeof source !== "object") continue;
+        const toolSource = source as Record<string, unknown>;
+        if (toolSource.type !== "url" || typeof toolSource.url !== "string") continue;
+        const cleanUrl = cleanEvidenceUrl(toolSource.url);
+        if (!cleanUrl) continue;
+        toolSourceCount += 1;
+        found.add(cleanUrl);
       }
     }
   }
-  return [...found];
+  return { urls: [...found], messageAnnotationCount, toolSourceCount };
+}
+
+export function collectCitedHttpUrls(value: unknown): string[] {
+  return collectExplicitWebSearchSources(value).urls;
+}
+
+export function missingExactModelVerifiedMetricVendors(
+  parsed: Record<string, unknown>,
+  vendors: string[],
+): string[] {
+  const vendorScores = Array.isArray(parsed.vendorScores)
+    ? parsed.vendorScores as Array<Record<string, unknown>>
+    : [];
+  return vendors.filter((vendor) => {
+    const vendorScore = vendorScores.find((row) => (
+      typeof row.vendor === "string"
+      && normalizeComparisonOptionName(row.vendor) === normalizeComparisonOptionName(vendor)
+    ));
+    const weightedScores = vendorScore && Array.isArray(vendorScore.weightedScores)
+      ? vendorScore.weightedScores as Array<Record<string, unknown>>
+      : [];
+    const exactEvidence = weightedScores.flatMap((criterion) => (
+      Array.isArray(criterion.evidence)
+      ? (criterion.evidence as Array<Record<string, unknown>>).filter((evidence) => (
+        evidence.normalizationMethod === "retrieved_document_metric"
+        && typeof evidence.documentSha256 === "string"
+        && /^[a-f0-9]{64}$/.test(evidence.documentSha256)
+        && typeof evidence.sourceTextStart === "number"
+        && typeof evidence.sourceTextEnd === "number"
+        && evidence.sourceTextEnd > evidence.sourceTextStart
+        && typeof evidence.metricSubject === "string"
+        && normalizeComparisonOptionName(evidence.metricSubject) === normalizeComparisonOptionName(vendor)
+        && typeof evidence.sourceUrl === "string"
+      ))
+      : []
+    ));
+    const brandToken = normalizeComparisonOptionName(vendor).split(" ")[0] ?? "";
+    const domains = new Set(exactEvidence.flatMap((evidence) => {
+      if (typeof evidence.sourceDate !== "string" || !normalizeDate(evidence.sourceDate)) return [];
+      try {
+        return [publisherDomainForHostname(new URL(String(evidence.sourceUrl)).hostname)];
+      } catch {
+        return [];
+      }
+    }));
+    const hasOfficialExactMetric = exactEvidence.some((evidence) => {
+      try {
+        const hostname = new URL(String(evidence.sourceUrl)).hostname.toLowerCase();
+        return brandToken.length >= 3 && hostname.includes(brandToken);
+      } catch {
+        return false;
+      }
+    });
+    return !hasOfficialExactMetric && domains.size < 2;
+  });
+}
+
+export async function discoverIndependentVehicleFallbackUrls(
+  parsed: Record<string, unknown>,
+  vendors: string[],
+  search: (missingVendors: string[]) => Promise<unknown>,
+  maximum = 8,
+): Promise<string[]> {
+  const missingVendors = missingExactModelVerifiedMetricVendors(parsed, vendors);
+  if (!missingVendors.length) return [];
+  const output = await search(missingVendors);
+  return dedupeReferenceUrls(collectCitedHttpUrls(output)).slice(0, Math.max(0, maximum));
+}
+
+/** Collect only URLs emitted as Responses web-search citations, never prose URLs. */
+export async function discoverGeneralSoftwareFallbackUrls(
+  vendors: string[],
+  search: (vendors: string[]) => Promise<unknown>,
+  maximum = 8,
+): Promise<string[]> {
+  if (!vendors.length || maximum <= 0) return [];
+  const output = await search(vendors);
+  return dedupeReferenceUrls(collectCitedHttpUrls(output)).slice(0, maximum);
+}
+
+type CitedCompetitorDiscoverySearchResult = {
+  output: unknown;
+  outputText: string;
+};
+
+type CitedCompetitorDiscoveryResult = {
+  vendors: string[];
+  urls: string[];
+  selectionRoles: Array<{
+    vendor: string;
+    lens: string;
+    officialUrl: string;
+    discoveryStatus?: "unverified_candidate";
+  }>;
+  category: string;
+};
+
+function documentNamesComparisonOption(document: RetrievedEvidenceDocument, product: string): boolean {
+  const normalizedText = normalizeComparisonOptionName(document.text);
+  const normalizedProduct = normalizeComparisonOptionName(product);
+  if (!normalizedProduct) return false;
+  if (normalizedText.includes(normalizedProduct)) return true;
+  const acronym = normalizedProduct
+    .split(/\s+/)
+    .filter((token) => token && !["and", "the", "of", "for"].includes(token))
+    .map((token) => token[0])
+    .join("");
+  const escapedAcronym = acronym.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return acronym.length >= 2
+    && new RegExp(`(?:^|\\s)${escapedAcronym}(?:\\s|$)`, "i").test(normalizedText);
+}
+
+const COMPARABLE_CATEGORY_TAXONOMY = [{
+  trigger: /\b(?:aem|adobe experience manager|dxp|cms|wcm|content management|digital experience)\b/i,
+  evidence: /\b(?:dxp|cms|wcm)\b|digital experience platforms?|content management systems?|web content management/i,
+}];
+
+function documentConfirmsComparableCategory(
+  document: RetrievedEvidenceDocument,
+  prompt: string,
+  category: string,
+): boolean {
+  const taxonomy = COMPARABLE_CATEGORY_TAXONOMY.find(({ trigger }) => trigger.test(`${prompt} ${category}`));
+  if (taxonomy) return taxonomy.evidence.test(document.text);
+  const normalizedCategory = normalizeComparisonOptionName(category);
+  if (!normalizedCategory) return false;
+  const normalizedText = normalizeComparisonOptionName(document.text);
+  if (normalizedText.includes(normalizedCategory)) return true;
+  const categoryTokens = normalizedCategory
+    .split(/\s+/)
+    .map((token) => token.replace(/s$/, ""))
+    .filter((token) => token.length >= 3 && ![
+      "enterprise", "platform", "product", "service", "software", "solution", "system",
+    ].includes(token));
+  const textTokens = new Set(normalizedText.split(/\s+/).map((token) => token.replace(/s$/, "")));
+  return categoryTokens.length >= 2 && categoryTokens.every((token) => textTokens.has(token));
+}
+
+function boundedProductHeadings(document: RetrievedEvidenceDocument): string[] {
+  const lines = document.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return Array.from(new Set(lines.slice(0, 80).flatMap((line, index) => {
+    const explicit = line.match(/^(?:#{1,4}\s+|[-*•]\s+)([\p{L}\p{N}][\p{L}\p{N} .&+/-]{1,80})$/u)?.[1];
+    const firstHeading = index < 5
+      ? line.match(/^([\p{Lu}\p{Lt}\p{N}][\p{L}\p{N} .&+/-]{1,80})$/u)?.[1]
+      : undefined;
+    const candidate = cleanVendorName(explicit ?? firstHeading ?? "");
+    if (
+      !candidate
+      || candidate.split(/\s+/).length > 8
+      || isObjectivePhraseVendor(candidate)
+      || /^(?:home|products?|solutions?|features?|alternatives?|comparison|overview|pricing|resources?)$/i.test(candidate)
+    ) return [];
+    return [candidate];
+  })));
+}
+
+function hostnameSupportsProductName(url: string, name: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const brand = normalizeComparisonOptionName(name).split(/\s+/)[0]?.replace(/[^a-z0-9]/g, "") ?? "";
+    return brand.length >= 3 && hostname.includes(brand);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recovers an open-ended shortlist only from structured names whose explicit
+ * Responses citations survive governed document retrieval and whose retrieved
+ * text names both the product and the shared comparable category.
+ */
+export async function recoverCitedOpenEndedCompetitors(options: {
+  anchor: string;
+  prompt: string;
+  market: string;
+  initialCategory?: string;
+  requested: string[];
+  initialVendors: string[];
+  targetCount: number;
+  search: () => Promise<CitedCompetitorDiscoverySearchResult>;
+  retrieve: (urls: string[]) => Promise<EvidenceDocumentResult[]>;
+}): Promise<CitedCompetitorDiscoveryResult | null> {
+  const diagnostics = {
+    citedUrlCount: 0,
+    messageAnnotationCount: 0,
+    toolSourceCount: 0,
+    retrievedDocumentCount: 0,
+    structuredCandidateCount: 0,
+    extractedCandidateCount: 0,
+    verifiedAlternativeCount: 0,
+    rejected: {
+      no_citations: 0,
+      no_retrieved_content: 0,
+      product_page_missing: 0,
+      comparison_category_missing: 0,
+      insufficient_plural_alternatives: 0,
+    },
+  };
+  const finish = (result: CitedCompetitorDiscoveryResult | null) => {
+    console.info("cited_competitor_discovery_diagnostics", diagnostics);
+    return result;
+  };
+  const initial = preserveConcreteDiscoveryOptions(
+    options.requested,
+    options.initialVendors,
+    options.targetCount,
+  );
+  const categoryMatchesPromptTaxonomy = (category: string) => {
+    const taxonomy = COMPARABLE_CATEGORY_TAXONOMY.find(({ trigger }) => trigger.test(options.prompt));
+    if (taxonomy) return taxonomy.evidence.test(category);
+    return normalizeComparisonOptionName(category).split(/\s+/).filter((token) => token.length >= 3).length >= 2;
+  };
+  const unverifiedResult = (
+    names: string[],
+    category: string,
+  ): CitedCompetitorDiscoveryResult | null => {
+    const isCategoryOnlyName = (name: string) => {
+      const tokens = normalizeComparisonOptionName(name).split(/\s+/).filter(Boolean);
+      const categoryVocabulary = new Set([
+        "cms", "dxp", "wcm", "content", "digital", "experience", "management",
+        "platform", "platforms", "system", "systems", "web",
+      ]);
+      return tokens.length > 0 && tokens.every((token) => categoryVocabulary.has(token));
+    };
+    const vendors = preserveConcreteDiscoveryOptions(
+      options.requested,
+      names.filter((name) => (
+        normalizeComparisonOptionName(name) !== normalizeComparisonOptionName(category)
+        && !isCategoryOnlyName(name)
+      )),
+      options.targetCount,
+    );
+    if (vendors.length < 3) {
+      diagnostics.rejected.insufficient_plural_alternatives += 1;
+      return null;
+    }
+    return {
+      vendors,
+      urls: [],
+      category,
+      selectionRoles: vendors.map((vendor, index) => ({
+        vendor,
+        lens: index === 0 ? "preserved" : "comparable_competitor",
+        officialUrl: "",
+        discoveryStatus: "unverified_candidate",
+      })),
+    };
+  };
+  if (
+    initial.length >= 3
+    && options.initialCategory
+    && categoryMatchesPromptTaxonomy(options.initialCategory)
+  ) {
+    return finish(unverifiedResult(initial, options.initialCategory));
+  }
+  const response = await options.search();
+  let structured: Record<string, unknown>;
+  try {
+    structured = parseJsonObject(response.outputText) as Record<string, unknown>;
+  } catch {
+    return finish(null);
+  }
+  const category = typeof structured.category === "string" ? structured.category.trim() : "";
+  const responseMarket = typeof structured.market === "string" ? structured.market.trim() : "";
+  const alternatives = Array.isArray(structured.alternatives) ? structured.alternatives : [];
+  const explicitSources = collectExplicitWebSearchSources(response.output);
+  const citedUrls = new Set(explicitSources.urls.map(canonicalDocumentKey));
+  diagnostics.citedUrlCount = citedUrls.size;
+  diagnostics.messageAnnotationCount = explicitSources.messageAnnotationCount;
+  diagnostics.toolSourceCount = explicitSources.toolSourceCount;
+  if (!citedUrls.size) {
+    diagnostics.rejected.no_citations += 1;
+    const normalizedExpectedMarket = normalizeComparisonOptionName(options.market);
+    const normalizedResponseMarket = normalizeComparisonOptionName(responseMarket);
+    const marketMatches = Boolean(
+      normalizedResponseMarket
+      && normalizedExpectedMarket.split(/\s+/).some((token) => (
+        token.length >= 2 && normalizedResponseMarket.split(/\s+/).includes(token)
+      )),
+    );
+    if (!categoryMatchesPromptTaxonomy(category) || !marketMatches) return finish(null);
+    const namesOnly = alternatives.flatMap((item) => (
+      item && typeof item === "object" && typeof (item as { name?: unknown }).name === "string"
+        ? [cleanVendorName((item as { name: string }).name)]
+        : []
+    ));
+    diagnostics.structuredCandidateCount = namesOnly.length;
+    const result = unverifiedResult(namesOnly, category);
+    if (result) diagnostics.verifiedAlternativeCount = result.vendors.length - 1;
+    return finish(result);
+  }
+  const candidates = alternatives.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const name = typeof row.name === "string" ? cleanVendorName(row.name) : "";
+    const citationValue = typeof row.officialUrl === "string" ? row.officialUrl : row.citationUrl;
+    const citationUrl = typeof citationValue === "string" ? cleanEvidenceUrl(citationValue) : null;
+    if (
+      !name
+      || !citationUrl
+      || !citedUrls.has(canonicalDocumentKey(citationUrl))
+    ) return [];
+    return [{ name, citationUrl }];
+  });
+  diagnostics.structuredCandidateCount = candidates.length;
+  const retrievalUrls = [...citedUrls].slice(0, 8);
+  const retrievals = await options.retrieve(retrievalUrls);
+  const retrievedDocuments = retrievals.flatMap((result) => result.document ? [result.document] : []);
+  diagnostics.retrievedDocumentCount = retrievedDocuments.length;
+  if (!retrievedDocuments.length) {
+    diagnostics.rejected.no_retrieved_content += 1;
+    return finish(null);
+  }
+  const documentsByUrl = new Map(retrievals.flatMap((result) => (
+    result.document
+      ? [
+          [canonicalDocumentKey(result.url), result.document] as const,
+          [canonicalDocumentKey(result.document.finalUrl), result.document] as const,
+        ]
+      : []
+  )));
+  const comparisonDocuments = retrievedDocuments.filter((document) => (
+    documentNamesComparisonOption(document, options.anchor)
+    && documentConfirmsComparableCategory(document, options.prompt, category)
+  ));
+  const extractedCandidates = comparisonDocuments.flatMap((document) => boundedProductHeadings(document))
+    .filter((name) => !preserveConcreteDiscoveryOptions(
+      [options.anchor, "its competitors"],
+      [name],
+      2,
+    ).every((value) => normalizeComparisonOptionName(value) === normalizeComparisonOptionName(options.anchor)));
+  diagnostics.extractedCandidateCount = extractedCandidates.length;
+  const candidateByName = new Map<string, { name: string; citationUrl?: string }>();
+  for (const candidate of candidates) {
+    candidateByName.set(normalizeComparisonOptionName(candidate.name), candidate);
+  }
+  for (const name of extractedCandidates) {
+    const key = normalizeComparisonOptionName(name);
+    if (!candidateByName.has(key)) candidateByName.set(key, { name });
+  }
+  const verified = [...candidateByName.values()].flatMap(({ name, citationUrl }) => {
+    if (isObjectivePhraseVendor(name)) return [];
+    const explicitProductDocument = citationUrl
+      ? documentsByUrl.get(canonicalDocumentKey(citationUrl))
+      : undefined;
+    const extractedProductDocument = retrievedDocuments.find((document) => (
+      document !== comparisonDocuments.find((comparison) => comparison === document)
+      && hostnameSupportsProductName(document.finalUrl, name)
+      && boundedProductHeadings(document).some((heading) => (
+        normalizeComparisonOptionName(heading) === normalizeComparisonOptionName(name)
+      ))
+    ));
+    const productDocument = explicitProductDocument && documentNamesComparisonOption(explicitProductDocument, name)
+      ? explicitProductDocument
+      : extractedProductDocument;
+    if (!productDocument) {
+      diagnostics.rejected.product_page_missing += 1;
+      return [];
+    }
+    const graphCategoryDocument = comparisonDocuments.find((document) => (
+      documentNamesComparisonOption(document, name)
+    ));
+    const singlePageCategory = documentConfirmsComparableCategory(
+      productDocument,
+      options.prompt,
+      category,
+    );
+    if (!singlePageCategory && !graphCategoryDocument) {
+      diagnostics.rejected.comparison_category_missing += 1;
+      return [];
+    }
+    return [{ name, citationUrl: citationUrl ?? productDocument.url }];
+  });
+  diagnostics.verifiedAlternativeCount = verified.length;
+  const vendors = preserveConcreteDiscoveryOptions(
+    options.requested,
+    verified.map(({ name }) => name),
+    options.targetCount,
+  );
+  if (vendors.length < 3 || vendors.length > options.targetCount) {
+    diagnostics.rejected.insufficient_plural_alternatives += 1;
+    return finish(null);
+  }
+  const admitted = verified.filter(({ name }) => vendors.some((vendor) => (
+    normalizeComparisonOptionName(vendor) === normalizeComparisonOptionName(name)
+  )));
+  return finish({
+    vendors,
+    urls: dedupeReferenceUrls([
+      ...comparisonDocuments.map((document) => document.url),
+      ...admitted.map(({ citationUrl }) => citationUrl),
+    ]),
+    category: category || "prompt-grounded comparable category",
+    selectionRoles: [
+      { vendor: options.anchor, lens: "preserved", officialUrl: "" },
+      ...admitted.map(({ name, citationUrl }) => ({
+        vendor: name,
+        lens: "comparable_competitor",
+        officialUrl: citationUrl,
+      })),
+    ],
+  });
+}
+
+export function requiresGeneralSoftwareSourceFallback(
+  prompt: string,
+  segment: string,
+  bestAlternativeAnchor: string | undefined,
+  admittedUrls: string[],
+): boolean {
+  return Boolean(bestAlternativeAnchor)
+    && admittedUrls.length === 0
+    && /\b(?:software|saas|digital experience|DXP|content management|CMS|digital asset management|DAM|Adobe Experience Manager|AEM)\b/i.test(
+      `${prompt} ${segment}`,
+    );
 }
 
 function normalizeKnownEvidenceUrls(value: string, allowedUrls: string[]): string {
@@ -5174,6 +6102,10 @@ function normalizedUnit(value: unknown): string {
   if (/^(?:km|kilomet(?:er|re)s?)$/.test(unit)) return "km";
   if (/^(?:kwh|kilowatt[- ]hours?)$/.test(unit)) return "kwh";
   if (/^(?:kw|kilowatts?)$/.test(unit)) return "kw";
+  if (/^(?:hp|bhp|horsepower)$/.test(unit)) return "hp";
+  if (/^ps$/.test(unit)) return "ps";
+  if (/^(?:nm|n·m|newton[- ]met(?:er|re)s?)$/.test(unit)) return "nm";
+  if (/^(?:s|sec|secs|seconds?)$/.test(unit)) return "seconds";
   if (/^(?:min|mins|minutes?)$/.test(unit)) return "minutes";
   if (/^(?:mm|millimet(?:er|re)s?)$/.test(unit)) return "mm";
   if (/^(?:year|years|yr|yrs)$/.test(unit)) return "years";
@@ -5212,6 +6144,9 @@ const METRIC_REGISTRY: Record<string, MetricDefinition> = {
   battery_capacity: { units: ["kwh"], direction: "higher_is_better", label: /\bbattery capacity\b/i },
   charging_power: { units: ["kw"], direction: "higher_is_better", label: /\b(?:charging|charger|dc charge|ac charge).{0,24}\b(?:power|capacity|rate)?\b/i },
   charging_time: { units: ["minutes"], direction: "lower_is_better", label: /\bcharg(?:e|ing).{0,24}\btime\b/i },
+  engine_power: { units: ["kw", "hp", "ps"], direction: "higher_is_better", label: /\b(?:engine|motor|power|output|horsepower|bhp|ps)\b/i },
+  engine_torque: { units: ["nm"], direction: "higher_is_better", label: /\b(?:engine|motor|torque)\b/i },
+  acceleration_0_100: { units: ["seconds"], direction: "lower_is_better", label: /\b(?:0|zero)\s*(?:-|–|—|to)\s*100\s*(?:km\/?h|kph).{0,32}\b(?:acceleration|time|seconds?|secs?|s)\b|\b(?:acceleration|time).{0,32}\b(?:0|zero)\s*(?:-|–|—|to)\s*100\b/i },
   warranty_years: { units: ["years"], direction: "higher_is_better", label: /\b(?:vehicle|battery|product)?\s*warranty\b/i },
   market_share: { units: ["percent"], direction: "higher_is_better", label: /\bmarket share\b/i },
   customer_satisfaction_rate: { units: ["percent"], direction: "higher_is_better", label: /\b(?:customer )?satisfaction\b/i },
@@ -5231,6 +6166,10 @@ const UNIT_PATTERNS: Record<string, RegExp> = {
   km: /^(?:\s{0,3})(?:km|kilomet(?:er|re)s?\b)/i,
   kwh: /^(?:\s{0,3})(?:kwh|kilowatt[- ]hours?\b)/i,
   kw: /^(?:\s{0,3})(?:kw|kilowatts?\b)/i,
+  hp: /^(?:\s{0,3})(?:hp|bhp|horsepower\b)/i,
+  ps: /^(?:\s{0,3})PS\b/i,
+  nm: /^(?:\s{0,3})(?:nm|n·m|newton[- ]met(?:er|re)s?\b)/i,
+  seconds: /^(?:\s{0,3})(?:s\b|sec|secs|seconds?\b)/i,
   minutes: /^(?:\s{0,3})(?:min|mins|minutes?\b)/i,
   mm: /^(?:\s{0,3})(?:mm|millimet(?:er|re)s?\b)/i,
   years: /^(?:\s{0,3})(?:year|years|yr|yrs\b)/i,
@@ -5272,11 +6211,17 @@ function findQuantitativeClaim(
   const definition = METRIC_REGISTRY[metricKey];
   if (!definition || !definition.units.includes(rawUnit)) return null;
   const vendorTokens = Array.from(vendor.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-  if (!vendorTokens.length) return null;
+  const qualifierTokens = new Set(["diesel", "petrol", "gasoline", "electric", "hybrid", "automatic", "manual", "at", "amt", "cvt", "dct", "awd", "fwd", "4x4"]);
+  const baseTokens = vendorTokens.filter((token) => !qualifierTokens.has(token));
+  if (!baseTokens.length) return null;
   const vendorIdentityPattern = new RegExp(
-    `\\b${vendorTokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]{0,6}")}\\b`,
+    `\\b${baseTokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]{0,6}")}\\b`,
     "i",
   );
+  const requestedFuel = vendorTokens.find((token) => ["diesel", "petrol", "gasoline", "electric", "hybrid"].includes(token));
+  const requestedTransmission = vendorTokens.some((token) => ["automatic", "at", "amt", "cvt", "dct"].includes(token))
+    ? "automatic"
+    : vendorTokens.includes("manual") ? "manual" : undefined;
   const officialHomeLoanHost = (HOME_LOAN_OFFICIAL_SOURCES[vendor] ?? []).some((source) => {
     try {
       const sourceHost = new URL(source).hostname.replace(/^www\./, "");
@@ -5291,7 +6236,7 @@ function findQuantitativeClaim(
     const segment = match[0].trim();
     if (segment.length < 8 || segment.length > 800) continue;
     if (!isSafeUserInput(segment)) continue;
-    if (/\d\s*[-–—]\s*\d/.test(segment)) continue;
+    if (/\d\s*[-–—]\s*\d/.test(segment) && !/\b0\s*[-–—]\s*100\s*(?:km\/?h|kph)\b/i.test(segment)) continue;
     const numericMatches = Array.from(segment.matchAll(/[−-]?\d[\d,.]*(?:\d)?/g));
     const adjacentPairs = numericMatches.filter((numericMatch) => {
       const start = numericMatch.index ?? 0;
@@ -5314,13 +6259,51 @@ function findQuantitativeClaim(
     ) continue;
     const leadingWhitespace = match[0].length - match[0].trimStart().length;
     const start = (match.index ?? 0) + leadingWhitespace;
-    const identityContextStart = Math.max(0, start - (officialHomeLoanHost ? 520 : 180));
-    const identityContextEnd = Math.min(document.text.length, start + segment.length + 180);
+    const identityContextStart = Math.max(0, start - (officialHomeLoanHost ? 520 : 800));
+    const identityContextEnd = Math.min(document.text.length, start + segment.length + (officialHomeLoanHost ? 180 : 320));
     const identityContext = document.text.slice(identityContextStart, identityContextEnd);
     if (!definition.label.test(identityContext)) continue;
-    const identityMatch = identityContext.match(vendorIdentityPattern);
+    const identityMatches = Array.from(identityContext.matchAll(new RegExp(vendorIdentityPattern.source, "gi")));
+    const segmentOffset = start - identityContextStart;
+    const identityMatch = identityMatches
+      .filter((candidate) => (candidate.index ?? 0) <= segmentOffset + segment.length)
+      .sort((left, right) => (
+        Math.abs(segmentOffset - ((left.index ?? 0) + left[0].length))
+        - Math.abs(segmentOffset - ((right.index ?? 0) + right[0].length))
+      ))[0];
     if (!identityMatch && !officialHomeLoanHost) continue;
-    const subject = identityMatch?.[0] ?? vendor;
+    if (identityMatch && baseTokens.length >= 3) {
+      const familyPrefix = baseTokens.slice(0, -1)
+        .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("[^a-z0-9]{0,6}");
+      const expectedLeaf = baseTokens.at(-1)!;
+      const betweenIdentityAndMetric = identityContext.slice(
+        (identityMatch.index ?? 0) + identityMatch[0].length,
+        segmentOffset + pairStart,
+      );
+      const siblingMentions = Array.from(
+        betweenIdentityAndMetric.matchAll(new RegExp(`\\b${familyPrefix}[^a-z0-9]{0,6}([a-z0-9]+)\\b`, "gi")),
+        (candidate) => candidate[1].toLowerCase(),
+      );
+      if (siblingMentions.some((leaf) => leaf !== expectedLeaf)) continue;
+    }
+    if (identityMatch && (requestedFuel || requestedTransmission)) {
+      const identityStart = identityMatch.index ?? 0;
+      const nextIdentity = identityMatches
+        .map((candidate) => candidate.index ?? 0)
+        .filter((index) => index > identityStart && index < segmentOffset)
+        .sort((left, right) => left - right)[0];
+      const sectionStart = identityStart;
+      const sectionEnd = nextIdentity ?? Math.min(identityContext.length, segmentOffset + segment.length + 80);
+      const relevantSection = identityContext.slice(sectionStart, sectionEnd).toLowerCase();
+      const fuels = Array.from(relevantSection.matchAll(/\b(diesel|petrol|gasoline|electric|hybrid)\b/g), (fuel) => fuel[1]);
+      if (requestedFuel && (!fuels.includes(requestedFuel) || fuels.some((fuel) => fuel !== requestedFuel))) continue;
+      const hasAutomatic = /\b(?:automatic|at|amt|cvt|dct)\b/i.test(relevantSection);
+      const hasManual = /\bmanual\b/i.test(relevantSection);
+      if (requestedTransmission === "automatic" && (!hasAutomatic || hasManual)) continue;
+      if (requestedTransmission === "manual" && (!hasManual || hasAutomatic)) continue;
+    }
+    const subject = vendor;
     return {
       text: segment,
       basisText: identityContext,
@@ -5364,6 +6347,19 @@ function metricBasis(metricKey: string, unit: string, claim: string): string | n
     const window = normalized.match(/\b\d{1,3}\s*%\s*(?:to|-|–|—)\s*\d{1,3}\s*%\b/)?.[0];
     if (!window) return null;
     qualifier = window.replace(/[^a-z0-9]+/g, "_");
+  } else if (metricKey === "engine_power") {
+    const powertrain = normalized.match(/\b(?:diesel|petrol|gasoline|electric|hybrid)\b/)?.[0];
+    if (!powertrain) return null;
+    const transmission = normalized.match(/\b(?:automatic|manual|dct|cvt|amt|at)\b/)?.[0] ?? "unspecified_transmission";
+    qualifier = `${powertrain}_${transmission}_powertrain_output`;
+  } else if (metricKey === "engine_torque") {
+    const powertrain = normalized.match(/\b(?:diesel|petrol|gasoline|electric|hybrid)\b/)?.[0];
+    if (!powertrain) return null;
+    const transmission = normalized.match(/\b(?:automatic|manual|dct|cvt|amt|at)\b/)?.[0] ?? "unspecified_transmission";
+    qualifier = `${powertrain}_${transmission}_powertrain_peak_torque`;
+  } else if (metricKey === "acceleration_0_100") {
+    if (!/\b(?:0|zero)\s*(?:-|–|—|to)\s*100\s*(?:km\/?h|kph)?\b/.test(normalized)) return null;
+    qualifier = "zero_to_100_kph";
   } else if (metricKey === "ncap_star_rating" || metricKey === "adult_occupant_score" || metricKey === "child_occupant_score") {
     const protocol = normalized.match(/\b(?:bharat|global)\s*ncap\b/)?.[0]?.replace(/\s+/g, "_");
     if (!protocol) return null;
@@ -5421,6 +6417,13 @@ export function validateQuantitativeEvidenceAgainstDocuments(
     byUrl.set(canonicalDocumentKey(document.finalUrl), document);
   }
   let verified = 0;
+  let candidates = 0;
+  const rejected = {
+    source_document_missing: 0,
+    metric_or_unit_unsupported: 0,
+    identity_variant_or_claim_mismatch: 0,
+    comparable_basis_missing: 0,
+  };
   const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
   for (const vendor of vendorScores) {
     if (!vendor || typeof vendor !== "object") continue;
@@ -5439,17 +6442,24 @@ export function validateQuantitativeEvidenceAgainstDocuments(
         if (!item || typeof item !== "object") continue;
         const row = item as Record<string, unknown>;
         if (typeof row.rawMetricValue !== "number" || !Number.isFinite(row.rawMetricValue)) continue;
+        candidates += 1;
         const sourceUrl = typeof row.sourceUrl === "string" ? canonicalDocumentKey(row.sourceUrl) : "";
         const document = byUrl.get(sourceUrl);
         const metricKey = typeof row.metricKey === "string"
           ? row.metricKey.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
           : "";
         const unit = normalizedUnit(row.rawMetricUnit);
+        if (!document) rejected.source_document_missing += 1;
+        else if (!METRIC_REGISTRY[metricKey]?.units.includes(unit)) rejected.metric_or_unit_unsupported += 1;
         const match = document && metricKey && unit
           ? findQuantitativeClaim(document, vendorName, metricKey, row.rawMetricValue, unit)
           : null;
         const basis = match ? metricBasis(metricKey, unit, match.basisText) : null;
         if (!match || !document || !basis) {
+          if (document && METRIC_REGISTRY[metricKey]?.units.includes(unit)) {
+            if (!match) rejected.identity_variant_or_claim_mismatch += 1;
+            else if (!basis) rejected.comparable_basis_missing += 1;
+          }
           row.evidenceKind = "unverified";
           row.confidence = Math.min(typeof row.confidence === "number" ? row.confidence : 0, 10);
           delete row.metricKey;
@@ -5468,11 +6478,96 @@ export function validateQuantitativeEvidenceAgainstDocuments(
         row.metricSubject = match.subject;
         row.metricBasis = basis;
         row.retrievalDate = document.retrievedAt.slice(0, 10);
+        const verifiedSourceDate = publishedDateFromDocument(document);
+        if (verifiedSourceDate) row.sourceDate = verifiedSourceDate;
+        else delete row.sourceDate;
         row.documentSha256 = document.sha256;
         row.sourceTextStart = match.start;
         row.sourceTextEnd = match.end;
         row.evidenceKind = unit === "percent" ? "percentage" : "quantitative";
         row.normalizationMethod = "retrieved_document_metric";
+        verified += 1;
+      }
+    }
+  }
+  console.info("evidence_extraction_diagnostics", {
+    documentCount: documents.length,
+    candidateCount: candidates,
+    verifiedCount: verified,
+    rejected,
+  });
+  return verified;
+}
+
+/**
+ * Admits qualitative feature evidence only when the model's exact claim is a
+ * verbatim span in the retrieved document and names the exact compared entity.
+ * This is deliberately separate from quantitative normalization.
+ */
+export function validateQualitativeEvidenceAgainstDocuments(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const byUrl = new Map<string, RetrievedEvidenceDocument>();
+  for (const document of documents) {
+    byUrl.set(canonicalDocumentKey(document.url), document);
+    byUrl.set(canonicalDocumentKey(document.finalUrl), document);
+  }
+  let verified = 0;
+  const vendorScores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
+  for (const vendor of vendorScores) {
+    if (!vendor || typeof vendor !== "object") continue;
+    const vendorName = String((vendor as Record<string, unknown>).vendor ?? "").trim();
+    const vendorIdentity = normalizedIdentity(vendorName);
+    const vendorTokens = vendorIdentity.split(" ").filter((token) => token.length >= 3);
+    const vendorAcronym = vendorTokens.map((token) => token[0]).join("");
+    const weightedScores = Array.isArray((vendor as Record<string, unknown>).weightedScores)
+      ? (vendor as Record<string, unknown>).weightedScores as unknown[]
+      : [];
+    for (const criterion of weightedScores) {
+      if (!criterion || typeof criterion !== "object") continue;
+      const evidenceRows = Array.isArray((criterion as Record<string, unknown>).evidence)
+        ? (criterion as Record<string, unknown>).evidence as unknown[]
+        : [];
+      for (const item of evidenceRows) {
+        if (!item || typeof item !== "object") continue;
+        const row = item as Record<string, unknown>;
+        if (row.evidenceKind !== "qualitative" || typeof row.rawMetricValue === "number") continue;
+        const claim = typeof row.exactClaim === "string" ? row.exactClaim.trim() : "";
+        const sourceUrl = typeof row.sourceUrl === "string" ? canonicalDocumentKey(row.sourceUrl) : "";
+        const document = byUrl.get(sourceUrl);
+        if (!document || claim.length < 12) {
+          row.evidenceKind = "unverified";
+          row.normalizationMethod = "document_claim_not_verified";
+          continue;
+        }
+        const claimPattern = claim
+          .split(/\s+/)
+          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("\\s+");
+        const match = new RegExp(claimPattern, "i").exec(document.text);
+        const claimIdentity = normalizedIdentity(match?.[0]);
+        const namesExactEntity = vendorTokens.every((token) => claimIdentity.includes(token))
+          || Boolean(vendorAcronym.length >= 3 && claimIdentity.split(" ").includes(vendorAcronym));
+        if (!match || !namesExactEntity) {
+          row.evidenceKind = "unverified";
+          row.normalizationMethod = "document_claim_not_verified";
+          delete row.metricSubject;
+          delete row.documentSha256;
+          delete row.sourceTextStart;
+          delete row.sourceTextEnd;
+          continue;
+        }
+        row.exactClaim = match[0];
+        row.metricSubject = vendorName;
+        row.metricBasis = typeof row.metricBasis === "string" && row.metricBasis.trim()
+          ? row.metricBasis.trim()
+          : "retrieved_document_qualitative_feature";
+        row.retrievalDate = document.retrievedAt.slice(0, 10);
+        row.documentSha256 = document.sha256;
+        row.sourceTextStart = match.index;
+        row.sourceTextEnd = match.index + match[0].length;
+        row.normalizationMethod = "retrieved_document_qualitative_claim";
         verified += 1;
       }
     }
@@ -5504,6 +6599,17 @@ export function addVerifiedElectricVehicleMatrixMetrics(
     }
     if (/\bcharg/i.test(dimension)) {
       addMatches("charging_power", "kw", /(\d+(?:\.\d+)?)\s*kw\b/gi);
+    }
+    if (/\b(?:power|performance|motor|engine)\b/i.test(dimension) && !/\bcharg/i.test(dimension)) {
+      addMatches("engine_power", "hp", /(\d+(?:\.\d+)?)\s*(?:hp|bhp)\b/gi);
+      addMatches("engine_power", "ps", /(\d+(?:\.\d+)?)\s*ps\b/gi);
+      addMatches("engine_power", "kw", /(\d+(?:\.\d+)?)\s*kw\b/gi);
+    }
+    if (/\b(?:torque|performance|motor|engine)\b/i.test(dimension)) {
+      addMatches("engine_torque", "nm", /(\d+(?:\.\d+)?)\s*(?:nm|n·m)\b/gi);
+    }
+    if (/\b(?:acceleration|performance|0\s*[-–—]\s*100)\b/i.test(dimension)) {
+      addMatches("acceleration_0_100", "seconds", /(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)\b/gi);
     }
     if (/\bprice\b|ex[- ]showroom/i.test(dimension)) {
       addMatches("price", "inr_lakh", /₹\s*(\d+(?:\.\d+)?)\s*(?:lakh|lakhs)\b/gi);
@@ -5542,7 +6648,7 @@ export function addVerifiedElectricVehicleMatrixMetrics(
             candidate.value,
             candidate.unit,
           );
-          const basis = claim ? metricBasis(candidate.metricKey, candidate.unit, claim.text) : null;
+          const basis = claim ? metricBasis(candidate.metricKey, candidate.unit, claim.basisText) : null;
           return claim && basis ? [{ document, claim, basis }] : [];
         })[0];
         if (!match) continue;
@@ -5562,7 +6668,8 @@ export function addVerifiedElectricVehicleMatrixMetrics(
           ))) continue;
           evidence.push({
             sourceUrl: match.document.finalUrl,
-            sourceTitle: `${vendorName} official product information`,
+            sourceTitle: `${vendorName} retrieved product evidence`,
+            sourceDate: publishedDateFromDocument(match.document),
             exactClaim: match.claim.text,
             metricKey: candidate.metricKey,
             rawMetricValue: candidate.value,
@@ -5582,6 +6689,162 @@ export function addVerifiedElectricVehicleMatrixMetrics(
             normalizationMethod: "retrieved_document_metric",
           });
           added += 1;
+        }
+      }
+    }
+  }
+  return added;
+}
+
+/**
+ * Recover facts that the research model left out of its presentation matrix.
+ * The matrix is a useful hint, but it is not an evidence boundary: product
+ * pages commonly put specifications in a separate table or paragraph.  Scan
+ * every retrieved line for registered metrics and let the same strict
+ * identity/variant/basis validator admit only document-backed claims.
+ */
+export function addVerifiedVehicleDocumentMetrics(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const vendors = Array.isArray(parsed.vendorScores)
+    ? parsed.vendorScores as Array<Record<string, unknown>>
+    : [];
+  let added = 0;
+  const ensureCriterion = (vendor: Record<string, unknown>, criterion: string, weight: number) => {
+    const rows = Array.isArray(vendor.weightedScores) ? vendor.weightedScores as Array<Record<string, unknown>> : [];
+    if (!Array.isArray(vendor.weightedScores)) vendor.weightedScores = rows;
+    let row = rows.find((entry) => entry.criterion === criterion);
+    if (!row) {
+      row = { criterion, weight, score: 50, rationale: "", evidence: [] };
+      rows.push(row);
+    }
+    if (!Array.isArray(row.evidence)) row.evidence = [];
+    return row.evidence as Array<Record<string, unknown>>;
+  };
+  // Prefix currencies need the currency text before the number; suffix units
+  // are handled by the registry's canonical unit patterns.
+  const candidatesIn = (line: string): Array<{ key: string; value: number; unit: string }> => {
+    const result: Array<{ key: string; value: number; unit: string }> = [];
+    for (const match of line.matchAll(/[−-]?\d[\d,.]*/g)) {
+      const start = match.index ?? 0;
+      const raw = numericTokens(match[0])[0];
+      if (raw === undefined) continue;
+      const before = line.slice(Math.max(0, start - 18), start);
+      const after = line.slice(start + match[0].length, start + match[0].length + 28);
+      for (const [key, definition] of Object.entries(METRIC_REGISTRY)) {
+        if (!definition.label.test(line)) continue;
+        for (const unit of definition.units) {
+          if (UNIT_PATTERNS[unit]?.test(after) || PREFIX_UNIT_PATTERNS[unit]?.test(before)) {
+            result.push({ key, value: raw, unit });
+          }
+        }
+      }
+    }
+    return result;
+  };
+  for (const vendor of vendors) {
+    const vendorName = typeof vendor.vendor === "string" ? vendor.vendor.trim() : "";
+    if (!vendorName) continue;
+    for (const document of documents) {
+      for (const lineMatch of document.text.matchAll(/[^\n]+/g)) {
+        const line = lineMatch[0].trim();
+        if (line.length < 8 || line.length > 800 || !isSafeUserInput(line)) continue;
+        for (const candidate of candidatesIn(line)) {
+          const claim = findQuantitativeClaim(document, vendorName, candidate.key, candidate.value, candidate.unit);
+          const basis = claim ? metricBasis(candidate.key, candidate.unit, claim.basisText) : null;
+          if (!claim || !basis) continue;
+          const criterion = candidate.key === "price" ? "Value for Money" : "Meets Needs / Features";
+          const evidence = ensureCriterion(vendor, criterion, candidate.key === "price" ? 20 : 25);
+          if (evidence.some((entry) => entry.metricKey === candidate.key
+            && entry.rawMetricValue === candidate.value
+            && entry.documentSha256 === document.sha256)) continue;
+          evidence.push({
+            sourceUrl: document.finalUrl,
+            sourceTitle: `${vendorName} retrieved product evidence`,
+            exactClaim: claim.text,
+            metricKey: candidate.key,
+            rawMetricValue: candidate.value,
+            rawMetricUnit: candidate.unit,
+            normalizationDirection: claim.definition.direction,
+            metricSubject: claim.subject,
+            metricBasis: basis,
+            documentSha256: document.sha256,
+            sourceTextStart: claim.start,
+            sourceTextEnd: claim.end,
+            evidenceKind: candidate.unit === "percent" ? "percentage" : "quantitative",
+            supportDirection: "context",
+            confidence: 90,
+            normalizedScore: 50,
+            criterionWeight: candidate.key === "price" ? 20 : 25,
+            weightedContribution: 0,
+            normalizationMethod: "retrieved_document_metric",
+          });
+          added += 1;
+        }
+      }
+    }
+  }
+  return added;
+}
+
+/**
+ * When a product page uses a different feature label than the model's prose,
+ * derive a qualitative row from the retrieved sentence itself.  The claim is
+ * still required to name the exact entity (or its unambiguous acronym), and
+ * its hash/span are retained for downstream scoring.
+ */
+export function addVerifiedQualitativeDocumentClaims(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const vendors = Array.isArray(parsed.vendorScores) ? parsed.vendorScores as Array<Record<string, unknown>> : [];
+  const features = Array.isArray(parsed.features) ? parsed.features as Array<Record<string, unknown>> : [];
+  let added = 0;
+  for (const vendor of vendors) {
+    const vendorName = typeof vendor.vendor === "string" ? vendor.vendor.trim() : "";
+    if (!vendorName) continue;
+    const rows = Array.isArray(vendor.weightedScores) ? vendor.weightedScores as Array<Record<string, unknown>> : [];
+    if (!Array.isArray(vendor.weightedScores)) vendor.weightedScores = rows;
+    let criterion = rows.find((row) => row.criterion === "Meets Needs / Features");
+    if (!criterion) {
+      criterion = { criterion: "Meets Needs / Features", weight: 25, score: 50, rationale: "", evidence: [] };
+      rows.push(criterion);
+    }
+    if (!Array.isArray(criterion.evidence)) criterion.evidence = [];
+    const evidence = criterion.evidence as Array<Record<string, unknown>>;
+    for (const feature of features) {
+      const dimension = typeof feature.dimension === "string" ? feature.dimension : "";
+      const tokens = normalizedIdentity(dimension).split(" ").filter((token) => token.length >= 4);
+      if (!tokens.length) continue;
+      for (const document of documents) {
+        for (const sentenceMatch of document.text.matchAll(/[^.!?\n]{12,500}[.!?]/g)) {
+          const sentence = sentenceMatch[0].trim();
+          const normalized = normalizedIdentity(sentence);
+          const vendorTokens = normalizedIdentity(vendorName).split(" ").filter((token) => token.length >= 3);
+          const acronym = vendorTokens.map((token) => token[0]).join("");
+          if (!(vendorTokens.every((token) => normalized.includes(token))
+            || (acronym.length >= 3 && normalized.split(" ").includes(acronym)))) continue;
+          if (!tokens.some((token) => normalized.includes(token))) continue;
+          const start = (sentenceMatch.index ?? 0) + sentenceMatch[0].indexOf(sentence);
+          if (evidence.some((entry) => entry.documentSha256 === document.sha256 && entry.sourceTextStart === start)) continue;
+          evidence.push({
+            sourceUrl: document.finalUrl,
+            sourceTitle: `${vendorName} retrieved feature evidence`,
+            exactClaim: sentence,
+            metricKey: "documented_feature",
+            metricSubject: vendorName,
+            metricBasis: "retrieved_document_qualitative_feature",
+            documentSha256: document.sha256,
+            sourceTextStart: start,
+            sourceTextEnd: start + sentence.length,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 85,
+            normalizationMethod: "retrieved_document_qualitative_claim",
+          });
+          added += 1;
+          break;
         }
       }
     }
@@ -7315,7 +8578,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     input.onProgress?.("finding_official_sources");
     const isBrandLevelBaasComparison = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service|battery as service)\b/i.test(input.prompt)
       && input.vendors.every((vendor) => /^(?:MG|Mahindra)$/i.test(vendor.trim()));
-    const isBrandLevelModelSelection = requestsCurrentModelSelection(input.prompt)
+    const isBrandLevelModelSelection = (
+      requestsCurrentModelSelection(input.prompt)
+      || requestsVehiclePortfolioSelection(input.prompt, input.vendors)
+    )
       && input.vendors.length >= 2
       && input.vendors.every((vendor) => !isObjectivePhraseVendor(vendor));
     const isElectricVehicleModelSelection = isBrandLevelModelSelection
@@ -7323,16 +8589,26 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     const vendorDiscoveryWasRequired = input.vendors.some(isObjectivePhraseVendor)
       || isBrandLevelBaasComparison
       || isBrandLevelModelSelection;
+    const bestAlternativeAnchor = vendorDiscoveryWasRequired
+      && requestsBestAlternative(input.prompt)
+      ? input.vendors.find((vendor) => !isObjectivePhraseVendor(vendor))
+      : undefined;
     const isDealershipComparison = isDealershipComparisonRequest(input.prompt, input.vendors);
     let discoveredAlternativeInsights: string[] = [];
     let discoveredSelectionRationale = "";
     let discoveredOfficialProductUrls: string[] = [];
     let approvedDiscoveryCitationUrls: string[] = [];
+    const unverifiedDiscoveryCandidates = new Set<string>();
     if (vendorDiscoveryWasRequired) {
       const requestedCount = discoveryTargetCount(input.vendors);
       const requestedManufacturers = [...input.vendors];
       const concreteRequestedOptions = requestedManufacturers.filter((vendor) => !isObjectivePhraseVendor(vendor));
       const objectiveRequestedOptions = requestedManufacturers.filter(isObjectivePhraseVendor);
+      const hasAmbiguousMahindraXuv = objectiveRequestedOptions.some((option) => /^Mahindra\s+XUV$/i.test(option));
+      const isTitanWatchPortfolioDiscovery = input.market === "IN"
+        && concreteRequestedOptions.length === 1
+        && /^Titan(?:\s+watches?)?$/i.test(concreteRequestedOptions[0] ?? "")
+        && objectiveRequestedOptions.some((option) => /\bwatch\s+brands?\b/i.test(option));
       const openEndedElectricVehicleBrandDiscovery = isElectricVehiclePrompt(input.prompt)
         && concreteRequestedOptions.length === 1
         && objectiveRequestedOptions.length >= 1
@@ -7408,12 +8684,16 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 numberOfProducts: requestedCount,
                 instructions: isDealershipComparison
                   ? `Choose exactly ${requestedCount} unique authorised motor-vehicle dealerships that are genuinely comparable for this local buying-and-servicing decision. Preserve these named dealerships exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only the generic competitor phrases with current dealerships serving the same metropolitan area and selling or servicing the same vehicle brand, Toyota in this request. Compare dealership businesses and their sales, service, parts, finance, warranty support, customer experience, and location convenience—not Toyota vehicle models, manufacturers, marketplaces, or unrelated dealer groups. Verify every selected dealership using its official local dealer website or the manufacturer's official dealer locator. Return the official dealership homepage in selectionRoles.`
+                  : hasAmbiguousMahindraXuv
+                    ? `Resolve the explicitly named but ambiguous Mahindra XUV model family before scoring. Preserve every other exact model named by the user. Choose exactly one current Mahindra XUV model family sold in the stated local market that is genuinely comparable with the preserved vehicle, using the user's criteria and intended use. Verify it on an official local Mahindra product page. Never silently treat "XUV" as a specific model, choose a trim, or choose a model from another manufacturer. If current official evidence cannot support one defensible resolution, fail with an actionable request for the user to specify the intended XUV model.`
+                  : isTitanWatchPortfolioDiscovery
+                    ? `Choose exactly ${requestedCount} unique current watch model families sold in India. First select one exact current Titan watch model family after screening Titan's Indian portfolio, then select ${requestedCount - 1} genuinely comparable watch model families from distinct competing brands available in India. Preserve the user's India scope. Return exact model-family names, never bare brand names, collections without a concrete model family, categories, request text, or placeholders. Keep the selected Titan model first. Verify every selected watch on an official India brand product page and return those URLs in selectionRoles. These exact products, not Titan or "other watch brands", are the ranked shortlist.`
                   : openEndedElectricVehicleBrandDiscovery
                     ? `Choose exactly ${requestedCount} unique current battery-electric model families sold in the stated local market. Select exactly one current model from ${concreteRequestedOptions[0]} after screening its local EV portfolio, then select ${requestedCount - 1} genuinely comparable EV models from ${requestedCount - 1} distinct competing manufacturers. Return exact model-family names, never bare manufacturer names, categories, trims, grades, packs, request text, or placeholders. Keep the selected ${concreteRequestedOptions[0]} model first. Verify every model on an official local manufacturer product page and return those URLs in selectionRoles.`
                   : isBrandLevelBaasComparison
                   ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
                   : isBrandLevelModelSelection
-                    ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "product"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : ""}`
+                    ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "vehicle"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : /\bdiesel\b/i.test(input.prompt) ? "Select only current diesel vehicles; do not substitute petrol, electric, or hybrid models." : ""}`
                     : `Choose exactly ${requestedCount} unique products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. Never return an expanded name, acronym, edition, module, or alias of a preserved option as a competitor. Use web search to identify current alternatives and verify each exact product name from an official product page. When the request names multiple product lenses such as DXP and DAM, cover those lenses deliberately: include a broad platform peer and a focused specialist alternative when that produces the most decision-useful shortlist, and explain each option's role. A standalone DAM must be primarily marketed as a digital asset management product; do not label a DXP, CMS, content hub, or DAM module as the standalone DAM slot. Its officialUrl must be the vendor's exact DAM product page and contain DAM or digital-asset-management in the URL. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
                 shape: {
                   vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
@@ -7640,6 +8920,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       ));
       let discoveredVendors = isBrandLevelModelSelection
         ? normalizeDiscoveredVendors(rawDiscoveredVendors)
+        : isTitanWatchPortfolioDiscovery
+          ? selectOpenEndedElectricVehicleShortlist(
+              "Titan",
+              normalizeDiscoveredVendors(rawDiscoveredVendors),
+              requestedCount,
+            )
         : openEndedElectricVehicleBrandDiscovery
           ? selectOpenEndedElectricVehicleShortlist(
               concreteRequestedOptions[0],
@@ -7651,12 +8937,122 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             normalizeDiscoveredVendors(rawDiscoveredVendors),
             requestedCount,
           );
+      let acceptedBoundedCitedFallback = false;
+      const isSingleAnchorOpenEndedDiscovery = concreteRequestedOptions.length === 1
+        && objectiveRequestedOptions.length >= 1
+        && !isBrandLevelModelSelection
+        && !openEndedElectricVehicleBrandDiscovery
+        && !isTitanWatchPortfolioDiscovery
+        && !isDealershipComparison;
       if (
-        discoveredVendors.length !== requestedCount
+        isSingleAnchorOpenEndedDiscovery
+        && (
+          discoveredVendors.length !== requestedCount
+          || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
+        )
+      ) {
+        const discoveryMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
+        const forced = await recoverCitedOpenEndedCompetitors({
+          anchor: concreteRequestedOptions[0],
+          prompt: input.prompt,
+          market: `${discoveryMarket.country} ${discoveryMarket.countryCode}`,
+          initialCategory: typeof discovery.category === "string" ? discovery.category : undefined,
+          requested: requestedManufacturers,
+          initialVendors: discoveredVendors,
+          targetCount: requestedCount,
+          search: async () => {
+            const response = await measureAnalysisStage(input, "vendor_discovery", () => client.responses.create({
+              model: "gpt-4.1-mini",
+              max_output_tokens: 2400,
+              include: ["web_search_call.action.sources"],
+              tool_choice: "auto",
+              tools: [{
+                type: "web_search",
+                search_context_size: "medium",
+                external_web_access: true,
+                user_location: {
+                  type: "approximate" as const,
+                  country: discoveryMarket.countryCode,
+                  timezone: discoveryMarket.timezone,
+                },
+              }],
+              input: [{
+                role: "system",
+                content: "Use web search now to recover a concrete competitor shortlist with no more than eight cited pages. Find one reputable independent comparison or alternatives page that names the anchor and multiple comparable products in the shared category, plus a current official product page for each candidate. Return only one JSON object. Category language may use an established domain synonym such as DXP, CMS, WCM, web content management, or digital experience platform. Every URL must be copied from an explicit web-search citation. Do not return the anchor, its acronym or expanded aliases, objectives, categories as products, prose suggestions, reconstructed URLs, modules, or editions.",
+              }, {
+                role: "user",
+                content: JSON.stringify({
+                  prompt: input.prompt,
+                  anchor: concreteRequestedOptions[0],
+                  market: discoveryMarket,
+                  requiredAlternativeCount: requestedCount - 1,
+                  maximumCitedPages: 8,
+                  requiredShape: {
+                    category: "Exact shared comparable product category",
+                    market: `${discoveryMarket.country} ${discoveryMarket.countryCode}`,
+                    anchor: {
+                      name: concreteRequestedOptions[0],
+                      category: "Exact shared comparable product category",
+                      citationUrl: "https://explicitly-cited-page-that-names-anchor-and-category",
+                    },
+                    comparisonCitationUrls: [
+                      "https://independent-comparison-page-naming-anchor-candidates-and-shared-category",
+                    ],
+                    alternatives: Array.from({ length: requestedCount - 1 }, (_, index) => ({
+                      name: `Exact competitor product ${index + 1}`,
+                      officialUrl: "https://explicitly-cited-current-official-product-page",
+                    })),
+                  },
+                }),
+              }],
+            }, {
+              timeout: 15_000,
+              maxRetries: 0,
+            }));
+            return {
+              output: response.output,
+              outputText: response.status === "completed" ? response.output_text : "",
+            };
+          },
+          retrieve: (urls) => retrieveEvidenceDocuments(urls, {
+            permissionRegistry: publisherPermissionRegistry,
+            concurrency: 3,
+            batchTimeoutMs: 20_000,
+          }),
+        });
+        if (!forced) {
+          throw new Error(
+            `Insufficient source coverage: competitor discovery could not identify at least two concrete, non-alias alternatives to ${concreteRequestedOptions[0]} for the requested category and market. Name at least two alternatives explicitly or add current official competitor product URLs.`,
+          );
+        }
+        discoveredVendors = forced.vendors;
+        acceptedBoundedCitedFallback = true;
+        if (!forced.urls.length) {
+          for (const vendor of forced.vendors.slice(1)) {
+            unverifiedDiscoveryCandidates.add(normalizeComparisonOptionName(vendor));
+          }
+        }
+        rawDiscoveredVendors = forced.vendors;
+        discovery = {
+          ...discovery,
+          vendors: forced.vendors,
+          selectionRoles: forced.selectionRoles,
+          selectionRationale: forced.urls.length
+            ? `The fallback shortlist retained ${concreteRequestedOptions[0]} and admitted only competitors named with the shared ${forced.category} category on cited, governed, retrievable pages.`
+            : `The fallback retained ${concreteRequestedOptions[0]} and supplied concrete ${forced.category} discovery labels only. Every competitor remains an unverified candidate until normal research retrieves exact product and category provenance.`,
+        };
+        approvedDiscoveryCitationUrls.push(...forced.urls);
+      }
+      if (
+        (!acceptedBoundedCitedFallback && discoveredVendors.length !== requestedCount)
         || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
       ) {
         const repairSystem = isBrandLevelModelSelection
           ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
+          : hasAmbiguousMahindraXuv
+            ? "Repair the vehicle-selection draft into one valid JSON object. Preserve every exact model named by the user and replace Mahindra XUV with exactly one current, locally sold, genuinely comparable Mahindra XUV model family verified on an official local Mahindra product page. Never choose a trim, a non-Mahindra model, or silently leave the ambiguous XUV label unresolved."
+          : isTitanWatchPortfolioDiscovery
+            ? `Repair the search-backed watch shortlist into one valid JSON object. Return exactly ${requestedCount} unique current watch model-family names sold in India. The first option must be one exact current Titan watch model, followed by ${requestedCount - 1} comparable watch models from distinct competing brands. Never return bare brands, generic collections, categories, request text, placeholders, or duplicate products. Verify every selected model with an official India brand product page in selectionRoles.`
           : openEndedElectricVehicleBrandDiscovery
             ? `Repair the search-backed electric-vehicle shortlist into one valid JSON object. Return exactly ${requestedCount} unique current battery-electric model-family names sold in the stated local market. The first option must be one exact current ${concreteRequestedOptions[0]} model, followed by ${requestedCount - 1} comparable EV models from ${requestedCount - 1} distinct competing manufacturers. Never return bare manufacturer names, multiple ${concreteRequestedOptions[0]} models, categories, trims, grades, packs, request text, placeholders, or duplicate products. Verify every selected model with an official local manufacturer product page in selectionRoles.`
           : isDealershipComparison
@@ -7744,6 +9140,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             rawDiscoveredVendors = discoveryVendorCandidates(discovery);
             discoveredVendors = isBrandLevelModelSelection
               ? normalizeDiscoveredVendors(rawDiscoveredVendors)
+              : isTitanWatchPortfolioDiscovery
+                ? selectOpenEndedElectricVehicleShortlist(
+                    "Titan",
+                    normalizeDiscoveredVendors(rawDiscoveredVendors),
+                    requestedCount,
+                  )
               : openEndedElectricVehicleBrandDiscovery
                 ? selectOpenEndedElectricVehicleShortlist(
                     concreteRequestedOptions[0],
@@ -7760,7 +9162,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           }
         }
         if (
-          discoveredVendors.length !== requestedCount
+          (!acceptedBoundedCitedFallback && discoveredVendors.length !== requestedCount)
           || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
         ) {
           const deterministicFallback = openEndedElectricVehicleBrandDiscovery
@@ -7781,7 +9183,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           }
         }
         if (
-          discoveredVendors.length !== requestedCount
+          (!acceptedBoundedCitedFallback && discoveredVendors.length !== requestedCount)
           || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
         ) {
           console.warn("Product discovery failed concrete shortlist validation", {
@@ -7928,6 +9330,62 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         if (!input.urls.includes(sourceUrl)) input.urls.push(sourceUrl);
       }
     }
+    let generalSoftwareSourceNotes = "";
+    if (requiresGeneralSoftwareSourceFallback(
+      input.prompt,
+      context.segment,
+      bestAlternativeAnchor,
+      input.urls,
+    )) {
+      const fallbackResponse = await measureAnalysisStage(input, "software_source_fallback", () => client.responses.create({
+        model: "gpt-4.1-mini",
+        max_output_tokens: 2200,
+        include: ["web_search_call.action.sources"],
+        tool_choice: "required",
+        tools: [{
+          type: "web_search",
+          search_context_size: "medium",
+          external_web_access: true,
+          user_location: {
+            type: "approximate" as const,
+            country: researchMarket.countryCode,
+            timezone: researchMarket.timezone,
+          },
+        }],
+        input: [{
+          role: "system",
+          content: "Use web search now. Find exact current official product, feature, pricing, integration, security, and support pages for the named enterprise-software products. Quote concise verbatim source excerpts that name the exact product and establish a concrete capability or commercial fact. Cite every excerpt with the web-search citation. Do not emit guessed or reconstructed URLs.",
+        }, {
+          role: "user",
+          content: JSON.stringify({
+            prompt: input.prompt,
+            exactProducts: input.vendors,
+            market: researchMarket,
+            maximumCitedPages: 8,
+          }),
+        }],
+      }, {
+        timeout: 15_000,
+        maxRetries: 0,
+      }));
+      const fallbackUrls = await discoverGeneralSoftwareFallbackUrls(
+        input.vendors,
+        async () => fallbackResponse.output,
+        8,
+      );
+      if (!fallbackUrls.length) {
+        throw new Error("Insufficient source coverage: forced software source search returned no explicit retrieval citations.");
+      }
+      input.urls.push(...fallbackUrls);
+      generalSoftwareSourceNotes = fallbackResponse.status === "completed"
+        ? fallbackResponse.output_text.slice(0, 12_000)
+        : "";
+      console.info("general_software_source_fallback_diagnostics", {
+        invoked: true,
+        citedUrlCount: fallbackUrls.length,
+        admittedUrlCount: input.urls.length,
+      });
+    }
     const parameterPriorityInstructions = isSafetyFirstVehicleDecision
       ? "The user's first and controlling decision parameter is vehicle safety. Use a safety-focused score profile rather than the generic vendor emphasis. Prioritize official manufacturer India pages and Bharat NCAP. Compare exact current models and applicable variants using ncap_star_rating (stars), adult_occupant_score (points), child_occupant_score (points), airbag_count (airbags), esc_compliance (binary), pedestrian protection, and adas_feature_count (features). Include the exact NCAP program, protocol/version, tested variant, applicability, publication year, and score denominator. Compare NCAP results only when the program, protocol/version, and denominator match. Keep an exact tie when authoritative same-protocol evidence does not establish a safety winner."
       : explicitDecisionPriority
@@ -7954,7 +9412,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         ? "For exact AI-model comparisons, use public provider developer documentation when launch or marketing pages deny access. Verify the exact model ID and current API availability before using token price, context-window, or benchmark evidence. Record input_token_price and output_token_price only as USD per million tokens, context_window_tokens only as explicit token counts, and coding_benchmark_score only when the exact same named benchmark, version, task, and scale cover every compared model. Never transfer a neighboring model's value."
         : "",
       "Every material price, feature, eligibility, performance, market, risk, and recommendation claim must be traceable to an exact public URL in sources. If a source is unavailable, inaccessible, geography-mismatched, stale, or contradictory, say so and mark the claim unverified or unavailable instead of estimating.",
-      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
+      "Every vendor and criterion must include source-linked evidence. Use exact URLs for verified evidence, and capture raw metric values, units, and sample sizes. Quantitative metricKey values must use this controlled vocabulary when applicable: price, baas_upfront_price, usage_cost_per_km, ground_clearance, annual_fee, monthly_fee, variable_interest_rate, comparison_rate, certified_range, battery_capacity, charging_power, charging_time, engine_power, engine_torque, acceleration_0_100, warranty_years, market_share, customer_satisfaction_rate, complaint_rate, failure_rate. For usage_cost_per_km use rawMetricUnit such as INR/km, AUD/km, USD/km, or GBP/km. For ground_clearance use mm; for engine_power preserve hp, PS, or kW as the source states it and never treat PS as hp; for engine_torque use Nm; and for acceleration_0_100 use seconds only when the source explicitly states the 0–100 km/h basis. Use the same key only for genuinely equivalent measures across vendors, plus normalizationDirection as higher_is_better or lower_is_better. Never assign the same metricKey to values with different currencies, periods, populations, variants, or calculation bases. Use supportDirection only as supports, contradicts, context, or neutral. Use normalizationMethod inverse_percentage for adverse percentages where lower is better, including complaint, defect, failure, churn, return, incident, downtime, interest-rate, fee-rate, and emissions-rate measures; use direct_percentage only where higher is better. Distinguish percentage metrics, qualitative claims, analyst judgment, and unverified evidence. Never convert an organizational aspiration into a measured outcome. Missing evidence is neutral and low-confidence/unverified, never fabricated. Separate verified facts from assumptions and analyst judgment. Lower confidence when material evidence is missing or conflicting, and state what evidence would resolve the uncertainty.",
       "Set criteriaMet to false only when the named options are categorically incompatible with the requested decision, not when one criterion has missing, uncertain, or incomplete evidence. A requested ownership or retention period is a decision horizon; it does not require evidence covering that full future period. Continue the comparison with neutral treatment and an explicit evidence limitation for unsupported criteria.",
     ].join(" ");
     const explicitBaasScenario = input.annualDistanceKm && input.ownershipPeriodYears
@@ -7987,7 +9445,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         max_output_tokens: 16000,
         tools: [{
           type: "web_search",
-          search_context_size: "low",
+          // Vehicle decisions need separate official product/specification pages
+          // for every model plus independent safety/reliability evidence. A low
+          // context search has repeatedly returned a single video and one
+          // inaccessible manufacturer page, which cannot satisfy provenance
+          // gates or support a winner.
+          search_context_size: isVehicleComparison ? "high" : "low",
           external_web_access: true,
           user_location: {
             type: "approximate" as const,
@@ -8021,6 +9484,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 `Reputable independent ${researchMarket.country} publications`,
               ],
               suppliedUrls: input.urls,
+              sourceAcquisitionNotes: generalSoftwareSourceNotes || undefined,
               criteria: input.criteria,
               shape: analysisOutputShape(researchShapeVendors, isProviderLevelHomeLoanDiscovery, isElectricVehicleComparison),
               frameworkAdherenceInstructions: frameworkAdherenceInstructions(researchShapeVendors),
@@ -8434,12 +9898,12 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.urls.length,
       ...dedupeReferenceUrls([...rankedUrls, ...requiredHomeLoanRateUrls]),
     );
-    const evidenceAvailability = await measureAnalysisStage(
+    let evidenceAvailability = await measureAnalysisStage(
       input,
       "evidence_url_validation",
       () => validateFinalEvidenceUrls(input.urls, undefined, userSuppliedUrls),
     );
-    const citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
+    let citationUrls = dedupeReferenceUrls(evidenceAvailability.referenceable);
     input.onProgress?.("building_evidence");
     const retrievalUrls = dedupeReferenceUrls([
       ...evidenceAvailability.reachable,
@@ -8453,6 +9917,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
         concurrency: 6,
       }),
     );
+    logRetrievalDiagnostics("initial", retrievedResults);
     const directDocuments = retrievedResults.flatMap((result) => result.document ? [result.document] : []);
     let retrievedDocuments = directDocuments;
     if (isScrapyAiAcquisitionConfigured()) {
@@ -8471,26 +9936,150 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             concurrency: 4,
           }),
         );
+        logRetrievalDiagnostics("rendered", renderedResults);
         const renderedDocuments = renderedResults.flatMap((result) => result.document ? [result.document] : []);
         const renderedByUrl = new Map(renderedDocuments.map((document) => [document.url, document]));
         retrievedDocuments = retrievalUrls.flatMap((url) => renderedByUrl.get(url) ?? directByUrl.get(url) ?? []);
       }
     }
-    const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
-      document.url,
-      document.finalUrl,
-    ]));
-    const matrixEvidenceAdded = isElectricVehicleComparison
+    let matrixEvidenceAdded = isVehicleComparison
       ? addVerifiedElectricVehicleMatrixMetrics(parsed as Record<string, unknown>, retrievedDocuments)
       : 0;
+    if (isVehicleComparison) {
+      matrixEvidenceAdded += addVerifiedVehicleDocumentMetrics(
+        parsed as Record<string, unknown>,
+        retrievedDocuments,
+      );
+    }
     validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
-    const officialSpecEvidenceAdded = isElectricVehicleComparison
+    validateQualitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+    if (!isVehicleComparison) {
+      addVerifiedQualitativeDocumentClaims(
+        parsed as Record<string, unknown>,
+        retrievedDocuments,
+      );
+    }
+    let officialSpecEvidenceAdded = isElectricVehicleComparison
       ? addVerifiedElectricVehicleOfficialSpecs(
         parsed as Record<string, unknown>,
         retrievedDocuments,
         input.vendors,
       )
       : 0;
+    if (isVehicleComparison) {
+      const missingBeforeFallback = missingExactModelVerifiedMetricVendors(
+        parsed as Record<string, unknown>,
+        resolvedVendors,
+      );
+      const fallbackUrls = await discoverIndependentVehicleFallbackUrls(
+        parsed as Record<string, unknown>,
+        resolvedVendors,
+        async (missingVendors) => {
+          const response = await client.responses.create({
+            model: "gpt-4.1-mini",
+            max_output_tokens: 1200,
+            tools: [{
+              type: "web_search",
+              search_context_size: "low",
+              external_web_access: true,
+              user_location: {
+                type: "approximate" as const,
+                country: researchMarket.countryCode,
+                timezone: researchMarket.timezone,
+              },
+            }],
+            input: [{
+              role: "system",
+              content: "Find recent reputable independent local automotive publication pages for the exact named vehicle models. Return concise source notes. Do not cite search snippets, forums, affiliate pages, videos, or manufacturer-controlled sites. Never change or alias a model name.",
+            }, {
+              role: "user",
+              content: JSON.stringify({
+                exactModelsMissingVerifiedEvidence: missingVendors,
+                market: researchMarket,
+                asOf: currentDate,
+                requiredFacts: "Comparable exact-model prices, specifications, measured performance, maintenance, reliability, ownership, or comfort. Prefer pages naming every compared model and publishing a date.",
+              }),
+            }],
+          }, {
+            timeout: 15_000,
+            maxRetries: 0,
+          });
+          return response.output;
+        },
+      );
+      const existingDocuments = new Set(retrievedDocuments.flatMap((document) => [
+        canonicalDocumentKey(document.url),
+        canonicalDocumentKey(document.finalUrl),
+      ]));
+      const independentFallbackUrls = rankEvidenceSources(
+        filterSourcesForMarket(fallbackUrls, researchMarket),
+        resolvedVendors,
+        researchMarket,
+        [],
+        8,
+      ).filter((url) => {
+        if (existingDocuments.has(canonicalDocumentKey(url))) return false;
+        const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+        return resolvedVendors.every((vendor) => {
+          const brandToken = normalizeComparisonOptionName(vendor).split(" ")[0] ?? "";
+          return brandToken.length < 3 || !hostname.includes(brandToken);
+        });
+      }).slice(0, 8);
+      console.info("independent_vehicle_fallback_diagnostics", {
+        invoked: missingBeforeFallback.length > 0,
+        missingModelCount: missingBeforeFallback.length,
+        citedUrlCount: fallbackUrls.length,
+        eligibleUrlCount: independentFallbackUrls.length,
+      });
+      if (independentFallbackUrls.length) {
+        const fallbackAvailability = await validateFinalEvidenceUrls(independentFallbackUrls);
+        const fallbackRetrievals = await retrieveEvidenceDocuments(fallbackAvailability.reachable, {
+          permissionRegistry: publisherPermissionRegistry,
+          concurrency: 4,
+          batchTimeoutMs: 20_000,
+        });
+        logRetrievalDiagnostics("independent_fallback", fallbackRetrievals);
+        const fallbackDocuments = fallbackRetrievals.flatMap((result) => result.document ? [result.document] : []);
+        if (fallbackDocuments.length) {
+          retrievedDocuments = [...retrievedDocuments, ...fallbackDocuments];
+          citationUrls = dedupeReferenceUrls([...citationUrls, ...fallbackAvailability.referenceable]);
+          evidenceAvailability = {
+            ...evidenceAvailability,
+            reachable: dedupeReferenceUrls([...evidenceAvailability.reachable, ...fallbackAvailability.reachable]),
+            referenceable: citationUrls,
+            unavailableInsights: [...evidenceAvailability.unavailableInsights, ...fallbackAvailability.unavailableInsights],
+            sourceAvailability: [...evidenceAvailability.sourceAvailability, ...fallbackAvailability.sourceAvailability],
+          };
+          matrixEvidenceAdded += addVerifiedElectricVehicleMatrixMetrics(
+            parsed as Record<string, unknown>,
+            fallbackDocuments,
+          );
+          matrixEvidenceAdded += addVerifiedVehicleDocumentMetrics(
+            parsed as Record<string, unknown>,
+            fallbackDocuments,
+          );
+          validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+          validateQualitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+          if (!isVehicleComparison) {
+            addVerifiedQualitativeDocumentClaims(
+              parsed as Record<string, unknown>,
+              fallbackDocuments,
+            );
+          }
+          if (isElectricVehicleComparison) {
+            officialSpecEvidenceAdded += addVerifiedElectricVehicleOfficialSpecs(
+              parsed as Record<string, unknown>,
+              fallbackDocuments,
+              input.vendors,
+            );
+          }
+        }
+      }
+    }
+    const scoreVerifiedUrls = dedupeReferenceUrls(retrievedDocuments.flatMap((document) => [
+      document.url,
+      document.finalUrl,
+    ]));
     if (batteryServiceInstructions) {
       addVerifiedBaasOfferEvidence(parsed as Record<string, unknown>, retrievedDocuments);
     }
@@ -8689,8 +10278,17 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       market: `${researchMarket.country} ${researchMarket.countryCode}`,
       mustHaves,
       globalDigitalService: isAiModelComparison,
+      globalServiceMarketAvailability: /\b(?:digital experience platforms?|DXP|digital asset management|DAM|content management systems?|CMS)\b/i.test(
+        `${input.prompt} ${normalized.category}`,
+      ),
+      unverifiedDiscoveryVendors: input.vendors.filter((vendor) => (
+        unverifiedDiscoveryCandidates.has(normalizeComparisonOptionName(vendor))
+      )),
     });
-    preserveProvisionalLensWinner(normalized);
+    suppressUnqualifiedLensWinners(normalized);
+    if (bestAlternativeAnchor) {
+      applyBestAlternativeDecision(normalized, bestAlternativeAnchor);
+    }
     if (hasReviewSignalCoverage && !insufficientEvidence && normalized.recommendation !== "No exact winner") {
       normalized.recommendationReason = `Review-signal winner: ${normalized.recommendation} leads on comparable recent independent review ratings with verified multi-source coverage. ${normalized.recommendationReason}`;
     }
@@ -8714,6 +10312,10 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (insufficientEvidence && !hasQualificationModel) {
       annotateUnverifiableWinner(normalized);
     }
+    assertHasProvenanceCompleteScorableEvidence(
+      normalized,
+      bestAlternativeAnchor ? [bestAlternativeAnchor] : [],
+    );
     return normalized;
   } catch (error) {
     console.error("Product research failed", error instanceof Error

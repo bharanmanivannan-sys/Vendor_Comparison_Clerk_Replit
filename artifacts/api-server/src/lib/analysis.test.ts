@@ -5,12 +5,17 @@ import {
   applyScopedVehicleMarketPositions,
   addElectricVehicleMatrixEvidence,
   addVerifiedElectricVehicleMatrixMetrics,
+  addVerifiedVehicleDocumentMetrics,
+  addVerifiedQualitativeDocumentClaims,
   addVerifiedElectricVehicleOfficialSpecs,
   addVerifiedBaasOfferEvidence,
   addVerifiedAiModelEvidence,
   addVerifiedHomeLoanRateEvidence,
   addVerifiedQuickCommerceDeliveryEvidence,
   applyEvidenceBackedLensWinner,
+  applyVendorModelDecision,
+  applyBestAlternativeRecommendation,
+  assertHasProvenanceCompleteScorableEvidence,
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
   applySoftwareCapabilityMatrixDecision,
@@ -25,9 +30,12 @@ import {
   capabilityLedSoftwarePriorityProfile,
   canonicalVendorScoreRows,
   collectCitedHttpUrls,
+  collectExplicitWebSearchSources,
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
   deterministicOpenEndedEvFallback,
+  discoverGeneralSoftwareFallbackUrls,
+  discoverIndependentVehicleFallbackUrls,
   discoveryTargetCount,
   electricVehicleFinalQualityIssues,
   evidenceSufficiency,
@@ -51,6 +59,7 @@ import {
   isSafetyFirstVehicleQuery,
   isObjectivePhraseVendor,
   missingCreditCardSourceVendors,
+  missingExactModelVerifiedMetricVendors,
   missingElectricVehicleSourceVendors,
   mergeElectricVehicleResearch,
   normalizeDecisionGovernance,
@@ -78,28 +87,34 @@ import {
   reconcileRecommendationDecision,
   reconcileFinalRecommendationNarrative,
   reconcileRecommendationWithNarrative,
+  recoverCitedOpenEndedCompetitors,
   rankEvidenceSources,
   refineComparisonPrompt,
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
   requestsCurrentModelSelection,
+  requestsBestAlternative,
+  requiresGeneralSoftwareSourceFallback,
   scoreDifferenceBand,
   sanitizeOutsideAlternativeInsights,
   vehicleIndependentEvidenceInstructions,
   vehicleMarketPositionInstructions,
   selectRecommendationLabel,
   selectOpenEndedElectricVehicleShortlist,
+  validatedQualitativeLensDecision,
   sourceMatchesResearchMarket,
   uniqueHighestDeterministicWeightedVendor,
   userSuppliedSourceInstructions,
   UNVERIFIABLE_WINNER_NOTE,
   validateFinalEvidenceUrls,
+  validateQualitativeEvidenceAgainstDocuments,
   validateQuantitativeEvidenceAgainstDocuments,
   validateComparisonContext,
 } from "./analysis";
-import type { RetrievedEvidenceDocument } from "./security";
+import { normalizeRetrievedText, type RetrievedEvidenceDocument } from "./security";
 import { flattenComparisonEvidence } from "../services/comparisonPersistence";
 import { isSafeUserInput } from "./security";
+import { CreateComparisonBody } from "@workspace/api-zod";
 
 const extracted = (value: object) => async () => value;
 const intent = (value: object) => ({
@@ -110,12 +125,404 @@ const intent = (value: object) => ({
   ...value,
 });
 
+test("accepts Automobile vehicle evidence with unknown non-hard gates as a consistent conditional decision", () => {
+  const hash = "a".repeat(64);
+  const evidence = (vendor: string, metricKey: string, value: number, score: number) => ({
+    sourceId: `docsha256:${hash}`,
+    documentSha256: hash,
+    sourceTextStart: 13053,
+    sourceTextEnd: 13092,
+    evidenceKind: "quantitative",
+    normalizationMethod: "direct_comparable_metric",
+    metricSubject: vendor,
+    metricKey,
+    metricBasis: `${metricKey}:paired_table`,
+    rawMetricValue: value,
+    rawMetricUnit: metricKey === "price" ? "inr_lakh" : "hp",
+    normalizationDirection: metricKey === "price" ? "lower_is_better" : "higher_is_better",
+    normalizedScore: score,
+    supportDirection: "supports",
+    exactClaim: metricKey === "price" ? "Mahindra ₹20.89 lakh; Tata ₹20.79 lakh" : "Mahindra 185 hp; Tata 170 hp",
+  });
+  const prompt = "Compare Mahindra xuv 700 and Tata Safari diesel AT for automobile in India. Evaluate Performance and Safety features. Recommend the best safety outcome.";
+  const analysis = {
+    category: "Automobile | SUV | Diesel | Automatic | India",
+    vendors: ["Mahindra xuv 700", "Tata Safari diesel AT"],
+    vendorScores: [
+      {
+        vendor: "Mahindra xuv 700",
+        score: 50,
+        qualificationStatus: "INSUFFICIENT_EVIDENCE",
+        qualificationGates: [
+          { gate: "Exact entity/variant identity", status: "PASS", mandatory: true, rationale: "", evidenceSourceIds: [`docsha256:${hash}`] },
+          { gate: "Market availability", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+          { gate: "Applicable local regulatory compliance", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+        ],
+        weightedScores: [{
+          criterion: "Meets Needs / Features", weight: 35, score: 50,
+          evidence: [evidence("Mahindra xuv 700", "engine_power", 185, 70), evidence("Mahindra xuv 700", "price", 20.89, 50)],
+        }],
+      },
+      {
+        vendor: "Tata Safari diesel AT",
+        score: 50,
+        qualificationStatus: "INSUFFICIENT_EVIDENCE",
+        qualificationGates: [
+          { gate: "Exact entity/variant identity", status: "PASS", mandatory: true, rationale: "", evidenceSourceIds: [`docsha256:${hash}`] },
+          { gate: "Market availability", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+          { gate: "Applicable local regulatory compliance", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+        ],
+        weightedScores: [{
+          criterion: "Meets Needs / Features", weight: 35, score: 50,
+          evidence: [evidence("Tata Safari diesel AT", "engine_power", 170, 60), evidence("Tata Safari diesel AT", "price", 20.79, 55)],
+        }],
+      },
+    ],
+    pricing: [{ dimension: "Product price", values: { "Mahindra xuv 700": "₹20.89 lakh", "Tata Safari diesel AT": "₹20.79 lakh" }, winner: "Not established" }],
+    features: [{ dimension: "Performance", values: { "Mahindra xuv 700": "185 hp", "Tata Safari diesel AT": "170 hp" }, winner: "Not established" }],
+    recommendation: "No qualified option",
+    score: 0,
+    executiveSummary: "No option was established.",
+    recommendationReason: "Insufficient evidence.",
+    insights: [],
+  } as unknown as AnalysisPayload;
+
+  applyVendorModelDecision(analysis, { prompt, category: analysis.category, market: "India IN" });
+  assert.equal(analysis.recommendation, "Mahindra xuv 700");
+  assert.equal(analysis.vendorScores.find((vendor) => vendor.vendor === "Mahindra xuv 700")?.score, 70);
+  assert.equal(analysis.vendorScores.find((vendor) => vendor.vendor === "Mahindra xuv 700")?.modelScore, 70);
+  assert.match(analysis.executiveSummary, /Mahindra xuv 700.*conditional recommendation/i);
+  assert.match(analysis.recommendationReason, /supported performance/i);
+  assert.equal(analysis.features?.[0]?.winner, "Mahindra xuv 700");
+  assert.ok(analysis.vendorScores.every((vendor) => vendor.qualificationStatus === "QUALIFIED_WITH_CONDITIONS"));
+
+  const software = { ...analysis, category: "Enterprise software", recommendation: "No qualified option" } as unknown as AnalysisPayload;
+  applyVendorModelDecision(software, { prompt: "Compare two software platforms", category: software.category });
+  assert.equal(software.recommendation, "No qualified option");
+});
+
 test("includes NPS in the 100-point weighted decision model", () => {
   assert.deepEqual(
     WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Customer Advocacy / NPS"),
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("admits governed independent exact-model vehicle metrics when official pages are unavailable", () => {
+  const sourceUrl = "https://independent-auto.example/2026/xuv-7xo-vs-safari";
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text: [
+      "Published 2026-04-17",
+      "Mahindra XUV 7XO engine power is 185 hp in the tested diesel automatic.",
+      "Tata Safari engine power is 170 hp in the tested diesel automatic.",
+      "Mahindra XUV 7XO peak engine torque is 450 Nm in the tested diesel automatic.",
+      "Tata Safari peak engine torque is 350 Nm in the tested diesel automatic.",
+      "Mahindra XUV 7XO 0-100 km/h acceleration time is 9.97 seconds.",
+      "Tata Safari 0-100 km/h acceleration time is 12.09 seconds.",
+    ].join("\n"),
+    sha256: "a".repeat(64),
+    retrievedAt: "2026-04-17T10:00:00.000Z",
+    truncated: false,
+  };
+  const parsed = {
+    vendorScores: ["Mahindra XUV 7XO", "Tata Safari"].map((vendor, index) => ({
+      vendor,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        evidence: [{
+          sourceUrl,
+          sourceDate: "2026-04-17",
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: index === 0 ? 185 : 170,
+          rawMetricUnit: "hp",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    })),
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 2);
+  for (const vendor of parsed.vendorScores) {
+    const evidence = vendor.weightedScores[0].evidence[0] as Record<string, any>;
+    assert.equal(evidence.normalizationMethod, "retrieved_document_metric");
+    assert.equal(evidence.sourceDate, "2026-04-17");
+    assert.equal(evidence.documentSha256, "a".repeat(64));
+    assert.ok(evidence.sourceTextEnd > evidence.sourceTextStart);
+  }
+});
+
+test("matches qualified diesel-automatic models across representative heading and table text while preserving PS", () => {
+  const sourceUrl = "https://publisher.example/xuv700-safari-diesel-comparison";
+  const text = normalizeRetrievedText(`
+    <article>
+      <h1>Mahindra XUV700 vs Tata Safari diesel automatic comparison</h1>
+      <section>
+        <h2>Mahindra XUV700</h2>
+        <p>Tested powertrain: diesel automatic</p>
+        <table>
+          <thead><tr><th>Specification</th><th>Measured value</th></tr></thead>
+          <tbody>
+            <tr><th>Power</th><td>185 PS</td></tr>
+            <tr><th>Peak torque</th><td>450 Nm</td></tr>
+          </tbody>
+        </table>
+      </section>
+      <section>
+        <h2>Tata Safari</h2>
+        <p>Tested powertrain: diesel automatic</p>
+        <table>
+          <tbody>
+            <tr><th>Power</th><td>170 PS</td></tr>
+            <tr><th>Peak torque</th><td>350 Nm</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </article>
+  `, "text/html");
+  const analysis = {
+    features: [{
+      dimension: "Engine power and torque performance",
+      values: {
+        "Mahindra XUV700 diesel automatic": "185 PS; 450 Nm",
+        "Tata Safari diesel automatic": "170 PS; 350 Nm",
+      },
+    }],
+    pricing: [],
+    vendorScores: ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"].map((vendor) => ({
+      vendor,
+      weightedScores: [],
+    })),
+  } as unknown as AnalysisPayload;
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text,
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-04-17T00:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(addVerifiedElectricVehicleMatrixMetrics(analysis, [document]), 8);
+  const evidence = analysis.vendorScores.flatMap((vendor) => (
+    vendor.weightedScores?.flatMap((criterion) => criterion.evidence ?? []) ?? []
+  ));
+  assert.ok(evidence.some((row) => row.metricKey === "engine_power" && row.rawMetricUnit === "ps"));
+  assert.ok(evidence.every((row) => row.metricSubject === "Mahindra XUV700 diesel automatic"
+    || row.metricSubject === "Tata Safari diesel automatic"));
+});
+
+test("rejects a petrol table section for a diesel-qualified model", () => {
+  const sourceUrl = "https://publisher.example/xuv700-powertrains";
+  const text = normalizeRetrievedText(`
+    <article>
+      <h2>Mahindra XUV700</h2>
+      <p>Petrol automatic</p>
+      <table><tr><th>Power</th><td>200 PS</td></tr></table>
+      <h2>Mahindra XUV700</h2>
+      <p>Diesel automatic</p>
+      <table><tr><th>Power</th><td>185 PS</td></tr></table>
+    </article>
+  `, "text/html");
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700 diesel automatic",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{
+          sourceUrl,
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: 200,
+          rawMetricUnit: "PS",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    }],
+  };
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text,
+    sha256: "f".repeat(64),
+    retrievedAt: "2026-04-17T00:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+});
+
+test("runs at most one bounded citation-only fallback search when exact-model metrics are missing", async () => {
+  let searches = 0;
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    { vendorScores: [{ vendor: "Mahindra XUV 7XO", weightedScores: [] }] },
+    ["Mahindra XUV 7XO"],
+    async (missing) => {
+      searches += 1;
+      assert.deepEqual(missing, ["Mahindra XUV 7XO"]);
+      return {
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "A prose URL https://not-a-citation.example must not be admitted.",
+            annotations: [
+              { type: "url_citation", url: "https://publisher.example/xuv-7xo-test" },
+              { type: "url_citation", url: "https://publisher.example/xuv-7xo-test" },
+            ],
+          }],
+        }],
+      };
+    },
+  );
+  assert.equal(searches, 1);
+  assert.deepEqual(urls, ["https://publisher.example/xuv-7xo-test"]);
+});
+
+test("skips independent fallback search when every exact model already has span-backed metrics", async () => {
+  let searches = 0;
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV 7XO",
+      weightedScores: [{
+        evidence: [{
+          normalizationMethod: "retrieved_document_metric",
+          documentSha256: "d".repeat(64),
+          sourceTextStart: 10,
+          sourceTextEnd: 40,
+          metricSubject: "Mahindra XUV 7XO",
+          sourceUrl: "https://auto.mahindra.com/xuv-7xo",
+        }],
+      }],
+    }],
+  };
+  assert.deepEqual(missingExactModelVerifiedMetricVendors(parsed, ["Mahindra XUV 7XO"]), []);
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    parsed,
+    ["Mahindra XUV 7XO"],
+    async () => {
+      searches += 1;
+      return [];
+    },
+  );
+  assert.equal(searches, 0);
+  assert.deepEqual(urls, []);
+});
+
+test("does not map XUV 7XO evidence to XUV700", () => {
+  const sourceUrl = "https://independent-auto.example/2026/xuv-7xo-test";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        evidence: [{
+          sourceUrl,
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: 185,
+          rawMetricUnit: "hp",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    }],
+  };
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text: "Mahindra XUV 7XO engine power is 185 hp in the tested diesel automatic.",
+    sha256: "b".repeat(64),
+    retrievedAt: "2026-04-17T10:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+});
+
+test("does not let an official-only EV gate reject two dated independent exact-model sources", () => {
+  const vendors = ["Alpha EV One", "Beta EV Two"];
+  const evidenceFor = (vendor: string, sourceUrl: string) => ({
+    sourceUrl,
+    sourceDate: "2026-04-17",
+    retrievalDate: "2026-04-18",
+    exactClaim: `${vendor} exact-model metric`,
+    metricKey: "engine_power",
+    metricSubject: vendor,
+    metricBasis: "electric_automatic_powertrain_output",
+    rawMetricValue: 100,
+    rawMetricUnit: "kw",
+    normalizationDirection: "higher_is_better" as const,
+    documentSha256: "c".repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 40,
+    evidenceKind: "quantitative" as const,
+    supportDirection: "context" as const,
+    confidence: 90,
+    normalizedScore: 50,
+    criterionWeight: 25,
+    weightedContribution: 12.5,
+    normalizationMethod: "retrieved_document_metric",
+  });
+  const analysis = {
+    pricing: [],
+    features: [],
+    recommendation: "No exact winner",
+    recommendationReason: "Evidence remains limited.",
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 50,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        score: 50,
+        rationale: "Two dated independent sources.",
+        evidence: [
+          evidenceFor(vendor, `https://review-one.example/${vendor.replaceAll(" ", "-")}`),
+          evidenceFor(vendor, `https://review-two.example/${vendor.replaceAll(" ", "-")}`),
+        ],
+      }],
+    })),
+  } as unknown as AnalysisPayload;
+
+  const issues = electricVehicleFinalQualityIssues(analysis, vendors, [], [
+    ...vendors.flatMap((vendor) => [
+      `https://review-one.example/${vendor.replaceAll(" ", "-")}`,
+      `https://review-two.example/${vendor.replaceAll(" ", "-")}`,
+    ]),
+  ]);
+  assert.ok(!issues.some((issue) => /official product sources/i.test(issue)));
+});
+
+test("long-horizon maintenance and comfort priorities produce different weights without horizon claims", () => {
+  const maintenance = explicitDecisionPriorityProfile(
+    "Compare these SUVs for 20 years; prioritize maintenance and service costs.",
+  );
+  const comfort = explicitDecisionPriorityProfile(
+    "Compare these SUVs for 5 years; prioritize ride comfort and cabin comfort.",
+  );
+  assert.ok(maintenance);
+  assert.ok(comfort);
+  const weight = (profile: NonNullable<typeof maintenance>, criterion: string) => (
+    profile.weights.find((entry) => entry.criterion === criterion)?.weight ?? 0
+  );
+  assert.ok(weight(maintenance, "Quality & Reliability") > weight(comfort!, "Quality & Reliability"));
+  assert.ok(weight(comfort!, "Meets Needs / Features") > weight(maintenance, "Meets Needs / Features"));
+  assert.doesNotMatch(maintenance.label, /20/);
+  assert.doesNotMatch(comfort!.label, /5/);
 });
 
 function qualificationEvidence(
@@ -126,6 +533,9 @@ function qualificationEvidence(
 ) {
   return {
     sourceId: `docsha256:${hashCharacter.repeat(64)}`,
+    documentSha256: hashCharacter.repeat(64),
+    sourceTextStart: 0,
+    sourceTextEnd: 64,
     sourceUrl: `https://official.example/${vendor.toLowerCase().replaceAll(" ", "-")}`,
     exactClaim: `${vendor} is available in Australia; verified product metric`,
     metricKey: "capability_score",
@@ -396,6 +806,131 @@ test("uses every named non-price criterion without treating long ownership as a 
   assert.ok((profile.weights.find(({ criterion }) => criterion === "Regulatory Compliance")?.weight ?? 0) > 3);
 });
 
+test("preserves mixed vehicle specificity when intent extraction returns only manufacturers", async () => {
+  const prompt = "Compare Mahindra vs Tata Safari diesel AT. I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance.";
+  assert.deepEqual(parsePrompt(prompt).vendors, ["Mahindra", "Tata Safari diesel AT"]);
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    async () => ({
+      options: ["Mahindra", "Tata"],
+      subject: "SUV vehicle",
+      decisionType: "comparison",
+      category: "automotive",
+      useCase: "long-term ownership",
+      qualifiers: ["20 years", "performance", "reliability", "safety features", "maintenance"],
+      decisionCriterion: "best safety outcome",
+      freshness: "current",
+      confidence: 0.9,
+      clarification: "",
+    }),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata Safari diesel AT"]);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /manufacturer.*specific model/i);
+});
+
+test("preserves the exact mixed-specificity AI prompt and its validation correction at low confidence", async () => {
+  const prompt = "Compare Mahindra vs Tata Safari diesel AI. I am planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+  const deterministic = parsePrompt(prompt);
+  assert.deepEqual(deterministic.vendors, ["Mahindra", "Tata Safari diesel AI"]);
+  assert.equal(deterministic.context.valid, false);
+  assert.match(deterministic.context.message, /Mahindra is a manufacturer.*Tata Safari diesel AI is a specific model/i);
+
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra", "Tata"],
+      category: "Automotive",
+      useCase: "Long-term ownership",
+      confidence: 0.42,
+      clarification: "What outcome or use case should decide between these options?",
+    })),
+    { market: "IN" },
+  );
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata Safari diesel AI"]);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /Mahindra is a manufacturer.*Tata Safari diesel AI is a specific model/i);
+  assert.doesNotMatch(parsed.context.message, /what outcome or use case/i);
+});
+
+test("keeps the first exact vehicle pair when a later compare sentence lists only criteria", async () => {
+  const prompt = "Compare Mahindra XUV700 diesel automatic versus Tata Safari diesel automatic in India. Compare performance, reliability, safety features and maintenance for 20-year ownership.";
+  assert.deepEqual(
+    parsePrompt(prompt).vendors,
+    ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"],
+  );
+
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra", "Tata"],
+      category: "Automotive",
+      useCase: "20-year ownership",
+      confidence: 0.95,
+      clarification: "",
+    })),
+    { market: "IN" },
+  );
+  assert.deepEqual(
+    parsed.vendors,
+    ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"],
+  );
+  assert.equal(parsed.context.valid, true);
+});
+
+test("treats an edited review request as authoritative over stale generated metadata", async () => {
+  const prompt = [
+    "Compare Mahindra xuv 700 and Tata Safari diesel AT in India.",
+    "Evaluate performance, reliability, safety features and maintenance.",
+    "Original request: Compare Mahindra vs Tata Safari diesel AT in India.",
+    "Original request: Compare Mahindra vs Tata Safari diesel AT in India.",
+  ].join(" ");
+
+  const deterministic = parsePrompt(prompt);
+  assert.equal(
+    deterministic.prompt,
+    "Compare Mahindra xuv 700 and Tata Safari diesel AT in India. Evaluate performance, reliability, safety features and maintenance.",
+  );
+  assert.deepEqual(deterministic.vendors, ["Mahindra xuv 700", "Tata Safari diesel AT"]);
+
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["Mahindra", "Tata Safari diesel AT"],
+    category: "Automotive",
+    useCase: "Long-term ownership",
+    confidence: 0.95,
+  })), { market: "IN" });
+  assert.deepEqual(parsed.vendors, ["Mahindra xuv 700", "Tata Safari diesel AT"]);
+  assert.deepEqual(parsed.comparisonIdentity.entities.map((entity) => entity.name), [
+    "Mahindra xuv 700",
+    "Tata Safari diesel AT",
+  ]);
+  assert.equal(parsed.context.valid, true);
+  assert.doesNotMatch(parsed.prompt, /Original request:/i);
+});
+
+test("keeps corrected and multi-model vehicle option chains out of later criteria sentences", () => {
+  const corrected = parsePrompt(
+    "Compare Mahindra XUV700 diesel AT vs Tata Safari diesel AT. Compare the vehicle on performance, reliability, safety features and maintenance.",
+  );
+  assert.deepEqual(corrected.vendors, ["Mahindra XUV700 diesel AT", "Tata Safari diesel AT"]);
+  assert.equal(corrected.context.valid, true);
+
+  const multiModel = parsePrompt(
+    "Compare Mahindra XUV700 vs Tata Safari vs MG Hector for family vehicles. Compare the vehicles on performance, safety and maintenance.",
+  );
+  assert.deepEqual(multiModel.vendors, ["Mahindra XUV700", "Tata Safari", "MG Hector"]);
+  assert.equal(multiModel.context.valid, true);
+});
+
+test("does not use model words in later criteria to reject a broad vehicle-class comparison", () => {
+  const parsed = parsePrompt(
+    "Compare Mahindra vs Tata for SUVs in India. Compare the vehicles on performance, Safari-like comfort, safety and maintenance.",
+  );
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata"]);
+  assert.equal(parsed.context.valid, true);
+});
+
 test("keeps a valid long-horizon vehicle comparison when research reports incomplete criterion evidence", () => {
   const parsed = {
     criteriaMet: false,
@@ -633,7 +1168,7 @@ test("preserves a pricing and feature lens winner when other parameters are insu
   assert.match(analysis.recommendationReason, /\*\*Note: .*AI can sometimes provide incorrect results\.\*\*/);
 });
 
-test("preserves only a provisional lens leader after every option fails evidence qualification", () => {
+test("does not restore a provisional score or winner after every option fails evidence qualification", () => {
   const analysis = {
     recommendation: "No qualified option",
     score: 0,
@@ -659,12 +1194,11 @@ test("preserves only a provisional lens leader after every option fails evidence
     })),
   } as unknown as AnalysisPayload;
 
-  assert.equal(preserveProvisionalLensWinner(analysis), true);
-  assert.equal(analysis.recommendation, "GPT 5.6 Luna fast");
-  assert.equal(analysis.score, 50);
-  assert.match(analysis.executiveSummary, /^Provisional lens winner — GPT 5\.6 Luna fast/);
-  assert.match(analysis.recommendationReason, /not a qualified overall recommendation/i);
-  assert.match(analysis.recommendationReason, /missing comparable evidence, not equal performance/i);
+  assert.equal(preserveProvisionalLensWinner(analysis), false);
+  assert.equal(analysis.recommendation, "No qualified option");
+  assert.equal(analysis.score, 0);
+  assert.deepEqual(analysis.vendorScores.map((vendor) => vendor.score), [50, 50, 50, 50]);
+  assert.doesNotMatch(analysis.executiveSummary, /^Provisional lens winner —/);
   assert.ok(analysis.vendorScores.every((vendor) => (
     (vendor as any).qualificationStatus === "INSUFFICIENT_EVIDENCE"
   )));
@@ -2414,6 +2948,49 @@ test("does not admit model-invented home-loan URLs as web-search evidence", () =
   assert.deepEqual(collectCitedHttpUrls(responseOutput), [citedAnzUrl]);
 });
 
+test("collects only explicit Responses message citations and web-search tool sources", () => {
+  const annotationUrl = "https://publisher.example/annotated";
+  const toolSourceUrl = "https://publisher.example/tool-source";
+  const proseUrl = "https://publisher.example/prose-only";
+  const malformedUrl = "https://publisher.example/malformed-nested";
+  const response = {
+    output: [{
+      type: "message",
+      content: [{
+        type: "output_text",
+        text: JSON.stringify({ sourceUrl: proseUrl }),
+        annotations: [{ type: "url_citation", url: annotationUrl }],
+      }],
+      metadata: {
+        nested: {
+          type: "web_search_call",
+          action: { sources: [{ type: "url", url: malformedUrl }] },
+        },
+      },
+    }, {
+      type: "web_search_call",
+      action: {
+        type: "search",
+        sources: [{ type: "url", url: toolSourceUrl }],
+      },
+    }, {
+      type: "web_search_call",
+      action: {
+        sources: [{ type: "url_citation", url: "https://publisher.example/wrong-source-type" }],
+      },
+    }],
+  };
+
+  assert.deepEqual(collectExplicitWebSearchSources(response), {
+    urls: [annotationUrl, toolSourceUrl],
+    messageAnnotationCount: 1,
+    toolSourceCount: 1,
+  });
+  assert.deepEqual(collectCitedHttpUrls(response), [annotationUrl, toolSourceUrl]);
+  assert.equal(collectCitedHttpUrls(response).includes(proseUrl), false);
+  assert.equal(collectCitedHttpUrls(response).includes(malformedUrl), false);
+});
+
 test("removes an unapproved banking URL from normalized market evidence", () => {
   const inventedUrl = "https://www.westpac.com.au/home-loans/does-not-exist";
   const approvedUrl = "https://www.anz.com.au/personal/home-loans/interest-rates";
@@ -2778,6 +3355,128 @@ test("rejects Westpac products in India before research", () => {
   assert.match(context.message, /Westpac does not offer.*India/i);
 });
 
+test("rejects a prompt country that conflicts with the selected research market", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata for automobiles in India. Use case: long-term ownership for 20 years.",
+    ["Mahindra", "Tata"],
+    "AU",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /prompt asks for India/i);
+  assert.match(context.message, /selected research market is Australia/i);
+});
+
+test("accepts manufacturer-only automobile comparisons for governed portfolio discovery", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata for automobiles. Use case: long-term ownership for 20 years.",
+    ["Mahindra", "Tata"],
+    "IN",
+  );
+
+  assert.equal(context.valid, true);
+});
+
+test("parses the five supported broad-brand and model-family comparison examples", () => {
+  const cases = [
+    {
+      prompt: "Tata Safari vs Mahindra XUV",
+      vendors: ["Tata Safari", "Mahindra XUV"],
+      objective: "Mahindra XUV",
+    },
+    { prompt: "Tata vs Mahindra", vendors: ["Tata", "Mahindra"] },
+    {
+      prompt: "Tata Diesel vehicles vs Mahindra Diesel vehicles",
+      vendors: ["Tata", "Mahindra"],
+      segment: "Vehicles",
+    },
+    { prompt: "Gucci vs Prada", vendors: ["Gucci", "Prada"] },
+    {
+      prompt: "Titan watches vs other watch brands in India",
+      vendors: ["Titan watches", "other watch brands"],
+      objective: "other watch brands",
+    },
+  ];
+
+  for (const example of cases) {
+    const parsed = parsePrompt(example.prompt);
+    assert.deepEqual(parsed.vendors, example.vendors, example.prompt);
+    assert.equal(parsed.context.valid, true, `${example.prompt}: ${parsed.context.message}`);
+    if (example.prompt === "Tata vs Mahindra" || /Diesel/.test(example.prompt)) {
+      assert.equal(parsed.context.segment, "Vehicles");
+      assert.equal(parsed.context.industry, "Consumer automotive");
+    }
+    if (example.objective) assert.equal(isObjectivePhraseVendor(example.objective), true);
+  }
+});
+
+test("intent parsing accepts all five supported examples without requiring exact models", async () => {
+  const cases = [
+    ["Tata Safari vs Mahindra XUV", ["Tata Safari", "Mahindra XUV"]],
+    ["Tata vs Mahindra", ["Tata", "Mahindra"]],
+    ["Tata Diesel vehicles vs Mahindra Diesel vehicles", ["Tata", "Mahindra"]],
+    ["Gucci vs Prada", ["Gucci", "Prada"]],
+    ["Titan watches vs other watch brands in India", ["Titan watches", "other watch brands"]],
+  ] as const;
+
+  for (const [prompt, options] of cases) {
+    const parsed = await parsePromptWithIntent(prompt, async () => ({
+      ...intent({
+        options: [...options],
+        decisionType: "comparison",
+        category: /Tata|Mahindra/.test(prompt) ? "Vehicles" : /Titan/.test(prompt) ? "Watches" : "Luxury brands",
+        useCase: "Purchase decision",
+        confidence: 0.95,
+        clarification: "",
+      }),
+    }) as never, { market: /India/.test(prompt) || /Tata|Mahindra/.test(prompt) ? "IN" : "US" });
+    assert.deepEqual(parsed.vendors, [...options], prompt);
+    assert.equal(parsed.context.valid, true, `${prompt}: ${parsed.context.message}`);
+    assert.equal(parsed.intent.clarification, "");
+  }
+});
+
+test("low-specificity intent extraction cannot erase the automotive or diesel scope", async () => {
+  for (const prompt of [
+    "Tata vs Mahindra",
+    "Tata Diesel vehicles vs Mahindra Diesel vehicles",
+  ]) {
+    const parsed = await parsePromptWithIntent(prompt, async () => ({
+      ...intent({
+        options: ["Tata", "Mahindra"],
+        decisionType: "comparison",
+        category: "Product or service comparison",
+        useCase: "",
+        confidence: 0.55,
+        clarification: "Which exact models?",
+      }),
+    }) as never, { market: "IN" });
+
+    assert.deepEqual(parsed.vendors, ["Tata", "Mahindra"]);
+    assert.equal(parsed.context.valid, true);
+    assert.equal(parsed.context.segment, "Vehicles");
+    assert.equal(parsed.context.industry, "Consumer automotive");
+    assert.equal(parsed.intent.clarification, "");
+    if (/Diesel/.test(prompt)) {
+      const brief = refineComparisonPrompt(prompt, parsed.vendors, parsed.criteria, parsed.context, "IN");
+      assert.match(brief, /preserve the requested diesel powertrain/i);
+      assert.match(brief, /only current diesel vehicles/i);
+    }
+  }
+});
+
+test("blocks mixed manufacturer and model specificity for vehicle decisions", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata Safari diesel automatic for long-term ownership in India.",
+    ["Mahindra", "Tata Safari diesel automatic"],
+    "IN",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /Mahindra is a manufacturer/i);
+  assert.match(context.message, /Tata Safari diesel automatic is a specific model/i);
+});
+
 test("allows a shared service criterion across different brand segments", () => {
   const parsed = parsePrompt("Compare after sales support between Apple and Westpac.");
   assert.deepEqual(parsed.vendors, ["Apple", "Westpac"]);
@@ -2935,6 +3634,41 @@ test("does not append model-inferred factors when the user explicitly names comp
     "Delivery time and reliability",
     "Product quality",
   ]);
+});
+
+test("normalizes criteria-heavy parser output to the create-comparison contract", async () => {
+  const prompt = "Compare Mahindra XUV700 and Tata Safari in India based on performance, safety, features, reliability, maintenance, resale value, warranty, budget, security, ease of use, customer outcomes and long-term sustainability.";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra XUV700", "Tata Safari"],
+      subject: "Current family SUVs with privacy, integration and implementation requirements",
+      category: "Automotive technology",
+      useCase: "Customer support and market positioning",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.equal(parsed.criteria.length, 8);
+  assert.deepEqual(parsed.criteria, parsePrompt(prompt).criteria);
+  assert.ok(parsed.criteria.every((criterion) => criterion.length <= 100));
+  assert.equal(CreateComparisonBody.safeParse({
+    prompt: parsed.prompt,
+    vendors: parsed.vendors,
+    urls: parsed.urls,
+    criteria: parsed.criteria,
+  }).success, true);
+});
+
+test("rejects a seventh explicit option without truncating the option chain", () => {
+  const parsed = parsePrompt(
+    "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank vs Macquarie vs Bankwest vs ING for home loans",
+  );
+
+  assert.equal(parsed.vendors.length, 7);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /two and 6 distinct options/i);
 });
 
 test("preserves all six providers in a supported comparison", async () => {
@@ -3862,6 +4596,804 @@ test("treats generic AEM competitor wording as discovery objectives", () => {
     ]),
     ["Adobe AEM", "Sitecore Experience Platform", "Acquia DXP"],
   );
+});
+
+test("parses the full AEM anchor and apostrophe variants as competitor discovery", () => {
+  for (const possessive of ["its", "it's", "it’s"]) {
+    const prompt = `Compare Adobe experience manager against ${possessive} competitors which is the best alternatives for AEM?`;
+    const parsed = parsePrompt(prompt);
+    assert.deepEqual(parsed.vendors, ["Adobe experience manager", `${possessive} competitors`]);
+    assert.equal(parsed.vendors.some(isObjectivePhraseVendor), true);
+    assert.equal(discoveryTargetCount(parsed.vendors), 4);
+    assert.equal(requestsBestAlternative(prompt), true);
+  }
+});
+
+test("keeps the full AEM anchor and removes expanded and acronym duplicates from discovery", () => {
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(
+      ["Adobe Experience Manager", "its competitors"],
+      [
+        "AEM",
+        "Adobe Experience Manager",
+        "Sitecore XM Cloud",
+        "sitecore xm cloud",
+        "Optimizely One",
+        "Acquia DXP",
+      ],
+      4,
+    ),
+    ["Adobe Experience Manager", "Sitecore XM Cloud", "Optimizely One", "Acquia DXP"],
+  );
+});
+
+test("recovers exact AEM competitors only from cited retrieved category evidence", async () => {
+  const prompt = "Compare Adobe experience manager against its competitors which is the best alternatives for AEM?";
+  const requested = parsePrompt(prompt).vendors;
+  let searches = 0;
+  const urlOne = "https://alt-one.example/product";
+  const urlTwo = "https://alt-two.example/product";
+  const anchorUrl = "https://anchor.example/product";
+  const proseOnlyUrl = "https://prose-only.example/product";
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe experience manager",
+    prompt,
+    market: "United States US",
+    requested,
+    initialVendors: ["Adobe experience manager", "its competitors"],
+    targetCount: 4,
+    search: async () => {
+      searches += 1;
+      return {
+        outputText: JSON.stringify({
+          category: "Digital experience platform",
+          anchor: {
+            name: "Adobe experience manager",
+            category: "Digital experience platform",
+            citationUrl: anchorUrl,
+          },
+          alternatives: [
+            { name: "AltOne", category: "Digital experience platform", citationUrl: urlOne },
+            { name: "AltTwo", category: "Digital experience platform", citationUrl: urlTwo },
+            { name: "Hallucinated Prose Product", category: "Digital experience platform", citationUrl: proseOnlyUrl },
+            { name: "other competitors", category: "Digital experience platform", citationUrl: urlOne },
+          ],
+        }),
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: `A prose-only URL ${proseOnlyUrl}`,
+            annotations: [anchorUrl, urlOne, urlTwo].map((url) => ({ type: "url_citation", url })),
+          }],
+        }],
+      };
+    },
+    retrieve: async (urls) => urls.map((url, index) => {
+      const product = url === anchorUrl
+        ? "Adobe experience manager"
+        : ["AltOne", "AltTwo"][index - 1];
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          canonicalUrl: url,
+          contentType: "text/html",
+          text: `${product} is a current digital experience platform for enterprise content.`,
+          sha256: String(index + 1).repeat(64),
+          retrievedAt: "2026-09-23T00:00:00.000Z",
+          truncated: false,
+          retrievalMethod: "direct_http",
+          parserVersion: "security-html-v1",
+        },
+      };
+    }),
+  });
+
+  assert.equal(searches, 1);
+  assert.deepEqual(recovered?.vendors, [
+    "Adobe experience manager",
+    "AltOne",
+    "AltTwo",
+  ]);
+  assert.deepEqual(recovered?.urls, [anchorUrl, urlOne, urlTwo]);
+  assert.equal(recovered?.vendors.some(isObjectivePhraseVendor), false);
+  assert.ok(!recovered?.vendors.includes("Hallucinated Prose Product"));
+});
+
+test("continues source-less discovery with concrete unverified names only", async () => {
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe Experience Manager",
+    prompt: "Compare Adobe Experience Manager against its competitors",
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 4,
+    search: async () => ({
+      outputText: JSON.stringify({
+        category: "Digital experience platform",
+        market: "United States US",
+        alternatives: [
+          { name: "AEM" },
+          { name: "Adobe AEM" },
+          { name: "Digital experience platform" },
+          { name: "its competitors" },
+          { name: "AltOne" },
+          { name: "AltTwo" },
+        ],
+      }),
+      output: [{
+        type: "message",
+        content: [{
+          type: "output_text",
+          text: "Structured discovery returned without citation annotations.",
+          annotations: [],
+        }],
+      }],
+    }),
+    retrieve: async () => {
+      assert.fail("source-less discovery labels must not trigger discovery evidence retrieval");
+    },
+  });
+
+  assert.deepEqual(recovered?.vendors, ["Adobe Experience Manager", "AltOne", "AltTwo"]);
+  assert.deepEqual(recovered?.urls, []);
+  assert.ok(recovered?.selectionRoles.every((role) => role.discoveryStatus === "unverified_candidate"));
+  assert.ok(recovered?.selectionRoles.every((role) => role.officialUrl === ""));
+
+  const analysis = {
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "",
+    score: 90,
+    executiveSummary: "",
+    vendorScores: recovered!.vendors.map((vendor) => ({
+      vendor,
+      score: vendor === "AltOne" ? 99 : 90,
+      modelScore: vendor === "AltOne" ? 99 : 90,
+      qualificationStatus: "INSUFFICIENT_EVIDENCE",
+      weightedScores: [],
+    })),
+  } as unknown as AnalysisPayload;
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+  assert.notEqual(analysis.recommendation, "AltOne");
+  assert.notEqual(analysis.recommendation, "AltTwo");
+});
+
+test("later exact retrieved provenance can qualify a source-less discovery label", () => {
+  const withoutDocuments = calculateVendorScoreExtension({
+    vendor: "AltOne",
+    weightedScores: [],
+  }, {
+    prompt: "Compare digital experience platforms",
+    market: "US",
+    unverifiedDiscoveryVendors: ["AltOne"],
+  });
+  const withExactDocumentEvidence = calculateVendorScoreExtension({
+    vendor: "AltOne",
+    weightedScores: [{
+      criterion: "Requirements Fit",
+      evidence: [{
+        ...qualificationEvidence("AltOne", 82),
+        exactClaim: "AltOne is a digital experience platform available in the United States.",
+        metricSubject: "AltOne",
+      }],
+    }],
+  }, {
+    prompt: "Compare digital experience platforms",
+    market: "US",
+    unverifiedDiscoveryVendors: ["AltOne"],
+  });
+  const withWrongCategoryEvidence = calculateVendorScoreExtension({
+    vendor: "AltOne",
+    weightedScores: [{
+      criterion: "Requirements Fit",
+      evidence: [{
+        ...qualificationEvidence("AltOne", 82),
+        exactClaim: "AltOne is a payroll service available in the United States.",
+        metricSubject: "AltOne",
+      }],
+    }],
+  }, {
+    prompt: "Compare digital experience platforms",
+    market: "US",
+    unverifiedDiscoveryVendors: ["AltOne"],
+  });
+
+  assert.equal(withoutDocuments.qualificationStatus, "INSUFFICIENT_EVIDENCE");
+  assert.equal(withWrongCategoryEvidence.qualificationStatus, "INSUFFICIENT_EVIDENCE");
+  assert.equal(withExactDocumentEvidence.qualificationStatus, "QUALIFIED");
+});
+
+test("fails source-less fallback when it returns no concrete alternative names", async () => {
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe Experience Manager",
+    prompt: "Compare Adobe Experience Manager against its competitors",
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 4,
+    search: async () => ({
+      outputText: JSON.stringify({
+        category: "Digital experience platform",
+        market: "United States US",
+        alternatives: [{ name: "AEM" }, { name: "competitors" }, { name: "CMS" }],
+      }),
+      output: [],
+    }),
+    retrieve: async () => [],
+  });
+
+  assert.equal(recovered, null);
+});
+
+test("rejects cited competitor names when retrieved text does not confirm the exact product category", async () => {
+  const url = "https://alt-one.example/product";
+  const anchorUrl = "https://anchor.example/product";
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe Experience Manager",
+    prompt: "Compare Adobe Experience Manager with its competitors",
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 2,
+    search: async () => ({
+      outputText: JSON.stringify({
+        category: "Digital experience platform",
+        anchor: {
+          name: "Adobe Experience Manager",
+          category: "Digital experience platform",
+          citationUrl: anchorUrl,
+        },
+        alternatives: [{ name: "AltOne", category: "Digital experience platform", citationUrl: url }],
+      }),
+      output: [{
+        type: "web_search_call",
+        action: { sources: [anchorUrl, url].map((sourceUrl) => ({ type: "url", url: sourceUrl })) },
+      }],
+    }),
+    retrieve: async (urls) => urls.map((retrievedUrl) => ({
+      url: retrievedUrl,
+      document: {
+        url: retrievedUrl,
+        finalUrl: retrievedUrl,
+        canonicalUrl: retrievedUrl,
+        contentType: "text/html",
+        text: retrievedUrl === anchorUrl
+          ? "Adobe Experience Manager is a digital experience platform."
+          : "AltOne is a payroll processing service.",
+        sha256: "a".repeat(64),
+        retrievedAt: "2026-09-23T00:00:00.000Z",
+        truncated: false,
+        retrievalMethod: "direct_http",
+        parserVersion: "security-html-v1",
+      },
+    })),
+  });
+
+  assert.equal(recovered, null);
+});
+
+test("uses a cited evidence graph when official product pages omit the category wording", async () => {
+  const prompt = "Compare Adobe Experience Manager against its competitors and find the best alternatives for AEM";
+  const comparisonUrl = "https://analyst.example/aem-alternatives";
+  const officialOne = "https://altone.example/product";
+  const officialTwo = "https://alttwo.example/product";
+  const search = async (includeComparison: boolean) => ({
+    outputText: JSON.stringify({
+      category: "Digital experience platform",
+      alternatives: includeComparison
+        ? []
+        : [
+            { name: "AltOne", officialUrl: officialOne },
+            { name: "AltTwo", officialUrl: officialTwo },
+          ],
+    }),
+    output: [{
+      type: "web_search_call",
+      action: {
+        sources: [officialOne, officialTwo, ...(includeComparison ? [comparisonUrl] : [])]
+          .map((url) => ({ type: "url", url })),
+      },
+    }],
+  });
+  const retrieve = async (urls: string[]) => urls.map((url, index) => ({
+    url,
+    document: {
+      url,
+      finalUrl: url,
+      canonicalUrl: url,
+      contentType: "text/html",
+      text: url === comparisonUrl
+        ? "# AEM alternatives for web content management systems\n- AltOne\n- AltTwo"
+        : url === officialOne ? "# AltOne\nComposable publishing tools." : "# AltTwo\nEnterprise authoring tools.",
+      sha256: String(index + 1).repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+      retrievalMethod: "direct_http" as const,
+      parserVersion: "security-html-v1",
+    },
+  }));
+  const base = {
+    anchor: "Adobe Experience Manager",
+    prompt,
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 4,
+    retrieve,
+  };
+
+  assert.equal(await recoverCitedOpenEndedCompetitors({
+    ...base,
+    search: () => search(false),
+  }), null, "official pages alone do not establish the shared category");
+
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    ...base,
+    search: () => search(true),
+  });
+  assert.deepEqual(recovered?.vendors, ["Adobe Experience Manager", "AltOne", "AltTwo"]);
+  assert.deepEqual(recovered?.urls, [comparisonUrl, officialOne, officialTwo]);
+});
+
+test("does not accept one alternative or an unrelated comparison category", async () => {
+  const prompt = "Compare Adobe Experience Manager against its competitors";
+  const officialUrl = "https://altone.example/product";
+  const comparisonUrl = "https://analyst.example/comparison";
+  const recover = (comparisonText: string, alternatives: Array<Record<string, string>>) => (
+    recoverCitedOpenEndedCompetitors({
+      anchor: "Adobe Experience Manager",
+      prompt,
+      market: "United States US",
+      requested: ["Adobe Experience Manager", "its competitors"],
+      initialVendors: ["Adobe Experience Manager"],
+      targetCount: 4,
+      search: async () => ({
+        outputText: JSON.stringify({ category: "Digital experience platform", alternatives }),
+        output: [{
+          type: "web_search_call",
+          action: {
+            sources: [officialUrl, comparisonUrl].map((url) => ({ type: "url", url })),
+          },
+        }],
+      }),
+      retrieve: async (urls) => urls.map((url, index) => ({
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          canonicalUrl: url,
+          contentType: "text/html",
+          text: url === officialUrl ? "# AltOne\nPublishing tools." : comparisonText,
+          sha256: String(index + 1).repeat(64),
+          retrievedAt: "2026-09-23T00:00:00.000Z",
+          truncated: false,
+          retrievalMethod: "direct_http",
+          parserVersion: "security-html-v1",
+        },
+      })),
+    })
+  );
+
+  assert.equal(await recover(
+    "# AEM alternatives for CMS\n- AltOne",
+    [{ name: "AltOne", officialUrl }],
+  ), null, "plural competitor requests require two verified alternatives");
+  assert.equal(await recover(
+    "# AEM and AltOne payroll processing comparison\n- AltOne",
+    [{ name: "AltOne", officialUrl }],
+  ), null, "an unrelated category cannot establish comparability");
+});
+
+test("selects the strongest qualified competitor for a best-alternative request", () => {
+  const analysis = {
+    executiveSummary: "Adobe Experience Manager is the best overall option.",
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "Adobe Experience Manager leads overall.",
+    score: 91,
+    vendorScores: [
+      { vendor: "Adobe Experience Manager", score: 91, modelScore: 91, qualificationStatus: "QUALIFIED" },
+      { vendor: "Sitecore XM Cloud", score: 84, modelScore: 84, qualificationStatus: "QUALIFIED" },
+      { vendor: "Optimizely One", score: 82, modelScore: 82, qualificationStatus: "QUALIFIED_WITH_CONDITIONS" },
+      { vendor: "Acquia DXP", score: 95, modelScore: 95, qualificationStatus: "INSUFFICIENT_EVIDENCE" },
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+
+  assert.equal(analysis.recommendation, "Sitecore XM Cloud");
+  assert.equal(analysis.score, 84);
+  assert.match(analysis.recommendationReason, /best-qualified alternative to Adobe Experience Manager/i);
+  assert.doesNotMatch(analysis.recommendationReason, /Acquia DXP is the best/i);
+});
+
+test("rejects completion when every option has zero provenance-complete scorable evidence", () => {
+  const analysis = {
+    vendorScores: [
+      {
+        vendor: "Alpha",
+        score: 50,
+        weightedScores: [{
+          criterion: "Price",
+          evidence: [{ evidenceKind: "unverified", normalizedScore: 90 }],
+        }],
+      },
+      {
+        vendor: "Beta",
+        score: 50,
+        weightedScores: [{
+          criterion: "Features",
+          evidence: [{
+            evidenceKind: "quantitative",
+            normalizedScore: 80,
+            normalizationMethod: "direct_numeric",
+            sourceUrl: "https://example.com/beta",
+          }],
+        }],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.throws(
+    () => assertHasProvenanceCompleteScorableEvidence(analysis),
+    /Insufficient quantitative evidence/i,
+  );
+});
+
+test("accepts a feature-only decision only when qualitative row support is provenance-complete and uniquely decisive", () => {
+  const qualitativeFeatureEvidence = (vendor: string, claim: string, hashCharacter: string) => ({
+    sourceId: `docsha256:${hashCharacter.repeat(64)}`,
+    documentSha256: hashCharacter.repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 10 + claim.length,
+    sourceUrl: `https://official.example/${vendor.toLowerCase().replaceAll(" ", "-")}`,
+    exactClaim: claim,
+    metricSubject: vendor,
+    metricKey: "managed_service_capability",
+    metricBasis: "current official service capability",
+    evidenceKind: "qualitative",
+    supportDirection: "supports",
+    confidence: 90,
+    normalizationMethod: "qualitative_explicit",
+  });
+  const analysis = {
+    recommendation: "AEM",
+    recommendationReason: "Provisional lens winner — AEM leads the provenance-backed feature comparison.",
+    score: 80,
+    pricing: [],
+    features: [
+      {
+        dimension: "Managed service coverage",
+        values: { AEM: "Broad", Sitecore: "Limited" },
+        winner: "AEM",
+      },
+      {
+        dimension: "Implementation support",
+        values: { AEM: "Included", Sitecore: "Partner-led" },
+        winner: "AEM",
+      },
+    ],
+    vendorScores: [
+      {
+        vendor: "AEM",
+        score: 80,
+        qualificationStatus: "QUALIFIED_WITH_CONDITIONS",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [
+            qualitativeFeatureEvidence("AEM", "AEM provides managed service coverage.", "a"),
+            qualitativeFeatureEvidence("AEM", "AEM includes implementation support.", "b"),
+          ],
+        }],
+      },
+      {
+        vendor: "Sitecore",
+        score: 78,
+        qualificationStatus: "QUALIFIED",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{ evidenceKind: "unverified", exactClaim: "Sitecore may offer similar services." }],
+        }],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.equal(validatedQualitativeLensDecision(analysis)?.winner, "AEM");
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(analysis));
+  assert.match(analysis.recommendationReason, /^Provisional lens winner —/);
+
+  const unverified = structuredClone(analysis);
+  for (const vendor of unverified.vendorScores) {
+    for (const criterion of vendor.weightedScores ?? []) {
+      for (const evidence of criterion.evidence ?? []) delete (evidence as { sourceId?: string }).sourceId;
+    }
+  }
+  assert.equal(validatedQualitativeLensDecision(unverified), null);
+  assert.throws(
+    () => assertHasProvenanceCompleteScorableEvidence(unverified),
+    /Insufficient quantitative evidence/i,
+  );
+});
+
+test("admits a feature-only best alternative through retrieved-document validation and normalization", () => {
+  const contentstackUrl = "https://www.contentstack.com/product";
+  const bynderUrl = "https://www.bynder.com/product";
+  const contentstackClaim = "Contentstack provides visual editing workflows for enterprise content teams.";
+  const bynderClaim = "Bynder provides digital asset library governance for brand teams.";
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: contentstackUrl,
+      finalUrl: contentstackUrl,
+      contentType: "text/html",
+      text: contentstackClaim,
+      sha256: "c".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: bynderUrl,
+      finalUrl: bynderUrl,
+      contentType: "text/html",
+      text: bynderClaim,
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+  const parsed = {
+    vendorScores: [
+      {
+        vendor: "Contentstack",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{
+            sourceUrl: contentstackUrl,
+            exactClaim: contentstackClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizationMethod: "qualitative_explicit",
+          }],
+        }],
+      },
+      {
+        vendor: "Bynder",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{
+            sourceUrl: bynderUrl,
+            exactClaim: bynderClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizationMethod: "qualitative_explicit",
+          }],
+        }],
+      },
+    ],
+  };
+
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, documents), 2);
+  const vendorScores = parsed.vendorScores.map((vendor) => ({
+    vendor: vendor.vendor,
+    score: 50,
+    weightedScores: [{
+      criterion: "Meets Needs / Features",
+      weight: 25,
+      score: 50,
+      rationale: "Verified feature evidence.",
+      evidence: normalizeEvidenceRecords(
+        vendor.weightedScores[0].evidence,
+        "Meets Needs / Features",
+        25,
+        [contentstackUrl, bynderUrl],
+        [contentstackUrl, bynderUrl],
+      ),
+    }],
+  }));
+  const analysis = {
+    executiveSummary: "The feature comparison is complete.",
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "Compare the supported service features.",
+    score: 50,
+    pricing: [],
+    features: [
+      {
+        dimension: "Visual editing workflows",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Visual editing workflows",
+          Bynder: "Not established",
+        },
+        winner: "Contentstack",
+      },
+      {
+        dimension: "Enterprise content workflows",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Enterprise content teams",
+          Bynder: "Not established",
+        },
+        winner: "Contentstack",
+      },
+      {
+        dimension: "Digital asset governance",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Not established",
+          Bynder: "Digital asset library governance",
+        },
+        winner: "Bynder",
+      },
+    ],
+    vendorScores: [
+      { vendor: "Adobe Experience Manager", score: 50, weightedScores: [] },
+      ...vendorScores,
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyVendorScoreModel(analysis, {
+    prompt: "Compare Adobe Experience Manager and recommend the best alternative DXP.",
+    category: "Digital experience platforms",
+    market: "United States US",
+    globalServiceMarketAvailability: true,
+  });
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+
+  assert.equal(analysis.vendorScores[1].qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+  assert.equal(analysis.recommendation, "Contentstack");
+  assert.match(analysis.recommendationReason, /provenance-validated competitor feature lens/i);
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(
+    analysis,
+    ["Adobe Experience Manager"],
+  ));
+});
+
+test("forces cited source acquisition when single-anchor software research starts with zero URLs", async () => {
+  const citedUrl = "https://official.example/contentstack/features";
+  const proseOnlyUrl = "https://invented.example/not-a-tool-citation";
+  const initialUrls: string[] = [];
+  assert.equal(requiresGeneralSoftwareSourceFallback(
+    "Compare Adobe Experience Manager against its competitors. Which is the best alternative for AEM?",
+    "Product or service comparison",
+    "Adobe Experience Manager",
+    initialUrls,
+  ), true);
+  let searchCalls = 0;
+  const admitted = await discoverGeneralSoftwareFallbackUrls(
+    ["Adobe Experience Manager", "Contentstack"],
+    async () => {
+      searchCalls += 1;
+      return [{
+        type: "message",
+        content: [{
+          type: "output_text",
+          text: `Ignore this prose URL: ${proseOnlyUrl}`,
+          annotations: [{ type: "url_citation", url: citedUrl }],
+        }],
+      }];
+    },
+  );
+  initialUrls.push(...admitted);
+
+  assert.equal(searchCalls, 1);
+  assert.deepEqual(initialUrls, [citedUrl]);
+  assert.equal(initialUrls.includes(proseOnlyUrl), false);
+
+  const exactClaim = "Contentstack provides visual editing workflows for enterprise content teams.";
+  const quantitativeClaim = "Contentstack monthly fee is USD 99 per month.";
+  const transportDocuments = new Map<string, RetrievedEvidenceDocument>([[
+    citedUrl,
+    {
+      url: citedUrl,
+      finalUrl: citedUrl,
+      contentType: "text/html",
+      text: `${quantitativeClaim}\n${exactClaim}`,
+      sha256: "e".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+  ]]);
+  const retrieved = initialUrls.flatMap((url) => transportDocuments.get(url) ?? []);
+  const parsed = {
+    vendorScores: [{
+      vendor: "Contentstack",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [
+          {
+            sourceUrl: citedUrl,
+            exactClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+          },
+          {
+            sourceUrl: citedUrl,
+            exactClaim: quantitativeClaim,
+            metricKey: "monthly_fee",
+            rawMetricValue: 99,
+            rawMetricUnit: "USD",
+            evidenceKind: "quantitative",
+            supportDirection: "supports",
+            confidence: 90,
+          },
+        ],
+      }],
+    }],
+  };
+
+  assert.equal(retrieved.length, 1);
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, retrieved), 1);
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, retrieved), 1);
+  const evidence = normalizeEvidenceRecords(
+    parsed.vendorScores[0].weightedScores[0].evidence,
+    "Meets Needs / Features",
+    25,
+    initialUrls,
+    initialUrls,
+  );
+  const qualification = calculateVendorScoreExtension({
+    vendor: "Contentstack",
+    weightedScores: [{ criterion: "Meets Needs / Features", evidence }],
+  }, {
+    market: "United States US",
+    globalServiceMarketAvailability: true,
+  });
+
+  assert.equal(evidence[0]?.sourceId, `docsha256:${"e".repeat(64)}`);
+  assert.equal(evidence[1]?.normalizationMethod, "retrieved_document_metric");
+  assert.equal(qualification.qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+});
+
+test("does not attach a sibling product's qualitative claim to another compared option", () => {
+  const url = "https://www.example.com/content-products";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Contentful",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{
+          sourceUrl: url,
+          exactClaim: "Contentstack provides visual editing workflows for enterprise content teams.",
+          evidenceKind: "qualitative",
+          supportDirection: "supports",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text: "Contentstack provides visual editing workflows for enterprise content teams.",
+    sha256: "d".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, documents), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+  assert.equal("documentSha256" in parsed.vendorScores[0].weightedScores[0].evidence[0], false);
+});
+
+test("selects a sole eligible best alternative without treating its own score as a tie gap", () => {
+  const analysis = {
+    executiveSummary: "Anchor leads overall.",
+    recommendation: "Anchor",
+    recommendationReason: "Anchor leads overall.",
+    score: 92,
+    vendorScores: [
+      { vendor: "Anchor", score: 92, modelScore: 92, qualificationStatus: "QUALIFIED" },
+      { vendor: "Only Alternative", score: 0, modelScore: 0, qualificationStatus: "QUALIFIED_WITH_CONDITIONS" },
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyBestAlternativeRecommendation(analysis, "Anchor");
+
+  assert.equal(analysis.recommendation, "Only Alternative");
+  assert.doesNotMatch(analysis.recommendationReason, /practical tie/i);
 });
 
 test("treats a domain brand plus other ecommerce sites as competitor discovery", () => {
@@ -5333,4 +6865,50 @@ test("explains when adjusted weights cannot separate identical underlying scores
     result.vendorScores?.find((vendor) => vendor.vendor === "Mahindra diesel")?.verdict ?? "",
     /leads/i,
   );
+});
+
+test("discovers vehicle metrics from retrieved document sections outside the matrix", () => {
+  const url = "https://cars.example/xuv700";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700 diesel automatic",
+      weightedScores: [],
+    }],
+  };
+  const documents = [{
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text: "Mahindra XUV700\nDiesel automatic\nEngine power: 185 PS\nMaximum torque: 450 Nm.",
+    sha256: "d".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.ok(addVerifiedVehicleDocumentMetrics(parsed, documents) > 0);
+  const evidence = (parsed.vendorScores[0].weightedScores as Array<{ evidence?: Array<Record<string, unknown>> }>)
+    .flatMap((row) => row.evidence ?? []);
+  assert.ok(evidence.some((entry) => entry.metricKey === "engine_power"));
+  assert.equal(evidence[0].documentSha256, "d".repeat(64));
+});
+
+test("derives qualitative feature evidence from exact retrieved sentences", () => {
+  const url = "https://aem.example/product";
+  const parsed = {
+    features: [{ dimension: "managed service coverage", values: { AEM: "Available" } }],
+    vendorScores: [{ vendor: "AEM", weightedScores: [] }],
+  };
+  const documents = [{
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text: "AEM provides managed service coverage for enterprise content teams.",
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(addVerifiedQualitativeDocumentClaims(parsed, documents), 1);
+  const evidence = (parsed.vendorScores[0].weightedScores as Array<{ evidence: Array<Record<string, unknown>> }>)[0]!.evidence[0]!;
+  assert.equal(evidence.exactClaim, documents[0].text);
+  assert.equal(evidence.sourceTextStart, 0);
+  assert.equal(evidence.documentSha256, "e".repeat(64));
 });
