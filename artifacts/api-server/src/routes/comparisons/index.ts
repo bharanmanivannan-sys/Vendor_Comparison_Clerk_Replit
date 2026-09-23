@@ -709,8 +709,14 @@ export function summaryFromRow(row: typeof comparisonsTable.$inferSelect) {
     const leaderScore = leader ? (leader.modelScore ?? leader.score) : 0;
     const runnerUpScore = runnerUp ? (runnerUp.modelScore ?? runnerUp.score) : undefined;
     const practicalTie = runnerUpScore !== undefined && Math.abs(leaderScore - runnerUpScore) < 1;
+    const persistedConditional = /\bconditional (?:winner|recommendation)\b|\bsupported .+ comparison\b/i.test(row.recommendationReason ?? "")
+      && row.vendors.some((vendor) => vendor.toLowerCase() === row.recommendation.toLowerCase())
+      && Number.isFinite(row.score)
+      && row.score > Math.max(...decisionRows.map((vendor) => vendor.modelScore ?? vendor.score), 0);
     const decision = !leader
       ? { recommendation: "No qualified option", score: 0 }
+      : persistedConditional
+        ? { recommendation: row.recommendation, score: Math.round(row.score) }
       : practicalTie
         ? { recommendation: "No definitive winner", score: Math.round(leaderScore) }
         : { recommendation: leader.vendor, score: Math.round(leaderScore) };
@@ -814,13 +820,26 @@ export function buildComparisonDecisionSet(comparison: {
     const raw = Number(vendor.modelScore ?? vendor.score);
     return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : null;
   };
+  // Conditional decisions are finalized from the supported evidence model.
+  // Older persisted rows may still contain neutral vendor scores while the
+  // top-level decision already carries the canonical derived score. Prefer
+  // that score only when the rationale identifies the evidence-backed
+  // conditional path; otherwise retain the vendor score and report a tie.
+  const rationaleText = String(comparison.recommendationReason ?? "");
+  const canonicalDecisionScore = recommendation
+    && /\bconditional (?:winner|recommendation)\b|\bsupported .+ comparison\b/i.test(rationaleText)
+    && Number.isFinite(Number(comparison.score))
+    ? Math.max(0, Math.min(100, Math.round(Number(comparison.score))))
+    : null;
   const scoredOptions = vendors.flatMap((option) => {
     if (bestAlternativeAnchor && option === bestAlternativeAnchor) return [];
     const vendor = vendorScores.find((entry) => canonicalOption(entry.vendor) === option);
-    const score = numericScore(vendor);
+    const score = option === recommendation && canonicalDecisionScore !== null
+      ? canonicalDecisionScore
+      : numericScore(vendor);
     return score === null ? [] : [{ option, score }];
   });
-  const recommendedScore = numericScore(recommendedVendor);
+  const recommendedScore = canonicalDecisionScore ?? numericScore(recommendedVendor);
   const higherScoredOptionExists = recommendedScore !== null
     && scoredOptions.some((entry) => entry.option !== recommendation && entry.score > recommendedScore);
   const practicalScoreTie = recommendedScore !== null
@@ -944,6 +963,20 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     pricing,
     features,
   });
+  // Repair persisted conditional reports at the authoritative response
+  // boundary. Evidence remains untouched; only the rendered vendor score
+  // fields are synchronized with the confirmed/alternative contract.
+  const repairedVendorScores = vendorScores.map((vendor) => {
+    const confirmed = decisionSet.confirmedRecommendation.option === vendor.vendor
+      ? decisionSet.confirmedRecommendation.score
+      : decisionSet.alternatives.find((alternative) => alternative.option === vendor.vendor)?.score;
+    if (confirmed === null || confirmed === undefined) return vendor;
+    return {
+      ...vendor,
+      score: confirmed,
+      modelScore: confirmed,
+    };
+  });
   return {
     ...summary,
     urls: row.urls,
@@ -953,7 +986,7 @@ export function detailFromRow(row: typeof comparisonsTable.$inferSelect) {
     recommendationReason: row.recommendationReason,
     ...decisionSet,
     weightAdjustments: row.weightAdjustments,
-    vendorScores,
+    vendorScores: repairedVendorScores,
     pricing,
     features,
     swot: row.swot,

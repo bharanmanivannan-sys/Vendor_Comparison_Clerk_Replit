@@ -8,6 +8,7 @@ import {
   actionableSoarEntries,
   buildComparisonPdf,
   canAddAlternativeToComparison,
+  comparedSetAlternatives,
   comparisonOptionNamesOverlap,
   computeDecisionQuality,
   DecisionRecommendationCard,
@@ -20,6 +21,7 @@ import {
   MarketPositionSection,
   pricingFeatureLensModel,
   providerRolePresentation,
+  reconcileReportScores,
   scoreDifferenceLabel,
   shouldDisplayMarketHistory,
   weightedCriterionImpact,
@@ -651,6 +653,66 @@ test('renders a conditionally qualified confirmed winner in the browser and PDF'
   assert.match(pdfText, /Beta/);
   assert.match(pdfText, /81\/100/);
   assert.doesNotMatch(pdfText, /No definitive winner/);
+});
+
+test('reconciles stale restored scores across shortlist, vendor fit, recommendation, and PDF', async () => {
+  const stale = comparisonFixture() as any;
+  stale.vendors = ['Tata', 'Mahindra'];
+  stale.recommendation = 'Tata';
+  stale.score = 0;
+  stale.vendorScores = [
+    { ...stale.vendorScores[0], vendor: 'Tata', score: 0, modelScore: 0, qualificationStatus: 'QUALIFIED', qualificationGates: [] },
+    { ...stale.vendorScores[1], vendor: 'Mahindra', score: 0, modelScore: 0, qualificationStatus: 'QUALIFIED_WITH_CONDITIONS', qualificationGates: [] },
+  ];
+  stale.confirmedRecommendation = {
+    status: 'CONFIRMED',
+    option: 'Tata',
+    score: 58,
+    basis: 'QUALIFIED',
+    rationale: 'Tata is the strongest qualified fit.',
+  };
+  stale.alternatives = [{
+    option: 'Mahindra',
+    rank: 1,
+    score: 55,
+    scoreDifference: 3,
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: 'Best qualified alternative.',
+  }];
+
+  const reconciled = reconcileReportScores(stale);
+  assert.equal(reconciled.vendorScores[0].score, 58);
+  assert.equal(reconciled.vendorScores[0].modelScore, 58);
+  assert.equal(reconciled.vendorScores[0].rawScore, 0);
+  assert.equal(reconciled.vendorScores[1].score, 55);
+  assert.equal(reconciled.vendorScores[1].modelScore, 55);
+  assert.equal(reconciled.vendorScores[1].rawScore, 0);
+  assert.equal(reconciled.alternatives[0].score, 55);
+
+  const browserHtml = renderToStaticMarkup(<>
+    <ExecutiveDecisionBrief comparison={stale} />
+    <VendorScoreExtensionSection vendorScores={reconciled.vendorScores} />
+    <DecisionRecommendationCard comparison={stale} />
+  </>);
+  assert.match(browserHtml, /Tata 58\/100/);
+  assert.match(browserHtml, /Mahindra 55\/100/);
+  assert.match(browserHtml, /Tata/);
+  assert.match(browserHtml, /58\/100/);
+  assert.match(browserHtml, /55\/100/);
+
+  const pdfText = extractPdfText(await buildComparisonPdf(stale));
+  assert.match(pdfText, /Tata/);
+  assert.match(pdfText, /58\/100/);
+  assert.match(pdfText, /Mahindra/);
+  assert.match(pdfText, /55\/100/);
+
+  const noConfirmed = reconcileReportScores({
+    ...stale,
+    confirmedRecommendation: { status: 'NO_CONFIRMED_RECOMMENDATION', option: null, score: null, basis: 'NONE' },
+  });
+  assert.equal(noConfirmed.vendorScores[0].score, 0);
+  assert.equal(noConfirmed.vendorScores[1].score, 0);
+  assert.equal(comparedSetAlternatives(noConfirmed)[0]?.score, null);
 });
 
 test('treats the confirmed recommendation contract as authoritative for tied results', () => {

@@ -40,6 +40,25 @@ test("confirms an in-set recommendation and ranks only the remaining compared op
   assert.deepEqual(decision.alternatives.map((alternative) => alternative.scoreDifference), [5, 13]);
 });
 
+test("repairs persisted conditional vehicle decisions with one canonical score", () => {
+  const decision = buildComparisonDecisionSet({
+    vendors: ["Mahindra xuv 700", "Tata Safari diesel AT"],
+    recommendation: "Tata Safari diesel AT",
+    score: 58,
+    recommendationReason: "Tata Safari diesel AT is the conditional winner on the supported performance comparison (57.5/100).",
+    vendorScores: [
+      { vendor: "Mahindra xuv 700", score: 55, qualificationStatus: "QUALIFIED_WITH_CONDITIONS", verdict: "Alternative" },
+      { vendor: "Tata Safari diesel AT", score: 55, qualificationStatus: "QUALIFIED_WITH_CONDITIONS", verdict: "Conditional winner" },
+    ],
+  });
+  assert.equal(decision.confirmedRecommendation.status, "CONFIRMED");
+  assert.equal(decision.confirmedRecommendation.option, "Tata Safari diesel AT");
+  assert.equal(decision.confirmedRecommendation.score, 58);
+  assert.equal(decision.alternatives[0]?.score, 55);
+  assert.equal(decision.alternatives[0]?.scoreDifference, 3);
+  assert.doesNotMatch(decision.confirmedRecommendation.rationale, /no unique recommendation/i);
+});
+
 test("confirms a conditionally qualified recommendation with a supported unique score", () => {
   const decision = buildComparisonDecisionSet({
     vendors: ["Alpha", "Beta"],

@@ -132,6 +132,7 @@ const clerkProxyUrl = viteEnv.VITE_CLERK_PROXY_URL;
 
 export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+  comparison = reconcileReportScores(comparison);
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -1211,6 +1212,73 @@ export function providerRolePresentation(vendor: any): { label: string; rational
   };
 }
 
+/**
+ * Restore the scores that form the saved report's decision contract when an
+ * older browser snapshot has stale modeled scores (for example, all zeros
+ * after a guest job can no longer be re-fetched).  The evidence/model values
+ * are retained under raw* fields for inspection; every report view consumes
+ * the reconciled score fields from this boundary.
+ */
+export function reconcileReportScores<T extends Record<string, any>>(report: T): T {
+  if (!report || typeof report !== 'object') return report;
+  const confirmed = report.confirmedRecommendation;
+  const confirmedQualified = confirmed?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(confirmed?.basis));
+  const vendors = Array.isArray(report.vendorScores) ? report.vendorScores : [];
+  const canonical = (value: unknown) => String(value ?? '').trim().toLowerCase();
+  const confirmedScore = Number(confirmed?.score);
+  const scoreOverrides = new Map<string, number>();
+  if (confirmedQualified && Number.isFinite(confirmedScore)) {
+    scoreOverrides.set(canonical(confirmed.option), confirmedScore);
+  }
+  const alternatives = Array.isArray(report.alternatives) ? report.alternatives : [];
+  alternatives.forEach((alternative: any) => {
+    const qualified = ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(alternative?.qualificationStatus));
+    const score = Number(alternative?.score);
+    if (confirmedQualified && qualified && Number.isFinite(score)) {
+      scoreOverrides.set(canonical(alternative?.option), score);
+    }
+  });
+  const reconciledVendors = vendors.map((vendor: any) => {
+    const score = scoreOverrides.get(canonical(vendor?.vendor));
+    if (score === undefined) return vendor;
+    return {
+      ...vendor,
+      rawScore: vendor.rawScore ?? vendor.score,
+      rawModelScore: vendor.rawModelScore ?? vendor.modelScore,
+      score,
+      modelScore: score,
+      reconciledScoreSource: canonical(vendor?.vendor) === canonical(confirmed?.option)
+        ? 'confirmedRecommendation'
+        : 'qualifiedAlternative',
+    };
+  });
+  const reconciledAlternatives = Array.isArray(report.alternatives)
+    ? report.alternatives.map((alternative: any) => {
+        const qualified = ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(alternative?.qualificationStatus));
+        const score = Number(alternative?.score);
+        const vendor = confirmedQualified && qualified && Number.isFinite(score)
+          ? reconciledVendors.find((item: any) => canonical(item?.vendor) === canonical(alternative?.option))
+          : undefined;
+        if (!vendor) return alternative;
+        return {
+          ...alternative,
+          rawScore: alternative.rawScore ?? alternative.score,
+          score,
+          reconciledScoreSource: 'qualifiedAlternative',
+        };
+      })
+    : report.alternatives;
+  return {
+    ...report,
+    ...(confirmedQualified && Number.isFinite(confirmedScore)
+      ? { recommendation: confirmed.option, score: confirmedScore }
+      : {}),
+    vendorScores: reconciledVendors,
+    ...(Array.isArray(report.alternatives) ? { alternatives: reconciledAlternatives } : {}),
+  };
+}
+
 function vendorVerdictPresentation(vendor: any): string {
   return qualificationAllowsScore(vendor)
     ? String(vendor?.verdict || 'No verdict was returned.')
@@ -1284,6 +1352,7 @@ export function comparedSetAlternatives(comparison: any): Array<{
   qualificationStatus: string;
   rationale: string;
 }> {
+  comparison = reconcileReportScores(comparison);
   const vendors = Array.isArray(comparison?.vendors)
     ? comparison.vendors.map((vendor: unknown) => String(vendor).trim()).filter(Boolean)
     : (comparison?.vendorScores || []).map((vendor: any) => String(vendor?.vendor || '').trim()).filter(Boolean);
@@ -1291,6 +1360,8 @@ export function comparedSetAlternatives(comparison: any): Array<{
     (vendor: string) => vendor.toLowerCase() === String(value || '').trim().toLowerCase(),
   );
   const hasConfirmedRecommendationContract = Boolean(comparison?.confirmedRecommendation);
+  const confirmedContractQualified = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
   const confirmedOption = hasConfirmedRecommendationContract
     ? comparison.confirmedRecommendation.status === 'CONFIRMED'
       ? canonicalOption(comparison.confirmedRecommendation.option)
@@ -1317,8 +1388,12 @@ export function comparedSetAlternatives(comparison: any): Array<{
     return [{
       option,
       rank: Number.isInteger(alternative?.rank) && alternative.rank > 0 ? alternative.rank : index + 1,
-      score: alternative?.score !== null && Number.isFinite(rawScore) ? Math.round(rawScore) : null,
-      scoreDifference: alternative?.scoreDifference !== null && Number.isFinite(rawDifference) ? Math.max(0, Math.round(rawDifference)) : null,
+      score: confirmedContractQualified && alternative?.score !== null && Number.isFinite(rawScore)
+        ? Math.round(rawScore)
+        : null,
+      scoreDifference: confirmedContractQualified && alternative?.scoreDifference !== null && Number.isFinite(rawDifference)
+        ? Math.max(0, Math.round(rawDifference))
+        : null,
       qualificationStatus: String(alternative?.qualificationStatus || 'NOT_ESTABLISHED'),
       rationale: ['INSUFFICIENT_EVIDENCE', 'NOT_QUALIFIED'].includes(String(alternative?.qualificationStatus))
         ? 'No evidence-backed verdict was established; this option remains under consideration pending provenance-complete evidence.'
@@ -1328,6 +1403,7 @@ export function comparedSetAlternatives(comparison: any): Array<{
 }
 
 export function DecisionRecommendationCard({ comparison }: { comparison: any }) {
+  comparison = reconcileReportScores(comparison);
   const decisionQuality = computeDecisionQuality(comparison);
   const hasConfirmedRecommendationContract = Boolean(comparison?.confirmedRecommendation);
   const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED';
@@ -1585,6 +1661,7 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 }
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
+  comparison = reconcileReportScores(comparison);
   const decisionQuality = computeDecisionQuality(comparison);
   const decisionUsable = decisionQuality.decision !== 'FAIL'
     && !hasAdjustedTopScoreTie(comparison)
@@ -3442,7 +3519,7 @@ function AnalysisPage() {
   if (!guest && isLoading) return <AppShell><LoadingPanel label="Building the analysis" /></AppShell>;
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
   if (guest && !guestComparison) return <GuestShell><div className="mx-auto max-w-3xl px-5 py-20 text-center lg:px-10"><p className="mono text-xs uppercase tracking-[.2em] text-[#b94d45]">Guest result unavailable</p><h1 className="display mt-4 text-4xl font-bold tracking-[-.05em] text-[#202840]">That comparison has expired.</h1><p className="mt-4 text-sm leading-6 text-[#687083]">Run another guest comparison or create an account to keep a private 30-day history.</p><Link href="/guest" className="focus-ring mt-7 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]" data-testid="link-guest-result-restart"><ArrowLeft size={15} /> Run another comparison</Link></div></GuestShell>;
-  const comparison = (guest ? guestComparison : data) as Comparison;
+  const comparison = reconcileReportScores((guest ? guestComparison : data) as Comparison);
   const decisionQuality = computeDecisionQuality(comparison);
   const exportPdf = async () => {
     if (pdfStatus === 'exporting') return;
@@ -3626,7 +3703,7 @@ function DecisionArchitecturePage() {
   const { data, isLoading, isError, refetch } = useGetComparison(id, { query: { enabled: !guest && Boolean(id), queryKey: getGetComparisonQueryKey(id) } });
   if (!guest && isLoading) return <AppShell><LoadingPanel label="Loading decision plan" /></AppShell>;
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
-  const comparison = guest ? guestComparison : data;
+  const comparison = reconcileReportScores(guest ? guestComparison : data);
   if (!comparison) return <AppShell guest={guest}><ErrorPanel /></AppShell>;
   return <AppShell guest={guest}><main className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? '/guest/result' : `/comparisons/${id}`} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline"><ArrowLeft size={14} /> Back to comparison</Link><div className="mt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#b94d45]">Decision architecture</p><h1 className="display mt-3 max-w-4xl text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Equivalency, gaps, migration, and governance.</h1><p className="mt-4 max-w-3xl text-sm leading-6 text-[#687083]">A structured transition view for {comparison.recommendation}. Validate assumptions and evidence with accountable stakeholders before contract or cutover approval.</p></div><div className="mt-10"><DecisionArchitectureContent comparison={comparison} /></div></main></AppShell>;
 }

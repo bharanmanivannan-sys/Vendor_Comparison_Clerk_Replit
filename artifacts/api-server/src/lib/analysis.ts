@@ -102,6 +102,8 @@ export type VendorDimensionScore = {
 };
 export type VendorScoreExtension = {
   modelScore?: number;
+  /** Pre-conditional score retained for audit; rendering uses modelScore. */
+  rawModelScore?: number;
   qualificationStatus?: QualificationStatus;
   qualificationGates?: QualificationGate[];
   dimensionScores?: VendorDimensionScore[];
@@ -123,6 +125,8 @@ export type VendorScoreModelOptions = {
   globalDigitalService?: boolean;
   /** Global enterprise software is not qualified by a country-name mention on a product page. */
   globalServiceMarketAvailability?: boolean;
+  /** Discovery-only labels require retrieved exact-product category provenance before qualification. */
+  unverifiedDiscoveryVendors?: string[];
 };
 
 const QUALIFICATION_GATE_NAMES = [
@@ -288,9 +292,14 @@ export function calculateVendorScoreExtension(
   const text = allEvidence.map(evidenceText).join(" ");
   const context = `${options.prompt ?? ""} ${options.category ?? ""}`.trim();
   const vendorIdentity = normalizedIdentity(vendor.vendor);
+  const requiresDiscoveryCategoryProof = (options.unverifiedDiscoveryVendors ?? []).some((candidate) => (
+    normalizedIdentity(candidate) === vendorIdentity
+  ));
+  const discoveryCategoryPattern = /\b(?:dxp|cms|wcm|dam)\b|digital experience platforms?|content management systems?|web content management|digital asset management/i;
   const identityEvidence = allEvidence.filter((evidence) => {
     const subject = normalizedIdentity(evidence.metricSubject);
-    return subject === vendorIdentity;
+    return subject === vendorIdentity
+      && (!requiresDiscoveryCategoryProof || discoveryCategoryPattern.test(evidenceText(evidence)));
   });
   const compliancePattern = /\b(?:regulat|compliance|certif|approved|homolog|license|licen[cs]e|safety|ncap)\b/i;
   const securityPattern = /\b(?:security|privacy|data protection|encryption|soc ?2|iso ?27001|gdpr|pci)\b/i;
@@ -439,10 +448,47 @@ export function scoreDifferenceBand(difference: number): ScoreDifferenceBand {
       : absolute < 7 ? "MODERATE_ADVANTAGE" : "CLEAR_ADVANTAGE";
 }
 
-function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScoreModelOptions = {}): void {
+export function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScoreModelOptions = {}): void {
   // This function runs only while building a new analysis. Legacy saved rows are
   // serialized directly and keep their original optional extension fields.
   applyVendorScoreModel(analysis, options);
+  const conditional = conditionalComparableWinner(analysis, options.prompt ?? "");
+  if (conditional) {
+    for (const vendor of analysis.vendorScores) {
+      const extension = vendor as unknown as VendorScoreExtension;
+      if (extension.qualificationStatus === "INSUFFICIENT_EVIDENCE") {
+        extension.qualificationStatus = "QUALIFIED_WITH_CONDITIONS";
+        extension.conditions = [
+          ...(extension.conditions ?? []),
+          "Long-horizon reliability and maintenance evidence is not established; verify these before purchase.",
+        ];
+      }
+    }
+    analysis.recommendation = conditional.vendor;
+    analysis.score = Math.round(conditional.score);
+    const winningVendor = analysis.vendorScores.find((vendor) => vendor.vendor === conditional.vendor);
+    if (winningVendor) {
+      const extension = winningVendor as unknown as VendorScoreExtension;
+      extension.rawModelScore = extension.modelScore ?? winningVendor.score;
+      extension.modelScore = conditional.score;
+      winningVendor.score = Math.round(conditional.score);
+    }
+    analysis.recommendationReason = `${conditional.vendor} is the conditional winner on the supported ${conditional.label} comparison (${conditional.score.toFixed(1)}/100). Long-horizon reliability, maintenance, and ownership-cost claims remain unverified assumptions, not established facts.`;
+    analysis.executiveSummary = `${conditional.vendor} is the conditional recommendation because it uniquely leads the provenance-complete ${conditional.label} evidence. The result does not assert 20-year reliability or service cost: those remain explicit verification conditions.`;
+    for (const row of [...(analysis.pricing ?? []), ...(analysis.features ?? [])]) {
+      if (new RegExp(conditional.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(row.dimension)
+        || (conditional.label === "performance" && /\bperformance|power|torque|acceleration\b/i.test(row.dimension))
+        || (conditional.label === "safety" && /\bsafety|crash|airbag|ncap\b/i.test(row.dimension))) {
+        row.winner = conditional.vendor;
+      }
+    }
+    analysis.insights ??= [];
+    const limitation = "Missing-priority disclosure — Long-horizon reliability, maintenance, and 20-year ownership cost lack comparable verified evidence; confirm service coverage, parts availability, warranty terms, and actual costs before committing.";
+    if (!analysis.insights.some((insight) => insight.startsWith("Missing-priority disclosure —"))) {
+      analysis.insights.unshift(limitation);
+    }
+    return;
+  }
   const eligible = (analysis.vendorScores ?? []).filter((vendor) =>
     (vendor as unknown as VendorScoreExtension).qualificationStatus === "QUALIFIED"
     || (vendor as unknown as VendorScoreExtension).qualificationStatus === "QUALIFIED_WITH_CONDITIONS");
@@ -468,6 +514,71 @@ function applyVendorModelDecision(analysis: AnalysisPayload, options: VendorScor
   analysis.recommendationReason = band === "PRACTICAL_TIE"
     ? `${winner.vendor} and ${runnerUp?.vendor ?? "the leading options"} are a practical tie under the qualification and weighted evidence model.`
     : `${winner.vendor} leads with a ${band.toLowerCase().replaceAll("_", " ")} (${winnerScore.toFixed(2)} vs ${runnerUpScore?.toFixed(2) ?? "n/a"}).`;
+}
+
+type ConditionalWinner = { vendor: string; score: number; label: string };
+
+function conditionalComparableWinner(analysis: AnalysisPayload, prompt: string): ConditionalWinner | null {
+  const vendors = analysis.vendorScores ?? [];
+  if (vendors.length < 2 || !/\b(?:car|cars|vehicle|vehicles|suv|automotive|automobile|diesel|electric vehicle|aem|adobe experience manager)\b/i.test(`${prompt} ${analysis.category}`)) return null;
+  const failed = vendors.some((vendor) => vendor.qualificationStatus === "NOT_QUALIFIED"
+    || (vendor.qualificationGates ?? []).some((gate) => gate.mandatory && gate.status === "FAIL"));
+  if (failed) return null;
+  const groups = new Map<string, Array<{ vendor: string; score: number }>>();
+  for (const vendor of vendors) for (const row of vendor.weightedScores ?? []) for (const evidence of row.evidence ?? []) {
+    if (!isScorableEvidence(evidence) || evidence.supportDirection === "contradicts") continue;
+    const key = String(evidence.metricKey ?? "").trim();
+    if (!key) continue;
+    const list = groups.get(key) ?? [];
+    list.push({ vendor: vendor.vendor, score: Number(evidence.normalizedScore) });
+    groups.set(key, list);
+  }
+  const priorityTerms = [
+    { terms: /\bsafety\b/i, keys: /safety|ncap|airbag|crash|adas/i, label: "safety" },
+    { terms: /\bperformance\b/i, keys: /power|torque|acceleration|range|charging/i, label: "performance" },
+    { terms: /\b(?:price|cost|value)\b/i, keys: /price|cost|consumption/i, label: "price and value" },
+    { terms: /\b(?:maintenance|service|reliability)\b/i, keys: /maintenance|service|reliab/i, label: "maintenance and reliability" },
+  ];
+  const candidates = [...groups.entries()].flatMap(([key, rows]) => {
+    const scores = new Map<string, number>();
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      scores.set(row.vendor, (scores.get(row.vendor) ?? 0) + row.score);
+      counts.set(row.vendor, (counts.get(row.vendor) ?? 0) + 1);
+    }
+    if (scores.size !== vendors.length) return [];
+    const priority = priorityTerms.findIndex((entry) => entry.terms.test(prompt) && entry.keys.test(key));
+    const ranked = [...scores.entries()].map(([vendor, total]) => [vendor, total / (counts.get(vendor) ?? 1)] as const)
+      .sort((a, b) => b[1] - a[1]);
+    if (!ranked[1]) return [];
+    if (ranked[0]![1] <= ranked[1][1]) {
+      // A score tie may only be resolved by an explicit user priority and
+      // stronger provenance support for that same comparable row. Never use
+      // vendor array order as a tie-break.
+      if (priority < 0) return [];
+      const supportCounts = new Map(rows.map((row) => [row.vendor, (supportCountsForMetric(analysis, row.vendor, key))]));
+      const firstSupport = supportCounts.get(ranked[0]![0]) ?? 0;
+      const secondSupport = supportCounts.get(ranked[1][0]) ?? 0;
+      if (firstSupport <= secondSupport) {
+        const supportedLeader = [...supportCounts.entries()].sort((a, b) => b[1] - a[1]);
+        if (!supportedLeader[1] || supportedLeader[0]![1] <= supportedLeader[1][1]) return [];
+        return [{ vendor: supportedLeader[0]![0], score: ranked[0]![1], priority, label: priorityTerms[priority]?.label ?? key }];
+      }
+      return [{ vendor: ranked[0]![0], score: ranked[0]![1], priority, label: priorityTerms[priority]?.label ?? key }];
+    }
+    return [{ vendor: ranked[0]![0], score: ranked[0]![1], priority: priority < 0 ? 99 : priority, label: priorityTerms[priority]?.label ?? key }];
+  }).sort((a, b) => a.priority - b.priority || b.score - a.score);
+  const winner = candidates[0];
+  return winner ? { vendor: winner.vendor, score: winner.score, label: winner.label } : null;
+}
+
+function supportCountsForMetric(analysis: AnalysisPayload, vendorName: string, metricKey: string): number {
+  return (analysis.vendorScores.find((vendor) => vendor.vendor === vendorName)?.weightedScores ?? [])
+    .flatMap((row) => row.evidence ?? [])
+    .filter((evidence) => isScorableEvidence(evidence) && evidence.metricKey === metricKey)
+    .map((evidence) => String(evidence.sourceId))
+    .filter((sourceId, index, sourceIds) => sourceIds.indexOf(sourceId) === index)
+    .length;
 }
 
 function sourceIdForEvidence(row: Record<string, unknown>): string | undefined {
@@ -5492,25 +5603,61 @@ function collectHttpUrls(value: unknown, found = new Set<string>()): string[] {
 }
 
 /**
- * Only collect URLs attached to an explicit web-search citation annotation.
- * URLs embedded in model prose or JSON fields are not provenance.
+ * Collect only explicit Responses tool provenance. Model prose and JSON URLs
+ * are never admitted unless the same URL is present in one of these locations.
  */
-export function collectCitedHttpUrls(value: unknown, found = new Set<string>()): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value) collectCitedHttpUrls(item, found);
-  } else if (value && typeof value === "object") {
-    const row = value as Record<string, unknown>;
-    if (row.type === "url_citation" && typeof row.url === "string") {
-      const cleanUrl = cleanEvidenceUrl(row.url);
-      if (cleanUrl) found.add(cleanUrl);
+export function collectExplicitWebSearchSources(value: unknown): {
+  urls: string[];
+  messageAnnotationCount: number;
+  toolSourceCount: number;
+} {
+  const found = new Set<string>();
+  let messageAnnotationCount = 0;
+  let toolSourceCount = 0;
+  const root = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  const output = Array.isArray(value)
+    ? value
+    : root && Array.isArray(root.output) ? root.output : [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    if (row.type === "message" && Array.isArray(row.content)) {
+      for (const content of row.content) {
+        if (!content || typeof content !== "object") continue;
+        const annotations = (content as Record<string, unknown>).annotations;
+        if (!Array.isArray(annotations)) continue;
+        for (const annotation of annotations) {
+          if (!annotation || typeof annotation !== "object") continue;
+          const citation = annotation as Record<string, unknown>;
+          if (citation.type !== "url_citation" || typeof citation.url !== "string") continue;
+          const cleanUrl = cleanEvidenceUrl(citation.url);
+          if (!cleanUrl) continue;
+          messageAnnotationCount += 1;
+          found.add(cleanUrl);
+        }
+      }
     }
-    for (const item of Object.values(row)) {
-      if (Array.isArray(item) || (item && typeof item === "object")) {
-        collectCitedHttpUrls(item, found);
+    if (row.type === "web_search_call" && row.action && typeof row.action === "object") {
+      const sources = (row.action as Record<string, unknown>).sources;
+      if (!Array.isArray(sources)) continue;
+      for (const source of sources) {
+        if (!source || typeof source !== "object") continue;
+        const toolSource = source as Record<string, unknown>;
+        if (toolSource.type !== "url" || typeof toolSource.url !== "string") continue;
+        const cleanUrl = cleanEvidenceUrl(toolSource.url);
+        if (!cleanUrl) continue;
+        toolSourceCount += 1;
+        found.add(cleanUrl);
       }
     }
   }
-  return [...found];
+  return { urls: [...found], messageAnnotationCount, toolSourceCount };
+}
+
+export function collectCitedHttpUrls(value: unknown): string[] {
+  return collectExplicitWebSearchSources(value).urls;
 }
 
 export function missingExactModelVerifiedMetricVendors(
@@ -5585,6 +5732,330 @@ export async function discoverGeneralSoftwareFallbackUrls(
   if (!vendors.length || maximum <= 0) return [];
   const output = await search(vendors);
   return dedupeReferenceUrls(collectCitedHttpUrls(output)).slice(0, maximum);
+}
+
+type CitedCompetitorDiscoverySearchResult = {
+  output: unknown;
+  outputText: string;
+};
+
+type CitedCompetitorDiscoveryResult = {
+  vendors: string[];
+  urls: string[];
+  selectionRoles: Array<{
+    vendor: string;
+    lens: string;
+    officialUrl: string;
+    discoveryStatus?: "unverified_candidate";
+  }>;
+  category: string;
+};
+
+function documentNamesComparisonOption(document: RetrievedEvidenceDocument, product: string): boolean {
+  const normalizedText = normalizeComparisonOptionName(document.text);
+  const normalizedProduct = normalizeComparisonOptionName(product);
+  if (!normalizedProduct) return false;
+  if (normalizedText.includes(normalizedProduct)) return true;
+  const acronym = normalizedProduct
+    .split(/\s+/)
+    .filter((token) => token && !["and", "the", "of", "for"].includes(token))
+    .map((token) => token[0])
+    .join("");
+  const escapedAcronym = acronym.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return acronym.length >= 2
+    && new RegExp(`(?:^|\\s)${escapedAcronym}(?:\\s|$)`, "i").test(normalizedText);
+}
+
+const COMPARABLE_CATEGORY_TAXONOMY = [{
+  trigger: /\b(?:aem|adobe experience manager|dxp|cms|wcm|content management|digital experience)\b/i,
+  evidence: /\b(?:dxp|cms|wcm)\b|digital experience platforms?|content management systems?|web content management/i,
+}];
+
+function documentConfirmsComparableCategory(
+  document: RetrievedEvidenceDocument,
+  prompt: string,
+  category: string,
+): boolean {
+  const taxonomy = COMPARABLE_CATEGORY_TAXONOMY.find(({ trigger }) => trigger.test(`${prompt} ${category}`));
+  if (taxonomy) return taxonomy.evidence.test(document.text);
+  const normalizedCategory = normalizeComparisonOptionName(category);
+  if (!normalizedCategory) return false;
+  const normalizedText = normalizeComparisonOptionName(document.text);
+  if (normalizedText.includes(normalizedCategory)) return true;
+  const categoryTokens = normalizedCategory
+    .split(/\s+/)
+    .map((token) => token.replace(/s$/, ""))
+    .filter((token) => token.length >= 3 && ![
+      "enterprise", "platform", "product", "service", "software", "solution", "system",
+    ].includes(token));
+  const textTokens = new Set(normalizedText.split(/\s+/).map((token) => token.replace(/s$/, "")));
+  return categoryTokens.length >= 2 && categoryTokens.every((token) => textTokens.has(token));
+}
+
+function boundedProductHeadings(document: RetrievedEvidenceDocument): string[] {
+  const lines = document.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return Array.from(new Set(lines.slice(0, 80).flatMap((line, index) => {
+    const explicit = line.match(/^(?:#{1,4}\s+|[-*•]\s+)([\p{L}\p{N}][\p{L}\p{N} .&+/-]{1,80})$/u)?.[1];
+    const firstHeading = index < 5
+      ? line.match(/^([\p{Lu}\p{Lt}\p{N}][\p{L}\p{N} .&+/-]{1,80})$/u)?.[1]
+      : undefined;
+    const candidate = cleanVendorName(explicit ?? firstHeading ?? "");
+    if (
+      !candidate
+      || candidate.split(/\s+/).length > 8
+      || isObjectivePhraseVendor(candidate)
+      || /^(?:home|products?|solutions?|features?|alternatives?|comparison|overview|pricing|resources?)$/i.test(candidate)
+    ) return [];
+    return [candidate];
+  })));
+}
+
+function hostnameSupportsProductName(url: string, name: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const brand = normalizeComparisonOptionName(name).split(/\s+/)[0]?.replace(/[^a-z0-9]/g, "") ?? "";
+    return brand.length >= 3 && hostname.includes(brand);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recovers an open-ended shortlist only from structured names whose explicit
+ * Responses citations survive governed document retrieval and whose retrieved
+ * text names both the product and the shared comparable category.
+ */
+export async function recoverCitedOpenEndedCompetitors(options: {
+  anchor: string;
+  prompt: string;
+  market: string;
+  initialCategory?: string;
+  requested: string[];
+  initialVendors: string[];
+  targetCount: number;
+  search: () => Promise<CitedCompetitorDiscoverySearchResult>;
+  retrieve: (urls: string[]) => Promise<EvidenceDocumentResult[]>;
+}): Promise<CitedCompetitorDiscoveryResult | null> {
+  const diagnostics = {
+    citedUrlCount: 0,
+    messageAnnotationCount: 0,
+    toolSourceCount: 0,
+    retrievedDocumentCount: 0,
+    structuredCandidateCount: 0,
+    extractedCandidateCount: 0,
+    verifiedAlternativeCount: 0,
+    rejected: {
+      no_citations: 0,
+      no_retrieved_content: 0,
+      product_page_missing: 0,
+      comparison_category_missing: 0,
+      insufficient_plural_alternatives: 0,
+    },
+  };
+  const finish = (result: CitedCompetitorDiscoveryResult | null) => {
+    console.info("cited_competitor_discovery_diagnostics", diagnostics);
+    return result;
+  };
+  const initial = preserveConcreteDiscoveryOptions(
+    options.requested,
+    options.initialVendors,
+    options.targetCount,
+  );
+  const categoryMatchesPromptTaxonomy = (category: string) => {
+    const taxonomy = COMPARABLE_CATEGORY_TAXONOMY.find(({ trigger }) => trigger.test(options.prompt));
+    if (taxonomy) return taxonomy.evidence.test(category);
+    return normalizeComparisonOptionName(category).split(/\s+/).filter((token) => token.length >= 3).length >= 2;
+  };
+  const unverifiedResult = (
+    names: string[],
+    category: string,
+  ): CitedCompetitorDiscoveryResult | null => {
+    const isCategoryOnlyName = (name: string) => {
+      const tokens = normalizeComparisonOptionName(name).split(/\s+/).filter(Boolean);
+      const categoryVocabulary = new Set([
+        "cms", "dxp", "wcm", "content", "digital", "experience", "management",
+        "platform", "platforms", "system", "systems", "web",
+      ]);
+      return tokens.length > 0 && tokens.every((token) => categoryVocabulary.has(token));
+    };
+    const vendors = preserveConcreteDiscoveryOptions(
+      options.requested,
+      names.filter((name) => (
+        normalizeComparisonOptionName(name) !== normalizeComparisonOptionName(category)
+        && !isCategoryOnlyName(name)
+      )),
+      options.targetCount,
+    );
+    if (vendors.length < 3) {
+      diagnostics.rejected.insufficient_plural_alternatives += 1;
+      return null;
+    }
+    return {
+      vendors,
+      urls: [],
+      category,
+      selectionRoles: vendors.map((vendor, index) => ({
+        vendor,
+        lens: index === 0 ? "preserved" : "comparable_competitor",
+        officialUrl: "",
+        discoveryStatus: "unverified_candidate",
+      })),
+    };
+  };
+  if (
+    initial.length >= 3
+    && options.initialCategory
+    && categoryMatchesPromptTaxonomy(options.initialCategory)
+  ) {
+    return finish(unverifiedResult(initial, options.initialCategory));
+  }
+  const response = await options.search();
+  let structured: Record<string, unknown>;
+  try {
+    structured = parseJsonObject(response.outputText) as Record<string, unknown>;
+  } catch {
+    return finish(null);
+  }
+  const category = typeof structured.category === "string" ? structured.category.trim() : "";
+  const responseMarket = typeof structured.market === "string" ? structured.market.trim() : "";
+  const alternatives = Array.isArray(structured.alternatives) ? structured.alternatives : [];
+  const explicitSources = collectExplicitWebSearchSources(response.output);
+  const citedUrls = new Set(explicitSources.urls.map(canonicalDocumentKey));
+  diagnostics.citedUrlCount = citedUrls.size;
+  diagnostics.messageAnnotationCount = explicitSources.messageAnnotationCount;
+  diagnostics.toolSourceCount = explicitSources.toolSourceCount;
+  if (!citedUrls.size) {
+    diagnostics.rejected.no_citations += 1;
+    const normalizedExpectedMarket = normalizeComparisonOptionName(options.market);
+    const normalizedResponseMarket = normalizeComparisonOptionName(responseMarket);
+    const marketMatches = Boolean(
+      normalizedResponseMarket
+      && normalizedExpectedMarket.split(/\s+/).some((token) => (
+        token.length >= 2 && normalizedResponseMarket.split(/\s+/).includes(token)
+      )),
+    );
+    if (!categoryMatchesPromptTaxonomy(category) || !marketMatches) return finish(null);
+    const namesOnly = alternatives.flatMap((item) => (
+      item && typeof item === "object" && typeof (item as { name?: unknown }).name === "string"
+        ? [cleanVendorName((item as { name: string }).name)]
+        : []
+    ));
+    diagnostics.structuredCandidateCount = namesOnly.length;
+    const result = unverifiedResult(namesOnly, category);
+    if (result) diagnostics.verifiedAlternativeCount = result.vendors.length - 1;
+    return finish(result);
+  }
+  const candidates = alternatives.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const name = typeof row.name === "string" ? cleanVendorName(row.name) : "";
+    const citationValue = typeof row.officialUrl === "string" ? row.officialUrl : row.citationUrl;
+    const citationUrl = typeof citationValue === "string" ? cleanEvidenceUrl(citationValue) : null;
+    if (
+      !name
+      || !citationUrl
+      || !citedUrls.has(canonicalDocumentKey(citationUrl))
+    ) return [];
+    return [{ name, citationUrl }];
+  });
+  diagnostics.structuredCandidateCount = candidates.length;
+  const retrievalUrls = [...citedUrls].slice(0, 8);
+  const retrievals = await options.retrieve(retrievalUrls);
+  const retrievedDocuments = retrievals.flatMap((result) => result.document ? [result.document] : []);
+  diagnostics.retrievedDocumentCount = retrievedDocuments.length;
+  if (!retrievedDocuments.length) {
+    diagnostics.rejected.no_retrieved_content += 1;
+    return finish(null);
+  }
+  const documentsByUrl = new Map(retrievals.flatMap((result) => (
+    result.document
+      ? [
+          [canonicalDocumentKey(result.url), result.document] as const,
+          [canonicalDocumentKey(result.document.finalUrl), result.document] as const,
+        ]
+      : []
+  )));
+  const comparisonDocuments = retrievedDocuments.filter((document) => (
+    documentNamesComparisonOption(document, options.anchor)
+    && documentConfirmsComparableCategory(document, options.prompt, category)
+  ));
+  const extractedCandidates = comparisonDocuments.flatMap((document) => boundedProductHeadings(document))
+    .filter((name) => !preserveConcreteDiscoveryOptions(
+      [options.anchor, "its competitors"],
+      [name],
+      2,
+    ).every((value) => normalizeComparisonOptionName(value) === normalizeComparisonOptionName(options.anchor)));
+  diagnostics.extractedCandidateCount = extractedCandidates.length;
+  const candidateByName = new Map<string, { name: string; citationUrl?: string }>();
+  for (const candidate of candidates) {
+    candidateByName.set(normalizeComparisonOptionName(candidate.name), candidate);
+  }
+  for (const name of extractedCandidates) {
+    const key = normalizeComparisonOptionName(name);
+    if (!candidateByName.has(key)) candidateByName.set(key, { name });
+  }
+  const verified = [...candidateByName.values()].flatMap(({ name, citationUrl }) => {
+    if (isObjectivePhraseVendor(name)) return [];
+    const explicitProductDocument = citationUrl
+      ? documentsByUrl.get(canonicalDocumentKey(citationUrl))
+      : undefined;
+    const extractedProductDocument = retrievedDocuments.find((document) => (
+      document !== comparisonDocuments.find((comparison) => comparison === document)
+      && hostnameSupportsProductName(document.finalUrl, name)
+      && boundedProductHeadings(document).some((heading) => (
+        normalizeComparisonOptionName(heading) === normalizeComparisonOptionName(name)
+      ))
+    ));
+    const productDocument = explicitProductDocument && documentNamesComparisonOption(explicitProductDocument, name)
+      ? explicitProductDocument
+      : extractedProductDocument;
+    if (!productDocument) {
+      diagnostics.rejected.product_page_missing += 1;
+      return [];
+    }
+    const graphCategoryDocument = comparisonDocuments.find((document) => (
+      documentNamesComparisonOption(document, name)
+    ));
+    const singlePageCategory = documentConfirmsComparableCategory(
+      productDocument,
+      options.prompt,
+      category,
+    );
+    if (!singlePageCategory && !graphCategoryDocument) {
+      diagnostics.rejected.comparison_category_missing += 1;
+      return [];
+    }
+    return [{ name, citationUrl: citationUrl ?? productDocument.url }];
+  });
+  diagnostics.verifiedAlternativeCount = verified.length;
+  const vendors = preserveConcreteDiscoveryOptions(
+    options.requested,
+    verified.map(({ name }) => name),
+    options.targetCount,
+  );
+  if (vendors.length < 3 || vendors.length > options.targetCount) {
+    diagnostics.rejected.insufficient_plural_alternatives += 1;
+    return finish(null);
+  }
+  const admitted = verified.filter(({ name }) => vendors.some((vendor) => (
+    normalizeComparisonOptionName(vendor) === normalizeComparisonOptionName(name)
+  )));
+  return finish({
+    vendors,
+    urls: dedupeReferenceUrls([
+      ...comparisonDocuments.map((document) => document.url),
+      ...admitted.map(({ citationUrl }) => citationUrl),
+    ]),
+    category: category || "prompt-grounded comparable category",
+    selectionRoles: [
+      { vendor: options.anchor, lens: "preserved", officialUrl: "" },
+      ...admitted.map(({ name, citationUrl }) => ({
+        vendor: name,
+        lens: "comparable_competitor",
+        officialUrl: citationUrl,
+      })),
+    ],
+  });
 }
 
 export function requiresGeneralSoftwareSourceFallback(
@@ -6218,6 +6689,162 @@ export function addVerifiedElectricVehicleMatrixMetrics(
             normalizationMethod: "retrieved_document_metric",
           });
           added += 1;
+        }
+      }
+    }
+  }
+  return added;
+}
+
+/**
+ * Recover facts that the research model left out of its presentation matrix.
+ * The matrix is a useful hint, but it is not an evidence boundary: product
+ * pages commonly put specifications in a separate table or paragraph.  Scan
+ * every retrieved line for registered metrics and let the same strict
+ * identity/variant/basis validator admit only document-backed claims.
+ */
+export function addVerifiedVehicleDocumentMetrics(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const vendors = Array.isArray(parsed.vendorScores)
+    ? parsed.vendorScores as Array<Record<string, unknown>>
+    : [];
+  let added = 0;
+  const ensureCriterion = (vendor: Record<string, unknown>, criterion: string, weight: number) => {
+    const rows = Array.isArray(vendor.weightedScores) ? vendor.weightedScores as Array<Record<string, unknown>> : [];
+    if (!Array.isArray(vendor.weightedScores)) vendor.weightedScores = rows;
+    let row = rows.find((entry) => entry.criterion === criterion);
+    if (!row) {
+      row = { criterion, weight, score: 50, rationale: "", evidence: [] };
+      rows.push(row);
+    }
+    if (!Array.isArray(row.evidence)) row.evidence = [];
+    return row.evidence as Array<Record<string, unknown>>;
+  };
+  // Prefix currencies need the currency text before the number; suffix units
+  // are handled by the registry's canonical unit patterns.
+  const candidatesIn = (line: string): Array<{ key: string; value: number; unit: string }> => {
+    const result: Array<{ key: string; value: number; unit: string }> = [];
+    for (const match of line.matchAll(/[−-]?\d[\d,.]*/g)) {
+      const start = match.index ?? 0;
+      const raw = numericTokens(match[0])[0];
+      if (raw === undefined) continue;
+      const before = line.slice(Math.max(0, start - 18), start);
+      const after = line.slice(start + match[0].length, start + match[0].length + 28);
+      for (const [key, definition] of Object.entries(METRIC_REGISTRY)) {
+        if (!definition.label.test(line)) continue;
+        for (const unit of definition.units) {
+          if (UNIT_PATTERNS[unit]?.test(after) || PREFIX_UNIT_PATTERNS[unit]?.test(before)) {
+            result.push({ key, value: raw, unit });
+          }
+        }
+      }
+    }
+    return result;
+  };
+  for (const vendor of vendors) {
+    const vendorName = typeof vendor.vendor === "string" ? vendor.vendor.trim() : "";
+    if (!vendorName) continue;
+    for (const document of documents) {
+      for (const lineMatch of document.text.matchAll(/[^\n]+/g)) {
+        const line = lineMatch[0].trim();
+        if (line.length < 8 || line.length > 800 || !isSafeUserInput(line)) continue;
+        for (const candidate of candidatesIn(line)) {
+          const claim = findQuantitativeClaim(document, vendorName, candidate.key, candidate.value, candidate.unit);
+          const basis = claim ? metricBasis(candidate.key, candidate.unit, claim.basisText) : null;
+          if (!claim || !basis) continue;
+          const criterion = candidate.key === "price" ? "Value for Money" : "Meets Needs / Features";
+          const evidence = ensureCriterion(vendor, criterion, candidate.key === "price" ? 20 : 25);
+          if (evidence.some((entry) => entry.metricKey === candidate.key
+            && entry.rawMetricValue === candidate.value
+            && entry.documentSha256 === document.sha256)) continue;
+          evidence.push({
+            sourceUrl: document.finalUrl,
+            sourceTitle: `${vendorName} retrieved product evidence`,
+            exactClaim: claim.text,
+            metricKey: candidate.key,
+            rawMetricValue: candidate.value,
+            rawMetricUnit: candidate.unit,
+            normalizationDirection: claim.definition.direction,
+            metricSubject: claim.subject,
+            metricBasis: basis,
+            documentSha256: document.sha256,
+            sourceTextStart: claim.start,
+            sourceTextEnd: claim.end,
+            evidenceKind: candidate.unit === "percent" ? "percentage" : "quantitative",
+            supportDirection: "context",
+            confidence: 90,
+            normalizedScore: 50,
+            criterionWeight: candidate.key === "price" ? 20 : 25,
+            weightedContribution: 0,
+            normalizationMethod: "retrieved_document_metric",
+          });
+          added += 1;
+        }
+      }
+    }
+  }
+  return added;
+}
+
+/**
+ * When a product page uses a different feature label than the model's prose,
+ * derive a qualitative row from the retrieved sentence itself.  The claim is
+ * still required to name the exact entity (or its unambiguous acronym), and
+ * its hash/span are retained for downstream scoring.
+ */
+export function addVerifiedQualitativeDocumentClaims(
+  parsed: Record<string, unknown>,
+  documents: RetrievedEvidenceDocument[],
+): number {
+  const vendors = Array.isArray(parsed.vendorScores) ? parsed.vendorScores as Array<Record<string, unknown>> : [];
+  const features = Array.isArray(parsed.features) ? parsed.features as Array<Record<string, unknown>> : [];
+  let added = 0;
+  for (const vendor of vendors) {
+    const vendorName = typeof vendor.vendor === "string" ? vendor.vendor.trim() : "";
+    if (!vendorName) continue;
+    const rows = Array.isArray(vendor.weightedScores) ? vendor.weightedScores as Array<Record<string, unknown>> : [];
+    if (!Array.isArray(vendor.weightedScores)) vendor.weightedScores = rows;
+    let criterion = rows.find((row) => row.criterion === "Meets Needs / Features");
+    if (!criterion) {
+      criterion = { criterion: "Meets Needs / Features", weight: 25, score: 50, rationale: "", evidence: [] };
+      rows.push(criterion);
+    }
+    if (!Array.isArray(criterion.evidence)) criterion.evidence = [];
+    const evidence = criterion.evidence as Array<Record<string, unknown>>;
+    for (const feature of features) {
+      const dimension = typeof feature.dimension === "string" ? feature.dimension : "";
+      const tokens = normalizedIdentity(dimension).split(" ").filter((token) => token.length >= 4);
+      if (!tokens.length) continue;
+      for (const document of documents) {
+        for (const sentenceMatch of document.text.matchAll(/[^.!?\n]{12,500}[.!?]/g)) {
+          const sentence = sentenceMatch[0].trim();
+          const normalized = normalizedIdentity(sentence);
+          const vendorTokens = normalizedIdentity(vendorName).split(" ").filter((token) => token.length >= 3);
+          const acronym = vendorTokens.map((token) => token[0]).join("");
+          if (!(vendorTokens.every((token) => normalized.includes(token))
+            || (acronym.length >= 3 && normalized.split(" ").includes(acronym)))) continue;
+          if (!tokens.some((token) => normalized.includes(token))) continue;
+          const start = (sentenceMatch.index ?? 0) + sentenceMatch[0].indexOf(sentence);
+          if (evidence.some((entry) => entry.documentSha256 === document.sha256 && entry.sourceTextStart === start)) continue;
+          evidence.push({
+            sourceUrl: document.finalUrl,
+            sourceTitle: `${vendorName} retrieved feature evidence`,
+            exactClaim: sentence,
+            metricKey: "documented_feature",
+            metricSubject: vendorName,
+            metricBasis: "retrieved_document_qualitative_feature",
+            documentSha256: document.sha256,
+            sourceTextStart: start,
+            sourceTextEnd: start + sentence.length,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 85,
+            normalizationMethod: "retrieved_document_qualitative_claim",
+          });
+          added += 1;
+          break;
         }
       }
     }
@@ -7971,6 +8598,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     let discoveredSelectionRationale = "";
     let discoveredOfficialProductUrls: string[] = [];
     let approvedDiscoveryCitationUrls: string[] = [];
+    const unverifiedDiscoveryCandidates = new Set<string>();
     if (vendorDiscoveryWasRequired) {
       const requestedCount = discoveryTargetCount(input.vendors);
       const requestedManufacturers = [...input.vendors];
@@ -8309,8 +8937,114 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             normalizeDiscoveredVendors(rawDiscoveredVendors),
             requestedCount,
           );
+      let acceptedBoundedCitedFallback = false;
+      const isSingleAnchorOpenEndedDiscovery = concreteRequestedOptions.length === 1
+        && objectiveRequestedOptions.length >= 1
+        && !isBrandLevelModelSelection
+        && !openEndedElectricVehicleBrandDiscovery
+        && !isTitanWatchPortfolioDiscovery
+        && !isDealershipComparison;
       if (
-        discoveredVendors.length !== requestedCount
+        isSingleAnchorOpenEndedDiscovery
+        && (
+          discoveredVendors.length !== requestedCount
+          || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
+        )
+      ) {
+        const discoveryMarket = inferResearchMarket(input.prompt, input.vendors, input.market);
+        const forced = await recoverCitedOpenEndedCompetitors({
+          anchor: concreteRequestedOptions[0],
+          prompt: input.prompt,
+          market: `${discoveryMarket.country} ${discoveryMarket.countryCode}`,
+          initialCategory: typeof discovery.category === "string" ? discovery.category : undefined,
+          requested: requestedManufacturers,
+          initialVendors: discoveredVendors,
+          targetCount: requestedCount,
+          search: async () => {
+            const response = await measureAnalysisStage(input, "vendor_discovery", () => client.responses.create({
+              model: "gpt-4.1-mini",
+              max_output_tokens: 2400,
+              include: ["web_search_call.action.sources"],
+              tool_choice: "auto",
+              tools: [{
+                type: "web_search",
+                search_context_size: "medium",
+                external_web_access: true,
+                user_location: {
+                  type: "approximate" as const,
+                  country: discoveryMarket.countryCode,
+                  timezone: discoveryMarket.timezone,
+                },
+              }],
+              input: [{
+                role: "system",
+                content: "Use web search now to recover a concrete competitor shortlist with no more than eight cited pages. Find one reputable independent comparison or alternatives page that names the anchor and multiple comparable products in the shared category, plus a current official product page for each candidate. Return only one JSON object. Category language may use an established domain synonym such as DXP, CMS, WCM, web content management, or digital experience platform. Every URL must be copied from an explicit web-search citation. Do not return the anchor, its acronym or expanded aliases, objectives, categories as products, prose suggestions, reconstructed URLs, modules, or editions.",
+              }, {
+                role: "user",
+                content: JSON.stringify({
+                  prompt: input.prompt,
+                  anchor: concreteRequestedOptions[0],
+                  market: discoveryMarket,
+                  requiredAlternativeCount: requestedCount - 1,
+                  maximumCitedPages: 8,
+                  requiredShape: {
+                    category: "Exact shared comparable product category",
+                    market: `${discoveryMarket.country} ${discoveryMarket.countryCode}`,
+                    anchor: {
+                      name: concreteRequestedOptions[0],
+                      category: "Exact shared comparable product category",
+                      citationUrl: "https://explicitly-cited-page-that-names-anchor-and-category",
+                    },
+                    comparisonCitationUrls: [
+                      "https://independent-comparison-page-naming-anchor-candidates-and-shared-category",
+                    ],
+                    alternatives: Array.from({ length: requestedCount - 1 }, (_, index) => ({
+                      name: `Exact competitor product ${index + 1}`,
+                      officialUrl: "https://explicitly-cited-current-official-product-page",
+                    })),
+                  },
+                }),
+              }],
+            }, {
+              timeout: 15_000,
+              maxRetries: 0,
+            }));
+            return {
+              output: response.output,
+              outputText: response.status === "completed" ? response.output_text : "",
+            };
+          },
+          retrieve: (urls) => retrieveEvidenceDocuments(urls, {
+            permissionRegistry: publisherPermissionRegistry,
+            concurrency: 3,
+            batchTimeoutMs: 20_000,
+          }),
+        });
+        if (!forced) {
+          throw new Error(
+            `Insufficient source coverage: competitor discovery could not identify at least two concrete, non-alias alternatives to ${concreteRequestedOptions[0]} for the requested category and market. Name at least two alternatives explicitly or add current official competitor product URLs.`,
+          );
+        }
+        discoveredVendors = forced.vendors;
+        acceptedBoundedCitedFallback = true;
+        if (!forced.urls.length) {
+          for (const vendor of forced.vendors.slice(1)) {
+            unverifiedDiscoveryCandidates.add(normalizeComparisonOptionName(vendor));
+          }
+        }
+        rawDiscoveredVendors = forced.vendors;
+        discovery = {
+          ...discovery,
+          vendors: forced.vendors,
+          selectionRoles: forced.selectionRoles,
+          selectionRationale: forced.urls.length
+            ? `The fallback shortlist retained ${concreteRequestedOptions[0]} and admitted only competitors named with the shared ${forced.category} category on cited, governed, retrievable pages.`
+            : `The fallback retained ${concreteRequestedOptions[0]} and supplied concrete ${forced.category} discovery labels only. Every competitor remains an unverified candidate until normal research retrieves exact product and category provenance.`,
+        };
+        approvedDiscoveryCitationUrls.push(...forced.urls);
+      }
+      if (
+        (!acceptedBoundedCitedFallback && discoveredVendors.length !== requestedCount)
         || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
       ) {
         const repairSystem = isBrandLevelModelSelection
@@ -8428,7 +9162,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           }
         }
         if (
-          discoveredVendors.length !== requestedCount
+          (!acceptedBoundedCitedFallback && discoveredVendors.length !== requestedCount)
           || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
         ) {
           const deterministicFallback = openEndedElectricVehicleBrandDiscovery
@@ -8449,7 +9183,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           }
         }
         if (
-          discoveredVendors.length !== requestedCount
+          (!acceptedBoundedCitedFallback && discoveredVendors.length !== requestedCount)
           || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
         ) {
           console.warn("Product discovery failed concrete shortlist validation", {
@@ -8606,6 +9340,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       const fallbackResponse = await measureAnalysisStage(input, "software_source_fallback", () => client.responses.create({
         model: "gpt-4.1-mini",
         max_output_tokens: 2200,
+        include: ["web_search_call.action.sources"],
         tool_choice: "required",
         tools: [{
           type: "web_search",
@@ -9210,8 +9945,20 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     let matrixEvidenceAdded = isVehicleComparison
       ? addVerifiedElectricVehicleMatrixMetrics(parsed as Record<string, unknown>, retrievedDocuments)
       : 0;
+    if (isVehicleComparison) {
+      matrixEvidenceAdded += addVerifiedVehicleDocumentMetrics(
+        parsed as Record<string, unknown>,
+        retrievedDocuments,
+      );
+    }
     validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
     validateQualitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+    if (!isVehicleComparison) {
+      addVerifiedQualitativeDocumentClaims(
+        parsed as Record<string, unknown>,
+        retrievedDocuments,
+      );
+    }
     let officialSpecEvidenceAdded = isElectricVehicleComparison
       ? addVerifiedElectricVehicleOfficialSpecs(
         parsed as Record<string, unknown>,
@@ -9307,8 +10054,18 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
             parsed as Record<string, unknown>,
             fallbackDocuments,
           );
+          matrixEvidenceAdded += addVerifiedVehicleDocumentMetrics(
+            parsed as Record<string, unknown>,
+            fallbackDocuments,
+          );
           validateQuantitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
           validateQualitativeEvidenceAgainstDocuments(parsed as Record<string, unknown>, retrievedDocuments);
+          if (!isVehicleComparison) {
+            addVerifiedQualitativeDocumentClaims(
+              parsed as Record<string, unknown>,
+              fallbackDocuments,
+            );
+          }
           if (isElectricVehicleComparison) {
             officialSpecEvidenceAdded += addVerifiedElectricVehicleOfficialSpecs(
               parsed as Record<string, unknown>,
@@ -9524,6 +10281,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       globalServiceMarketAvailability: /\b(?:digital experience platforms?|DXP|digital asset management|DAM|content management systems?|CMS)\b/i.test(
         `${input.prompt} ${normalized.category}`,
       ),
+      unverifiedDiscoveryVendors: input.vendors.filter((vendor) => (
+        unverifiedDiscoveryCandidates.has(normalizeComparisonOptionName(vendor))
+      )),
     });
     suppressUnqualifiedLensWinners(normalized);
     if (bestAlternativeAnchor) {
