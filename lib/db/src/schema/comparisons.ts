@@ -43,6 +43,63 @@ export const comparisonsTable = pgTable("comparisons", {
   status: text("status").notNull().default("complete"),
   executiveSummary: text("executive_summary").notNull(),
   recommendationReason: text("recommendation_reason").notNull(),
+  evidenceReview: jsonb("evidence_review").$type<{
+    jobId: string;
+    status: "processing" | "complete" | "failed";
+    startedAt: string;
+    completedAt?: string;
+    initialRecommendation: string;
+    reviewedRecommendation?: string;
+    reviewReason?: string;
+    error?: string;
+    checks: Array<{
+      vendor: string;
+      claim: string;
+      sourceUrl: string;
+      status: "verified" | "contradicted" | "unavailable";
+      quote?: string;
+      reason: string;
+      checkedAt?: string;
+    }>;
+    verificationScore?: number | null;
+    evidenceCoverage?: number | null;
+    assumptionRegister?: Array<{
+      assumption: string;
+      status: "unverified" | "validated" | "contradicted";
+      reason: string;
+      sourceUrls: string[];
+    }>;
+    sourceRegister?: Array<{
+      url: string;
+      availability: "admitted" | "restricted" | "unavailable";
+      freshness: "known" | "unknown";
+      publicationDate?: string;
+      ageDays?: number;
+      lastCheckedAt: string;
+      checkCount: number;
+      verifiedCount: number;
+      contradictedCount: number;
+      unavailableCount: number;
+    }>;
+    competitiveValidation?: {
+      status: "not_assessed" | "partial" | "contradiction_found";
+      recommendation: string;
+      checkedCompetitors: string[];
+      summary: string;
+    };
+    riskAssessment?: {
+      level: "unknown" | "low" | "medium" | "high";
+      items: string[];
+      summary: string;
+    };
+    validationReport?: string;
+    governanceReport?: string;
+    auditTrail?: Array<{
+      timestamp: string;
+      event: string;
+      detail: string;
+    }>;
+  }>(),
   weightAdjustments: jsonb("weight_adjustments").$type<Array<{
     criterion: string;
     weight: number;

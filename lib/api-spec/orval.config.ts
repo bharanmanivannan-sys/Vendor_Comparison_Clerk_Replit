@@ -13,12 +13,23 @@ const titleTransformer: InputTransformerFn = (config) => {
   return config;
 };
 
+const apiClientTransformer: InputTransformerFn = (config) => {
+  titleTransformer(config);
+  const operation = config.paths?.["/comparisons"]?.post;
+  if (operation?.parameters) {
+    operation.parameters = operation.parameters.filter(
+      (parameter) => !("in" in parameter) || parameter.in !== "header",
+    );
+  }
+  return config;
+};
+
 export default defineConfig({
   "api-client-react": {
     input: {
       target: "./openapi.yaml",
       override: {
-        transformer: titleTransformer,
+        transformer: apiClientTransformer,
       },
     },
     output: {

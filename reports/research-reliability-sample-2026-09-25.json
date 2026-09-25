@@ -1,0 +1,1052 @@
+{
+  "started": "2026-09-25T09:55:57.357Z",
+  "finished": "2026-09-25T09:58:29.549Z",
+  "method": "internal bounded Decision Mode research pipeline; no guest API, no prompt parsing, no production traffic",
+  "rows": [
+    {
+      "case": 1,
+      "category": "Products",
+      "market": "US",
+      "options": [
+        "iPhone 16",
+        "Samsung Galaxy S25"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 5473,
+      "attemptedUrls": 6,
+      "reachableUrls": 4,
+      "restrictedUrls": 1,
+      "scoredOptions": [
+        {
+          "option": "iPhone 16",
+          "count": 1
+        },
+        {
+          "option": "Samsung Galaxy S25",
+          "count": 2
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 4,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 2,
+          "sourceCount": 3,
+          "malformedItemCount": 1
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 2,
+      "category": "Products",
+      "market": "US",
+      "options": [
+        "Sony WH-1000XM5",
+        "Bose QuietComfort Ultra Headphones"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 6832,
+      "attemptedUrls": 6,
+      "reachableUrls": 2,
+      "restrictedUrls": 2,
+      "scoredOptions": [
+        {
+          "option": "Sony WH-1000XM5",
+          "count": 0
+        },
+        {
+          "option": "Bose QuietComfort Ultra Headphones",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 2,
+          "missingOptionCount": 1
+        },
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "web_search_fallback",
+          "timedOut": true,
+          "errorCode": "latency_budget_exceeded"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 2,
+          "sourceCount": 1,
+          "malformedItemCount": 0
+        }
+      ]
+    },
+    {
+      "case": 3,
+      "category": "Products",
+      "market": "GB",
+      "options": [
+        "Dyson V15 Detect",
+        "Shark Stratos Cordless"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 7600,
+      "attemptedUrls": 6,
+      "reachableUrls": 3,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "Dyson V15 Detect",
+          "count": 0
+        },
+        {
+          "option": "Shark Stratos Cordless",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 3,
+          "missingOptionCount": 1
+        },
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "web_search_fallback",
+          "timedOut": true,
+          "errorCode": "latency_budget_exceeded"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 2,
+          "sourceCount": 2,
+          "malformedItemCount": 1
+        }
+      ]
+    },
+    {
+      "case": 4,
+      "category": "Brands",
+      "market": "US",
+      "options": [
+        "Nike",
+        "Adidas"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 7967,
+      "attemptedUrls": 6,
+      "reachableUrls": 5,
+      "restrictedUrls": 1,
+      "scoredOptions": [
+        {
+          "option": "Nike",
+          "count": 1
+        },
+        {
+          "option": "Adidas",
+          "count": 3
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 5,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 3,
+          "sourceCount": 3,
+          "malformedItemCount": 1
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 4
+        }
+      ]
+    },
+    {
+      "case": 5,
+      "category": "Brands",
+      "market": "US",
+      "options": [
+        "Toyota",
+        "Honda"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 5655,
+      "attemptedUrls": 6,
+      "reachableUrls": 3,
+      "restrictedUrls": 2,
+      "scoredOptions": [
+        {
+          "option": "Toyota",
+          "count": 0
+        },
+        {
+          "option": "Honda",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 3,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_item_rejected"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 2,
+          "sourceCount": 3,
+          "malformedItemCount": 1
+        }
+      ]
+    },
+    {
+      "case": 6,
+      "category": "Brands",
+      "market": "IN",
+      "options": [
+        "Apple",
+        "Samsung"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 4350,
+      "attemptedUrls": 6,
+      "reachableUrls": 6,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "Apple",
+          "count": 2
+        },
+        {
+          "option": "Samsung",
+          "count": 1
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 6,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 2,
+          "sourceCount": 4,
+          "malformedItemCount": 2
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 7,
+      "category": "Services",
+      "market": "US",
+      "options": [
+        "Netflix",
+        "Disney+"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 6691,
+      "attemptedUrls": 6,
+      "reachableUrls": 4,
+      "restrictedUrls": 2,
+      "scoredOptions": [
+        {
+          "option": "Netflix",
+          "count": 0
+        },
+        {
+          "option": "Disney+",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 4,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 1,
+          "sourceCount": 3,
+          "malformedItemCount": 2
+        }
+      ]
+    },
+    {
+      "case": 8,
+      "category": "Services",
+      "market": "GB",
+      "options": [
+        "Spotify",
+        "Apple Music"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 7665,
+      "attemptedUrls": 6,
+      "reachableUrls": 6,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "Spotify",
+          "count": 2
+        },
+        {
+          "option": "Apple Music",
+          "count": 1
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 6,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_item_rejected"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 3,
+          "sourceCount": 2,
+          "malformedItemCount": 0
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 9,
+      "category": "Services",
+      "market": "US",
+      "options": [
+        "Uber",
+        "Lyft"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 5144,
+      "attemptedUrls": 5,
+      "reachableUrls": 5,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "Uber",
+          "count": 1
+        },
+        {
+          "option": "Lyft",
+          "count": 2
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 5,
+          "retrievedCount": 5,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 3,
+          "sourceCount": 2,
+          "malformedItemCount": 0
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 10,
+      "category": "Retailers",
+      "market": "US",
+      "options": [
+        "Amazon",
+        "Walmart"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 10590,
+      "attemptedUrls": 6,
+      "reachableUrls": 3,
+      "restrictedUrls": 2,
+      "scoredOptions": [
+        {
+          "option": "Amazon",
+          "count": 1
+        },
+        {
+          "option": "Walmart",
+          "count": 2
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 3,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 3,
+          "sourceCount": 3,
+          "malformedItemCount": 0
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 11,
+      "category": "Retailers",
+      "market": "GB",
+      "options": [
+        "Tesco",
+        "Sainsbury's"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 6671,
+      "attemptedUrls": 6,
+      "reachableUrls": 3,
+      "restrictedUrls": 3,
+      "scoredOptions": [
+        {
+          "option": "Tesco",
+          "count": 1
+        },
+        {
+          "option": "Sainsbury's",
+          "count": 2
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 3,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_item_rejected"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 2,
+          "sourceCount": 3,
+          "malformedItemCount": 1
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 12,
+      "category": "Retailers",
+      "market": "IN",
+      "options": [
+        "Reliance Digital",
+        "Croma"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 7064,
+      "attemptedUrls": 6,
+      "reachableUrls": 2,
+      "restrictedUrls": 4,
+      "scoredOptions": [
+        {
+          "option": "Reliance Digital",
+          "count": 0
+        },
+        {
+          "option": "Croma",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 2,
+          "missingOptionCount": 1
+        },
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "web_search_fallback",
+          "timedOut": true,
+          "errorCode": "latency_budget_exceeded"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 1,
+          "sourceCount": 1,
+          "malformedItemCount": 0
+        }
+      ]
+    },
+    {
+      "case": 13,
+      "category": "Dealerships",
+      "market": "US",
+      "options": [
+        "AutoNation",
+        "CarMax"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 6057,
+      "attemptedUrls": 6,
+      "reachableUrls": 4,
+      "restrictedUrls": 1,
+      "scoredOptions": [
+        {
+          "option": "AutoNation",
+          "count": 1
+        },
+        {
+          "option": "CarMax",
+          "count": 3
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 4,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 4,
+          "sourceCount": 2,
+          "malformedItemCount": 0
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 4
+        }
+      ]
+    },
+    {
+      "case": 14,
+      "category": "Dealerships",
+      "market": "GB",
+      "options": [
+        "Pendragon",
+        "Arnold Clark"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 6075,
+      "attemptedUrls": 6,
+      "reachableUrls": 5,
+      "restrictedUrls": 1,
+      "scoredOptions": [
+        {
+          "option": "Pendragon",
+          "count": 0
+        },
+        {
+          "option": "Arnold Clark",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 5,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 1,
+          "sourceCount": 1,
+          "malformedItemCount": 0
+        }
+      ]
+    },
+    {
+      "case": 15,
+      "category": "Enterprise Software",
+      "market": "US",
+      "options": [
+        "Salesforce Sales Cloud",
+        "Microsoft Dynamics 365 Sales"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 8258,
+      "attemptedUrls": 6,
+      "reachableUrls": 5,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "Salesforce Sales Cloud",
+          "count": 1
+        },
+        {
+          "option": "Microsoft Dynamics 365 Sales",
+          "count": 2
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 5,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 3,
+          "sourceCount": 3,
+          "malformedItemCount": 0
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 16,
+      "category": "Enterprise Software",
+      "market": "US",
+      "options": [
+        "SAP S/4HANA Cloud",
+        "Oracle Fusion Cloud ERP"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 5499,
+      "attemptedUrls": 6,
+      "reachableUrls": 2,
+      "restrictedUrls": 4,
+      "scoredOptions": [
+        {
+          "option": "SAP S/4HANA Cloud",
+          "count": 2
+        },
+        {
+          "option": "Oracle Fusion Cloud ERP",
+          "count": 1
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 2,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 3,
+          "sourceCount": 2,
+          "malformedItemCount": 0
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 17,
+      "category": "Enterprise Software",
+      "market": "GB",
+      "options": [
+        "ServiceNow ITSM",
+        "Jira Service Management"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 6259,
+      "attemptedUrls": 6,
+      "reachableUrls": 2,
+      "restrictedUrls": 4,
+      "scoredOptions": [
+        {
+          "option": "ServiceNow ITSM",
+          "count": 0
+        },
+        {
+          "option": "Jira Service Management",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 2,
+          "missingOptionCount": 2
+        },
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "web_search_fallback",
+          "timedOut": true,
+          "errorCode": "latency_budget_exceeded"
+        },
+        {
+          "event": "decision_mode_research_unavailable",
+          "retrievedCount": 2,
+          "sourceCount": 0
+        }
+      ]
+    },
+    {
+      "case": 18,
+      "category": "Technology Platforms",
+      "market": "US",
+      "options": [
+        "AWS",
+        "Microsoft Azure"
+      ],
+      "researchStatus": "complete",
+      "resultType": "SUCCESSFUL_RESEARCH",
+      "coveragePct": 100,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 6288,
+      "attemptedUrls": 6,
+      "reachableUrls": 5,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "AWS",
+          "count": 2
+        },
+        {
+          "option": "Microsoft Azure",
+          "count": 1
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 5,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_item_rejected"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 2,
+          "sourceCount": 3,
+          "malformedItemCount": 1
+        },
+        {
+          "event": "decision_mode_targeted_research",
+          "validScoreCount": 3
+        }
+      ]
+    },
+    {
+      "case": 19,
+      "category": "Technology Platforms",
+      "market": "US",
+      "options": [
+        "GitHub",
+        "GitLab"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 4243,
+      "attemptedUrls": 6,
+      "reachableUrls": 6,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "GitHub",
+          "count": 0
+        },
+        {
+          "option": "GitLab",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery",
+          "provider": "firecrawl_keyless",
+          "candidateCount": 6,
+          "retrievedCount": 6,
+          "missingOptionCount": 0
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 1,
+          "sourceCount": 1,
+          "malformedItemCount": 0
+        }
+      ]
+    },
+    {
+      "case": 20,
+      "category": "Technology Platforms",
+      "market": "US",
+      "options": [
+        "Shopify",
+        "BigCommerce"
+      ],
+      "researchStatus": "partial",
+      "resultType": "PARTIAL_RESULT",
+      "coveragePct": 0,
+      "coverageDefinition": "binary bilateral source-backed coverage; partial per-option coverage not exposed",
+      "elapsedMs": 8424,
+      "attemptedUrls": 3,
+      "reachableUrls": 3,
+      "restrictedUrls": 0,
+      "scoredOptions": [
+        {
+          "option": "Shopify",
+          "count": 0
+        },
+        {
+          "option": "BigCommerce",
+          "count": 0
+        }
+      ],
+      "events": [
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "search_api",
+          "timedOut": false,
+          "errorCode": "http_429"
+        },
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "firecrawl_keyless",
+          "missingOptionCount": 1,
+          "timedOut": false,
+          "errorCode": "HTTP 429"
+        },
+        {
+          "event": "decision_mode_research_discovery_failed",
+          "provider": "web_search_fallback",
+          "timedOut": true,
+          "errorCode": "latency_budget_exceeded"
+        },
+        {
+          "event": "decision_mode_research_scoring",
+          "validScoreCount": 1,
+          "sourceCount": 1,
+          "malformedItemCount": 0
+        }
+      ]
+    }
+  ]
+}

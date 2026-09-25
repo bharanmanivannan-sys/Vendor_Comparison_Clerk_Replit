@@ -6,20 +6,31 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   additionalWeightRelevanceError,
   actionableSoarEntries,
+  buildOnDemandStrengthsLedEntries,
   buildComparisonPdf,
   canAddAlternativeToComparison,
+  comparedSetAlternatives,
   comparisonOptionNamesOverlap,
   computeDecisionQuality,
   DecisionRecommendationCard,
+  DecisionStrategySection,
   ExecutiveDecisionBrief,
   expandedAlternativeComparisonPrompt,
+  formatReportDecimal,
   HeadToHead,
   hasAdjustedTopScoreTie,
+  isProvisionalChoice,
   hasOptionSpecificFrameworkEvidence,
   isVisibleSourceInList,
+  LazyStrengthsLedStrategySection,
+  MarketPositionSection,
   pricingFeatureLensModel,
+  providerRolePresentation,
+  presentedDxpLensRows,
+  reconcileReportScores,
   scoreDifferenceLabel,
   shouldDisplayMarketHistory,
+  StrategicFrameworkSection,
   weightedCriterionImpact,
   VendorScoreExtensionSection,
   weightsBeforeAdditional,
@@ -28,6 +39,36 @@ import {
 } from './App';
 
 const sourceDate = new Date().toISOString().slice(0, 10);
+
+test('renders conditional strategy gates separately from an empty or legacy report', () => {
+  assert.equal(renderToStaticMarkup(<DecisionStrategySection comparison={{ nextSteps: ['Get a quote.'] }} />), '');
+  const html = renderToStaticMarkup(<DecisionStrategySection comparison={{ nextSteps: [
+    'Decision strategy — Validation gates: Verify the exact variant and get a written quote.',
+    'Decision strategy — Change the choice: Reconsider the second option if the first fails safety checks.',
+  ] }} />);
+  assert.match(html, /section-decision-strategy/);
+  assert.match(html, /Verify the exact variant and get a written quote/);
+  assert.match(html, /Reconsider the second option/);
+  assert.match(html, /not proof that the product or offer has passed these checks/i);
+});
+
+test('rounds coverage display to at most two decimal places', () => {
+  assert.equal(formatReportDecimal(100 / 3), '33.33');
+  assert.equal(formatReportDecimal(100), '100');
+  const html = renderToStaticMarkup(<VendorScoreExtensionSection vendorScores={[{
+    vendor: 'Mahindra XUV700',
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    dimensionScores: [{
+      dimension: 'Feature and Capability Strength',
+      coverage: 100 / 3,
+      coverageStatus: 'SUPPRESSED',
+      supportedSubcriteria: 1,
+      totalSubcriteria: 3,
+    }],
+  }]} />);
+  assert.match(html, /33\.33% evidence coverage/);
+  assert.doesNotMatch(html, /33\.333333/);
+});
 
 function verifiedEvidence(sourceUrl: string, score: number) {
   return {
@@ -159,6 +200,14 @@ test('does not add the same alternative twice', () => {
   const prompt = expandedAlternativeComparisonPrompt(comparison, 'gamma');
 
   assert.equal((prompt.match(/\bgamma\b/gi) || []).length, 1);
+});
+
+test('does not add a product descriptor alias as a new option', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.vendors = ['Tata Safari', 'Jeep Meridian'];
+  const prompt = expandedAlternativeComparisonPrompt(comparison, 'Tata Safari diesel AT');
+  assert.match(prompt, /^Compare Tata Safari vs Jeep Meridian\./);
+  assert.doesNotMatch(prompt.split('Use the same decision context')[0]!, /Tata Safari diesel AT/);
 });
 
 test('keeps the six-option maximum when adding an outside alternative', () => {
@@ -310,8 +359,8 @@ test('replaces vague SOAR instructions with option-specific product and buyer de
   assert.match(text, /representative test drive/i);
   assert.match(text, /decision target/i);
   assert.doesNotMatch(pdfText, /Identify the evidence-backed capability/i);
-  assert.match(pdfText, /Product-manager use/i);
-  assert.match(pdfText, /Acceptance test/i);
+  assert.match(pdfText, /VEHICLE BUYER CHECKS/i);
+  assert.doesNotMatch(pdfText, /SWOT, PESTLE, AND SOAR|Product-manager use/i);
 });
 
 test('preserves substantive option-specific SOAR findings', () => {
@@ -320,6 +369,75 @@ test('preserves substantive option-specific SOAR findings', () => {
   const resolved = actionableSoarEntries(comparison, [['Strengths', [finding]]]);
 
   assert.equal(resolved[0]?.[1]?.[0], finding);
+});
+
+test('uses quoted retrieved capability context for fallback SOAR strengths and results', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.features = [{
+    dimension: 'Retrieved capability context (not feature parity)',
+    values: {
+      Alpha: { excerpt: '“Automated case routing for service teams.”', sourceUrl: 'https://publisher.example/alpha' },
+      Beta: { excerpt: '“Unified customer inbox.”', sourceUrl: 'https://publisher.example/beta' },
+    },
+  }];
+  const resolved = actionableSoarEntries(comparison, [
+    ['Strengths', []],
+    ['Opportunities', []],
+    ['Aspirations', []],
+    ['Results', []],
+  ]);
+  const strengths = resolved[0]?.[1]?.join(' ') || '';
+  const results = resolved[3]?.[1]?.join(' ') || '';
+  assert.match(strengths, /publisher-stated capability context/i);
+  assert.match(strengths, /Automated case routing/);
+  assert.match(strengths, /representative workflow/);
+  assert.match(results, /testable hypothesis/i);
+  assert.match(results, /Unified customer inbox/);
+  assert.match(results, /https:\/\/publisher\.example\/beta/);
+});
+
+test('consolidates repeated option-specific framework fallback text into one evidence gap', () => {
+  const html = renderToStaticMarkup(<StrategicFrameworkSection
+    title="SOAR decision strategy by option"
+    eyebrow="Strengths-led strategy"
+    description="Decision support"
+    testId="section-soar"
+    vendors={['Alpha', 'Beta']}
+    entries={[['Strengths', [
+      'Alpha: Current advantage — strongest evidence coverage. Product-manager use: test whether the advantage is defensible. Buyer use: treat it as a proof point.',
+      'Beta: Current advantage — strongest evidence coverage. Product-manager use: test whether the advantage is defensible. Buyer use: treat it as a proof point.',
+    ]]]}
+  />);
+
+  assert.match(html, /Shared evidence gap/);
+  assert.match(html, /section-soar-shared-evidence-gap/);
+  assert.equal((html.match(/Current advantage — strongest evidence coverage/g) || []).length, 0);
+});
+
+test('strengths-led strategy is collapsed until opened and uses requested-criteria scores', () => {
+  const comparison = {
+    criteria: ['Features', 'Value for Money'],
+    vendorScores: [
+      { vendor: 'Alpha', weightedScores: [
+        { criterion: 'Features', score: 90 },
+        { criterion: 'Value for Money', score: 60 },
+        { criterion: 'Support', score: 5 },
+      ] },
+      { vendor: 'Beta', weightedScores: [
+        { criterion: 'Features', score: 70 },
+        { criterion: 'Value for Money', score: 85 },
+      ] },
+    ],
+  };
+  const entries = buildOnDemandStrengthsLedEntries(comparison, ['Alpha', 'Beta']);
+  assert.match(entries[0]?.[1]?.join(' ') ?? '', /Alpha: Features \(90\/100\)/);
+  assert.match(entries[1]?.[1]?.join(' ') ?? '', /Alpha: Value for Money \(60\/100\)/);
+  assert.doesNotMatch(entries.flatMap(([, findings]) => findings).join(' '), /Support/);
+
+  const markup = renderToStaticMarkup(<LazyStrengthsLedStrategySection comparison={comparison} vendors={['Alpha', 'Beta']} />);
+  assert.match(markup, /What should each option build on/);
+  assert.match(markup, /button-load-soar/);
+  assert.doesNotMatch(markup, /data-testid="section-soar-loaded"/);
 });
 
 test('renders no definitive winner after adjusted weights leave the top options tied', async () => {
@@ -425,6 +543,70 @@ function comparisonFixture({ mismatchedHistory = false } = {}) {
   };
 }
 
+test('shows advisory confidence and trade-offs only for the visible canonical choice', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.decisionAdvice = {
+    decisionType: 'Product or service choice',
+    winner: 'Alpha',
+    runnerUp: 'Beta',
+    provisional: false,
+    confidence: {
+      score: 76,
+      band: 'High',
+      dataCoverage: 100,
+      sourceConsistency: 100,
+      scoreSeparation: 40,
+      priorityClarity: 40,
+      basis: 'Heuristic confidence in this ranking, not a probability of success.',
+    },
+    whyItWon: 'Alpha leads on customer service.',
+    bestFor: 'A customer-service-led decision.',
+    notRecommendedIf: 'Support costs outweigh service quality.',
+    tradeoffs: ['Confirm current support terms.'],
+    scenarioLeaders: [],
+  };
+  const html = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
+  assert.match(html, /decision-advice/);
+  assert.match(html, /High decision confidence/);
+  assert.match(html, /not a probability of success/);
+  assert.match(html, /Not recommended if/);
+  assert.match(html, /Confirm current support terms/);
+
+  comparison.decisionAdvice.winner = 'Beta';
+  assert.doesNotMatch(renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />), /decision-advice/);
+});
+
+test('shows legacy DXP estimates in the PDF without inventing price scores', async () => {
+  const comparison = {
+    ...comparisonFixture(),
+    prompt: 'Compare Adobe Experience Manager vs Sitecore vs Contentful vs Optimizely vs Acquia for digital experience platforms',
+    category: 'Digital experience platforms',
+    vendors: ['Adobe Experience Manager', 'Sitecore', 'Contentful', 'Optimizely', 'Acquia'],
+    recommendation: 'Contentful',
+    recommendationReason: 'Provisional choice — Contentful is the strongest estimated fit; verify before purchase.',
+    executiveSummary: 'Provisional choice — Contentful is an assumption-led starting point, not a verified winner.',
+    score: 0,
+    vendorScores: ['Adobe Experience Manager', 'Sitecore', 'Contentful', 'Optimizely', 'Acquia'].map((vendor) => ({
+      vendor, score: 0, qualificationStatus: 'INSUFFICIENT_EVIDENCE',
+      weightedScores: [], verdict: 'Not scored',
+    })),
+    insights: ['Indicative fit scorecard (assumption-led, not verified) — Contentful: 78/100; Adobe Experience Manager: 76/100; Sitecore: 69/100; Optimizely: 74/100; Acquia: 71/100. Criteria: Customer outcomes 25%, Ease of use 25%, Value for money 25%, Quality and reliability 25%.'],
+    pricing: [
+      { dimension: 'Customer outcomes', values: {}, winner: 'Not established' },
+      { dimension: 'Value for money', values: { Contentful: 'Not established from comparable verified evidence.' }, winner: 'Not established' },
+    ],
+    features: [],
+  };
+  const lenses = presentedDxpLensRows(comparison);
+  assert.equal(lenses.pricing[0].dimension, 'Comparable Australian prices and total cost');
+  assert.match(lenses.features[0].values.Contentful, /Not established/);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  assert.match(pdfText, /INDICATIVE FIT ESTIMATES \(NOT VERIFIED\)/);
+  assert.match(pdfText, /Est\. 78\/100/);
+  assert.match(pdfText, /Comparable Australian prices and total cost/);
+  assert.doesNotMatch(pdfText.slice(pdfText.indexOf('Pricing analysis')), /Dimension: Customer outcomes/);
+});
+
 function extractPdfText(bytes: Uint8Array): string {
   const source = Buffer.from(bytes).toString('latin1');
   const texts: string[] = [];
@@ -493,7 +675,7 @@ test('shows a qualified pricing and feature lens winner when broader evidence is
   assert.doesNotMatch(html, /No definitive winner/);
 });
 
-test('shows an explicitly provisional lens leader and its evidence-limited score without presenting it as qualified', () => {
+test('does not show an unverified provisional lens leader or score from legacy matrix rows', () => {
   const comparison = comparisonFixture() as any;
   comparison.vendorScores.forEach((vendor: any) => {
     vendor.score = 50;
@@ -514,13 +696,69 @@ test('shows an explicitly provisional lens leader and its evidence-limited score
   const recommendedHtml = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
   const briefHtml = renderToStaticMarkup(<ExecutiveDecisionBrief comparison={comparison} />);
 
-  assert.match(recommendedHtml, /Evidence-limited leader/);
-  assert.match(recommendedHtml, /Alpha/);
-  assert.match(recommendedHtml, /broader evidence incomplete/);
+  assert.match(recommendedHtml, /Evidence-limited result/);
+  assert.match(recommendedHtml, /No definitive winner/);
+  assert.match(recommendedHtml, /No unique evidence-backed leader was established/);
   assert.doesNotMatch(recommendedHtml, /Best overall fit/);
-  assert.match(recommendedHtml, /score-ring-50/);
-  assert.match(briefHtml, /not a qualified overall recommendation/i);
-  assert.doesNotMatch(briefHtml, /No definitive winner/);
+  assert.doesNotMatch(recommendedHtml, /score-ring-50/);
+  assert.match(briefHtml, /No definitive winner/);
+});
+
+test('suppresses unsupported leader roles for new and legacy insufficient-evidence reports in browser and PDF', async () => {
+  const makeComparison = (withContract: boolean) => {
+    const comparison = comparisonFixture() as any;
+    comparison.recommendation = 'No qualified option';
+    comparison.score = 0;
+    comparison.recommendationReason = 'No option passed all mandatory qualification gates with sufficient validated evidence.';
+    comparison.executiveSummary = 'No qualified option was established.';
+    comparison.vendorScores = comparison.vendorScores.map((vendor: any) => ({
+      ...vendor,
+      score: 50,
+      providerRole: 'leader',
+      providerRoleRationale: 'Strong market presence.',
+      qualificationStatus: 'INSUFFICIENT_EVIDENCE',
+      evidenceConfidence: 0,
+      evidenceCoverage: 0,
+      weightedScores: vendor.weightedScores.map((criterion: any) => ({
+        ...criterion,
+        score: 50,
+        evidence: [{ evidenceKind: 'unverified', exactClaim: 'No verified evidence was returned.' }],
+      })),
+      marketPosition: {
+        marketShare: 'Reliable comparable figure not found',
+        market: 'India SUV segment',
+        marketSharePeriod: 'Current period',
+        evidence: 'No exact supporting URL was returned.',
+      },
+    }));
+    if (withContract) {
+      comparison.confirmedRecommendation = {
+        status: 'NO_CONFIRMED_RECOMMENDATION',
+        option: null,
+        score: null,
+        basis: 'NONE',
+        rationale: 'No unique recommendation was confirmed.',
+      };
+    }
+    return comparison;
+  };
+
+  for (const comparison of [makeComparison(true), makeComparison(false)]) {
+    assert.deepEqual(providerRolePresentation(comparison.vendorScores[0]), {
+      label: 'Not established',
+      rationale: 'Strategic role was not established from provenance-complete evidence.',
+    });
+    const html = renderToStaticMarkup(<MarketPositionSection vendorScores={comparison.vendorScores} />);
+    assert.match(html, /Not established/);
+    assert.match(html, /Strategic role was not established from provenance-complete evidence/);
+    assert.doesNotMatch(html, />leader</i);
+
+    const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+    assert.match(pdfText, /Strategic role: Not established/);
+    assert.match(pdfText, /Weighted score: Not scored/);
+    assert.doesNotMatch(pdfText, /Strategic role: leader/i);
+    assert.doesNotMatch(pdfText, /Weighted score: 50/);
+  }
 });
 
 test('shows ranked alternatives only from the same compared set beside a confirmed recommendation', () => {
@@ -553,6 +791,385 @@ test('shows ranked alternatives only from the same compared set beside a confirm
   assert.match(html, /2\. Gamma/);
   assert.match(html, /5 pts behind/);
   assert.doesNotMatch(html, /Outside/);
+});
+
+test('renders a conditionally qualified confirmed winner in the browser and PDF', async () => {
+  const comparison = comparisonFixture({ mismatchedHistory: true }) as any;
+  comparison.recommendation = 'Beta';
+  comparison.score = 81;
+  comparison.vendorScores = [
+    {
+      ...comparison.vendorScores[0],
+      vendor: 'Alpha',
+      score: 91,
+      modelScore: 91,
+      qualificationStatus: 'QUALIFIED',
+    },
+    {
+      ...comparison.vendorScores[1],
+      vendor: 'Beta',
+      score: 81,
+      modelScore: 81,
+      qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+      conditions: ['Confirm regional support coverage before contracting.'],
+    },
+  ];
+  comparison.confirmedRecommendation = {
+    status: 'CONFIRMED',
+    option: 'Beta',
+    score: 81,
+    basis: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: 'Beta is the best-qualified alternative, conditional on regional support coverage.',
+  };
+
+  const html = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+
+  assert.match(html, /Beta/);
+  assert.match(html, /81/);
+  assert.doesNotMatch(html, /No definitive winner/);
+  assert.match(pdfText, /Beta/);
+  assert.match(pdfText, /81\/100/);
+  assert.doesNotMatch(pdfText, /No definitive winner/);
+});
+
+test('keeps the exact long-horizon diesel vehicle decision aligned in browser and PDF', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.prompt = "Compare Mahindra XUV 700  diesel vs Tata Safari diesel vehicle .I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+  comparison.category = 'Indian diesel vehicles';
+  comparison.vendors = ['Mahindra XUV700 diesel', 'Tata Safari diesel'];
+  comparison.recommendation = 'Mahindra XUV700 diesel';
+  comparison.score = 86;
+  comparison.executiveSummary = 'Mahindra XUV700 diesel is the conditional recommendation on comparable official performance and eligible safety evidence.';
+  comparison.recommendationReason = 'Mahindra XUV700 diesel uniquely leads the provenance-complete comparable evidence; 20-year reliability and maintenance remain unverified.';
+  comparison.nextSteps = ['Confirm service coverage, parts availability, warranty terms, and actual maintenance costs before purchase.'];
+  comparison.vendorScores = comparison.vendors.map((vendor: string, index: number) => ({
+    ...comparison.vendorScores[index],
+    vendor,
+    score: [86, 79][index],
+    modelScore: [86, 79][index],
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    qualificationGates: [{ gate: 'Market availability', status: 'PASS', mandatory: true, rationale: 'Official local listing', evidenceSourceIds: ['source'] }],
+    conditions: ['Long-horizon reliability and maintenance evidence is not established.'],
+  }));
+  comparison.confirmedRecommendation = {
+    status: 'CONFIRMED',
+    option: 'Mahindra XUV700 diesel',
+    score: 86,
+    basis: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: comparison.recommendationReason,
+  };
+  comparison.alternatives = [{
+    option: 'Tata Safari diesel',
+    rank: 1,
+    score: 79,
+    scoreDifference: 7,
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: 'Comparable current diesel alternative.',
+  }];
+
+  const html = renderToStaticMarkup(<>
+    <ExecutiveDecisionBrief comparison={comparison} />
+    <DecisionRecommendationCard comparison={comparison} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  for (const output of [html, pdfText]) {
+    assert.match(output, /Mahindra XUV700 diesel/);
+    assert.match(output, /86/);
+    assert.doesNotMatch(output, /No definitive winner/i);
+  }
+  assert.match(pdfText, /20-year reliability and maintenance remain unverified|Long-horizon reliability and maintenance evidence is not established/i);
+});
+
+test('holds an old diesel vehicle PDF decision when purchase availability was not verified', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.prompt = 'Compare Mahindra XUV700 vs Tata Safari diesel for Automobile | Three-row SUV | Diesel | India';
+  comparison.category = 'Automobile | Three-row SUV | Diesel | India';
+  comparison.recommendation = 'Mahindra XUV700';
+  comparison.score = 67;
+  comparison.vendorScores = comparison.vendorScores.map((vendor: any, index: number) => ({
+    ...vendor, vendor: index ? 'Tata Safari diesel' : 'Mahindra XUV700',
+    score: index ? 43 : 67,
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    qualificationGates: [{ gate: 'Market availability', status: 'UNKNOWN', mandatory: true, rationale: 'Not established', evidenceSourceIds: [] }],
+  }));
+  const text = extractPdfText(await buildComparisonPdf(comparison));
+  assert.match(text, /VEHICLE PURCHASE DECISION/i);
+  assert.match(text, /BUYER DECISION GATES/i);
+  assert.match(text, /No purchase decision until the missing buying evidence is checked/i);
+  assert.doesNotMatch(text, /67\/100|MIGRATION SEQUENCE|C-SUITE FOCUS|RECOMMENDED OPTION|SWOT, PESTLE, AND SOAR/i);
+});
+
+test('shows an unscored provisional brand preference consistently in the report and PDF', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.prompt = 'Compare Mahindra vs Tata diesel vehicles in India';
+  comparison.category = 'Automotive';
+  comparison.vendors = ['Mahindra', 'Tata'];
+  comparison.recommendation = 'Mahindra';
+  comparison.score = 0;
+  comparison.recommendationReason = 'Provisional choice — Our recommendation is Mahindra because it is the first option the buyer listed, used only as a transparent tie-break because no verified differentiator was recovered. Verify the missing criteria before committing.';
+  comparison.executiveSummary = comparison.recommendationReason;
+  comparison.confirmedRecommendation = {
+    status: 'NO_CONFIRMED_RECOMMENDATION', option: null, score: null, basis: 'NONE', rationale: 'No verified overall leader.',
+  };
+  comparison.vendorScores = comparison.vendorScores.map((vendor: any, index: number) => ({
+    ...vendor, vendor: index ? 'Tata' : 'Mahindra',
+    qualificationStatus: 'INSUFFICIENT_EVIDENCE',
+    weightedScores: [],
+    qualificationGates: [{ gate: 'Market availability', status: 'UNKNOWN', mandatory: true }],
+  }));
+  comparison.alternatives = [];
+
+  assert.equal(isProvisionalChoice(comparison), true);
+  assert.deepEqual(comparedSetAlternatives(comparison).map((item: any) => item.option), ['Tata']);
+  const html = renderToStaticMarkup(<>
+    <DecisionRecommendationCard comparison={comparison} />
+    <ExecutiveDecisionBrief comparison={comparison} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  assert.match(html, /Provisional recommendation/);
+  assert.match(html, /Mahindra/);
+  assert.match(html, /no verified differentiator/);
+  assert.doesNotMatch(html, /Mahindra.*0\/100|No definitive winner/);
+  assert.match(pdfText, /PROVISIONAL RECOMMENDATION/);
+  assert.match(pdfText, /Mahindra/);
+  assert.doesNotMatch(pdfText, /RECOMMENDED OPTION|0\/100/);
+});
+
+test('renders the broad diesel response from final canonical decision rows', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.prompt = 'Compare Mahindra and Tata diesel vehicles in India for performance, reliability, safety features and maintenance over 20 years';
+  comparison.vendors = ['Mahindra', 'Tata'];
+  comparison.recommendation = 'Mahindra XUV700 diesel';
+  comparison.score = 100;
+  comparison.recommendationReason = 'Mahindra XUV700 diesel is the conditional winner on supported performance evidence.';
+  const canonicalVendors = ['Mahindra XUV700 diesel', 'Tata Safari diesel'];
+  comparison.vendorScores = canonicalVendors.map((vendor: string, index: number) => ({
+    ...comparison.vendorScores[index],
+    vendor,
+    score: [100, 43][index],
+    modelScore: 0,
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+  }));
+  comparison.confirmedRecommendation = {
+    status: 'NO_CONFIRMED_RECOMMENDATION',
+    option: null,
+    score: null,
+    basis: 'NONE',
+    rationale: 'No unique recommendation was confirmed from the submitted brand labels.',
+  };
+  comparison.alternatives = [];
+
+  const reconciled = reconcileReportScores(comparison);
+  assert.equal(reconciled.confirmedRecommendation.option, 'Mahindra XUV700 diesel');
+  assert.deepEqual(reconciled.vendors, canonicalVendors);
+  assert.deepEqual(reconciled.vendorScores.map((vendor: any) => [vendor.vendor, vendor.score, vendor.modelScore]), [
+    ['Mahindra XUV700 diesel', 100, 100],
+    ['Tata Safari diesel', 43, 43],
+  ]);
+
+  const html = renderToStaticMarkup(<>
+    <ExecutiveDecisionBrief comparison={comparison} />
+    <DecisionRecommendationCard comparison={comparison} />
+    <VendorScoreExtensionSection vendorScores={reconciled.vendorScores} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  assert.match(html, /Mahindra XUV700 diesel/);
+  assert.match(html, /100/);
+  assert.match(html, /Tata Safari diesel/);
+  assert.match(html, /43/);
+  assert.match(pdfText, /Mahindra XUV700 diesel/);
+  assert.match(pdfText, /Tata Safari diesel/);
+  assert.match(pdfText, /Not scored/);
+  assert.match(pdfText, /Decision on hold/);
+  assert.doesNotMatch(pdfText, /100\/100|RECOMMENDED OPTION/i);
+  assert.doesNotMatch(html, /Mahindra \(not scored\)|Tata \(not scored\)/);
+  assert.match(html, /Shortlist assessed:.*Mahindra XUV700 diesel 100\/100.*Tata Safari diesel 43\/100/);
+});
+
+test('keeps final governed software presentation consistent in browser and PDF', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.category = 'DXP/WCM enterprise software';
+  comparison.vendors = ['Adobe Experience Manager', 'Sitecore XM Cloud', 'Progress Sitefinity'];
+  comparison.recommendation = 'Sitecore XM Cloud';
+  comparison.score = 91;
+  comparison.executiveSummary = 'Sitecore XM Cloud is the conditional evidence-led non-anchor alternative in the governed DXP/WCM enterprise software comparison.';
+  comparison.recommendationReason = 'Sitecore XM Cloud has the strongest exact official-document capability coverage.';
+  comparison.nextSteps = ['Validate implementation scope, security, local availability, and commercial terms.'];
+  comparison.insights = ['Capability evidence is reported as exact verified counts; unsupported dimensions remain unscored.'];
+  comparison.vendorScores = comparison.vendors.map((vendor: string, index: number) => ({
+    ...comparison.vendorScores[Math.min(index, comparison.vendorScores.length - 1)],
+    vendor,
+    score: [70, 91, 78][index],
+    modelScore: [70, 91, 78][index],
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    verdict: `${[2, 6, 4][index]} of 6 governed capability dimensions had exact official-document support; unsupported dimensions remain unscored.`,
+    weightedScores: comparison.vendorScores[Math.min(index, comparison.vendorScores.length - 1)].weightedScores.map((criterion: any, criterionIndex: number) => (
+      criterionIndex === 0
+        ? { ...criterion, score: 33, rationale: 'Comparable-metric subtotal: 33/100.' }
+        : criterion
+    )),
+    dimensionScores: [{
+      dimension: 'Feature and Capability Strength',
+      weight: 25,
+      score: 33,
+      coverage: 50,
+      coverageStatus: 'PROVISIONAL',
+      supportedSubcriteria: 3,
+      totalSubcriteria: 6,
+      rationale: 'Three exact capability metrics were verified.',
+    }],
+  }));
+  comparison.confirmedRecommendation = {
+    status: 'CONFIRMED',
+    option: 'Sitecore XM Cloud',
+    score: 91,
+    basis: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: comparison.recommendationReason,
+  };
+  comparison.alternatives = [{
+    option: 'Progress Sitefinity',
+    rank: 1,
+    score: 78,
+    scoreDifference: 13,
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: 'Validated alternative.',
+  }];
+
+  const html = renderToStaticMarkup(<>
+    <ExecutiveDecisionBrief comparison={comparison} />
+    <DecisionRecommendationCard comparison={comparison} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  for (const output of [html, pdfText]) {
+    assert.match(output, /Sitecore XM Cloud/);
+    assert.match(output, /91/);
+    assert.match(output, /DXP\/WCM/);
+    assert.doesNotMatch(output, /No definitive winner|Insurance/i);
+    assert.doesNotMatch(output, /Comparable-metric subtotal|33\/100/i);
+  }
+  assert.match(pdfText, /verified metric|evidence coverage/i);
+  assert.match(pdfText, /governed capability dimensions had exact official-document support/i);
+  assert.doesNotMatch(pdfText, /33\/100|50\/100|100\/100|comparable verified metrics|criterion score is (?:the )?neutral midpoint/i);
+});
+
+test('keeps the conditional bank rate winner and score consistent in browser and PDF', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.category = 'Australian investor home loans';
+  comparison.vendors = ['Westpac', 'ANZ'];
+  comparison.recommendation = 'Westpac';
+  comparison.score = 100;
+  comparison.executiveSummary = 'Westpac is the conditional, evidence-limited leader on the lowest exact sourced comparison rate (6.15% p.a.) for the same investor borrower/LVR/repayment basis.';
+  comparison.recommendationReason = 'Westpac has the lowest same-basis exact retrieved comparison rate.';
+  comparison.nextSteps = ['Confirm personalised rates, eligibility, fees, and secondary terms.'];
+  comparison.swot = {
+    ...(comparison.swot || {}),
+    'SOAR — Opportunities': [
+      'Westpac: No unique pricing or feature-row win is established yet.',
+      'ANZ: No unique pricing or feature-row win is established yet.',
+    ],
+  };
+  comparison.vendorScores = comparison.vendors.map((vendor: string, index: number) => ({
+    ...comparison.vendorScores[index],
+    vendor,
+    score: [100, 95][index],
+    modelScore: [100, 95][index],
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+  }));
+  comparison.confirmedRecommendation = {
+    status: 'CONFIRMED',
+    option: 'Westpac',
+    score: 100,
+    basis: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: comparison.recommendationReason,
+  };
+  comparison.alternatives = [{
+    option: 'ANZ',
+    rank: 1,
+    score: 95,
+    scoreDifference: 5,
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: 'Higher same-basis exact retrieved comparison rate.',
+  }];
+  const browserSoarText = actionableSoarEntries(comparison, [
+    ['Opportunities', comparison.swot['SOAR — Opportunities']],
+  ]).flatMap(([, values]) => values).join(' ');
+
+  const html = renderToStaticMarkup(<>
+    <ExecutiveDecisionBrief comparison={comparison} />
+    <DecisionRecommendationCard comparison={comparison} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  for (const output of [html, pdfText]) {
+    assert.match(output, /Westpac/);
+    assert.match(output, /100/);
+    assert.match(output, /6\.15%/);
+    assert.doesNotMatch(output, /No definitive winner/i);
+  }
+  assert.doesNotMatch(pdfText, /No unique pricing or feature-row win is established yet/i);
+  assert.match(pdfText, /No unique leader for this individual evidence row; this does not change the conditional overall recommendation/i);
+  assert.doesNotMatch(browserSoarText, /No unique pricing or feature-row win is established yet/i);
+  assert.match(browserSoarText, /No unique leader for this individual evidence row; this does not change the conditional overall recommendation/i);
+});
+
+test('reconciles stale restored scores across shortlist, vendor fit, recommendation, and PDF', async () => {
+  const stale = comparisonFixture() as any;
+  stale.vendors = ['Tata', 'Mahindra'];
+  stale.recommendation = 'Tata';
+  stale.score = 0;
+  stale.vendorScores = [
+    { ...stale.vendorScores[0], vendor: 'Tata', score: 0, modelScore: 0, qualificationStatus: 'QUALIFIED', qualificationGates: [] },
+    { ...stale.vendorScores[1], vendor: 'Mahindra', score: 0, modelScore: 0, qualificationStatus: 'QUALIFIED_WITH_CONDITIONS', qualificationGates: [] },
+  ];
+  stale.confirmedRecommendation = {
+    status: 'CONFIRMED',
+    option: 'Tata',
+    score: 58,
+    basis: 'QUALIFIED',
+    rationale: 'Tata is the strongest qualified fit.',
+  };
+  stale.alternatives = [{
+    option: 'Mahindra',
+    rank: 1,
+    score: 55,
+    scoreDifference: 3,
+    qualificationStatus: 'QUALIFIED_WITH_CONDITIONS',
+    rationale: 'Best qualified alternative.',
+  }];
+
+  const reconciled = reconcileReportScores(stale);
+  assert.equal(reconciled.vendorScores[0].score, 58);
+  assert.equal(reconciled.vendorScores[0].modelScore, 58);
+  assert.equal(reconciled.vendorScores[0].rawScore, 0);
+  assert.equal(reconciled.vendorScores[1].score, 55);
+  assert.equal(reconciled.vendorScores[1].modelScore, 55);
+  assert.equal(reconciled.vendorScores[1].rawScore, 0);
+  assert.equal(reconciled.alternatives[0].score, 55);
+
+  const browserHtml = renderToStaticMarkup(<>
+    <ExecutiveDecisionBrief comparison={stale} />
+    <VendorScoreExtensionSection vendorScores={reconciled.vendorScores} />
+    <DecisionRecommendationCard comparison={stale} />
+  </>);
+  assert.match(browserHtml, /Tata 58\/100/);
+  assert.match(browserHtml, /Mahindra 55\/100/);
+  assert.match(browserHtml, /Tata/);
+  assert.match(browserHtml, /58\/100/);
+  assert.match(browserHtml, /55\/100/);
+
+  const pdfText = extractPdfText(await buildComparisonPdf(stale));
+  assert.match(pdfText, /Tata/);
+  assert.match(pdfText, /58\/100/);
+  assert.match(pdfText, /Mahindra/);
+  assert.match(pdfText, /55\/100/);
+
+  const noConfirmed = reconcileReportScores({
+    ...stale,
+    confirmedRecommendation: { status: 'NO_CONFIRMED_RECOMMENDATION', option: null, score: null, basis: 'NONE' },
+  });
+  assert.equal(noConfirmed.vendorScores[0].score, 0);
+  assert.equal(noConfirmed.vendorScores[1].score, 0);
+  assert.equal(comparedSetAlternatives(noConfirmed)[0]?.score, null);
 });
 
 test('treats the confirmed recommendation contract as authoritative for tied results', () => {
@@ -603,6 +1220,39 @@ test('does not show a named insufficient-evidence option without the provisional
   assert.doesNotMatch(html, /Evidence-limited leader/);
 });
 
+test('provisional EV report shows indicative totals instead of contradictory not-scored labels', () => {
+  const comparison = comparisonFixture() as any;
+  comparison.prompt = 'Compare BYD and Tesla in Australia in EV car.';
+  comparison.category = 'Electric vehicles';
+  comparison.vendors = ['BYD', 'Tesla'];
+  comparison.recommendation = 'Tesla';
+  comparison.recommendationReason = 'Provisional choice — Tesla leads the estimated fit for this brief.';
+  comparison.confirmedRecommendation = undefined;
+  comparison.score = 0;
+  comparison.insights = [
+    'Indicative fit scorecard (assumption-led, not verified) — Tesla: 80/100; BYD: 74/100. Criteria: Price and total ownership cost 25%, Range and charging 25%.',
+  ];
+  comparison.vendorScores = comparison.vendors.map((vendor: string) => ({
+    vendor,
+    score: 0,
+    qualificationStatus: 'INSUFFICIENT_EVIDENCE',
+    qualificationGates: [],
+    dimensionScores: [],
+  }));
+
+  const html = renderToStaticMarkup(<>
+    <ExecutiveDecisionBrief comparison={comparison} />
+    <VendorScoreExtensionSection vendorScores={comparison.vendorScores} comparison={comparison} />
+  </>);
+
+  assert.match(html, /BYD \(indicative 74\/100\)/);
+  assert.match(html, /Tesla \(indicative 80\/100\)/);
+  assert.match(html, /Est\. 74\/100/);
+  assert.match(html, /Est\. 80\/100/);
+  assert.match(html, /Estimated fit by option/);
+  assert.doesNotMatch(html, /\(not scored\)/i);
+});
+
 test('recalculates the quick pricing and feature comparison with user-selected weights', () => {
   const comparison = comparisonFixture() as any;
   comparison.prompt = 'Compare Alpha and Beta on price and features.';
@@ -627,6 +1277,159 @@ test('failed release-quality PDF suppresses recommended-option and winner-only e
   assert.doesNotMatch(executiveSummaryText, /RECOMMENDED OPTION/);
   assert.doesNotMatch(executiveSummaryText, /92\/100/);
   assert.doesNotMatch(pdfText, /Closest alternative/);
+});
+
+test('exports an unscored CRM comparison without promoting the first vendor', async () => {
+  const vendors = ['Microsoft Dynamics 365', 'Salesforce', 'Oracle CX', 'SAP Sales Cloud'];
+  const rationale = 'No comparable criterion ratings were returned. No score or recommendation was generated.';
+  const comparison = {
+    ...comparisonFixture(),
+    prompt: 'Compare Microsoft Dynamics 365, Salesforce, Oracle CX and SAP Sales Cloud for CRM.',
+    category: 'CRM',
+    vendors,
+    recommendation: 'No definitive winner',
+    score: 0,
+    executiveSummary: rationale,
+    recommendationReason: rationale,
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 0,
+      verdict: 'Not scored — no complete set of comparable criterion ratings was returned.',
+      qualificationStatus: 'INSUFFICIENT_EVIDENCE',
+      qualificationGates: [],
+      weightedScores: [],
+    })),
+  };
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  const executiveSummaryText = pdfText.split('DecisionIntel  |  Executive summary')[0]!;
+
+  assert.match(executiveSummaryText, /No definitive winner/);
+  assert.match(executiveSummaryText, /Not scored/);
+  assert.doesNotMatch(executiveSummaryText, /RECOMMENDED OPTION/);
+  assert.doesNotMatch(executiveSummaryText, /Microsoft Dynamics 365 is the recommended option/i);
+});
+
+test('hides legacy fallback 50s and keeps a tied CRM comparison unscored', async () => {
+  const vendors = ['Microsoft Dynamics 365', 'Salesforce', 'Oracle CX', 'SAP Sales Cloud'];
+  const criteria = [
+    'Meets Needs / Features',
+    'Quality & Reliability',
+    'Value for Money',
+    'Brand Reputation',
+    'Customer Advocacy / NPS',
+    'Safety & Security',
+    'Innovation / Differentiation',
+    'Sustainability',
+    'Regulatory Compliance',
+    'Strategic Provider Role',
+  ];
+  const fallbackRationale = 'Validate this provisional score against current product research and your specific operating context.';
+  const summary = 'No definitive winner. No complete set of comparable CRM criterion ratings was returned.';
+  const comparison = {
+    ...comparisonFixture(),
+    prompt: 'Compare Microsoft Dynamics 365, Salesforce, Oracle CX and SAP Sales Cloud for CRM.',
+    category: 'CRM',
+    vendors,
+    criteria: ['Customer outcomes', 'Ease of use', 'Value for money', 'Quality and reliability'],
+    recommendation: 'No definitive winner',
+    score: 50,
+    executiveSummary: summary,
+    recommendationReason: summary,
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 50,
+      verdict: 'No complete set of comparable CRM criterion ratings was returned.',
+      weightedScores: criteria.map((criterion) => ({
+        criterion,
+        weight: 10,
+        score: 50,
+        rationale: fallbackRationale,
+      })),
+    })),
+  };
+  const html = renderToStaticMarkup(<>
+    <DecisionRecommendationCard comparison={comparison} />
+    <ExecutiveDecisionBrief comparison={comparison} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+  const executiveSummaryText = pdfText.split('DecisionIntel  |  Executive summary')[0]!;
+
+  assert.match(html, /No definitive winner/);
+  assert.match(html, /Not scored/);
+  assert.doesNotMatch(html, /No definitive winner is the recommended option/i);
+  assert.doesNotMatch(html, /Microsoft Dynamics 365 is the recommended option/i);
+  assert.match(executiveSummaryText, /No definitive winner/);
+  assert.match(executiveSummaryText, /Not scored/);
+  assert.doesNotMatch(executiveSummaryText, /RECOMMENDED OPTION/);
+  assert.doesNotMatch(pdfText, /50\/100/);
+  assert.doesNotMatch(pdfText, /validate this provisional score against current product research/i);
+  assert.doesNotMatch(pdfText, /Microsoft Dynamics 365 is the recommended option/i);
+});
+
+test('shows neutral 50 fallbacks without hiding a winner supported by comparable CRM evidence', async () => {
+  const vendors = ['Alpha CRM', 'Beta CRM'];
+  const criteria = ['Core capabilities', 'Pricing and total cost'];
+  const neutralRationale = 'No comparable verified metric for every option; this criterion remains neutral.';
+  const sourceEvidence = (vendor: string) => {
+    const exactClaim = `${vendor} supports the stated sales workflow through its CRM capabilities.`;
+    return {
+      sourceId: `${vendor.toLowerCase().replace(/\s+/g, '-')}-official-capabilities`,
+      sourceUrl: `https://${vendor.toLowerCase().replace(/\s+/g, '-')}.example/capabilities`,
+      sourceTitle: `${vendor} product capabilities`,
+      exactClaim,
+      evidenceKind: 'qualitative' as const,
+      supportDirection: 'supports' as const,
+      confidence: 90,
+      documentSha256: 'a'.repeat(64),
+      sourceTextStart: 0,
+      sourceTextEnd: exactClaim.length,
+      normalizationMethod: 'retrieved_document_span',
+    };
+  };
+  const comparison = {
+    ...comparisonFixture(),
+    prompt: 'Compare Alpha CRM and Beta CRM for a sales team.',
+    category: 'CRM',
+    vendors,
+    criteria,
+    recommendation: 'Beta CRM',
+    score: 70,
+    confirmedRecommendation: undefined,
+    executiveSummary: 'Indicative research-based score — Beta CRM leads at 70/100. Unsupported criteria remain neutral at 50.',
+    recommendationReason: 'Indicative research-based score — Beta CRM leads at 70/100. Unsupported criteria remain neutral at 50.',
+    vendorScores: [
+      {
+        vendor: 'Alpha CRM',
+        score: 65,
+        verdict: 'Indicative judgment based on retrieved, source-verified claims.',
+        weightedScores: [
+          { criterion: criteria[0], weight: 50, score: 80, rationale: 'Verified product capabilities support the stated sales workflow.', evidence: [sourceEvidence('Alpha CRM')] },
+          { criterion: criteria[1], weight: 50, score: 50, rationale: neutralRationale },
+        ],
+      },
+      {
+        vendor: 'Beta CRM',
+        score: 70,
+        verdict: 'Indicative judgment based on retrieved, source-verified claims.',
+        weightedScores: [
+          { criterion: criteria[0], weight: 50, score: 90, rationale: 'Verified product capabilities support the stated sales workflow.', evidence: [sourceEvidence('Beta CRM')] },
+          { criterion: criteria[1], weight: 50, score: 50, rationale: neutralRationale },
+        ],
+      },
+    ],
+  };
+  const html = renderToStaticMarkup(<>
+    <DecisionRecommendationCard comparison={comparison} />
+    <ExecutiveDecisionBrief comparison={comparison} />
+  </>);
+  const pdfText = extractPdfText(await buildComparisonPdf(comparison));
+
+  assert.match(html, /Beta CRM/);
+  assert.match(html, /card-recommended/);
+  assert.match(pdfText, /RECOMMENDED OPTION/);
+  assert.match(pdfText, /Beta CRM/);
+  assert.match(pdfText, /Neutral fallback 50/);
+  assert.match(pdfText, /70\/100/);
 });
 
 test('passing release-quality fixture keeps the normal recommendation in browser and PDF', async () => {

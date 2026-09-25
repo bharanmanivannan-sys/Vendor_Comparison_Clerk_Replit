@@ -31,10 +31,10 @@ export const HealthCheckResponse = zod.object({
  */
 export const getDashboardSummaryResponseRecentComparisonsItemVendorsMax = 6;
 
-export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMin = 2;
+export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMin = 0;
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMax = 6;
 
-export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMin = 2;
+export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMin = 0;
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMax = 6;
 
 export const getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMin = 0;
@@ -69,7 +69,8 @@ export const GetDashboardSummaryResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMin).max(getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }))
 })
 
@@ -85,10 +86,10 @@ export const RecordVisitorSessionResponse = zod.void()
  */
 export const listComparisonsResponseVendorsMax = 6;
 
-export const listComparisonsResponseComparisonIdentityEntitiesMin = 2;
+export const listComparisonsResponseComparisonIdentityEntitiesMin = 0;
 export const listComparisonsResponseComparisonIdentityEntitiesMax = 6;
 
-export const listComparisonsResponseComparisonIdentityEntityCountMin = 2;
+export const listComparisonsResponseComparisonIdentityEntityCountMin = 0;
 export const listComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
 export const listComparisonsResponseProviderRoleTieBreakBonusMin = 0;
@@ -118,7 +119,8 @@ export const ListComparisonsResponseItem = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(listComparisonsResponseProviderRoleTieBreakBonusMin).max(listComparisonsResponseProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 })
 export const ListComparisonsResponse = zod.array(ListComparisonsResponseItem)
 
@@ -126,6 +128,14 @@ export const ListComparisonsResponse = zod.array(ListComparisonsResponseItem)
 /**
  * @summary Create and analyze a new vendor comparison
  */
+export const createComparisonHeaderIdempotencyKeyRegExp = new RegExp('^[a-zA-Z0-9-]{8,100}$');
+
+
+export const CreateComparisonHeader = zod.object({
+  "Prefer": zod.string().optional().describe('Set to respond-async to start a durable, idempotent comparison job instead of waiting for synchronous analysis.'),
+  "Idempotency-Key": zod.string().regex(createComparisonHeaderIdempotencyKeyRegExp).optional().describe('Required with Prefer: respond-async. Must contain 8 to 100 alphanumeric or hyphen characters.')
+})
+
 export const createComparisonBodyPromptMin = 8;
 export const createComparisonBodyPromptMax = 2000;
 
@@ -158,14 +168,29 @@ export const CreateComparisonBody = zod.object({
 
 export const createComparisonResponseOneVendorsMax = 6;
 
-export const createComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const createComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const createComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const createComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const createComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const createComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const createComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const createComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const createComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const createComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const createComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const createComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const createComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const createComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const createComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const createComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const createComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const createComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const createComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const createComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -248,7 +273,8 @@ export const CreateComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(createComparisonResponseOneProviderRoleTieBreakBonusMin).max(createComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -280,8 +306,88 @@ export const CreateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(createComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(createComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(createComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(createComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(createComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(createComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(createComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(createComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(createComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(createComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(createComparisonResponseTwoConfirmedRecommendationScoreMin).max(createComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -524,11 +630,26 @@ export const CreateGuestComparisonBody = zod.object({
 
 export const createGuestComparisonResponseVendorsMax = 6;
 
-export const createGuestComparisonResponseComparisonIdentityEntitiesMin = 2;
+export const createGuestComparisonResponseComparisonIdentityEntitiesMin = 0;
 export const createGuestComparisonResponseComparisonIdentityEntitiesMax = 6;
 
-export const createGuestComparisonResponseComparisonIdentityEntityCountMin = 2;
+export const createGuestComparisonResponseComparisonIdentityEntityCountMin = 0;
 export const createGuestComparisonResponseComparisonIdentityEntityCountMax = 6;
+
+export const createGuestComparisonResponseDecisionAdviceConfidenceScoreMin = 0;
+export const createGuestComparisonResponseDecisionAdviceConfidenceScoreMax = 100;
+
+export const createGuestComparisonResponseDecisionAdviceConfidenceDataCoverageMin = 0;
+export const createGuestComparisonResponseDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const createGuestComparisonResponseDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const createGuestComparisonResponseDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const createGuestComparisonResponseDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const createGuestComparisonResponseDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const createGuestComparisonResponseDecisionAdviceConfidencePriorityClarityMin = 0;
+export const createGuestComparisonResponseDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const createGuestComparisonResponseConfirmedRecommendationScoreMin = 0;
 export const createGuestComparisonResponseConfirmedRecommendationScoreMax = 100;
@@ -581,6 +702,7 @@ export const createGuestComparisonResponseVendorScoresItemEvidenceCoverageMax = 
 
 
 export const CreateGuestComparisonResponse = zod.object({
+  "id": zod.number().int().optional().describe('Present for a partially completed authenticated comparison only after its report has been persisted.'),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(createGuestComparisonResponseVendorsMax),
   "comparisonIdentity": zod.object({
@@ -599,6 +721,7 @@ export const CreateGuestComparisonResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.'),
   "createdAt": zod.coerce.date(),
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -630,8 +753,31 @@ export const CreateGuestComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(createGuestComparisonResponseDecisionAdviceConfidenceScoreMin).max(createGuestComparisonResponseDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(createGuestComparisonResponseDecisionAdviceConfidenceDataCoverageMin).max(createGuestComparisonResponseDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(createGuestComparisonResponseDecisionAdviceConfidenceSourceConsistencyMin).max(createGuestComparisonResponseDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(createGuestComparisonResponseDecisionAdviceConfidenceScoreSeparationMin).max(createGuestComparisonResponseDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(createGuestComparisonResponseDecisionAdviceConfidencePriorityClarityMin).max(createGuestComparisonResponseDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(createGuestComparisonResponseConfirmedRecommendationScoreMin).max(createGuestComparisonResponseConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -843,10 +989,11 @@ export const parseComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
-export const parseComparisonPromptResponseVendorsMin = 2;
+export const parseComparisonPromptResponseVendorsMin = 0;
 export const parseComparisonPromptResponseVendorsMax = 6;
 
 export const parseComparisonPromptResponseIntentOptionsMax = 6;
@@ -856,10 +1003,10 @@ export const parseComparisonPromptResponseIntentQualifiersMax = 8;
 export const parseComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseComparisonPromptResponseIntentConfidenceMax = 1;
 
-export const parseComparisonPromptResponseComparisonIdentityEntitiesMin = 2;
+export const parseComparisonPromptResponseComparisonIdentityEntitiesMin = 0;
 export const parseComparisonPromptResponseComparisonIdentityEntitiesMax = 6;
 
-export const parseComparisonPromptResponseComparisonIdentityEntityCountMin = 2;
+export const parseComparisonPromptResponseComparisonIdentityEntityCountMin = 0;
 export const parseComparisonPromptResponseComparisonIdentityEntityCountMax = 6;
 
 
@@ -899,7 +1046,7 @@ export const ParseComparisonPromptResponse = zod.object({
   "displayName": zod.string(),
   "headline": zod.string()
 }).describe('Canonical comparison set used by every downstream label and recommendation.')
-}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor.\n')
+}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor. Incomplete\nrequests return context.valid=false with a clarification, not a server error.\n')
 
 
 /**
@@ -914,7 +1061,7 @@ export const preflightComparisonSourcesBodyUrlsMax = 12;
 
 export const PreflightComparisonSourcesBody = zod.object({
   "prompt": zod.string().min(preflightComparisonSourcesBodyPromptMin).max(preflightComparisonSourcesBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Optional. When omitted, the market is inferred from the prompt using the same policy as comparison submission.'),
   "urls": zod.array(zod.string().url()).min(1).max(preflightComparisonSourcesBodyUrlsMax)
 })
 
@@ -937,10 +1084,11 @@ export const parseGuestComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseGuestComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
-export const parseGuestComparisonPromptResponseVendorsMin = 2;
+export const parseGuestComparisonPromptResponseVendorsMin = 0;
 export const parseGuestComparisonPromptResponseVendorsMax = 6;
 
 export const parseGuestComparisonPromptResponseIntentOptionsMax = 6;
@@ -950,10 +1098,10 @@ export const parseGuestComparisonPromptResponseIntentQualifiersMax = 8;
 export const parseGuestComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseGuestComparisonPromptResponseIntentConfidenceMax = 1;
 
-export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMin = 2;
+export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMin = 0;
 export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMax = 6;
 
-export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMin = 2;
+export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMin = 0;
 export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMax = 6;
 
 
@@ -993,7 +1141,7 @@ export const ParseGuestComparisonPromptResponse = zod.object({
   "displayName": zod.string(),
   "headline": zod.string()
 }).describe('Canonical comparison set used by every downstream label and recommendation.')
-}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor.\n')
+}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor. Incomplete\nrequests return context.valid=false with a clarification, not a server error.\n')
 
 
 /**
@@ -1008,7 +1156,7 @@ export const preflightGuestComparisonSourcesBodyUrlsMax = 12;
 
 export const PreflightGuestComparisonSourcesBody = zod.object({
   "prompt": zod.string().min(preflightGuestComparisonSourcesBodyPromptMin).max(preflightGuestComparisonSourcesBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Optional. When omitted, the market is inferred from the prompt using the same policy as comparison submission.'),
   "urls": zod.array(zod.string().url()).min(1).max(preflightGuestComparisonSourcesBodyUrlsMax)
 })
 
@@ -1058,19 +1206,36 @@ export const CreateComparisonJobBody = zod.object({
 export const createComparisonJobResponseProgressEntitiesMin = 2;
 export const createComparisonJobResponseProgressEntitiesMax = 6;
 
+export const createComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const createComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
+
 
 
 
 export const CreateComparisonJobResponse = zod.object({
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(createComparisonJobResponseProgressEntitiesMin).max(createComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
-}).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(createComparisonJobResponsePreviewDecisionCoverageMin).max(createComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.')
+}).describe('Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.')
 
 
 /**
@@ -1088,14 +1253,29 @@ export const getComparisonJobResponseElapsedMsMin = 0;
 
 export const getComparisonJobResponseResultOneOneVendorsMax = 6;
 
-export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
+export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 0;
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 6;
 
-export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
+export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 0;
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax = 100;
@@ -1156,11 +1336,26 @@ export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverag
 
 export const getComparisonJobResponseResultTwoVendorsMax = 6;
 
-export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
+export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 0;
 export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 6;
 
-export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
+export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 0;
 export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getComparisonJobResponseResultTwoConfirmedRecommendationScoreMin = 0;
 export const getComparisonJobResponseResultTwoConfirmedRecommendationScoreMax = 100;
@@ -1210,17 +1405,23 @@ export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidence
 export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const getComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const getComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
+
 
 
 export const GetComparisonJobResponse = zod.object({
-  "status": zod.enum(['processing', 'complete', 'failed']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "status": zod.enum(['processing', 'complete', 'partial', 'failed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(getComparisonJobResponseProgressEntitiesMin).max(getComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "elapsedMs": zod.number().int().min(getComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
+  "elapsedMs": zod.number().int().min(getComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.'),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
@@ -1243,7 +1444,8 @@ export const GetComparisonJobResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin).max(getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -1275,8 +1477,88 @@ export const GetComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin).max(getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -1482,6 +1764,7 @@ export const GetComparisonJobResponse = zod.object({
   "decisionGate": zod.string()
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
 })),zod.object({
+  "id": zod.number().int().optional().describe('Present for a partially completed authenticated comparison only after its report has been persisted.'),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getComparisonJobResponseResultTwoVendorsMax),
   "comparisonIdentity": zod.object({
@@ -1500,6 +1783,7 @@ export const GetComparisonJobResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.'),
   "createdAt": zod.coerce.date(),
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -1531,8 +1815,31 @@ export const GetComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getComparisonJobResponseResultTwoConfirmedRecommendationScoreMin).max(getComparisonJobResponseResultTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -1732,10 +2039,33 @@ export const GetComparisonJobResponse = zod.object({
   "evidenceRequired": zod.string(),
   "decisionGate": zod.string()
 }))
-})]).optional(),
-  "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
-}).describe('Pollable state for asynchronous comparison research.')
+})]).optional().describe('Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds.'),
+  "saveStatus": zod.enum(['pending', 'saved', 'failed']).optional().describe('Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.'),
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(getComparisonJobResponsePreviewDecisionCoverageMin).max(getComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "message": zod.string().optional().describe('User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report.'),
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence', 'latency_budget_exceeded']).optional().describe('Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.')
+}).describe('Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.')
+
+
+/**
+ * Server-sent events named state carry the same JSON payload as GET /comparison-jobs/{id}; the stream closes when the job completes, returns a partial result, or fails.
+ * @summary Stream authenticated comparison job state changes
+ */
+export const StreamComparisonJobEventsParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const StreamComparisonJobEventsResponse = zod.unknown()
 
 
 /**
@@ -1749,7 +2079,7 @@ export const regenerateComparisonBodyWeightsItemWeightMin = 0;
 export const regenerateComparisonBodyWeightsItemWeightMax = 100;
 
 export const regenerateComparisonBodyWeightsMin = 9;
-export const regenerateComparisonBodyWeightsMax = 9;
+export const regenerateComparisonBodyWeightsMax = 10;
 
 export const regenerateComparisonBodyAdditionalWeightsItemCriterionMax = 100;
 
@@ -1776,14 +2106,29 @@ export const RegenerateComparisonBody = zod.object({
 
 export const regenerateComparisonResponseOneVendorsMax = 6;
 
-export const regenerateComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const regenerateComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const regenerateComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const regenerateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const regenerateComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const regenerateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const regenerateComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const regenerateComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -1866,7 +2211,8 @@ export const RegenerateComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(regenerateComparisonResponseOneProviderRoleTieBreakBonusMin).max(regenerateComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -1898,8 +2244,88 @@ export const RegenerateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(regenerateComparisonResponseTwoConfirmedRecommendationScoreMin).max(regenerateComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -2108,6 +2534,100 @@ export const RegenerateComparisonResponse = zod.object({
 
 
 /**
+ * Requires a signed-in user and returns access only for a saved comparison owned by that user.
+ * @summary Get premium verification access for a saved comparison
+ */
+export const GetComparisonVerificationAccessParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const GetComparisonVerificationAccessResponse = zod.object({
+  "access": zod.enum(['active', 'payment_required', 'not_configured']),
+  "message": zod.string().optional()
+})
+
+
+/**
+ * Requires a signed-in user and creates checkout only for a saved comparison owned by that user.
+ * @summary Create a premium verification checkout for a saved comparison
+ */
+export const CreateComparisonVerificationCheckoutParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const CreateComparisonVerificationCheckoutResponse = zod.object({
+  "purchaseUrl": zod.string().url()
+})
+
+
+/**
+ * Requires premium verification access for the saved comparison; purchase access through the verification checkout endpoint when payment is required.
+ * @summary Start an opt-in source-by-source review of a saved comparison
+ */
+export const StartComparisonEvidenceCheckParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const StartComparisonEvidenceCheckResponse = zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+})
+
+
+/**
  * @summary Start a guest comparison research job
  */
 export const createGuestComparisonJobBodyPromptMin = 8;
@@ -2143,19 +2663,36 @@ export const CreateGuestComparisonJobBody = zod.object({
 export const createGuestComparisonJobResponseProgressEntitiesMin = 2;
 export const createGuestComparisonJobResponseProgressEntitiesMax = 6;
 
+export const createGuestComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const createGuestComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
+
 
 
 
 export const CreateGuestComparisonJobResponse = zod.object({
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(createGuestComparisonJobResponseProgressEntitiesMin).max(createGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
-}).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(createGuestComparisonJobResponsePreviewDecisionCoverageMin).max(createGuestComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.')
+}).describe('Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.')
 
 
 /**
@@ -2173,14 +2710,29 @@ export const getGuestComparisonJobResponseElapsedMsMin = 0;
 
 export const getGuestComparisonJobResponseResultOneOneVendorsMax = 6;
 
-export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
+export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 0;
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 6;
 
-export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
+export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 0;
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax = 100;
@@ -2241,11 +2793,26 @@ export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCo
 
 export const getGuestComparisonJobResponseResultTwoVendorsMax = 6;
 
-export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
+export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 0;
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 6;
 
-export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
+export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 0;
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMin = 0;
 export const getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMax = 100;
@@ -2295,17 +2862,23 @@ export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceConfi
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const getGuestComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const getGuestComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
+
 
 
 export const GetGuestComparisonJobResponse = zod.object({
-  "status": zod.enum(['processing', 'complete', 'failed']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "status": zod.enum(['processing', 'complete', 'partial', 'failed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(getGuestComparisonJobResponseProgressEntitiesMin).max(getGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "elapsedMs": zod.number().int().min(getGuestComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
+  "elapsedMs": zod.number().int().min(getGuestComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.'),
   "result": zod.union([zod.object({
   "id": zod.number().int(),
   "prompt": zod.string(),
@@ -2328,7 +2901,8 @@ export const GetGuestComparisonJobResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin).max(getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -2360,8 +2934,88 @@ export const GetGuestComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin).max(getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -2567,6 +3221,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "decisionGate": zod.string()
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
 })),zod.object({
+  "id": zod.number().int().optional().describe('Present for a partially completed authenticated comparison only after its report has been persisted.'),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getGuestComparisonJobResponseResultTwoVendorsMax),
   "comparisonIdentity": zod.object({
@@ -2585,6 +3240,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.'),
   "createdAt": zod.coerce.date(),
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -2616,8 +3272,31 @@ export const GetGuestComparisonJobResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMin).max(getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -2817,10 +3496,33 @@ export const GetGuestComparisonJobResponse = zod.object({
   "evidenceRequired": zod.string(),
   "decisionGate": zod.string()
 }))
-})]).optional(),
-  "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
-}).describe('Pollable state for asynchronous comparison research.')
+})]).optional().describe('Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds.'),
+  "saveStatus": zod.enum(['pending', 'saved', 'failed']).optional().describe('Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.'),
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(getGuestComparisonJobResponsePreviewDecisionCoverageMin).max(getGuestComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "message": zod.string().optional().describe('User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report.'),
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence', 'latency_budget_exceeded']).optional().describe('Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.')
+}).describe('Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.')
+
+
+/**
+ * Server-sent events named state carry the same JSON payload as GET /guest/comparison-jobs/{id}; the stream closes when the job completes, returns a partial result, or fails and is scoped to the submitting guest.
+ * @summary Stream guest comparison job state changes
+ */
+export const StreamGuestComparisonJobEventsParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const StreamGuestComparisonJobEventsResponse = zod.unknown()
 
 
 /**
@@ -2832,14 +3534,29 @@ export const GetComparisonParams = zod.object({
 
 export const getComparisonResponseOneVendorsMax = 6;
 
-export const getComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const getComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const getComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const getComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const getComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const getComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const getComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const getComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -2922,7 +3639,8 @@ export const GetComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getComparisonResponseOneProviderRoleTieBreakBonusMin).max(getComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -2954,8 +3672,88 @@ export const GetComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(getComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getComparisonResponseTwoConfirmedRecommendationScoreMin).max(getComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -3174,6 +3972,148 @@ export const DeleteComparisonResponse = zod.void()
 
 
 /**
+ * @summary Read private buyer-supplied quote summaries and comparable pricing
+ */
+export const GetComparisonQuotesParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const GetComparisonQuotesResponse = zod.object({
+  "quotes": zod.array(zod.object({
+  "vendor": zod.string(),
+  "documentDate": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "validUntil": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "currency": zod.enum(['AUD', 'USD', 'EUR', 'GBP']),
+  "termMonths": zod.number().int(),
+  "licenseAnnual": zod.string(),
+  "implementationOnce": zod.string(),
+  "serviceAnnual": zod.string(),
+  "audPerUnit": zod.string(),
+  "exchangeRateDate": zod.string().optional().describe('Calendar date YYYY-MM-DD'),
+  "exchangeRateSource": zod.string().optional(),
+  "scope": zod.string(),
+  "taxBasis": zod.enum(['ex_gst', 'inc_gst']),
+  "exclusions": zod.string(),
+  "fileName": zod.string(),
+  "fileSha256": zod.string(),
+  "documentUrl": zod.string(),
+  "totalAud": zod.string()
+}).describe('Buyer-entered terms linked to a private written quote, not independently verified.')),
+  "assessment": zod.object({
+  "status": zod.enum(['ready', 'incomplete']),
+  "flags": zod.array(zod.string()),
+  "horizonMonths": zod.number().int().optional(),
+  "winner": zod.string().nullable(),
+  "rows": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "scores": zod.record(zod.string(), zod.number().int())
+})
+})
+
+
+/**
+ * Multipart form with a details JSON string and a PDF file field (maximum 8 MB). The submitted amounts remain buyer-entered.
+ * @summary Upload a private written quote and buyer-entered commercial terms
+ */
+export const UploadComparisonQuoteParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const UploadComparisonQuoteResponse = zod.object({
+  "quotes": zod.array(zod.object({
+  "vendor": zod.string(),
+  "documentDate": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "validUntil": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "currency": zod.enum(['AUD', 'USD', 'EUR', 'GBP']),
+  "termMonths": zod.number().int(),
+  "licenseAnnual": zod.string(),
+  "implementationOnce": zod.string(),
+  "serviceAnnual": zod.string(),
+  "audPerUnit": zod.string(),
+  "exchangeRateDate": zod.string().optional().describe('Calendar date YYYY-MM-DD'),
+  "exchangeRateSource": zod.string().optional(),
+  "scope": zod.string(),
+  "taxBasis": zod.enum(['ex_gst', 'inc_gst']),
+  "exclusions": zod.string(),
+  "fileName": zod.string(),
+  "fileSha256": zod.string(),
+  "documentUrl": zod.string(),
+  "totalAud": zod.string()
+}).describe('Buyer-entered terms linked to a private written quote, not independently verified.')),
+  "assessment": zod.object({
+  "status": zod.enum(['ready', 'incomplete']),
+  "flags": zod.array(zod.string()),
+  "horizonMonths": zod.number().int().optional(),
+  "winner": zod.string().nullable(),
+  "rows": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "scores": zod.record(zod.string(), zod.number().int())
+})
+})
+
+
+/**
+ * @summary Remove a private buyer quote
+ */
+export const DeleteComparisonQuoteParams = zod.object({
+  "id": zod.coerce.number().int(),
+  "vendor": zod.coerce.string()
+})
+
+export const DeleteComparisonQuoteResponse = zod.object({
+  "quotes": zod.array(zod.object({
+  "vendor": zod.string(),
+  "documentDate": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "validUntil": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "currency": zod.enum(['AUD', 'USD', 'EUR', 'GBP']),
+  "termMonths": zod.number().int(),
+  "licenseAnnual": zod.string(),
+  "implementationOnce": zod.string(),
+  "serviceAnnual": zod.string(),
+  "audPerUnit": zod.string(),
+  "exchangeRateDate": zod.string().optional().describe('Calendar date YYYY-MM-DD'),
+  "exchangeRateSource": zod.string().optional(),
+  "scope": zod.string(),
+  "taxBasis": zod.enum(['ex_gst', 'inc_gst']),
+  "exclusions": zod.string(),
+  "fileName": zod.string(),
+  "fileSha256": zod.string(),
+  "documentUrl": zod.string(),
+  "totalAud": zod.string()
+}).describe('Buyer-entered terms linked to a private written quote, not independently verified.')),
+  "assessment": zod.object({
+  "status": zod.enum(['ready', 'incomplete']),
+  "flags": zod.array(zod.string()),
+  "horizonMonths": zod.number().int().optional(),
+  "winner": zod.string().nullable(),
+  "rows": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "scores": zod.record(zod.string(), zod.number().int())
+})
+})
+
+
+/**
+ * @summary Download an owned quote document privately
+ */
+export const DownloadComparisonQuoteParams = zod.object({
+  "id": zod.coerce.number().int(),
+  "vendor": zod.coerce.string()
+})
+
+export const DownloadComparisonQuoteResponse = zod.unknown()
+
+
+/**
  * Requires an API key with the comparisons:read scope.
  * @summary List tenant comparisons
  */
@@ -3189,10 +4129,10 @@ export const ExternalListComparisonsQueryParams = zod.object({
 
 export const externalListComparisonsResponseVendorsMax = 6;
 
-export const externalListComparisonsResponseComparisonIdentityEntitiesMin = 2;
+export const externalListComparisonsResponseComparisonIdentityEntitiesMin = 0;
 export const externalListComparisonsResponseComparisonIdentityEntitiesMax = 6;
 
-export const externalListComparisonsResponseComparisonIdentityEntityCountMin = 2;
+export const externalListComparisonsResponseComparisonIdentityEntityCountMin = 0;
 export const externalListComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
 export const externalListComparisonsResponseProviderRoleTieBreakBonusMin = 0;
@@ -3222,7 +4162,8 @@ export const ExternalListComparisonsResponseItem = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(externalListComparisonsResponseProviderRoleTieBreakBonusMin).max(externalListComparisonsResponseProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 })
 export const ExternalListComparisonsResponse = zod.array(ExternalListComparisonsResponseItem)
 
@@ -3272,14 +4213,29 @@ export const ExternalCreateComparisonBody = zod.object({
 
 export const externalCreateComparisonResponseOneVendorsMax = 6;
 
-export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const externalCreateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const externalCreateComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const externalCreateComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -3362,7 +4318,8 @@ export const ExternalCreateComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin).max(externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -3394,8 +4351,88 @@ export const ExternalCreateComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(externalCreateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(externalCreateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(externalCreateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(externalCreateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(externalCreateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(externalCreateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(externalCreateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(externalCreateComparisonResponseTwoConfirmedRecommendationScoreMin).max(externalCreateComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -3613,14 +4650,29 @@ export const ExternalGetComparisonParams = zod.object({
 
 export const externalGetComparisonResponseOneVendorsMax = 6;
 
-export const externalGetComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const externalGetComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const externalGetComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const externalGetComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const externalGetComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const externalGetComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const externalGetComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -3703,7 +4755,8 @@ export const ExternalGetComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(externalGetComparisonResponseOneProviderRoleTieBreakBonusMin).max(externalGetComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -3735,8 +4788,88 @@ export const ExternalGetComparisonResponse = zod.object({
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(externalGetComparisonResponseTwoConfirmedRecommendationScoreMin).max(externalGetComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),

@@ -22,7 +22,8 @@ export interface SourcePreflightInput {
      * @maxLength 4000
      */
   prompt: string;
-  market: SourcePreflightInputMarket;
+  /** Optional. When omitted, the market is inferred from the prompt using the same policy as comparison submission. */
+  market?: SourcePreflightInputMarket;
   /**
      * @minItems 1
      * @maxItems 12

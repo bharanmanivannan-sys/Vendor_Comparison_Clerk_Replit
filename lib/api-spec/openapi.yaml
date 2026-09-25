@@ -87,6 +87,21 @@ paths:
       operationId: createComparison
       tags: [comparisons]
       summary: Create and analyze a new vendor comparison
+      parameters:
+        - name: Prefer
+          in: header
+          required: false
+          description: Set to respond-async to start a durable, idempotent comparison job instead of waiting for synchronous analysis.
+          schema:
+            type: string
+            example: respond-async
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: "Required with Prefer: respond-async. Must contain 8 to 100 alphanumeric or hyphen characters."
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9-]{8,100}$"
       requestBody:
         required: true
         content:
@@ -100,6 +115,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Comparison"
+        "202":
+          description: Asynchronous comparison job is still researching or has produced a partial result
+          headers:
+            Location:
+              description: Pollable comparison job resource
+              schema: { type: string, example: /api/comparison-jobs/00000000-0000-4000-8000-000000000000 }
+            X-Comparison-Job-Id:
+              description: Comparison job identifier
+              schema: { type: string, format: uuid }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonJobState"
         "400":
           description: Invalid comparison input
           content:
@@ -108,6 +136,25 @@ paths:
                 $ref: "#/components/schemas/LegacyErrorResponse"
         "401":
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "409":
+          description: Idempotency key was reused with a different request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "503":
+          description: Existing request is still in progress but has no live job in this process, or the job did not reach a terminal state within the wait budget
+          headers:
+            Retry-After:
+              description: Suggested delay before retrying
+              schema: { type: string, example: "5" }
+            Location:
+              description: Pollable comparison job URL when available
+              schema: { type: string }
           content:
             application/json:
               schema:
@@ -321,6 +368,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparison-jobs/{id}/events:
+    get:
+      operationId: streamComparisonJobEvents
+      tags: [comparisons]
+      summary: Stream authenticated comparison job state changes
+      description: Server-sent events named state carry the same JSON payload as GET /comparison-jobs/{id}; the stream closes when the job completes, returns a partial result, or fails.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Event stream of changed comparison job states
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "event: state\ndata: {\"status\":\"processing\",\"stage\":\"finding_official_sources\"}\n\n"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Job not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
   /comparisons/{id}/regenerate:
     post:
       operationId: regenerateComparison
@@ -362,6 +440,118 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}/verification-access:
+    get:
+      operationId: getComparisonVerificationAccess
+      tags: [comparisons]
+      summary: Get premium verification access for a saved comparison
+      description: Requires a signed-in user and returns access only for a saved comparison owned by that user.
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Premium verification access state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonVerificationAccess"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "402":
+          description: Payment required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Comparison not found or not owned by the signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "503":
+          description: Verification access could not be confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonVerificationAccess"
+  /comparisons/{id}/verification-checkout:
+    post:
+      operationId: createComparisonVerificationCheckout
+      tags: [comparisons]
+      summary: Create a premium verification checkout for a saved comparison
+      description: Requires a signed-in user and creates checkout only for a saved comparison owned by that user.
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "201":
+          description: Hosted checkout created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonVerificationCheckout"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "402":
+          description: Payment required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Comparison not found or not owned by the signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "503":
+          description: Checkout could not be created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}/evidence-check:
+    post:
+      operationId: startComparisonEvidenceCheck
+      tags: [comparisons]
+      summary: Start an opt-in source-by-source review of a saved comparison
+      description: Requires premium verification access for the saved comparison; purchase access through the verification checkout endpoint when payment is required.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "202":
+          description: Review accepted; poll the comparison detail for status and results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonEvidenceReview"
+        "401":
+          description: Unauthorized
+        "402":
+          description: Payment required for premium verification
+        "404":
+          description: Comparison not found
+        "409":
+          description: Review already processing
   /guest/comparison-jobs:
     post:
       operationId: createGuestComparisonJob
@@ -411,6 +601,31 @@ paths:
                 $ref: "#/components/schemas/ComparisonJobState"
         "404":
           description: Job not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /guest/comparison-jobs/{id}/events:
+    get:
+      operationId: streamGuestComparisonJobEvents
+      tags: [comparisons]
+      summary: Stream guest comparison job state changes
+      description: Server-sent events named state carry the same JSON payload as GET /guest/comparison-jobs/{id}; the stream closes when the job completes, returns a partial result, or fails and is scoped to the submitting guest.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Event stream of changed comparison job states
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "event: state\ndata: {\"status\":\"processing\",\"stage\":\"finding_official_sources\"}\n\n"
+        "404":
+          description: Job not found or expired or owned by another guest
           content:
             application/json:
               schema:
@@ -470,6 +685,87 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}/quotes:
+    get:
+      operationId: getComparisonQuotes
+      tags: [comparisons]
+      summary: Read private buyer-supplied quote summaries and comparable pricing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Quote summaries and pricing assessment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BuyerQuoteBundle" }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison not found }
+    post:
+      operationId: uploadComparisonQuote
+      tags: [comparisons]
+      summary: Upload a private written quote and buyer-entered commercial terms
+      description: Multipart form with a details JSON string and a PDF file field (maximum 8 MB). The submitted amounts remain buyer-entered.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Updated quote summaries and assessment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BuyerQuoteBundle" }
+        "400": { description: Invalid file or quote terms }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison not found }
+  /comparisons/{id}/quotes/{vendor}:
+    delete:
+      operationId: deleteComparisonQuote
+      tags: [comparisons]
+      summary: Remove a private buyer quote
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: vendor
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated quote summaries and assessment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BuyerQuoteBundle" }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison or quote not found }
+  /comparisons/{id}/quotes/{vendor}/document:
+    get:
+      operationId: downloadComparisonQuote
+      tags: [comparisons]
+      summary: Download an owned quote document privately
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: vendor
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Private PDF attachment
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison or quote not found }
   /v1/comparisons:
     get:
       operationId: externalListComparisons
@@ -1003,7 +1299,7 @@ components:
         weights:
           type: array
           minItems: 9
-          maxItems: 9
+          maxItems: 10
           items:
             $ref: "#/components/schemas/ComparisonWeight"
         additionalWeights:
@@ -1047,6 +1343,9 @@ components:
           type: string
           minLength: 8
           maxLength: 2000
+        market:
+          type: string
+          enum: [IN, AU, US, GB]
       required: [prompt]
     SourcePreflightInput:
       type: object
@@ -1058,6 +1357,7 @@ components:
         market:
           type: string
           enum: [IN, AU, US, GB]
+          description: Optional. When omitted, the market is inferred from the prompt using the same policy as comparison submission.
         urls:
           type: array
           minItems: 1
@@ -1065,7 +1365,7 @@ components:
           items:
             type: string
             format: uri
-      required: [prompt, market, urls]
+      required: [prompt, urls]
     SourcePreflightResult:
       type: object
       properties:
@@ -1094,13 +1394,14 @@ components:
       description: |
         One-shot parse result. Entity boundaries are resolved before source retrieval.
         The response preserves user order and exposes the qualifiers, decision criterion,
-        and freshness requirements that downstream research must honor.
+        and freshness requirements that downstream research must honor. Incomplete
+        requests return context.valid=false with a clarification, not a server error.
       properties:
         prompt:
           type: string
         vendors:
           type: array
-          minItems: 2
+          minItems: 0
           maxItems: 6
           items:
             type: string
@@ -1121,7 +1422,7 @@ components:
       required: [prompt, vendors, urls, criteria, context, intent, comparisonIdentity]
     ComparisonJobAccepted:
       type: object
-      description: Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
+      description: Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.
       properties:
         jobId:
           type: string
@@ -1133,15 +1434,17 @@ components:
           $ref: "#/components/schemas/ComparisonJobStage"
         progress:
           $ref: "#/components/schemas/ComparisonJobProgress"
+        previewDecision:
+          $ref: "#/components/schemas/ComparisonPreviewDecision"
         targetCompletionSeconds:
           type: integer
           minimum: 1
-          example: 120
-          description: Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+          example: 20
+          description: Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.
       required: [jobId, status, stage, progress, targetCompletionSeconds]
     ComparisonJobStage:
       type: string
-      enum: [finding_official_sources, building_evidence, analysing_evidence, validating_comparison, preparing_result, completed]
+      enum: [finding_official_sources, building_evidence, analysing_evidence, validating_comparison, preparing_result, completed, partial_result]
     ComparisonJobProgress:
       type: object
       properties:
@@ -1153,13 +1456,33 @@ components:
         subject:
           type: string
       required: [entities, subject]
+    ComparisonPreviewDecision:
+      type: object
+      description: An early assumption-led starting choice, not a verified finding. Research continues after this is returned.
+      properties:
+        winner: { type: string }
+        decisionType:
+          type: string
+          enum: [Product Selection, Service Selection, Vendor Evaluation, Dealership Investment, Franchise Opportunity, Market Entry, Technology Platform Selection]
+        coverage: { type: integer, minimum: 0, maximum: 100 }
+        reason: { type: string }
+        provisional: { type: boolean }
+        priorities:
+          type: array
+          items:
+            type: object
+            properties:
+              lens: { type: string }
+              weight: { type: integer, minimum: 0, maximum: 100 }
+            required: [lens, weight]
+      required: [winner, decisionType, coverage, reason, provisional, priorities]
     ComparisonJobState:
       type: object
-      description: Pollable state for asynchronous comparison research.
+      description: Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.
       properties:
         status:
           type: string
-          enum: [processing, complete, failed]
+          enum: [processing, complete, partial, failed]
         stage:
           $ref: "#/components/schemas/ComparisonJobStage"
         progress:
@@ -1167,23 +1490,30 @@ components:
         elapsedMs:
           type: integer
           minimum: 0
-          description: Server-measured milliseconds since this job was created.
+          description: Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
         targetCompletionSeconds:
           type: integer
           minimum: 1
-          example: 120
-          description: Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+          example: 20
+          description: Hard deadline in seconds for reaching a terminal job state.
         result:
+          description: Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds.
           oneOf:
             - $ref: "#/components/schemas/Comparison"
             - $ref: "#/components/schemas/GuestComparison"
+        saveStatus:
+          type: string
+          enum: [pending, saved, failed]
+          description: Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.
+        previewDecision:
+          $ref: "#/components/schemas/ComparisonPreviewDecision"
         message:
           type: string
-          description: User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.
+          description: User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report.
         errorCode:
           type: string
-          description: Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
-          enum: [research_failed, validation_failed, insufficient_quantitative_evidence]
+          description: Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.
+          enum: [research_failed, validation_failed, insufficient_quantitative_evidence, latency_budget_exceeded]
       required: [status, stage, progress, elapsedMs, targetCompletionSeconds]
     ComparisonIdentity:
       type: object
@@ -1193,7 +1523,7 @@ components:
         category: { type: string }
         entities:
           type: array
-          minItems: 2
+          minItems: 0
           maxItems: 6
           items:
             type: object
@@ -1201,7 +1531,7 @@ components:
               id: { type: string }
               name: { type: string }
             required: [id, name]
-        entityCount: { type: integer, minimum: 2, maximum: 6 }
+        entityCount: { type: integer, minimum: 0, maximum: 6 }
         comparisonType:
           type: string
           enum: [pair, multi_entity]
@@ -1291,7 +1621,111 @@ components:
         status:
           type: string
           enum: [complete, processing, failed]
+        researchStatus:
+          type: string
+          enum: [partial, complete]
+          description: Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
       required: [id, prompt, vendors, comparisonIdentity, category, recommendation, score, createdAt, status]
+    ComparisonEvidenceReview:
+      type: object
+      required: [jobId, status, startedAt, initialRecommendation, checks]
+      properties:
+        jobId: { type: string, format: uuid }
+        status: { type: string, enum: [processing, complete, failed] }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        initialRecommendation: { type: string }
+        reviewedRecommendation: { type: string }
+        reviewReason: { type: string }
+        error: { type: string }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [vendor, claim, sourceUrl, status, reason]
+            properties:
+              vendor: { type: string }
+              claim: { type: string }
+              sourceUrl: { type: string }
+              status: { type: string, enum: [verified, contradicted, unavailable] }
+              quote: { type: string }
+              reason: { type: string }
+              checkedAt: { type: string, format: date-time }
+        verificationScore:
+          type: ["number", "null"]
+          description: Percentage of completed, available checks that were verified; null when no such checks are available.
+        evidenceCoverage:
+          type: ["number", "null"]
+          description: Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.
+        assumptionRegister:
+          type: array
+          items:
+            type: object
+            required: [assumption, status, reason, sourceUrls]
+            properties:
+              assumption: { type: string }
+              status: { type: string, enum: [unverified, validated, contradicted] }
+              reason: { type: string }
+              sourceUrls:
+                type: array
+                items: { type: string }
+        sourceRegister:
+          type: array
+          items:
+            type: object
+            required: [url, availability, freshness, lastCheckedAt, checkCount, verifiedCount, contradictedCount, unavailableCount]
+            properties:
+              url: { type: string }
+              availability: { type: string, enum: [admitted, restricted, unavailable] }
+              freshness: { type: string, enum: [known, unknown] }
+              publicationDate: { type: string }
+              ageDays: { type: integer }
+              lastCheckedAt: { type: string, format: date-time }
+              checkCount: { type: integer }
+              verifiedCount: { type: integer }
+              contradictedCount: { type: integer }
+              unavailableCount: { type: integer }
+        competitiveValidation:
+          type: object
+          required: [status, recommendation, checkedCompetitors, summary]
+          properties:
+            status: { type: string, enum: [not_assessed, partial, contradiction_found] }
+            recommendation: { type: string }
+            checkedCompetitors:
+              type: array
+              items: { type: string }
+            summary: { type: string }
+        riskAssessment:
+          type: object
+          required: [level, items, summary]
+          properties:
+            level: { type: string, enum: [unknown, low, medium, high] }
+            items:
+              type: array
+              items: { type: string }
+            summary: { type: string }
+        validationReport: { type: string }
+        governanceReport: { type: string }
+        auditTrail:
+          type: array
+          items:
+            type: object
+            required: [timestamp, event, detail]
+            properties:
+              timestamp: { type: string, format: date-time }
+              event: { type: string }
+              detail: { type: string }
+    ComparisonVerificationAccess:
+      type: object
+      required: [access]
+      properties:
+        access: { type: string, enum: [active, payment_required, not_configured] }
+        message: { type: string }
+    ComparisonVerificationCheckout:
+      type: object
+      required: [purchaseUrl]
+      properties:
+        purchaseUrl: { type: string, format: uri }
     Comparison:
       allOf:
         - $ref: "#/components/schemas/ComparisonSummary"
@@ -1314,6 +1748,10 @@ components:
               type: string
             recommendationReason:
               type: string
+            decisionAdvice:
+              $ref: "#/components/schemas/DecisionAdvice"
+            evidenceReview:
+              $ref: "#/components/schemas/ComparisonEvidenceReview"
             confirmedRecommendation:
               $ref: "#/components/schemas/ConfirmedRecommendation"
             alternatives:
@@ -1384,6 +1822,9 @@ components:
     GuestComparison:
       type: object
       properties:
+        id:
+          type: integer
+          description: Present for a partially completed authenticated comparison only after its report has been persisted.
         prompt:
           type: string
         vendors:
@@ -1402,6 +1843,10 @@ components:
         status:
           type: string
           enum: [complete, processing, failed]
+        researchStatus:
+          type: string
+          enum: [partial, complete]
+          description: Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
         createdAt:
           type: string
           format: date-time
@@ -1421,6 +1866,8 @@ components:
           type: string
         recommendationReason:
           type: string
+        decisionAdvice:
+          $ref: "#/components/schemas/DecisionAdvice"
         confirmedRecommendation:
           $ref: "#/components/schemas/ConfirmedRecommendation"
         alternatives:
@@ -1477,12 +1924,46 @@ components:
           type: array
           items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
       required: [prompt, vendors, comparisonIdentity, category, recommendation, score, status, createdAt, urls, sourceAvailability, criteria, executiveSummary, recommendationReason, confirmedRecommendation, alternatives, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
+    DecisionAdvice:
+      type: object
+      description: Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.
+      required: [decisionType, winner, runnerUp, provisional, confidence, whyItWon, bestFor, notRecommendedIf, tradeoffs, scenarioLeaders]
+      properties:
+        decisionType: { type: string }
+        winner: { type: string }
+        runnerUp: { type: string }
+        provisional: { type: boolean }
+        confidence:
+          type: object
+          required: [score, band, dataCoverage, sourceConsistency, scoreSeparation, priorityClarity, basis]
+          properties:
+            score: { type: integer, minimum: 0, maximum: 100 }
+            band: { type: string, enum: [Low, Moderate, High] }
+            dataCoverage: { type: integer, minimum: 0, maximum: 100 }
+            sourceConsistency: { type: integer, minimum: 0, maximum: 100 }
+            scoreSeparation: { type: integer, minimum: 0, maximum: 100 }
+            priorityClarity: { type: integer, minimum: 0, maximum: 100 }
+            basis: { type: string }
+        whyItWon: { type: string }
+        bestFor: { type: string }
+        notRecommendedIf: { type: string }
+        tradeoffs:
+          type: array
+          items: { type: string }
+        scenarioLeaders:
+          type: array
+          items:
+            type: object
+            required: [lens, leader]
+            properties:
+              lens: { type: string }
+              leader: { type: string }
     ConfirmedRecommendation:
       type: object
       properties:
         status:
           type: string
-          enum: [CONFIRMED, NO_CONFIRMED_RECOMMENDATION]
+          enum: [CONFIRMED, PROVISIONAL, NO_CONFIRMED_RECOMMENDATION]
         option:
           type: [string, "null"]
         score:
@@ -1971,6 +2452,51 @@ components:
         exitCriteria: { type: string }
         risk: { type: string, enum: [low, medium, high, critical] }
       required: [phase, objective, dependencies, exitCriteria, risk]
+    BuyerQuote:
+      type: object
+      description: Buyer-entered terms linked to a private written quote, not independently verified.
+      properties:
+        vendor: { type: string }
+        documentDate: { type: string, description: Calendar date YYYY-MM-DD }
+        validUntil: { type: string, description: Calendar date YYYY-MM-DD }
+        currency: { type: string, enum: [AUD, USD, EUR, GBP] }
+        termMonths: { type: integer }
+        licenseAnnual: { type: string }
+        implementationOnce: { type: string }
+        serviceAnnual: { type: string }
+        audPerUnit: { type: string }
+        exchangeRateDate: { type: string, description: Calendar date YYYY-MM-DD }
+        exchangeRateSource: { type: string }
+        scope: { type: string }
+        taxBasis: { type: string, enum: [ex_gst, inc_gst] }
+        exclusions: { type: string }
+        fileName: { type: string }
+        fileSha256: { type: string }
+        documentUrl: { type: string }
+        totalAud: { type: string }
+      required: [vendor, documentDate, validUntil, currency, termMonths, licenseAnnual, implementationOnce, serviceAnnual, audPerUnit, scope, taxBasis, exclusions, fileName, fileSha256, documentUrl, totalAud]
+    BuyerQuoteAssessment:
+      type: object
+      properties:
+        status: { type: string, enum: [ready, incomplete] }
+        flags: { type: array, items: { type: string } }
+        horizonMonths: { type: integer }
+        winner: { type: [string, "null"] }
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/AnalysisRow" }
+        scores:
+          type: object
+          additionalProperties: { type: integer }
+      required: [status, flags, winner, rows, scores]
+    BuyerQuoteBundle:
+      type: object
+      properties:
+        quotes:
+          type: array
+          items: { $ref: "#/components/schemas/BuyerQuote" }
+        assessment: { $ref: "#/components/schemas/BuyerQuoteAssessment" }
+      required: [quotes, assessment]
     DecisionGovernanceItem:
       type: object
       properties:

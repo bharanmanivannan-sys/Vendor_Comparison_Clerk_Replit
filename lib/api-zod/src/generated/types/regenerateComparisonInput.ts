@@ -20,7 +20,7 @@ import type { ComparisonWeight } from './comparisonWeight';
 export interface RegenerateComparisonInput {
   /**
      * @minItems 9
-     * @maxItems 9
+     * @maxItems 10
      */
   weights: ComparisonWeight[];
   /** @maxItems 8 */

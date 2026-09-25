@@ -21,12 +21,13 @@ import type { ComparisonIntent } from './comparisonIntent';
 /**
  * One-shot parse result. Entity boundaries are resolved before source retrieval.
  * The response preserves user order and exposes the qualifiers, decision criterion,
- * and freshness requirements that downstream research must honor.
+ * and freshness requirements that downstream research must honor. Incomplete
+ * requests return context.valid=false with a clarification, not a server error.
  */
 export interface ParsedComparison {
   prompt: string;
   /**
-     * @minItems 2
+     * @minItems 0
      * @maxItems 6
      */
   vendors: string[];

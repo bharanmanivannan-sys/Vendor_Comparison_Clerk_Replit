@@ -15,6 +15,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Optional. When omitted, the market is inferred from the prompt using the same policy as comparison submission.
+ */
 export type SourcePreflightInputMarket = typeof SourcePreflightInputMarket[keyof typeof SourcePreflightInputMarket];
 
 

@@ -35,12 +35,16 @@ import type {
   AuditEvent,
   BadGatewayResponse,
   BadRequestResponse,
+  BuyerQuoteBundle,
   Comparison,
+  ComparisonEvidenceReview,
   ComparisonInput,
   ComparisonJobAccepted,
   ComparisonJobState,
   ComparisonPromptInput,
   ComparisonSummary,
+  ComparisonVerificationAccess,
+  ComparisonVerificationCheckout,
   ConflictResponse,
   CreateTenantApiKeyHeaders,
   DashboardSummary,
@@ -412,7 +416,7 @@ export const getCreateComparisonUrl = () => {
 /**
  * @summary Create and analyze a new vendor comparison
  */
-export const createComparison = async (comparisonInput: ComparisonInput, options?: Parameters<typeof customFetch>[1]): Promise<Comparison> => {
+export const createComparison = async (comparisonInput: ComparisonInput, options?: Parameters<typeof customFetch>[1]): Promise<Comparison | ComparisonJobState> => {
 
     const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
@@ -428,7 +432,7 @@ export const createComparison = async (comparisonInput: ComparisonInput, options
     }
     return headers;
   };
-return customFetch<Comparison>(getCreateComparisonUrl(),
+return customFetch<Comparison | ComparisonJobState>(getCreateComparisonUrl(),
   {
     ...options,
     method: 'POST',
@@ -1094,6 +1098,84 @@ export function useGetComparisonJob<TData = Awaited<ReturnType<typeof getCompari
 
 
 
+export const getStreamComparisonJobEventsUrl = (id: string,) => {
+
+
+
+
+  return `/api/comparison-jobs/${id}/events`
+}
+
+/**
+ * Server-sent events named state carry the same JSON payload as GET /comparison-jobs/{id}; the stream closes when the job completes, returns a partial result, or fails.
+ * @summary Stream authenticated comparison job state changes
+ */
+export const streamComparisonJobEvents = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<string> => {
+
+  return customFetch<string>(getStreamComparisonJobEventsUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getStreamComparisonJobEventsQueryKey = (id: string,) => {
+    return [
+    `/api/comparison-jobs/${id}/events`
+    ] as const;
+    }
+
+
+export const getStreamComparisonJobEventsQueryOptions = <TData = Awaited<ReturnType<typeof streamComparisonJobEvents>>, TError = ErrorType<LegacyErrorResponse>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamComparisonJobEvents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStreamComparisonJobEventsQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof streamComparisonJobEvents>>> = ({ signal }) => streamComparisonJobEvents(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof streamComparisonJobEvents>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type StreamComparisonJobEventsQueryResult = NonNullable<Awaited<ReturnType<typeof streamComparisonJobEvents>>>
+export type StreamComparisonJobEventsQueryError = ErrorType<LegacyErrorResponse>
+
+
+/**
+ * @summary Stream authenticated comparison job state changes
+ */
+
+export function useStreamComparisonJobEvents<TData = Awaited<ReturnType<typeof streamComparisonJobEvents>>, TError = ErrorType<LegacyErrorResponse>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamComparisonJobEvents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getStreamComparisonJobEventsQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
 export const getRegenerateComparisonUrl = (id: number,) => {
 
 
@@ -1181,6 +1263,234 @@ export const useRegenerateComparison = <TError = ErrorType<LegacyErrorResponse>,
         TContext
       > => {
       return useMutation(getRegenerateComparisonMutationOptions(options));
+    }
+
+export const getGetComparisonVerificationAccessUrl = (id: number,) => {
+
+
+
+
+  return `/api/comparisons/${id}/verification-access`
+}
+
+/**
+ * Requires a signed-in user and returns access only for a saved comparison owned by that user.
+ * @summary Get premium verification access for a saved comparison
+ */
+export const getComparisonVerificationAccess = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<ComparisonVerificationAccess> => {
+
+  return customFetch<ComparisonVerificationAccess>(getGetComparisonVerificationAccessUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetComparisonVerificationAccessQueryKey = (id: number,) => {
+    return [
+    `/api/comparisons/${id}/verification-access`
+    ] as const;
+    }
+
+
+export const getGetComparisonVerificationAccessQueryOptions = <TData = Awaited<ReturnType<typeof getComparisonVerificationAccess>>, TError = ErrorType<LegacyErrorResponse | ComparisonVerificationAccess>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getComparisonVerificationAccess>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetComparisonVerificationAccessQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getComparisonVerificationAccess>>> = ({ signal }) => getComparisonVerificationAccess(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getComparisonVerificationAccess>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetComparisonVerificationAccessQueryResult = NonNullable<Awaited<ReturnType<typeof getComparisonVerificationAccess>>>
+export type GetComparisonVerificationAccessQueryError = ErrorType<LegacyErrorResponse | ComparisonVerificationAccess>
+
+
+/**
+ * @summary Get premium verification access for a saved comparison
+ */
+
+export function useGetComparisonVerificationAccess<TData = Awaited<ReturnType<typeof getComparisonVerificationAccess>>, TError = ErrorType<LegacyErrorResponse | ComparisonVerificationAccess>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getComparisonVerificationAccess>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetComparisonVerificationAccessQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateComparisonVerificationCheckoutUrl = (id: number,) => {
+
+
+
+
+  return `/api/comparisons/${id}/verification-checkout`
+}
+
+/**
+ * Requires a signed-in user and creates checkout only for a saved comparison owned by that user.
+ * @summary Create a premium verification checkout for a saved comparison
+ */
+export const createComparisonVerificationCheckout = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<ComparisonVerificationCheckout> => {
+
+  return customFetch<ComparisonVerificationCheckout>(getCreateComparisonVerificationCheckoutUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getCreateComparisonVerificationCheckoutMutationKey = () => ['createComparisonVerificationCheckout'] as const;
+
+export const getCreateComparisonVerificationCheckoutMutationOptions = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createComparisonVerificationCheckout>>, TError,CreateComparisonVerificationCheckoutMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createComparisonVerificationCheckout>>, TError,CreateComparisonVerificationCheckoutMutationVariables, TContext> => {
+
+const mutationKey = getCreateComparisonVerificationCheckoutMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createComparisonVerificationCheckout>>, CreateComparisonVerificationCheckoutMutationVariables> = (props) => {
+          const {id} = props ?? {};
+
+          return  createComparisonVerificationCheckout(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateComparisonVerificationCheckoutMutationResult = NonNullable<Awaited<ReturnType<typeof createComparisonVerificationCheckout>>>
+
+    export type CreateComparisonVerificationCheckoutMutationError = ErrorType<LegacyErrorResponse>
+    export type CreateComparisonVerificationCheckoutMutationVariables = {id: number}
+
+    /**
+ * @summary Create a premium verification checkout for a saved comparison
+ */
+export const useCreateComparisonVerificationCheckout = <TError = ErrorType<LegacyErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createComparisonVerificationCheckout>>, TError,CreateComparisonVerificationCheckoutMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createComparisonVerificationCheckout>>,
+        TError,
+        CreateComparisonVerificationCheckoutMutationVariables,
+        TContext
+      > => {
+      return useMutation(getCreateComparisonVerificationCheckoutMutationOptions(options));
+    }
+
+export const getStartComparisonEvidenceCheckUrl = (id: number,) => {
+
+
+
+
+  return `/api/comparisons/${id}/evidence-check`
+}
+
+/**
+ * Requires premium verification access for the saved comparison; purchase access through the verification checkout endpoint when payment is required.
+ * @summary Start an opt-in source-by-source review of a saved comparison
+ */
+export const startComparisonEvidenceCheck = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<ComparisonEvidenceReview> => {
+
+  return customFetch<ComparisonEvidenceReview>(getStartComparisonEvidenceCheckUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getStartComparisonEvidenceCheckMutationKey = () => ['startComparisonEvidenceCheck'] as const;
+
+export const getStartComparisonEvidenceCheckMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startComparisonEvidenceCheck>>, TError,StartComparisonEvidenceCheckMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof startComparisonEvidenceCheck>>, TError,StartComparisonEvidenceCheckMutationVariables, TContext> => {
+
+const mutationKey = getStartComparisonEvidenceCheckMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof startComparisonEvidenceCheck>>, StartComparisonEvidenceCheckMutationVariables> = (props) => {
+          const {id} = props ?? {};
+
+          return  startComparisonEvidenceCheck(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StartComparisonEvidenceCheckMutationResult = NonNullable<Awaited<ReturnType<typeof startComparisonEvidenceCheck>>>
+
+    export type StartComparisonEvidenceCheckMutationError = ErrorType<void>
+    export type StartComparisonEvidenceCheckMutationVariables = {id: number}
+
+    /**
+ * @summary Start an opt-in source-by-source review of a saved comparison
+ */
+export const useStartComparisonEvidenceCheck = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startComparisonEvidenceCheck>>, TError,StartComparisonEvidenceCheckMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof startComparisonEvidenceCheck>>,
+        TError,
+        StartComparisonEvidenceCheckMutationVariables,
+        TContext
+      > => {
+      return useMutation(getStartComparisonEvidenceCheckMutationOptions(options));
     }
 
 export const getCreateGuestComparisonJobUrl = () => {
@@ -1348,6 +1658,84 @@ export function useGetGuestComparisonJob<TData = Awaited<ReturnType<typeof getGu
 
 
 
+export const getStreamGuestComparisonJobEventsUrl = (id: string,) => {
+
+
+
+
+  return `/api/guest/comparison-jobs/${id}/events`
+}
+
+/**
+ * Server-sent events named state carry the same JSON payload as GET /guest/comparison-jobs/{id}; the stream closes when the job completes, returns a partial result, or fails and is scoped to the submitting guest.
+ * @summary Stream guest comparison job state changes
+ */
+export const streamGuestComparisonJobEvents = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<string> => {
+
+  return customFetch<string>(getStreamGuestComparisonJobEventsUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getStreamGuestComparisonJobEventsQueryKey = (id: string,) => {
+    return [
+    `/api/guest/comparison-jobs/${id}/events`
+    ] as const;
+    }
+
+
+export const getStreamGuestComparisonJobEventsQueryOptions = <TData = Awaited<ReturnType<typeof streamGuestComparisonJobEvents>>, TError = ErrorType<LegacyErrorResponse>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamGuestComparisonJobEvents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStreamGuestComparisonJobEventsQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof streamGuestComparisonJobEvents>>> = ({ signal }) => streamGuestComparisonJobEvents(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof streamGuestComparisonJobEvents>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type StreamGuestComparisonJobEventsQueryResult = NonNullable<Awaited<ReturnType<typeof streamGuestComparisonJobEvents>>>
+export type StreamGuestComparisonJobEventsQueryError = ErrorType<LegacyErrorResponse>
+
+
+/**
+ * @summary Stream guest comparison job state changes
+ */
+
+export function useStreamGuestComparisonJobEvents<TData = Awaited<ReturnType<typeof streamGuestComparisonJobEvents>>, TError = ErrorType<LegacyErrorResponse>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamGuestComparisonJobEvents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getStreamGuestComparisonJobEventsQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
 export const getGetComparisonUrl = (id: number,) => {
 
 
@@ -1498,6 +1886,316 @@ export const useDeleteComparison = <TError = ErrorType<LegacyErrorResponse>,
       > => {
       return useMutation(getDeleteComparisonMutationOptions(options));
     }
+
+export const getGetComparisonQuotesUrl = (id: number,) => {
+
+
+
+
+  return `/api/comparisons/${id}/quotes`
+}
+
+/**
+ * @summary Read private buyer-supplied quote summaries and comparable pricing
+ */
+export const getComparisonQuotes = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<BuyerQuoteBundle> => {
+
+  return customFetch<BuyerQuoteBundle>(getGetComparisonQuotesUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetComparisonQuotesQueryKey = (id: number,) => {
+    return [
+    `/api/comparisons/${id}/quotes`
+    ] as const;
+    }
+
+
+export const getGetComparisonQuotesQueryOptions = <TData = Awaited<ReturnType<typeof getComparisonQuotes>>, TError = ErrorType<void>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getComparisonQuotes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetComparisonQuotesQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getComparisonQuotes>>> = ({ signal }) => getComparisonQuotes(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getComparisonQuotes>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetComparisonQuotesQueryResult = NonNullable<Awaited<ReturnType<typeof getComparisonQuotes>>>
+export type GetComparisonQuotesQueryError = ErrorType<void>
+
+
+/**
+ * @summary Read private buyer-supplied quote summaries and comparable pricing
+ */
+
+export function useGetComparisonQuotes<TData = Awaited<ReturnType<typeof getComparisonQuotes>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getComparisonQuotes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetComparisonQuotesQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUploadComparisonQuoteUrl = (id: number,) => {
+
+
+
+
+  return `/api/comparisons/${id}/quotes`
+}
+
+/**
+ * Multipart form with a details JSON string and a PDF file field (maximum 8 MB). The submitted amounts remain buyer-entered.
+ * @summary Upload a private written quote and buyer-entered commercial terms
+ */
+export const uploadComparisonQuote = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<BuyerQuoteBundle> => {
+
+  return customFetch<BuyerQuoteBundle>(getUploadComparisonQuoteUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getUploadComparisonQuoteMutationKey = () => ['uploadComparisonQuote'] as const;
+
+export const getUploadComparisonQuoteMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadComparisonQuote>>, TError,UploadComparisonQuoteMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof uploadComparisonQuote>>, TError,UploadComparisonQuoteMutationVariables, TContext> => {
+
+const mutationKey = getUploadComparisonQuoteMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof uploadComparisonQuote>>, UploadComparisonQuoteMutationVariables> = (props) => {
+          const {id} = props ?? {};
+
+          return  uploadComparisonQuote(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UploadComparisonQuoteMutationResult = NonNullable<Awaited<ReturnType<typeof uploadComparisonQuote>>>
+
+    export type UploadComparisonQuoteMutationError = ErrorType<void>
+    export type UploadComparisonQuoteMutationVariables = {id: number}
+
+    /**
+ * @summary Upload a private written quote and buyer-entered commercial terms
+ */
+export const useUploadComparisonQuote = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadComparisonQuote>>, TError,UploadComparisonQuoteMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof uploadComparisonQuote>>,
+        TError,
+        UploadComparisonQuoteMutationVariables,
+        TContext
+      > => {
+      return useMutation(getUploadComparisonQuoteMutationOptions(options));
+    }
+
+export const getDeleteComparisonQuoteUrl = (id: number,
+    vendor: string,) => {
+
+
+
+
+  return `/api/comparisons/${id}/quotes/${vendor}`
+}
+
+/**
+ * @summary Remove a private buyer quote
+ */
+export const deleteComparisonQuote = async (id: number,
+    vendor: string, options?: Parameters<typeof customFetch>[1]): Promise<BuyerQuoteBundle> => {
+
+  return customFetch<BuyerQuoteBundle>(getDeleteComparisonQuoteUrl(id,vendor),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteComparisonQuoteMutationKey = () => ['deleteComparisonQuote'] as const;
+
+export const getDeleteComparisonQuoteMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteComparisonQuote>>, TError,DeleteComparisonQuoteMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteComparisonQuote>>, TError,DeleteComparisonQuoteMutationVariables, TContext> => {
+
+const mutationKey = getDeleteComparisonQuoteMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteComparisonQuote>>, DeleteComparisonQuoteMutationVariables> = (props) => {
+          const {id,vendor} = props ?? {};
+
+          return  deleteComparisonQuote(id,vendor,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteComparisonQuoteMutationResult = NonNullable<Awaited<ReturnType<typeof deleteComparisonQuote>>>
+
+    export type DeleteComparisonQuoteMutationError = ErrorType<void>
+    export type DeleteComparisonQuoteMutationVariables = {id: number;vendor: string}
+
+    /**
+ * @summary Remove a private buyer quote
+ */
+export const useDeleteComparisonQuote = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteComparisonQuote>>, TError,DeleteComparisonQuoteMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteComparisonQuote>>,
+        TError,
+        DeleteComparisonQuoteMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeleteComparisonQuoteMutationOptions(options));
+    }
+
+export const getDownloadComparisonQuoteUrl = (id: number,
+    vendor: string,) => {
+
+
+
+
+  return `/api/comparisons/${id}/quotes/${vendor}/document`
+}
+
+/**
+ * @summary Download an owned quote document privately
+ */
+export const downloadComparisonQuote = async (id: number,
+    vendor: string, options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
+
+  return customFetch<Blob>(getDownloadComparisonQuoteUrl(id,vendor),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getDownloadComparisonQuoteQueryKey = (id: number,
+    vendor: string,) => {
+    return [
+    `/api/comparisons/${id}/quotes/${vendor}/document`
+    ] as const;
+    }
+
+
+export const getDownloadComparisonQuoteQueryOptions = <TData = Awaited<ReturnType<typeof downloadComparisonQuote>>, TError = ErrorType<void>>(id: number,
+    vendor: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof downloadComparisonQuote>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getDownloadComparisonQuoteQueryKey(id,vendor);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof downloadComparisonQuote>>> = ({ signal }) => downloadComparisonQuote(id,vendor, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined && vendor !== null && vendor !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof downloadComparisonQuote>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type DownloadComparisonQuoteQueryResult = NonNullable<Awaited<ReturnType<typeof downloadComparisonQuote>>>
+export type DownloadComparisonQuoteQueryError = ErrorType<void>
+
+
+/**
+ * @summary Download an owned quote document privately
+ */
+
+export function useDownloadComparisonQuote<TData = Awaited<ReturnType<typeof downloadComparisonQuote>>, TError = ErrorType<void>>(
+ id: number,
+    vendor: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof downloadComparisonQuote>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getDownloadComparisonQuoteQueryOptions(id,vendor,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getExternalListComparisonsUrl = (params?: ExternalListComparisonsParams,) => {
   const normalizedParams = new URLSearchParams();

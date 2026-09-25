@@ -18,8 +18,10 @@ import type { AnalysisRow } from './analysisRow';
 import type { ComparedAlternative } from './comparedAlternative';
 import type { ComparisonIdentity } from './comparisonIdentity';
 import type { ConfirmedRecommendation } from './confirmedRecommendation';
+import type { DecisionAdvice } from './decisionAdvice';
 import type { DecisionGovernanceItem } from './decisionGovernanceItem';
 import type { FunctionalGapItem } from './functionalGapItem';
+import type { GuestComparisonResearchStatus } from './guestComparisonResearchStatus';
 import type { GuestComparisonStatus } from './guestComparisonStatus';
 import type { GuestComparisonSwot } from './guestComparisonSwot';
 import type { MigrationPhase } from './migrationPhase';
@@ -29,6 +31,8 @@ import type { ServiceProductMapItem } from './serviceProductMapItem';
 import type { VendorScore } from './vendorScore';
 
 export interface GuestComparison {
+  /** Present for a partially completed authenticated comparison only after its report has been persisted. */
+  id?: number;
   prompt: string;
   /** @maxItems 6 */
   vendors: string[];
@@ -37,12 +41,15 @@ export interface GuestComparison {
   recommendation: string;
   score: number;
   status: GuestComparisonStatus;
+  /** Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out. */
+  researchStatus?: GuestComparisonResearchStatus;
   createdAt: Date;
   urls: string[];
   sourceAvailability: ReportSource[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  decisionAdvice?: DecisionAdvice;
   confirmedRecommendation: ConfirmedRecommendation;
   /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
   alternatives: ComparedAlternative[];
