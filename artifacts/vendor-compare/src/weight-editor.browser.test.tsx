@@ -70,6 +70,46 @@ test('keeps weight-editor interactions stable through custom factors, quick lens
   assert.match(lens.container.textContent || '', /Beta leads this lens with 80\/100 after the 20\/80 split/i);
 });
 
+test('lets users reallocate provider-role weight to Safety & Security without a reserved bonus', () => {
+  let updated: any;
+  const editor = render(<WeightEditor comparison={weightEditorFixture(7, 25)} guest onUpdated={(report) => { updated = report; }} />);
+  const role = editor.getByLabelText('Strategic Provider Role weight') as HTMLInputElement;
+  const safety = editor.getByLabelText('Safety & Security weight') as HTMLInputElement;
+  assert.equal(role.disabled, false);
+  assert.equal(safety.value, '0');
+  fireEvent.change(role, { target: { value: '0' } });
+  fireEvent.change(safety, { target: { value: '2' } });
+  assert.equal(editor.queryByTestId('status-weight-total'), null);
+  fireEvent.click(editor.getByRole('button', { name: 'Regenerate report' }));
+  assert.ok(updated);
+  const rows = updated.vendorScores[0].weightedScores;
+  assert.equal(rows.find((row: any) => row.criterion === 'Safety & Security').weight, 2);
+  assert.equal(rows.find((row: any) => row.criterion === 'Strategic Provider Role').weight, 0);
+  assert.equal(updated.vendorScores[0].providerRoleTieBreakBonus ?? 0, 0);
+});
+
+test('keeps the ten weights available on qualified reports and accepts mapped custom priorities', () => {
+  let updated: any;
+  const comparison = weightEditorFixture(8, 25);
+  comparison.vendorScores.forEach((vendor: any) => {
+    vendor.qualificationStatus = 'QUALIFIED';
+    vendor.qualificationGates = [];
+  });
+  const editor = render(<WeightEditor comparison={comparison} guest onUpdated={(report) => { updated = report; }} />);
+  assert.equal(editor.getAllByRole('slider').length, 10);
+  fireEvent.change(editor.getByLabelText('Meets Needs / Features weight'), { target: { value: '15' } });
+  fireEvent.change(editor.getByLabelText('Additional criterion'), { target: { value: 'Local language' } });
+  fireEvent.click(editor.getByTestId('button-additional-weight'));
+  fireEvent.change(editor.getByLabelText('Additional criterion 1 weight'), { target: { value: '10' } });
+  assert.equal(editor.queryByTestId('status-weight-total'), null);
+  assert.equal((editor.getByLabelText('Evidence criterion for Local language') as HTMLSelectElement).value, 'Meets Needs / Features');
+  fireEvent.click(editor.getByRole('button', { name: 'Regenerate report' }));
+  assert.equal(updated.recommendation, 'No qualified option');
+  assert.equal(updated.score, 0);
+  assert.equal(updated.vendorScores[0].qualificationStatus, 'QUALIFIED');
+  assert.deepEqual(updated.weightAdjustments[0].mappedCriteria, ['Meets Needs / Features']);
+});
+
 function weightEditorFixture(id: number, featuresWeight: number) {
   const weights: Record<string, number> = {
     'Meets Needs / Features': featuresWeight,

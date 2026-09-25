@@ -16,7 +16,7 @@
  */
 
 /**
- * Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
+ * Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.
  */
 export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[keyof typeof ComparisonJobStateErrorCode];
 
@@ -25,4 +25,5 @@ export const ComparisonJobStateErrorCode = {
   research_failed: 'research_failed',
   validation_failed: 'validation_failed',
   insufficient_quantitative_evidence: 'insufficient_quantitative_evidence',
+  latency_budget_exceeded: 'latency_budget_exceeded',
 } as const;

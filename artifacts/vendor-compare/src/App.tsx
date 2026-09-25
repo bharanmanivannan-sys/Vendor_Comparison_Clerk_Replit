@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, RedirectToSignIn, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -21,6 +21,8 @@ import {
   setAuthTokenGetter,
 } from '@workspace/api-client-react';
 import type { Comparison, ParsedComparison, Tenant } from '@workspace/api-client-react';
+import { VerifyPage } from './VerifyPage';
+import { QuotePanel, type QuoteBundle } from './QuotePanel';
 import {
   Bar,
   BarChart,
@@ -51,7 +53,6 @@ import {
   Filter,
   History,
   LayoutDashboard,
-  Link2,
   LoaderCircle,
   LogOut,
   Menu,
@@ -130,8 +131,17 @@ function ThemeToggle() {
 }
 const clerkProxyUrl = viteEnv.VITE_CLERK_PROXY_URL;
 
+function isVehiclePurchaseReport(comparison: any): boolean {
+  const context = `${comparison?.category || ''} ${comparison?.prompt || ''}`;
+  return !/\b(?:dealerships?|car dealers?|showrooms?)\b/i.test(context)
+    && /\b(?:automobile|automotive|cars?|vehicles?|suvs?|sedans?|hatchbacks?)\b/i.test(context);
+}
+
 export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+  comparison = reconcileReportScores(comparison);
+  const indicativeDxp = isIndicativeDxpReport(comparison);
+  const lensRows = presentedDxpLensRows(comparison);
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -145,12 +155,28 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const margin = 42;
   const contentWidth = pageSize[0] - margin * 2;
   const decisionQuality = computeDecisionQuality(comparison);
-  const decisionUsable = decisionQuality.decision !== 'FAIL'
+  const provisionalChoice = isProvisionalChoice(comparison);
+  const vehicleReport = isVehiclePurchaseReport(comparison);
+  const vehicleReady = !vehicleReport || (
+    Array.isArray(comparison.vendorScores) && comparison.vendorScores.length > 0
+    && comparison.vendorScores.every((vendor: any) =>
+      vendor.qualificationGates?.some((gate: any) => gate.gate === 'Market availability' && gate.status === 'PASS')
+      && qualificationAllowsScore(vendor))
+  );
+  const pdfScoreEligible = (vendor: any) => qualificationAllowsScore(vendor) && vehicleReady;
+  const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && Boolean(comparison?.confirmedRecommendation?.option);
+  const confirmedContractUsable = contractConfirmed
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED'].includes(String(comparison.confirmedRecommendation.basis));
+  const decisionUsable = (decisionQuality.decision !== 'FAIL' || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
-    && qualificationDecisionUsable(comparison);
+    && qualificationDecisionUsable(comparison) && vehicleReady;
   const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
     && provisionalLensDecisionUsable(comparison);
-  const decisionVisible = decisionUsable || provisionalLensUsable;
+  const decisionVisible = provisionalChoice || (contractConfirmed && vehicleReady) || decisionUsable || provisionalLensUsable;
+  const visibleRecommendation = contractConfirmed
+    ? String(comparison.confirmedRecommendation.option)
+    : comparison.recommendation;
   const clean = (value: unknown) => String(value ?? 'Not established')
     .normalize('NFKD')
     .replace(/[^\x20-\x7E]/g, ' ')
@@ -221,44 +247,59 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     return pageSize[1] - 108;
   };
   const summary = pdf.addPage(pageSize);
-  let y = addHeader(summary, 'C-Suite Decision Summary', clean(comparison.category || 'Product and service comparison'));
-  y = drawLines(summary, comparison.prompt, margin, y, { size: 15, lineHeight: 18, font: bold, maxLines: 3 });
+  let y = addHeader(summary, vehicleReport ? 'Vehicle Purchase Decision' : 'C-Suite Decision Summary', clean(comparison.category || 'Product and service comparison'));
+  y = drawLines(summary, comparison.comparisonIdentity?.headline || comparison.prompt, margin, y, { size: 15, lineHeight: 18, font: bold, maxLines: 3 });
   y -= 10;
   summary.drawRectangle({ x: margin, y: y - 83, width: contentWidth, height: 83, color: teal });
-  summary.drawText(decisionUsable ? 'RECOMMENDED OPTION' : provisionalLensUsable ? 'EVIDENCE-LIMITED LEADER' : 'EVIDENCE-LIMITED RESULT', { x: margin + 16, y: y - 21, size: 8, font: bold, color: cream });
-  summary.drawText(clean(decisionVisible ? comparison.recommendation : 'No definitive winner'), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
-  if (decisionUsable) summary.drawText(`${Math.round(Number(comparison.score) || 0)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
+  summary.drawText(provisionalChoice ? 'PROVISIONAL RECOMMENDATION' : decisionUsable ? 'RECOMMENDED OPTION' : provisionalLensUsable ? 'EVIDENCE-LIMITED LEADER' : 'EVIDENCE-LIMITED RESULT', { x: margin + 16, y: y - 21, size: 8, font: bold, color: cream });
+  summary.drawText(clean(decisionVisible ? visibleRecommendation : vehicleReport ? 'Decision on hold' : 'No definitive winner'), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
+  if (decisionUsable && !provisionalChoice) summary.drawText(`${Math.round(Number(comparison.score) || 0)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
   y -= 105;
   summary.drawText('EXECUTIVE RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
-   y = drawDecisionLines(summary, comparison.executiveSummary, margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
+   y = drawDecisionLines(summary,
+      vehicleReport && !vehicleReady && !provisionalChoice
+       ? 'Only a limited evidence lead may be established; no purchase-ready winner or overall fit score is supported. Verify local availability, like-for-like on-road prices, safety, service costs and the exact variant before choosing.'
+       : evidenceSafeExecutiveSummary(comparison),
+     margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
   y -= 8;
-  summary.drawText('WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
+  summary.drawText(indicativeDxp ? 'INDICATIVE FIT ESTIMATES (NOT VERIFIED)' : 'WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 19;
   toArray<any>(comparison.vendorScores).slice(0, 6).forEach((vendor: any) => {
-    const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
-    const scoreEligible = qualificationAllowsScore(vendor);
+    const scoreEligible = pdfScoreEligible(vendor);
+    const estimate = indicativeDxp ? indicativeFitScore(comparison, vendor.vendor) : null;
+    const score = estimate ?? Math.max(0, Math.min(100, Number(vendor.score) || 0));
     summary.drawText(clean(vendor.vendor), { x: margin, y, size: 8.5, font: bold, color: navy });
     summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290, height: 9, color: rgb(0.88, 0.86, 0.8) });
-    if (scoreEligible) summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290 * score / 100, height: 9, color: decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
-    summary.drawText(scoreEligible ? `${Math.round(score)}` : 'Not scored', { x: margin + 428, y, size: 8.5, font: bold, color: navy });
+    if (scoreEligible || estimate !== null) summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290 * score / 100, height: 9, color: estimate !== null || decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
+    summary.drawText(estimate !== null ? `Est. ${score}/100` : scoreEligible ? `${Math.round(score)}` : 'Not scored', { x: margin + 428, y, size: 8.5, font: bold, color: navy });
     y -= 21;
   });
   y -= 3;
   const keyRisk = comparison.functionalGaps?.find((gap: any) => ['critical', 'high'].includes(String(gap.severity).toLowerCase())) ?? comparison.functionalGaps?.[0];
   const firstGate = comparison.decisionGovernance?.[0];
-  const actions = toTextList(comparison.nextSteps).slice(0, 3);
-  summary.drawText('C-SUITE FOCUS', { x: margin, y, size: 8, font: bold, color: teal });
+  const actions = vehicleReport
+    ? [
+        `Get comparable written on-road quotes for the exact ${/\b(?:electric|ev)\b/i.test(comparison.prompt) ? 'electric' : 'diesel'} variants.`,
+        'Confirm current stock, safety equipment, warranty exclusions and local service costs.',
+        'Test-drive both; choose only after the same purchase conditions are verified.',
+      ]
+    : decisionAlignedActions(comparison).slice(0, 3);
+  summary.drawText(vehicleReport ? 'BUYER DECISION GATES' : 'C-SUITE FOCUS', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 16;
-    y = drawDecisionLines(summary, `Strategic impact: ${decisionUsable ? comparison.recommendationReason : 'No commitment-grade winner is available until the release-quality issues are resolved.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
-  y -= 5;
-  y = drawLines(summary, `Primary gap or risk: ${keyRisk ? `${keyRisk.capability} - ${keyRisk.gap} (${keyRisk.severity})` : 'Validate material functional, delivery, security, and compliance risks.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
-  y -= 5;
-  y = drawLines(summary, `Decision gate: ${firstGate ? `${firstGate.decisionGate}; owner: ${firstGate.owner}` : 'Assign an executive sponsor and approval gate before commitment.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
+  if (vehicleReport) {
+    y = drawLines(summary, vehicleReady ? 'Confirm that the verified comparison applies to the exact variant you can buy.' : 'No purchase decision until the missing buying evidence is checked.', margin, y, { size: 8.5, lineHeight: 12, maxLines: 2 });
+  } else {
+    y = drawDecisionLines(summary, `Strategic impact: ${decisionVisible ? evidenceSafeExecutiveSummary(comparison) : 'No commitment-grade winner is available until the release-quality issues are resolved.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 4 });
+    y -= 5;
+    y = drawLines(summary, `Primary gap or risk: ${keyRisk ? `${keyRisk.capability} - ${keyRisk.gap} (${keyRisk.severity})` : 'Validate material functional, delivery, security, and compliance risks.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
+    y -= 5;
+    y = drawLines(summary, `Decision gate: ${firstGate ? `${firstGate.decisionGate}; owner: ${firstGate.owner}` : 'Assign an executive sponsor and approval gate before commitment.'}`, margin, y, { size: 8.5, lineHeight: 12, maxLines: 3 });
+  }
   y -= 8;
-  summary.drawText('NEXT EXECUTIVE ACTIONS', { x: margin, y, size: 8, font: bold, color: teal });
+  summary.drawText(vehicleReport ? 'BEFORE YOU CHOOSE' : 'NEXT EXECUTIVE ACTIONS', { x: margin, y, size: 8, font: bold, color: teal });
   y -= 15;
   actions.forEach((action: string, index: number) => { y = drawLines(summary, `${index + 1}. ${action}`, margin, y, { size: 8.5, lineHeight: 11.5, maxLines: 2 }); y -= 3; });
-  summary.drawText('One-page executive summary. Detailed equivalency, gaps, migration, governance, and sources follow.', { x: margin, y: 24, size: 7.5, font: regular, color: grey });
+  summary.drawText(vehicleReport ? 'Decision conditions, comparison evidence and sources follow.' : 'One-page executive summary. Detailed equivalency, gaps, migration, governance, and sources follow.', { x: margin, y: 24, size: 7.5, font: regular, color: grey });
 
   let appendixPage: any;
   let appendixY = 0;
@@ -301,17 +342,18 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     .join(' | ');
   const drawDetailedScoreCharts = () => {
     newAppendixPage('Scorecard and weighted decision model');
-    appendixPage.drawText('OVERALL WEIGHTED SCORES', { x: margin, y: appendixY, size: 10, font: bold, color: teal });
+    appendixPage.drawText(indicativeDxp ? 'INDICATIVE FIT (NOT VERIFIED)' : 'OVERALL WEIGHTED SCORES', { x: margin, y: appendixY, size: 10, font: bold, color: teal });
     appendixY -= 24;
     toArray<any>(comparison.vendorScores).slice(0, 6).forEach((vendor: any) => {
-      const score = Math.max(0, Math.min(100, Number(vendor.score) || 0));
-      const scoreEligible = qualificationAllowsScore(vendor);
+      const scoreEligible = pdfScoreEligible(vendor);
+      const estimate = indicativeDxp ? indicativeFitScore(comparison, vendor.vendor) : null;
+      const score = estimate ?? Math.max(0, Math.min(100, Number(vendor.score) || 0));
       ensureSpace(48, 'Scorecard and weighted decision model');
       appendixPage.drawText(clean(vendor.vendor), { x: margin, y: appendixY, size: 9, font: bold, color: navy });
-      appendixPage.drawText(scoreEligible ? `${Math.round(score)}/100` : 'Not scored', { x: pageSize[0] - margin - 62, y: appendixY, size: 9, font: bold, color: navy });
+      appendixPage.drawText(estimate !== null ? `Est. ${estimate}/100` : scoreEligible ? `${Math.round(score)}/100` : 'Not scored', { x: pageSize[0] - margin - 72, y: appendixY, size: 9, font: bold, color: navy });
       appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth, height: 10, color: rgb(0.88, 0.86, 0.8) });
-      if (scoreEligible) appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth * score / 100, height: 10, color: decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
-      appendixY = drawLines(appendixPage, vendor.verdict, margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
+      if (scoreEligible || estimate !== null) appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth * score / 100, height: 10, color: estimate !== null || decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
+       appendixY = drawLines(appendixPage, vendorVerdictPresentation(vendor), margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
       appendixY -= 12;
     });
     toArray<any>(comparison.vendorScores).forEach((vendor: any) => {
@@ -321,12 +363,31 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       toArray<any>(vendor.weightedScores).forEach((criterion: any) => {
         ensureSpace(43, 'Weighted criteria');
         const score = Math.max(0, Math.min(100, Number(criterion.score) || 0));
+        const criterionScoreEligible = pdfScoreEligible(vendor);
+        const qualificationModelReport = hasVendorScoreExtension(vendor);
+        const verifiedMetricCount = toArray<any>(criterion.evidence).filter((evidence: any) => (
+          evidence.normalizationMethod === 'retrieved_document_metric'
+          && evidence.evidenceKind !== 'unverified'
+          && evidence.sourceId
+        )).length;
         const label = `${clean(criterion.criterion)} (${Number(criterion.weight) || 0}% weight)`;
         appendixPage.drawText(label, { x: margin, y: appendixY, size: 8, font: bold, color: navy });
-        appendixPage.drawText(`${Math.round(score)}`, { x: pageSize[0] - margin - 22, y: appendixY, size: 8, font: bold, color: navy });
-        appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth, height: 6, color: rgb(0.88, 0.86, 0.8) });
-        appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth * score / 100, height: 6, color: teal });
-        appendixY = drawLines(appendixPage, criterion.rationale, margin, appendixY - 25, { size: 7.6, lineHeight: 9.5, color: grey, maxLines: 3 });
+        const secondaryMetric = qualificationModelReport
+          ? `${verifiedMetricCount} verified metric${verifiedMetricCount === 1 ? '' : 's'}`
+          : criterionScoreEligible ? `${Math.round(score)}` : 'Not scored';
+        appendixPage.drawText(secondaryMetric, { x: pageSize[0] - margin - (qualificationModelReport ? 95 : criterionScoreEligible ? 22 : 58), y: appendixY, size: 8, font: bold, color: navy });
+        if (!qualificationModelReport) {
+          appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth, height: 6, color: rgb(0.88, 0.86, 0.8) });
+          if (criterionScoreEligible) appendixPage.drawRectangle({ x: margin, y: appendixY - 13, width: contentWidth * score / 100, height: 6, color: teal });
+        }
+        const criterionDetail = isFallbackNeutralCriterion(criterion) && !hasLegacyProvisionalScore(vendor)
+          ? 'Neutral fallback 50 — comparable source-verified evidence was incomplete across the options.'
+          : isFallbackNeutralCriterion(criterion)
+            ? 'No comparable criterion rating was returned.'
+          : qualificationModelReport
+          ? `Evidence coverage: ${verifiedMetricCount} exact retrieved metric${verifiedMetricCount === 1 ? '' : 's'}.`
+          : criterion.rationale;
+        appendixY = drawLines(appendixPage, criterionDetail, margin, appendixY - 25, { size: 7.6, lineHeight: 9.5, color: grey, maxLines: 3 });
         appendixY -= 9;
       });
       if (toTextList(vendor.switchConditions).length) drawListSection(`When the recommendation could switch from ${vendor.vendor}`, vendor.switchConditions);
@@ -334,14 +395,12 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   };
   drawDetailedScoreCharts();
   const pdfEligibleScores = toArray<any>(comparison.vendorScores).filter((vendor: any) => Number.isFinite(Number(vendor.score))
-    && qualificationAllowsScore(vendor));
+    && pdfScoreEligible(vendor));
   const pdfTopScore = pdfEligibleScores.length ? Math.max(...pdfEligibleScores.map((vendor: any) => Number(vendor.score))) : null;
   const extendedVendorRows = toArray<any>(comparison.vendorScores).filter(hasVendorScoreExtension).flatMap((vendor: any) => {
     const dimensions = toArray<any>(vendor.dimensionScores).map((dimension: any) => {
-      const score = dimension.coverageStatus === 'SUPPRESSED' || dimension.score === undefined || dimension.score === null
-        ? 'Suppressed'
-        : `${Math.round(Number(dimension.score))}/100`;
-      return `${dimension.dimension}: ${score} (${coverageLabel(dimension.coverageStatus)}; ${dimension.coverage ?? 0}% coverage; ${dimension.supportedSubcriteria ?? 0}/${dimension.totalSubcriteria ?? 0} supported)`;
+      const coverageStatus = dimension.coverageStatus === 'SUPPRESSED' ? 'Suppressed' : coverageLabel(dimension.coverageStatus);
+      return `${dimension.dimension}: Evidence coverage ${dimension.supportedSubcriteria ?? 0}/${dimension.totalSubcriteria ?? 0} verified metrics (${coverageStatus}; ${formatReportDecimal(dimension.coverage)}% coverage)`;
     }).join(' | ');
     const gates = toArray<any>(vendor.qualificationGates).map((gate: any) => `${gate.gate}: ${gate.status || 'UNKNOWN'}${gate.mandatory ? ' (mandatory)' : ''} — ${gate.rationale || 'Not established'}${toTextList(gate.evidenceSourceIds).length ? ` [Evidence IDs: ${toTextList(gate.evidenceSourceIds).join(', ')}]` : ''}`).join(' | ');
     return [{
@@ -353,7 +412,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
           : scoreDifferenceLabel(pdfTopScore - Number(vendor.score)),
       gates: gates || 'Not established',
       dimensions: dimensions || 'Not established',
-      evidence: `Confidence: ${vendor.evidenceConfidence ?? 'Not established'}%; coverage: ${vendor.evidenceCoverage ?? 'Not established'}%`,
+      evidence: `Confidence: ${formatReportDecimal(vendor.evidenceConfidence)}%; coverage: ${formatReportDecimal(vendor.evidenceCoverage)}%`,
       strengths: toTextList(vendor.strengths).join(' | ') || 'Not established',
       gaps: toTextList(vendor.gaps).join(' | ') || 'Not established',
       conditions: toTextList(vendor.conditions).join(' | ') || 'Not established',
@@ -365,19 +424,49 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     extendedVendorRows,
     [['Option', 'vendor'], ['Overall score difference', 'difference'], ['Qualification status', 'qualification'], ['Qualification gates', 'gates'], ['Dimension scores', 'dimensions'], ['Evidence confidence and coverage', 'evidence'], ['Strengths', 'strengths'], ['Gaps', 'gaps'], ['Conditions', 'conditions'], ['Limitations', 'limitations']],
   );
+  const pdfVendorVerdicts = toArray<any>(comparison.vendorScores).map((vendor: any) => {
+    const role = vehicleReport
+      ? { label: 'Compared vehicle', rationale: 'Confirm the exact variant and buying conditions before choosing.' }
+      : providerRolePresentation(vendor);
+    return {
+      ...vendor,
+      score: indicativeDxp && indicativeFitScore(comparison, vendor.vendor) !== null
+        ? `Est. ${indicativeFitScore(comparison, vendor.vendor)}/100 (not verified)`
+        : pdfScoreEligible(vendor) ? vendor.score : 'Not scored',
+      providerRole: role.label,
+      providerRoleRationale: role.rationale,
+      verdict: vehicleReport && !vehicleReady
+        ? 'Purchase status: evidence-limited. Confirm current local availability and buying conditions.'
+        : vendorVerdictPresentation(vendor),
+    };
+  });
   drawSection(
-    'Vendor verdicts',
-    comparison.vendorScores,
-    [['Vendor', 'vendor'], ['Weighted score', 'score'], ['Strategic role', 'providerRole'], ['Role rationale', 'providerRoleRationale'], ['Verdict', 'verdict']],
+    vehicleReport ? 'Vehicle verdicts' : 'Vendor verdicts',
+    pdfVendorVerdicts,
+    [['Vehicle', 'vendor'], ['Weighted score', 'score'], [vehicleReport ? 'Role' : 'Strategic role', 'providerRole'], ['Role rationale', 'providerRoleRationale'], ['Verdict', 'verdict']],
   );
   drawSection(
     'Pricing analysis',
-    toArray<any>(comparison.pricing).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    lensRows.pricing.map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
     [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
   );
+  if (comparison.quoteBundle?.quotes?.length) {
+    drawSection(
+      'Buyer-supplied written quotes (separate from estimated value fit)',
+      [
+        { dimension: 'Comparability', values: comparison.quoteBundle.assessment.status === 'ready'
+          ? `Aligned over ${comparison.quoteBundle.assessment.horizonMonths} months, ${comparison.quoteBundle.quotes[0]?.taxBasis}; buyer-entered amounts, not independently verified against PDFs.`
+          : `Not comparable: ${comparison.quoteBundle.assessment.flags.join(' ')}`, winner: 'Not an overall recommendation' },
+        ...comparison.quoteBundle.assessment.rows.map((row: any) => ({
+          dimension: row.dimension, values: formatValues(row.values), winner: row.winner,
+        })),
+      ],
+      [['Dimension', 'dimension'], ['AUD values / provenance', 'values'], ['Lowest quoted cost', 'winner']],
+    );
+  }
   drawSection(
     'Feature and capability analysis',
-    toArray<any>(comparison.features).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    lensRows.features.map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
     [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
   );
   const rawStrategicEntries = Object.entries(comparison.swot && typeof comparison.swot === 'object' && !Array.isArray(comparison.swot) ? comparison.swot : {}) as [string, string[]][];
@@ -390,7 +479,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
         .map(([framework, findings]) => [framework.replace(/^SOAR\s+—\s*/i, ''), findings]),
     ).map(([dimension, findings]) => [`SOAR — ${dimension}`, findings] as [string, string[]]),
   ];
-  drawSection(
+  if (!vehicleReport) drawSection(
     'SWOT, PESTLE, and SOAR findings',
     pdfStrategicEntries
       .map(([framework, findings]) => ({
@@ -402,7 +491,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       .filter((row) => row.findings),
     [['Framework dimension', 'framework'], ['Findings', 'findings']],
   );
-  drawSection(
+  if (!vehicleReport) drawSection(
     'VRIO assessment',
     Object.entries(comparison.vrio && typeof comparison.vrio === 'object' && !Array.isArray(comparison.vrio) ? comparison.vrio : {}).map(([vendor, assessment]: [string, any]) => ({
       vendor,
@@ -450,14 +539,22 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     'Key insights',
     toTextList(comparison.insights).filter((insight: string) => !/^Evidence unavailable\b/i.test(insight.trim())),
   );
-  drawListSection('Opportunities', comparison.opportunities || []);
+  if (!vehicleReport) drawListSection('Opportunities', comparison.opportunities || []);
   drawListSection('Recommended next steps', comparison.nextSteps || []);
-  drawSection('Context assumptions', (comparison.contextAssumptions || []).map((assumption: string) => ({ assumption })), [['Assumption', 'assumption']]);
-  drawSection('Product and service equivalency', comparison.productEquivalency, [['Capability', 'capability'], ['Current arrangement', 'currentArrangement'], ['Target arrangement', 'targetArrangement'], ['Equivalency', 'equivalency'], ['Gap', 'gap']]);
-  drawSection('Functional gap analysis', comparison.functionalGaps, [['Capability', 'capability'], ['Current state', 'currentState'], ['Target state', 'targetState'], ['Gap', 'gap'], ['Mitigation', 'mitigation'], ['Severity', 'severity']]);
-  drawSection('Service and product arrangement mapping', comparison.serviceProductMap, [['Business service', 'businessService'], ['Current product', 'currentProduct'], ['Target product', 'targetProduct'], ['Dependencies', 'dependencies'], ['Owner', 'owner']]);
-  drawSection('Migration sequence', comparison.migrationSequence, [['Phase', 'phase'], ['Objective', 'objective'], ['Dependencies', 'dependencies'], ['Exit criteria', 'exitCriteria'], ['Risk', 'risk']]);
-  drawSection('Decision governance', comparison.decisionGovernance, [['Decision', 'decision'], ['Owner', 'owner'], ['Approvers', 'approvers'], ['Evidence required', 'evidenceRequired'], ['Decision gate', 'decisionGate']]);
+  if (vehicleReport) {
+    drawListSection('Vehicle buyer checks', [
+      `Confirm the exact currently available ${/\b(?:electric|ev)\b/i.test(comparison.prompt) ? 'electric' : 'diesel'} variant, trim and seating layout on the official local product page and at the dealership.`,
+      'Get written like-for-like on-road prices, including registration, taxes and insurance; compare warranty exclusions and scheduled service costs.',
+      'Verify safety evidence for the exact variant and test-drive every shortlisted vehicle before placing a deposit.',
+    ]);
+  } else {
+    drawSection('Context assumptions', (comparison.contextAssumptions || []).map((assumption: string) => ({ assumption })), [['Assumption', 'assumption']]);
+    drawSection('Product and service equivalency', comparison.productEquivalency, [['Capability', 'capability'], ['Current arrangement', 'currentArrangement'], ['Target arrangement', 'targetArrangement'], ['Equivalency', 'equivalency'], ['Gap', 'gap']]);
+    drawSection('Functional gap analysis', comparison.functionalGaps, [['Capability', 'capability'], ['Current state', 'currentState'], ['Target state', 'targetState'], ['Gap', 'gap'], ['Mitigation', 'mitigation'], ['Severity', 'severity']]);
+    drawSection('Service and product arrangement mapping', comparison.serviceProductMap, [['Business service', 'businessService'], ['Current product', 'currentProduct'], ['Target product', 'targetProduct'], ['Dependencies', 'dependencies'], ['Owner', 'owner']]);
+    drawSection('Migration sequence', comparison.migrationSequence, [['Phase', 'phase'], ['Objective', 'objective'], ['Dependencies', 'dependencies'], ['Exit criteria', 'exitCriteria'], ['Risk', 'risk']]);
+    drawSection('Decision governance', comparison.decisionGovernance, [['Decision', 'decision'], ['Owner', 'owner'], ['Approvers', 'approvers'], ['Evidence required', 'evidenceRequired'], ['Decision gate', 'decisionGate']]);
+  }
   drawSection(
     'Evidence sources',
     (comparison.sourceAvailability?.length
@@ -509,9 +606,12 @@ export function computeDecisionQuality(comparison: any) {
     return !Number.isNaN(date.getTime()) && Date.now() - date.getTime() <= 366 * 24 * 60 * 60 * 1000;
   });
   const scoredCriteria = (comparison.vendorScores || []).flatMap((vendor: any) => vendor.weightedScores || []);
-  const comparable = scoredCriteria.filter((criterion: any) => !(criterion.evidence || []).every((item: any) => (
-    item.evidenceKind === 'unverified' || item.normalizationMethod === 'insufficient_comparable_evidence_neutral'
-  )));
+  const comparable = scoredCriteria.filter((criterion: any) => (
+    !isFallbackNeutralCriterion(criterion)
+    && !(criterion.evidence || []).every((item: any) => (
+      item.evidenceKind === 'unverified' || item.normalizationMethod === 'insufficient_comparable_evidence_neutral'
+    ))
+  ));
   const histories = (comparison.vendorScores || []).map((vendor: any) => vendor.marketHistory).filter(Boolean);
   const historySignatures = histories.map((history: any) => JSON.stringify(
     (history.yearlyTrends || []).map((row: any) => [
@@ -546,7 +646,8 @@ export function computeDecisionQuality(comparison: any) {
   if (metrics.unknownRate > 25) reasons.push('Material evidence gaps remain explicit in the scorecard.');
   if (metrics.sourceConcentration > 70) reasons.push('Evidence is concentrated in one publisher or domain.');
   if (!historyComparable) reasons.push('Historical series definitions or windows differ across options.');
-  const definitiveWinner = comparison.recommendation && comparison.recommendation !== 'No exact winner';
+  const definitiveWinner = comparison.recommendation
+    && !/^(?:No definitive winner|No exact winner|No qualified option)$/i.test(String(comparison.recommendation).trim());
   const decision = prohibitedEvidence.length || (!lensWinner && !historyComparable) || (definitiveWinner && metrics.citationCoverage < 50 && !lensWinner)
     ? 'FAIL'
     : reasons.length ? 'PASS_WITH_WARNINGS' : 'PASS';
@@ -742,7 +843,7 @@ function comparisonOptionNames(comparison: any): string[] {
 export function canAddAlternativeToComparison(comparison: any, alternative: unknown): boolean {
   const alternativeName = String(alternative || '').trim();
   const options = comparisonOptionNames(comparison);
-  if (!alternativeName || options.some((option) => option.toLowerCase() === alternativeName.toLowerCase())) return true;
+  if (!alternativeName || options.some((option) => comparisonOptionNamesOverlap(option, alternativeName))) return true;
   return options.length < MAX_COMPARISON_OPTIONS;
 }
 
@@ -753,7 +854,7 @@ export function expandedAlternativeComparisonPrompt(comparison: any, alternative
     throw new RangeError(`A comparison can include up to ${MAX_COMPARISON_OPTIONS} options.`);
   }
   const options = [...originalOptions];
-  if (alternativeName && !options.some((option) => option.toLowerCase() === alternativeName.toLowerCase())) {
+  if (alternativeName && !options.some((option) => comparisonOptionNamesOverlap(option, alternativeName))) {
     options.push(alternativeName);
   }
   const criteria = Array.isArray(comparison.criteria)
@@ -766,6 +867,13 @@ export function expandedAlternativeComparisonPrompt(comparison: any, alternative
     context ? `Use the same decision context and primary comparison parameters as the original report: ${context}` : '',
     criteria.length ? `Primary criteria: ${criteria.join(', ')}.` : '',
   ].filter(Boolean).join(' ');
+}
+
+function AlternativeExplanation({ insight }: { insight: string }) {
+  const text = insight.replace('Alternative outside comparison — ', '');
+  const source = text.match(/https?:\/\/[^\s)]+/i)?.[0]?.replace(/[.,;!]+$/, '');
+  const description = source ? text.replace(source, '').replace(/\(\s*\)/g, '') : text;
+  return <span>{description}{source && <a className="mt-1 block w-fit break-all font-semibold text-[#0f766e] underline" href={source} target="_blank" rel="noopener noreferrer">View supporting product page</a>}</span>;
 }
 
 function stripDecisionNote(value: unknown): string {
@@ -936,14 +1044,14 @@ function Home() {
             <span className="landing-hero-accent block text-[#0f766e]">before the meeting.</span>
           </h1>
           <p className="mt-8 max-w-xl text-base leading-7 text-[#556075] sm:text-lg sm:leading-8">
-            DecisionIntel turns a messy buying question into a defensible shortlist—with the evidence, trade-offs, and recommendation in one place.
+            Start with a fast, research-informed decision. Decision Mode gathers enough targeted context to score your options, but it does not verify every source or guarantee current prices and availability.
           </p>
           <div className="mt-8 flex flex-col items-start gap-4 sm:flex-row sm:items-center">
             <Link href="/sign-up" className="focus-ring inline-flex items-center gap-3 rounded-xl bg-[#0f766e] px-6 py-3.5 text-sm font-bold text-[#f8f4e8] shadow-[4px_4px_0_#202840] transition-transform hover:-translate-y-0.5" data-testid="link-hero-start">Start a comparison <ArrowRight size={17} /></Link>
             <Link href="/guest" className="focus-ring text-xs font-semibold text-[#687083] underline decoration-[#b8c6ae] decoration-2 underline-offset-4 hover:text-[#0f766e]" data-testid="link-hero-guest">Try one without signing up</Link>
           </div>
           <div className="mt-11 grid max-w-xl grid-cols-1 gap-3 border-t border-[#d5cebd] pt-5 text-xs text-[#687083] sm:grid-cols-3 sm:gap-5">
-            <div className="flex items-center gap-2"><ShieldCheck size={16} className="shrink-0 text-[#0f766e]" /><span><strong className="text-[#202840]">Evidence-led</strong><br />sources stay attached</span></div>
+            <div className="flex items-center gap-2"><ShieldCheck size={16} className="shrink-0 text-[#0f766e]" /><span><strong className="text-[#202840]">Decision first</strong><br />assumptions made visible</span></div>
             <div className="flex items-center gap-2"><BarChart3 size={16} className="shrink-0 text-[#b94d45]" /><span><strong className="text-[#202840]">Criteria-first</strong><br />fit over feature count</span></div>
             <div className="flex items-center gap-2"><Clock3 size={16} className="shrink-0 text-[#8c6328]" /><span><strong className="text-[#202840]">Ready to share</strong><br />clear enough for the room</span></div>
           </div>
@@ -962,9 +1070,9 @@ function Home() {
               </div>
               <div className="mt-3 grid grid-cols-[1.35fr_.65fr] gap-3">
                 <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-3.5 sm:p-4"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Compared</p><div className="mt-3 flex flex-wrap gap-1.5"><span className="rounded-md bg-[#dcefe9] px-2 py-1 text-[11px] font-bold text-[#0f766e]">Linear</span><span className="rounded-md bg-[#eee2c7] px-2 py-1 text-[11px] font-bold text-[#8c6328]">Asana</span><span className="rounded-md bg-[#e5dce8] px-2 py-1 text-[11px] font-bold text-[#685474]">Height</span></div></div>
-                <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-3.5 sm:p-4"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Fit score</p><div className="mt-3 flex items-end gap-1"><span className="display text-3xl font-bold text-[#0f766e] sm:text-4xl">86</span><span className="mb-1 text-[10px] font-bold text-[#7a7b76]">/ 100</span></div></div>
+                <div className="rounded-2xl border border-[#d0c8b7] bg-[#f8f4e8] p-3.5 sm:p-4"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#8b8a80]">Illustrative fit</p><div className="mt-3 flex items-end gap-1"><span className="display text-3xl font-bold text-[#0f766e] sm:text-4xl">86</span><span className="mb-1 text-[10px] font-bold text-[#7a7b76]">/ 100</span></div></div>
               </div>
-              <div className="mt-3 rounded-2xl bg-[#0f766e] p-4 text-[#f8f4e8] sm:p-4"><div className="flex items-center justify-between gap-3"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#acd9ce]">Recommendation</p><span className="rounded-full bg-[#d9ef66] px-2 py-1 text-[10px] font-bold text-[#202840]">Strong fit</span></div><div className="mt-2 flex items-center justify-between gap-3"><p className="display text-xl font-bold">Linear</p><span className="flex items-center gap-1 text-[10px] font-bold text-[#d1e6df]"><FileSearch size={13} /> 8 sources</span></div><p className="mt-2 text-xs leading-5 text-[#d1e6df]">Best match for this team’s async operating rhythm.</p></div>
+              <div className="mt-3 rounded-2xl bg-[#0f766e] p-4 text-[#f8f4e8] sm:p-4"><div className="flex items-center justify-between gap-3"><p className="mono text-[9px] uppercase tracking-[.12em] text-[#acd9ce]">Decision mode · illustrative</p><span className="rounded-full bg-[#d9ef66] px-2 py-1 text-[10px] font-bold text-[#202840]">Assumption-led</span></div><div className="mt-2 flex items-center justify-between gap-3"><p className="display text-xl font-bold">Linear</p><span className="text-[10px] font-bold text-[#d1e6df]">Not source-verified</span></div><p className="mt-2 text-xs leading-5 text-[#d1e6df]">Indicative fit for this team’s async operating rhythm. Verify checks sources separately.</p></div>
             </div>
           </div>
           <div className="mt-5 flex items-center justify-between px-1 text-[10px] font-bold uppercase tracking-[.14em] text-[#7b817c]"><span>Prompt → criteria → recommendation</span><span className="hidden sm:inline">Nothing important buried</span></div>
@@ -979,12 +1087,12 @@ function Home() {
       <section id="method" className="border-y border-[#d8d0bd] bg-[#e7e2d4] px-5 py-20 lg:px-10">
         <div className="mx-auto max-w-7xl">
           <div className="grid gap-12 lg:grid-cols-[.8fr_1.2fr]">
-            <div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">A better starting point</p><h2 className="display mt-4 text-4xl font-bold leading-tight tracking-[-.045em] text-[#202840] sm:text-5xl">Good research starts with a better question.</h2></div>
+            <div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">A better starting point</p><h2 className="display mt-4 text-4xl font-bold leading-tight tracking-[-.045em] text-[#202840] sm:text-5xl">A clearer decision starts with a better question.</h2></div>
             <div className="grid gap-8 sm:grid-cols-3">
               {[
                 ['01', 'Say it plainly', 'Start with the messy version. We’ll find the shape inside it.'],
-                ['02', 'See the trade-offs', 'Scores, sources, and the “why” behind every recommendation.'],
-                ['03', 'Move with confidence', 'Bring a decision to the room, not another tab to review.'],
+                ['02', 'See the trade-offs', 'Get a quick, assumption-labelled view of fit, gaps and the “why”.'],
+                ['03', 'Verify when it matters', 'Save your decision, then choose the separately paid source review.'],
               ].map(([number, title, text]) => <div key={number} className="border-t-2 border-[#202840] pt-4"><span className="mono text-xs font-bold text-[#0f766e]">{number}</span><h3 className="display mt-8 text-xl font-bold text-[#202840]">{title}</h3><p className="mt-3 text-sm leading-6 text-[#667083]">{text}</p></div>)}
             </div>
           </div>
@@ -992,11 +1100,11 @@ function Home() {
         </div>
       </section>
       <section id="evidence" className="mx-auto grid max-w-7xl gap-14 px-5 py-24 lg:grid-cols-[1.1fr_.9fr] lg:px-10">
-        <div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#b94d45]">The evidence</p><h2 className="display mt-4 max-w-2xl text-5xl font-bold leading-[.94] tracking-[-.055em] text-[#202840]">Less “it depends.”<br /><span className="text-[#b94d45]">More “here’s why.”</span></h2><p className="mt-7 max-w-lg text-base leading-7 text-[#667083]">The workspace keeps evidence and judgment together. Compare how vendors perform against the criteria your team actually cares about, then share the reasoning—not just the winner.</p><div className="mt-8 flex flex-wrap gap-3"><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Pricing clarity</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Feature fit</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Team context</span></div></div>
-        <div className="relative rounded-[2rem] bg-[#202840] p-7 text-[#f8f4e8] shadow-[8px_8px_0_#d9ef66]"><div className="absolute right-6 top-6 grid size-11 place-items-center rounded-full border border-[#68738e] text-[#d9ef66]"><BarChart3 size={19} /></div><p className="mono text-[10px] uppercase tracking-[.18em] text-[#a5b0c7]">Example scorecard</p><div className="mt-12 space-y-5">{[['Fit for team size', 92, '#d9ef66'], ['Pricing transparency', 81, '#db8a52'], ['Workflow flexibility', 74, '#8bc9bb']].map(([label, score, color]) => <div key={label as string}><div className="flex justify-between text-sm font-semibold"><span>{label}</span><span className="mono text-xs">{score}</span></div><div className="mt-2 h-2 rounded-full bg-[#3b4662]"><div className="h-2 rounded-full" style={{ width: `${score}%`, backgroundColor: color as string }} /></div></div>)}</div><div className="mt-10 border-t border-[#3b4662] pt-5 text-sm leading-6 text-[#cad0dc]">“Linear is the strongest fit—not because it has the most features, but because it creates the least operational drag for this team.”</div></div>
+        <div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#b94d45]">Decision first, evidence bounded</p><h2 className="display mt-4 max-w-2xl text-5xl font-bold leading-[.94] tracking-[-.055em] text-[#202840]">Decide quickly.<br /><span className="text-[#b94d45]">Verify separately.</span></h2><p className="mt-7 max-w-lg text-base leading-7 text-[#667083]">Decision Mode gathers targeted context to score options against your priorities and makes its assumptions explicit; it does not validate every source. The separate Verify workflow checks factual claims against accessible sources. Neither mode guarantees future prices or availability.</p><div className="mt-8 flex flex-wrap gap-3"><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Targeted research</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Visible assumptions</span><span className="rounded-full border border-[#c9c1ae] px-3 py-2 text-xs font-bold text-[#556075]">Separate Verify workflow</span></div></div>
+        <div className="relative rounded-[2rem] bg-[#202840] p-7 text-[#f8f4e8] shadow-[8px_8px_0_#d9ef66]"><div className="absolute right-6 top-6 grid size-11 place-items-center rounded-full border border-[#68738e] text-[#d9ef66]"><BarChart3 size={19} /></div><p className="mono text-[10px] uppercase tracking-[.18em] text-[#a5b0c7]">Illustrative decision fit · not verified</p><div className="mt-12 space-y-5">{[['Fit for team size', 92, '#d9ef66'], ['Pricing transparency', 81, '#db8a52'], ['Workflow flexibility', 74, '#8bc9bb']].map(([label, score, color]) => <div key={label as string}><div className="flex justify-between text-sm font-semibold"><span>{label}</span><span className="mono text-xs">{score}</span></div><div className="mt-2 h-2 rounded-full bg-[#3b4662]"><div className="h-2 rounded-full" style={{ width: `${score}%`, backgroundColor: color as string }} /></div></div>)}</div><div className="mt-10 border-t border-[#3b4662] pt-5 text-sm leading-6 text-[#cad0dc]">“Linear may fit this team’s async workflow best, assuming the current product and pricing details hold.”</div></div>
       </section>
       <section id="teams" className="bg-[#d9ef66] px-5 py-20 lg:px-10"><div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-8 md:flex-row md:items-center"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#55715e]">For teams who decide</p><h2 className="display mt-3 max-w-2xl text-4xl font-bold leading-tight tracking-[-.05em] text-[#202840]">The best choice is the one everyone can explain.</h2></div><Link href="/sign-up" className="focus-ring inline-flex shrink-0 items-center gap-2 rounded-xl bg-[#202840] px-5 py-3.5 text-sm font-bold text-[#f8f4e8] shadow-[4px_4px_0_#0f766e]" data-testid="link-bottom-start">Open your workspace <ArrowRight size={17} /></Link></div></section>
-      <footer className="bg-[#202840] px-5 py-8 text-[#c4cada] lg:px-10"><div className="mx-auto flex max-w-7xl flex-col justify-between gap-5 sm:flex-row sm:items-center"><Logo light /><p className="text-xs">Research with fewer tabs. Decide with fewer caveats.</p><p className="mono text-[10px] uppercase tracking-[.14em] text-[#8791a8]">© 2025 VC / built for clear calls</p></div></footer>
+      <footer className="bg-[#202840] px-5 py-8 text-[#c4cada] lg:px-10"><div className="mx-auto flex max-w-7xl flex-col justify-between gap-5 sm:flex-row sm:items-center"><Logo light /><p className="text-xs">Decide with assumptions in view. Verify when you need to.</p><p className="mono text-[10px] uppercase tracking-[.14em] text-[#8791a8]">© 2025 VC / built for clear calls</p></div></footer>
     </main>
   );
 }
@@ -1152,15 +1260,255 @@ function hasVendorScoreExtension(vendor: any): boolean {
   ));
 }
 
+function isFallbackNeutralCriterion(criterion: any): boolean {
+  const rationale = String(criterion?.rationale || '').trim();
+  return Number(criterion?.score) === 50 && (
+    /^validate this provisional score against current product research/i.test(rationale)
+    || /^no comparable verified metric for every option; this criterion remains neutral\.?$/i.test(rationale)
+  );
+}
+
+function hasFallbackNeutralScore(vendor: any): boolean {
+  const weightedScores = Array.isArray(vendor?.weightedScores) ? vendor.weightedScores : [];
+  return weightedScores.some(isFallbackNeutralCriterion);
+}
+
+function hasLegacyProvisionalScore(vendor: any): boolean {
+  const weightedScores = Array.isArray(vendor?.weightedScores) ? vendor.weightedScores : [];
+  return weightedScores.some((criterion: any) => (
+    Number(criterion?.score) === 50
+    && /^validate this provisional score against current product research/i.test(String(criterion?.rationale || '').trim())
+  ));
+}
+
 function qualificationAllowsScore(vendor: any): boolean {
-  return !vendor?.qualificationStatus
-    || vendor.qualificationStatus === 'QUALIFIED'
-    || vendor.qualificationStatus === 'QUALIFIED_WITH_CONDITIONS';
+  return !hasLegacyProvisionalScore(vendor)
+    && (!vendor?.qualificationStatus
+      || vendor.qualificationStatus === 'QUALIFIED'
+      || vendor.qualificationStatus === 'QUALIFIED_WITH_CONDITIONS');
+}
+
+function provenanceCompleteEvidence(evidence: any): boolean {
+  const sourceId = String(evidence?.sourceId || '');
+  const hash = String(evidence?.documentSha256 || '');
+  return /^docsha256:[a-f0-9]{64}$/i.test(sourceId)
+    || (
+      /^[a-f0-9]{64}$/i.test(hash)
+      && Number.isInteger(evidence?.sourceTextStart)
+      && Number.isInteger(evidence?.sourceTextEnd)
+      && evidence.sourceTextStart >= 0
+      && evidence.sourceTextEnd > evidence.sourceTextStart
+    );
+}
+
+function vendorHasProvenanceCompleteEvidence(vendor: any): boolean {
+  const weightedScores = Array.isArray(vendor?.weightedScores) ? vendor.weightedScores : [];
+  return weightedScores.some((criterion: any) => (
+    (Array.isArray(criterion?.evidence) ? criterion.evidence : []).some((evidence: any) => (
+      evidence?.evidenceKind !== 'unverified'
+      && evidence?.evidenceKind !== 'analyst_judgment'
+      && provenanceCompleteEvidence(evidence)
+    ))
+  ));
+}
+
+export function providerRolePresentation(vendor: any): { label: string; rationale: string } {
+  if (!qualificationAllowsScore(vendor) || (
+    hasVendorScoreExtension(vendor)
+    && !vendorHasProvenanceCompleteEvidence(vendor)
+  )) {
+    return {
+      label: 'Not established',
+      rationale: 'Strategic role was not established from provenance-complete evidence.',
+    };
+  }
+  return {
+    label: String(vendor?.providerRole || 'Not classified').replaceAll('_', ' '),
+    rationale: String(vendor?.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'),
+  };
+}
+
+/**
+ * Restore the scores that form the saved report's decision contract when an
+ * older browser snapshot has stale modeled scores (for example, all zeros
+ * after a guest job can no longer be re-fetched).  The evidence/model values
+ * are retained under raw* fields for inspection; every report view consumes
+ * the reconciled score fields from this boundary.
+ */
+export function reconcileReportScores<T extends Record<string, any>>(report: T): T {
+  if (!report || typeof report !== 'object') return report;
+  const vendors = Array.isArray(report.vendorScores) ? report.vendorScores : [];
+  const canonical = (value: unknown) => String(value ?? '').trim().toLowerCase();
+  const finalRecommendedVendor = vendors.find(
+    (vendor: any) => canonical(vendor?.vendor) === canonical(report.recommendation),
+  );
+  const finalRecommendationQualified = finalRecommendedVendor
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(finalRecommendedVendor.qualificationStatus));
+  const finalScore = Number(report.score);
+  const storedConfirmedMatchesFinal = report.confirmedRecommendation?.status === 'CONFIRMED'
+    && canonical(report.confirmedRecommendation?.option) === canonical(report.recommendation);
+  const confirmed = storedConfirmedMatchesFinal
+    ? report.confirmedRecommendation
+    : finalRecommendationQualified && Number.isFinite(finalScore) && finalScore > 0
+    ? {
+        status: 'CONFIRMED',
+        option: finalRecommendedVendor.vendor,
+        score: finalScore,
+        basis: finalRecommendedVendor.qualificationStatus,
+        rationale: String(report.recommendationReason || ''),
+      }
+    : report.confirmedRecommendation;
+  const confirmedQualified = confirmed?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(confirmed?.basis));
+  const confirmedScore = Number(confirmed?.score);
+  const scoreOverrides = new Map<string, number>();
+  if (confirmedQualified && Number.isFinite(confirmedScore)) {
+    scoreOverrides.set(canonical(confirmed.option), confirmedScore);
+  }
+  const alternatives = Array.isArray(report.alternatives) ? report.alternatives : [];
+  alternatives.forEach((alternative: any) => {
+    const qualified = ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(alternative?.qualificationStatus));
+    const score = Number(alternative?.score);
+    if (confirmedQualified && qualified && Number.isFinite(score)) {
+      scoreOverrides.set(canonical(alternative?.option), score);
+    }
+  });
+  const reconciledVendors = vendors.map((vendor: any) => {
+    const rowScore = Number(vendor?.score);
+    const score = scoreOverrides.get(canonical(vendor?.vendor))
+      ?? (Number.isFinite(rowScore) ? rowScore : undefined);
+    if (score === undefined) return vendor;
+    return {
+      ...vendor,
+      rawScore: vendor.rawScore ?? vendor.score,
+      rawModelScore: vendor.rawModelScore ?? vendor.modelScore,
+      score,
+      modelScore: score,
+      reconciledScoreSource: canonical(vendor?.vendor) === canonical(confirmed?.option)
+        ? 'confirmedRecommendation'
+        : 'qualifiedAlternative',
+    };
+  });
+  const reconciledAlternatives = Array.isArray(report.alternatives)
+    ? report.alternatives.map((alternative: any) => {
+        const qualified = ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(alternative?.qualificationStatus));
+        const score = Number(alternative?.score);
+        const vendor = confirmedQualified && qualified && Number.isFinite(score)
+          ? reconciledVendors.find((item: any) => canonical(item?.vendor) === canonical(alternative?.option))
+          : undefined;
+        if (!vendor) return alternative;
+        return {
+          ...alternative,
+          rawScore: alternative.rawScore ?? alternative.score,
+          score,
+          reconciledScoreSource: 'qualifiedAlternative',
+        };
+      })
+    : report.alternatives;
+  return {
+    ...report,
+    ...(confirmedQualified && Number.isFinite(confirmedScore)
+      ? { recommendation: confirmed.option, score: confirmedScore }
+      : {}),
+    ...(confirmed ? { confirmedRecommendation: confirmed } : {}),
+    ...(finalRecommendationQualified
+      ? { vendors: reconciledVendors.map((vendor: any) => String(vendor?.vendor || '').trim()).filter(Boolean) }
+      : {}),
+    vendorScores: reconciledVendors,
+    ...(Array.isArray(report.alternatives) ? { alternatives: reconciledAlternatives } : {}),
+  };
+}
+
+function vendorVerdictPresentation(vendor: any): string {
+  return qualificationAllowsScore(vendor)
+    ? String(vendor?.verdict || 'No verdict was returned.')
+    : 'No evidence-backed verdict was established for this option.';
+}
+
+function evidenceSafeExecutiveSummary(comparison: any): string {
+  const hasFallbackScores = (comparison?.vendorScores || []).some(hasFallbackNeutralScore);
+  if (hasFallbackScores && !qualificationDecisionUsable(comparison)) {
+    const supplied = String(comparison?.recommendationReason || comparison?.executiveSummary || '').trim();
+    if (/^(?:No overall winner:|Indicative scores are tied at|No definitive winner)/i.test(supplied)) return supplied;
+    return 'No overall winner was generated. Unsupported criteria remain visible as neutral 50s; they do not indicate equal product performance.';
+  }
+  const confirmed = comparison?.confirmedRecommendation;
+  if (confirmed?.status === 'CONFIRMED' && confirmed.option) {
+    const winner = String(confirmed.option);
+    const supplied = String(
+      comparison?.executiveSummary
+      || confirmed.rationale
+      || comparison?.recommendationReason
+      || '',
+    ).replace(/\bNo definitive winner\b/gi, `${winner} is the recommended option`);
+    return supplied.toLowerCase().includes(winner.toLowerCase())
+      ? supplied
+      : `${winner} is the recommended option. ${supplied}`.trim();
+  }
+  return qualificationDecisionUsable(comparison)
+    ? String(comparison?.executiveSummary || comparison?.recommendationReason || '')
+    : String(
+      comparison?.recommendationReason
+      || 'No option passed the mandatory qualification gates with sufficient provenance-complete evidence.',
+    );
+}
+
+function businessRationaleText(comparison: any, recommendationText: string, decisionReasons: string[], actions: string[]): string {
+  const rationale = evidenceSafeExecutiveSummary(comparison).trim();
+  const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').replace(/[^\w ]/g, '').trim();
+  if (!rationale || normalize(rationale) !== normalize(recommendationText)) return rationale;
+  const caveat = decisionReasons.find(Boolean);
+  if (caveat) return `Decision caveat: ${caveat}`;
+  const nextAction = actions.find(Boolean);
+  return nextAction ? `Next validation step: ${nextAction}` : '';
+}
+
+function decisionAlignedActions(comparison: any): string[] {
+  const actions = Array.isArray(comparison?.nextSteps)
+    ? comparison.nextSteps.map((step: unknown) => String(step).trim())
+      .filter((step: string) => step && !step.startsWith('Decision strategy — '))
+    : [];
+  const confirmed = comparison?.confirmedRecommendation;
+  if (confirmed?.status !== 'CONFIRMED' || !confirmed.option) return actions;
+  const winner = String(confirmed.option);
+  const aligned = actions.map((action: string) => (
+    action.replace(/\bNo definitive winner\b/gi, `${winner} as the recommended option`)
+  ));
+  if (aligned.some((action: string) => action.toLowerCase().includes(winner.toLowerCase()))) return aligned;
+  return [
+    `Advance ${winner} as the recommended option, subject to the stated evidence conditions.`,
+    ...aligned,
+  ];
+}
+
+export function DecisionStrategySection({ comparison }: { comparison: any }) {
+  const labels = ['Validation gates', 'Trade-off', 'Sequence', 'Owner', 'Change the choice'];
+  const steps = Array.isArray(comparison?.nextSteps) ? comparison.nextSteps : [];
+  const entries = labels.flatMap((label) => {
+    const prefix = `Decision strategy — ${label}: `;
+    const step = steps.find((item: unknown) => typeof item === 'string' && item.startsWith(prefix));
+    return step ? [{ label, text: String(step).slice(prefix.length) }] : [];
+  });
+  if (!entries.length) return null;
+  return <section className="mt-6 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5 sm:p-6" data-testid="section-decision-strategy">
+    <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Decision strategy</p>
+    <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What has to be true before you commit?</h2>
+    <p className="mt-2 max-w-3xl text-xs leading-5 text-[#566074]">A conditional plan, not proof that the product or offer has passed these checks.</p>
+    <div className="mt-5 grid gap-3 md:grid-cols-2">{entries.map(({ label, text }) => <article key={label} className="rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4">
+      <h3 className="mono text-[10px] font-bold uppercase tracking-[.12em] text-[#0f766e]">{label}</h3>
+      <p className="mt-2 text-xs leading-5 text-[#39435a]">{text}</p>
+    </article>)}</div>
+  </section>;
 }
 
 function qualificationDecisionUsable(comparison: any): boolean {
-  const modeled: any[] = (Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [])
-    .filter((vendor: any) => vendor?.qualificationStatus);
+  const vendors: any[] = Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [];
+  const recommendedVendor = vendors.find((vendor: any) => (
+    String(vendor?.vendor || '').trim().toLowerCase()
+      === String(comparison?.recommendation || '').trim().toLowerCase()
+  ));
+  if (!recommendedVendor || !qualificationAllowsScore(recommendedVendor)) return false;
+  const modeled = vendors.filter((vendor: any) => vendor?.qualificationStatus);
   if (!modeled.length) return true;
   return modeled.some((vendor) => qualificationAllowsScore(vendor) && vendor.vendor === comparison.recommendation);
 }
@@ -1174,32 +1522,85 @@ export function provisionalLensDecisionUsable(comparison: any): boolean {
   const modeled: any[] = (Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [])
     .filter((vendor: any) => vendor?.qualificationStatus);
   return modeled.length > 0
-    && modeled.every((vendor) => vendor.qualificationStatus === 'INSUFFICIENT_EVIDENCE');
+    && modeled.every((vendor) => vendor.qualificationStatus === 'INSUFFICIENT_EVIDENCE')
+    && modeled.every(vendorHasProvenanceCompleteEvidence);
+}
+
+export function isProvisionalChoice(comparison: any): boolean {
+  const rows: any[] = Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [];
+  return String(comparison?.recommendationReason ?? '').startsWith('Provisional choice —')
+    && comparison?.score === 0
+    && rows.length >= 2
+    && rows.some((row) => row.vendor === comparison?.recommendation)
+    && comparison?.confirmedRecommendation?.status !== 'CONFIRMED';
+}
+
+function indicativeFitScore(comparison: any, vendor: string): number | null {
+  const scorecard = (Array.isArray(comparison?.insights) ? comparison.insights : [])
+    .find((insight: unknown) => typeof insight === 'string'
+      && insight.startsWith('Indicative fit scorecard (assumption-led, not verified) — '));
+  if (!scorecard) return null;
+  const rows = String(scorecard).split(' — ')[1]?.split('. Criteria:')[0]?.split('; ') ?? [];
+  const row = rows.find((item) => item.startsWith(`${vendor}: `));
+  const value = row?.slice(vendor.length + 2).match(/^(\d{1,3})\/100\b/);
+  return value && Number(value[1]) <= 100 ? Number(value[1]) : null;
+}
+
+function isIndicativeDxpReport(comparison: any): boolean {
+  return isProvisionalChoice(comparison)
+    && /digital[- ]experience|headless\s+cms|\bdxp\b/i.test(`${comparison.category || ''} ${comparison.prompt || ''}`)
+    && (comparison.vendorScores || []).length >= 5
+    && comparison.vendorScores.every((vendor: any) => vendor.qualificationStatus === 'INSUFFICIENT_EVIDENCE');
+}
+
+/** Legacy saved reports have an overall estimate but no per-lens ratings. Do not infer prices from it. */
+export function presentedDxpLensRows(comparison: any): { pricing: any[]; features: any[] } {
+  if (!isIndicativeDxpReport(comparison)) return { pricing: comparison.pricing || [], features: comparison.features || [] };
+  const vendors: string[] = comparison.vendorScores.map((row: any) => row.vendor);
+  const unknown = Object.fromEntries(vendors.map((vendor) => [vendor, 'No comparable Australian price established.']));
+  const pricing = (comparison.pricing || []).some((row: any) =>
+    /^Estimated |^Accessible commercial terms/i.test(String(row.dimension))
+    || Object.values(row.values || {}).some((value) => !/^Not established|^No comparable/i.test(String(value))))
+    ? comparison.pricing
+    : [{ dimension: 'Comparable Australian prices and total cost', values: unknown, winner: 'Not established' }];
+  const features = comparison.features?.length ? comparison.features
+    : [{ dimension: 'Retrieved feature comparison', values: Object.fromEntries(vendors.map((vendor) =>
+      [vendor, 'Not established from comparable exact-product evidence.'])), winner: 'Not established' }];
+  return { pricing, features };
 }
 
 function coverageLabel(status: unknown): string {
   return String(status || 'UNKNOWN').replaceAll('_', ' ');
 }
 
-export function VendorScoreExtensionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
+export function formatReportDecimal(value: unknown): string {
+  const number = typeof value === 'number' ? value : Number(value);
+  return value === null || value === undefined || value === '' || !Number.isFinite(number)
+    ? '—'
+    : new Intl.NumberFormat('en', { maximumFractionDigits: 2 }).format(number);
+}
+
+export function VendorScoreExtensionSection({ vendorScores = [], comparison }: { vendorScores?: any[]; comparison?: any }) {
   const extended = vendorScores.filter(hasVendorScoreExtension);
   if (!extended.length) return null;
+  const provisionalChoice = comparison && isProvisionalChoice(comparison);
   const eligible = vendorScores.filter((vendor) => Number.isFinite(Number(vendor.modelScore))
     && qualificationAllowsScore(vendor));
   const topScore = eligible.length ? Math.max(...eligible.map((vendor) => Number(vendor.modelScore))) : null;
   return <section className="mt-14" data-testid="section-vendor-score-extension">
-    <div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02B / Qualification and evidence</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Decision readiness by option</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Qualification gates and coverage labels keep unsupported conclusions explicit. A suppressed dimension has no numeric score.</p></div>
+    <div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">{provisionalChoice ? '02B / Indicative fit' : '02B / Qualification and evidence'}</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">{provisionalChoice ? 'Estimated fit by option' : 'Decision readiness by option'}</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{provisionalChoice ? 'These are assumption-led estimates against your requirements, not source-verified product scores. Evidence details below do not block the indicative choice.' : 'Qualification gates and coverage labels keep unsupported conclusions explicit. A suppressed dimension has no numeric score.'}</p></div>
     <div className="grid gap-5 lg:grid-cols-2">
       {extended.map((vendor) => {
         const score = Number(vendor.modelScore);
         const scoreEligible = qualificationAllowsScore(vendor);
+        const estimate = provisionalChoice ? indicativeFitScore(comparison, vendor.vendor) : null;
         const difference = topScore === null || !scoreEligible || !Number.isFinite(score) ? null : topScore - score;
         const dimensions = Array.isArray(vendor.dimensionScores) ? vendor.dimensionScores : [];
         return <article key={vendor.vendor} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid={`vendor-score-extension-${String(vendor.vendor).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3>{difference !== null && <p className="mt-1 text-[10px] font-bold uppercase tracking-[.1em] text-[#7b817e]">{difference === 0 ? 'Leads' : scoreDifferenceLabel(difference)}</p>}</div><div className="flex items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.qualificationStatus || 'Not established').replaceAll('_', ' ')}</span>{scoreEligible && Number.isFinite(score) ? <span className="mono text-sm font-bold text-[#202840]">{Math.round(score)}/100</span> : <span className="mono text-xs font-bold text-[#687083]">Not scored</span>}</div></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3>{difference !== null && <p className="mt-1 text-[10px] font-bold uppercase tracking-[.1em] text-[#7b817e]">{difference === 0 ? 'Leads' : scoreDifferenceLabel(difference)}</p>}</div><div className="flex items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{estimate !== null ? 'Indicative estimate' : String(vendor.qualificationStatus || 'Not established').replaceAll('_', ' ')}</span>{estimate !== null ? <span className="mono text-sm font-bold text-[#202840]">Est. {estimate}/100</span> : scoreEligible && Number.isFinite(score) ? <span className="mono text-sm font-bold text-[#202840]">{Math.round(score)}/100</span> : <span className="mono text-xs font-bold text-[#687083]">Not scored</span>}</div></div>
           {Array.isArray(vendor.qualificationGates) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Qualification gates</p><div className="mt-2 space-y-2">{vendor.qualificationGates.map((gate: any, index: number) => <div key={`${gate.gate}-${index}`} className="rounded-lg border border-[#e3ddcf] bg-white/50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-bold text-[#202840]">{gate.gate}</span><span className="rounded-full bg-[#e7e2d4] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(gate.status || 'UNKNOWN').replaceAll('_', ' ')}{gate.mandatory ? ' · mandatory' : ''}</span></div>{gate.rationale && <p className="mt-1 text-[11px] leading-5 text-[#687083]">{gate.rationale}</p>}{Array.isArray(gate.evidenceSourceIds) && gate.evidenceSourceIds.length > 0 && <p className="mt-1 text-[9px] text-[#85877f]">Evidence IDs: {gate.evidenceSourceIds.join(', ')}</p>}</div>)}</div></div>}
-          {Array.isArray(vendor.dimensionScores) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Dimension scores</p><div className="mt-2 space-y-3">{VENDOR_SCORE_DIMENSIONS.map((name) => { const dimension = dimensions.find((item: any) => item.dimension === name); if (!dimension) return null; const suppressed = dimension.coverageStatus === 'SUPPRESSED' || dimension.score === undefined || dimension.score === null; return <div key={name}><div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-bold text-[#202840]">{name}</span><span className="mono font-bold text-[#0f766e]">{suppressed ? 'Suppressed' : `${Math.round(Number(dimension.score))}/100`}</span></div><div className="mt-1 flex items-center justify-between gap-3 text-[9px] text-[#85877f]"><span>{coverageLabel(dimension.coverageStatus)}</span><span>{dimension.coverage ?? 0}% coverage · {dimension.supportedSubcriteria ?? 0}/{dimension.totalSubcriteria ?? 0} supported</span></div>{dimension.rationale && <p className="mt-1 text-[10px] leading-4 text-[#687083]">{dimension.rationale}</p>}</div>; })}</div></div>}
-          {(vendor.evidenceConfidence !== undefined || vendor.evidenceCoverage !== undefined) && <div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence confidence</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{vendor.evidenceConfidence ?? '—'}%</p></div><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence coverage</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{vendor.evidenceCoverage ?? '—'}%</p></div></div>}
+          {Array.isArray(vendor.dimensionScores) && <div className="mt-5"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Evidence coverage</p><div className="mt-2 space-y-3">{VENDOR_SCORE_DIMENSIONS.map((name) => { const dimension = dimensions.find((item: any) => item.dimension === name); if (!dimension) return null; const suppressed = dimension.coverageStatus === 'SUPPRESSED'; return <div key={name}><div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-bold text-[#202840]">{name}</span><span className="mono font-bold text-[#0f766e]">{dimension.supportedSubcriteria ?? 0}/{dimension.totalSubcriteria ?? 0} verified metrics{suppressed ? ' (Suppressed)' : ''}</span></div><div className="mt-1 flex items-center justify-between gap-3 text-[9px] text-[#85877f]"><span>{coverageLabel(dimension.coverageStatus)}</span><span>{formatReportDecimal(dimension.coverage)}% evidence coverage</span></div>{dimension.rationale && <p className="mt-1 text-[10px] leading-4 text-[#687083]">{dimension.rationale}</p>}</div>; })}</div></div>}
+          {(vendor.evidenceConfidence !== undefined || vendor.evidenceCoverage !== undefined) && <div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence confidence</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{formatReportDecimal(vendor.evidenceConfidence)}%</p></div><div className="rounded-lg bg-[#202840] p-3 text-[#f8f4e8]"><p className="mono text-[9px] uppercase text-[#bde3d8]">Evidence coverage</p><p className="mt-1 text-xl font-bold text-[#d9ef66]">{formatReportDecimal(vendor.evidenceCoverage)}%</p></div></div>}
           {[['Strengths', vendor.strengths], ['Gaps', vendor.gaps], ['Conditions', vendor.conditions], ['Limitations', vendor.limitations]].map(([label, items]) => Array.isArray(items) && items.length ? <div className="mt-4" key={label as string}><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{label as string}</p><ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-5 text-[#687083]">{(items as string[]).map((item, index) => <li key={`${label}-${index}`}>{item}</li>)}</ul></div> : null)}
         </article>;
       })}
@@ -1215,6 +1616,7 @@ export function comparedSetAlternatives(comparison: any): Array<{
   qualificationStatus: string;
   rationale: string;
 }> {
+  comparison = reconcileReportScores(comparison);
   const vendors = Array.isArray(comparison?.vendors)
     ? comparison.vendors.map((vendor: unknown) => String(vendor).trim()).filter(Boolean)
     : (comparison?.vendorScores || []).map((vendor: any) => String(vendor?.vendor || '').trim()).filter(Boolean);
@@ -1222,10 +1624,12 @@ export function comparedSetAlternatives(comparison: any): Array<{
     (vendor: string) => vendor.toLowerCase() === String(value || '').trim().toLowerCase(),
   );
   const hasConfirmedRecommendationContract = Boolean(comparison?.confirmedRecommendation);
+  const confirmedContractQualified = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
   const confirmedOption = hasConfirmedRecommendationContract
     ? comparison.confirmedRecommendation.status === 'CONFIRMED'
       ? canonicalOption(comparison.confirmedRecommendation.option)
-      : undefined
+      : isProvisionalChoice(comparison) ? canonicalOption(comparison.recommendation) : undefined
     : canonicalOption(comparison?.recommendation);
   const provided = Array.isArray(comparison?.alternatives) ? comparison.alternatives : [];
   const source = provided.length
@@ -1248,18 +1652,27 @@ export function comparedSetAlternatives(comparison: any): Array<{
     return [{
       option,
       rank: Number.isInteger(alternative?.rank) && alternative.rank > 0 ? alternative.rank : index + 1,
-      score: alternative?.score !== null && Number.isFinite(rawScore) ? Math.round(rawScore) : null,
-      scoreDifference: alternative?.scoreDifference !== null && Number.isFinite(rawDifference) ? Math.max(0, Math.round(rawDifference)) : null,
+      score: confirmedContractQualified && alternative?.score !== null && Number.isFinite(rawScore)
+        ? Math.round(rawScore)
+        : null,
+      scoreDifference: confirmedContractQualified && alternative?.scoreDifference !== null && Number.isFinite(rawDifference)
+        ? Math.max(0, Math.round(rawDifference))
+        : null,
       qualificationStatus: String(alternative?.qualificationStatus || 'NOT_ESTABLISHED'),
-      rationale: String(alternative?.rationale || `${option} remains an alternative from the compared set.`),
+      rationale: ['INSUFFICIENT_EVIDENCE', 'NOT_QUALIFIED'].includes(String(alternative?.qualificationStatus))
+        ? 'No evidence-backed verdict was established; this option remains under consideration pending provenance-complete evidence.'
+        : String(alternative?.rationale || `${option} remains an alternative from the compared set.`),
     }];
   });
 }
 
 export function DecisionRecommendationCard({ comparison }: { comparison: any }) {
+  comparison = reconcileReportScores(comparison);
   const decisionQuality = computeDecisionQuality(comparison);
   const hasConfirmedRecommendationContract = Boolean(comparison?.confirmedRecommendation);
   const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED';
+  const confirmedContractUsable = contractConfirmed
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(String(comparison.confirmedRecommendation.basis));
   const recommendation = String(
     contractConfirmed ? comparison.confirmedRecommendation.option : comparison?.recommendation || '',
   ).trim();
@@ -1271,31 +1684,48 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
     && decisionQuality.lensWinner.winner.toLowerCase() === recommendation.toLowerCase(),
   );
   const decisionUsable = Boolean(recommendedVendor)
-    && (decisionQuality.decision !== 'FAIL' || recommendationMatchesLens)
+    && (decisionQuality.decision !== 'FAIL' || recommendationMatchesLens || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = provisionalLensDecisionUsable(comparison)
     || (Boolean(recommendedVendor) && recommendationMatchesLens && decisionQuality.decision === 'FAIL');
   const isEvidenceLimitedLeader = provisionalLensUsable || (decisionUsable && decisionQuality.decision !== 'PASS');
-  const decisionVisible = hasConfirmedRecommendationContract
+  const provisionalChoice = isProvisionalChoice(comparison);
+  const decisionVisible = provisionalChoice || (hasConfirmedRecommendationContract
     ? contractConfirmed && Boolean(recommendedVendor) && !hasAdjustedTopScoreTie(comparison)
-    : decisionUsable || provisionalLensUsable;
+    : decisionUsable || provisionalLensUsable);
   const contractEvidenceLimited = contractConfirmed
     && comparison.confirmedRecommendation.basis === 'EVIDENCE_LIMITED';
   const visibleRecommendation = contractConfirmed ? comparison.confirmedRecommendation.option : comparison.recommendation;
   const visibleScore = Number(contractConfirmed ? comparison.confirmedRecommendation.score : comparison.score);
-  const hasVisibleScore = decisionVisible && Number.isFinite(visibleScore);
+  const hasVisibleScore = decisionVisible && !provisionalChoice && Number.isFinite(visibleScore);
+  const estimatedScore = provisionalChoice ? indicativeFitScore(comparison, visibleRecommendation) : null;
+  const advice = comparison?.decisionAdvice?.winner === visibleRecommendation
+    ? comparison.decisionAdvice : null;
   const alternatives = comparedSetAlternatives(comparison);
   return <div className="space-y-4">
   <div className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8] shadow-[6px_6px_0_#d9ef66]" data-testid="card-recommended">
-    <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{decisionVisible && !isEvidenceLimitedLeader && !contractEvidenceLimited ? 'Confirmed recommendation' : decisionVisible ? 'Evidence-limited leader' : 'Evidence-limited result'}</p>
+    <p className="mono text-[10px] uppercase tracking-[.17em] text-[#a8b0c2]">{provisionalChoice ? 'Provisional recommendation' : decisionVisible && !isEvidenceLimitedLeader && !contractEvidenceLimited ? 'Confirmed recommendation' : decisionVisible ? 'Evidence-limited leader' : 'Evidence-limited result'}</p>
     <div className="mt-5 flex items-center justify-between gap-4">
       <div>
         <p className="display text-3xl font-bold tracking-[-.05em] text-[#d9ef66]">{decisionVisible ? visibleRecommendation : 'No definitive winner'}</p>
-        <p className="mt-2 text-xs text-[#a8b0c2]">{decisionVisible && !isEvidenceLimitedLeader && !contractEvidenceLimited ? 'Best overall fit from the compared options' : decisionVisible ? 'Best available evidence fit; broader evidence incomplete' : hasAdjustedTopScoreTie(comparison) ? 'The adjusted model remains tied' : 'No unique evidence-backed leader was established'}</p>
+        <p className="mt-2 text-xs text-[#a8b0c2]">{provisionalChoice ? estimatedScore !== null ? `Indicative fit ${estimatedScore}/100 · assumption-led, not a verified overall score` : 'A named preference, not a verified overall score' : decisionVisible && !isEvidenceLimitedLeader && !contractEvidenceLimited ? 'Best overall fit from the compared options' : decisionVisible ? 'Best available evidence fit; broader evidence incomplete' : hasAdjustedTopScoreTie(comparison) ? 'The adjusted model remains tied' : 'No unique evidence-backed leader was established'}</p>
       </div>
       {hasVisibleScore && <ScoreRing score={Math.round(visibleScore)} />}
     </div>
+    {decisionVisible && advice && <div className="mt-5 border-t border-[#3b4662] pt-4" data-testid="decision-advice">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full bg-[#d9ef66] px-2.5 py-1 text-[10px] font-bold text-[#202840]">{advice.confidence.band} decision confidence · {advice.confidence.score}/100</span>
+        <span className="text-[10px] text-[#a8b0c2]">{advice.decisionType}</span>
+      </div>
+      <p className="mt-2 text-[10px] leading-4 text-[#a8b0c2]">{advice.confidence.basis}</p>
+      <div className="mt-4 space-y-3 text-xs leading-5">
+        <p><strong className="text-[#d9ef66]">Why it leads:</strong> {advice.whyItWon}</p>
+        <p><strong className="text-[#d9ef66]">Best for:</strong> {advice.bestFor}</p>
+        <p><strong className="text-[#d9ef66]">Not recommended if:</strong> {advice.notRecommendedIf}</p>
+        {advice.tradeoffs.length > 0 && <p><strong className="text-[#d9ef66]">Trade-off:</strong> {advice.tradeoffs.join(' ')}</p>}
+      </div>
+    </div>}
     {decisionQuality.decision !== 'PASS' && <div className="mt-5 border-t border-[#3b4662] pt-4">
       <AlertDialog>
         <AlertDialogTrigger asChild>
@@ -1332,7 +1762,7 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
       {alternatives.map((alternative) => <li key={alternative.option} className="rounded-xl border border-[#e1dacb] bg-white p-3" data-testid={`compared-alternative-${alternative.option.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>
         <div className="flex items-start justify-between gap-3">
           <div><p className="text-sm font-bold text-[#202840]">{alternative.rank}. {alternative.option}</p><p className="mt-1 text-[11px] leading-5 text-[#687083]">{alternative.rationale}</p></div>
-          <div className="shrink-0 text-right"><p className="mono text-xs font-bold text-[#0f766e]">{alternative.score === null ? 'Not scored' : `${alternative.score}/100`}</p>{alternative.scoreDifference !== null && <p className="mt-1 text-[9px] text-[#85877f]">{alternative.scoreDifference} pts behind</p>}</div>
+          <div className="shrink-0 text-right"><p className="mono text-xs font-bold text-[#0f766e]">{provisionalChoice && indicativeFitScore(comparison, alternative.option) !== null ? `Indicative ${indicativeFitScore(comparison, alternative.option)}/100` : alternative.score === null ? 'Not scored' : `${alternative.score}/100`}</p>{alternative.scoreDifference !== null && <p className="mt-1 text-[9px] text-[#85877f]">{alternative.scoreDifference} pts behind</p>}</div>
         </div>
         <p className="mt-2 text-[9px] font-bold uppercase tracking-[.08em] text-[#85877f]">{alternative.qualificationStatus.replaceAll('_', ' ')}</p>
       </li>)}
@@ -1343,8 +1773,10 @@ export function DecisionRecommendationCard({ comparison }: { comparison: any }) 
 
 function overallVendorScore(vendor: any): number {
   if (hasVendorScoreExtension(vendor)) {
+    const finalScore = Number(vendor?.score);
     const modelScore = Number(vendor?.modelScore);
-    return Math.max(0, Math.min(100, Math.round(Number.isFinite(modelScore) ? modelScore : 0)));
+    const score = Number.isFinite(finalScore) ? finalScore : modelScore;
+    return Math.max(0, Math.min(100, Math.round(Number.isFinite(score) ? score : 0)));
   }
   const baseScore = Number(vendor?.baseScore);
   const tieBreakBonus = Number(vendor?.providerRoleTieBreakBonus ?? 0);
@@ -1370,7 +1802,8 @@ export function weightedCriterionImpact(score: unknown, weight: unknown): number
 
 function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
   if (vendorScores.some(hasVendorScoreExtension)) return null;
-  const scoredVendors = vendorScores.filter((vendor) => Array.isArray(vendor.weightedScores) && vendor.weightedScores.length);
+  const scoredVendors = vendorScores.filter((vendor) => qualificationAllowsScore(vendor)
+    && Array.isArray(vendor.weightedScores) && vendor.weightedScores.length);
   if (!scoredVendors.length) return null;
   const radarData = scoredVendors[0].weightedScores.map((entry: any) => ({
     criterion: entry.criterion.replace('Innovation / Differentiation', 'Innovation').replace('Meets Needs / Features', 'Needs / Features').replace('Strategic Provider Role', 'Provider Role'),
@@ -1406,9 +1839,10 @@ const AI_CONTEXT = /\b(?:ai models?|artificial intelligence|chatgpt|claude|gemin
 const FINANCE_CONTEXT = /\b(?:bank|banking|credit card|finance|home loan|lender|loan|mortgage)\b/i;
 const INSURANCE_CONTEXT = /\b(?:insurance|insurer|policy)\b/i;
 
-export function additionalWeightRelevanceError(criterion: string, comparison: any): string {
+export function additionalWeightRelevanceError(criterion: string, comparison: any, mappedCriteria: string[] = []): string {
   const factor = criterion.trim();
   if (!factor) return 'Enter a named factor before adding a weight.';
+  if (factor.length > 100) return 'Custom factor names must be 100 characters or fewer.';
   const context = [
     comparison?.prompt,
     comparison?.category,
@@ -1431,8 +1865,8 @@ export function additionalWeightRelevanceError(criterion: string, comparison: an
   if (/\b(?:insurance premium|policy excess|claims? handling|coverage limit)\b/i.test(factor) && !INSURANCE_CONTEXT.test(context)) {
     return `"${factor}" is insurance-specific and is not relevant to ${label}.`;
   }
-  if (!RECOGNIZED_ADDITIONAL_FACTOR.test(factor)) {
-    return `"${factor}" cannot be mapped to a supported, evidence-backed comparison dimension.`;
+  if (!RECOGNIZED_ADDITIONAL_FACTOR.test(factor) && !mappedCriteria.length) {
+    return `"${factor}" needs a mapping to one of the evidence-backed comparison criteria.`;
   }
   return '';
 }
@@ -1484,54 +1918,93 @@ export function weightsBeforeAdditional(
 
 function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?: string[]; vendorScores?: any[] }) {
   if (!criteria.length || !vendorScores.length) return null;
+  const normalizeCriterionLabel = (value: string) => value
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   const rows = criteria.map((criterion) => {
     const mappedCriteria = defaultCriterionMatches(criterion);
     const scores = vendorScores.map((vendor) => {
-      const matched = mappedCriteria
-        .map((name) => vendor.weightedScores?.find((entry: any) => entry.criterion === name))
-        .filter(Boolean);
-      const score = matched.length
-        ? Math.round(matched.reduce((sum: number, entry: any) => sum + Number(entry.score ?? 50), 0) / matched.length)
-        : 50;
+      const weightedScores = Array.isArray(vendor.weightedScores) ? vendor.weightedScores : [];
+      const directMatch = weightedScores.find((entry: any) => (
+        normalizeCriterionLabel(String(entry.criterion || '')) === normalizeCriterionLabel(criterion)
+      ));
+      const matched = directMatch
+        ? [directMatch]
+        : mappedCriteria
+          .map((name) => weightedScores.find((entry: any) => entry.criterion === name))
+          .filter(Boolean);
+      const scoreAvailable = qualificationAllowsScore(vendor) && matched.length > 0;
+      const score = scoreAvailable
+        ? Math.round(matched.reduce((sum: number, entry: any) => sum + Number(entry.score), 0) / matched.length)
+        : null;
+      const neutralFallback = matched.some(isFallbackNeutralCriterion);
       const verifiedClaims = matched.flatMap((entry: any) => entry.evidence || [])
         .filter((evidence: any) => evidence.evidenceKind !== 'unverified' && evidence.sourceUrl).length;
-      return { vendor: vendor.vendor, score, verifiedClaims };
+      return { vendor: vendor.vendor, score, verifiedClaims, neutralFallback };
     });
     return { criterion, mappedCriteria, scores };
   });
   const colors = ['#0f766e', '#6b61c9', '#b94d45', '#9a6b20', '#2563a8', '#8b5a83'];
   return <section className="mt-14" data-testid="section-user-criteria-dashboard">
-    <div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">02A / Your criteria</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">How the options perform on the factors you named</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">This dashboard is separate from the default weighted decision model. It translates each requested factor to the closest evidence-backed model dimensions; missing evidence remains neutral rather than being estimated.</p></div>
+    <div className="mb-5"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">02A / Your criteria</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">How the options perform on the factors you named</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">This dashboard is separate from the default weighted decision model. Unsupported criteria use a neutral 50 only when comparable source-verified evidence is incomplete across the options.</p></div>
     <div className="grid gap-4 lg:grid-cols-2">
       {rows.map((row) => <article key={row.criterion} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid={`card-user-criterion-${row.criterion.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>
         <div className="flex items-start justify-between gap-4"><div><h3 className="display text-lg font-bold text-[#202840]">{row.criterion}</h3><p className="mt-1 text-[10px] text-[#7b817e]">Based on {row.mappedCriteria.join(' + ')}</p></div><span className="rounded-full bg-[#f0e5df] px-2.5 py-1 text-[9px] font-bold uppercase text-[#9a4c43]">User factor</span></div>
-        <div className="mt-5 space-y-4">{row.scores.map((entry, index) => <div key={entry.vendor}><div className="flex items-center justify-between gap-3 text-xs"><span className="font-bold text-[#202840]">{entry.vendor}</span><span className="mono font-bold text-[#0f766e]">{entry.score}/100</span></div><div className="mt-2 h-2 rounded-full bg-[#e0dacd]"><div className="h-2 rounded-full" style={{ width: `${entry.score}%`, backgroundColor: colors[index] ?? colors[0] }} /></div><p className="mt-1.5 text-[9px] text-[#85877f]">{entry.verifiedClaims ? `${entry.verifiedClaims} verified supporting claim${entry.verifiedClaims === 1 ? '' : 's'}` : 'No verified supporting claim; neutral evidence handling applies'}</p></div>)}</div>
+        <div className="mt-5 space-y-4">{row.scores.map((entry, index) => <div key={entry.vendor}><div className="flex items-center justify-between gap-3 text-xs"><span className="font-bold text-[#202840]">{entry.vendor}</span><span className="mono font-bold text-[#0f766e]">{entry.score === null ? 'Not scored' : `${entry.score}/100`}</span></div><div className="mt-2 h-2 rounded-full bg-[#e0dacd]"><div className="h-2 rounded-full" style={{ width: `${entry.score ?? 0}%`, backgroundColor: colors[index] ?? colors[0] }} /></div><p className="mt-1.5 text-[9px] text-[#85877f]">{entry.score === null ? 'No comparable criterion rating was returned' : entry.neutralFallback ? 'Neutral 50 fallback — comparable source-verified evidence was incomplete across options' : entry.verifiedClaims ? `${entry.verifiedClaims} verified supporting claim${entry.verifiedClaims === 1 ? '' : 's'}` : 'No verified supporting claim was found'}</p></div>)}</div>
       </article>)}
     </div>
   </section>;
 }
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
+  comparison = reconcileReportScores(comparison);
   const decisionQuality = computeDecisionQuality(comparison);
-  const decisionUsable = decisionQuality.decision !== 'FAIL'
+  const contractConfirmed = comparison?.confirmedRecommendation?.status === 'CONFIRMED'
+    && Boolean(comparison?.confirmedRecommendation?.option);
+  const confirmedContractUsable = contractConfirmed
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED'].includes(String(comparison.confirmedRecommendation.basis));
+  const decisionUsable = (decisionQuality.decision !== 'FAIL' || confirmedContractUsable)
     && !hasAdjustedTopScoreTie(comparison)
     && qualificationDecisionUsable(comparison);
   const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
     && provisionalLensDecisionUsable(comparison);
-  const decisionVisible = decisionUsable || provisionalLensUsable;
-  const decisionReason = stripDecisionNote(comparison.recommendationReason);
+  const provisionalChoice = isProvisionalChoice(comparison);
+  const decisionVisible = provisionalChoice || contractConfirmed || decisionUsable || provisionalLensUsable;
+  const visibleRecommendation = contractConfirmed
+    ? String(comparison.confirmedRecommendation.option)
+    : comparison.recommendation;
+  const decisionReasonText = stripDecisionNote(
+    contractConfirmed
+      ? String(comparison.confirmedRecommendation.rationale || comparison.recommendationReason || '')
+      : comparison.recommendationReason,
+  );
+  const decisionReason = decisionVisible && visibleRecommendation !== 'No definitive winner'
+    ? decisionReasonText.replace(/\bNo definitive winner\b/gi, `${visibleRecommendation} is the recommended option`)
+    : decisionReasonText;
   const decisionNote = extractDecisionNote(comparison.recommendationReason);
+  const immediateActions = decisionAlignedActions(comparison);
+  const recommendationText = String(decisionReason);
+  const businessRationale = provisionalChoice
+    ? 'The price and feature lenses below show how each option fits your requirements. These ratings are estimates, not verified vehicle measurements.'
+    : businessRationaleText(comparison, recommendationText, decisionQuality.reasons, immediateActions);
   const runnerUp = [...(comparison.vendorScores || [])]
     .filter((vendor: any) => vendor.vendor !== comparison.recommendation)
     .sort((a: any, b: any) => b.score - a.score)[0];
-  const shortlist = Array.isArray(comparison.vendors) && comparison.vendors.length
-    ? comparison.vendors
-    : (comparison.vendorScores || []).map((vendor: any) => vendor.vendor);
+  const canonicalScoreRows = Array.isArray(comparison.vendorScores)
+    ? comparison.vendorScores.filter((vendor: any) => String(vendor?.vendor || '').trim())
+    : [];
+  const shortlist = canonicalScoreRows.length
+    ? canonicalScoreRows.map((vendor: any) => vendor.vendor)
+    : Array.isArray(comparison.vendors) ? comparison.vendors : [];
   const shortlistSummary = shortlist
     .map((vendorName: string) => {
       const scoreEntry = (comparison.vendorScores || []).find((vendor: any) => vendor.vendor === vendorName);
+      const estimate = provisionalChoice ? indicativeFitScore(comparison, vendorName) : null;
       const score = scoreEntry && qualificationAllowsScore(scoreEntry) ? overallVendorScore(scoreEntry) : null;
-      return `${vendorName} ${score === null ? '(not scored)' : `${score}/100`}`;
+      return `${vendorName} ${estimate !== null ? `(indicative ${estimate}/100)` : score === null ? '(not scored)' : `${score}/100`}`;
     })
     .join(' · ');
   return <section className={compact ? '' : 'mt-10'} data-testid={compact ? undefined : 'section-executive-brief'}>
@@ -1540,9 +2013,9 @@ export function ExecutiveDecisionBrief({ comparison, compact = false }: { compar
       <span className="mono text-[10px] uppercase text-[#85877f]">Prepared {new Date(comparison.createdAt || Date.now()).toLocaleDateString()}</span>
     </div>
     <div className="mt-5 grid gap-4 md:grid-cols-3">
-      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{decisionUsable ? 'Decision' : provisionalLensUsable ? 'Evidence-limited leader' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionVisible ? comparison.recommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionVisible ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
-      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p><p className="mt-3 text-sm leading-6 text-[#4f596d]">{renderDecisionText(comparison.executiveSummary)}</p>{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}{shortlistSummary && <p className="mt-3 border-t border-[#e2dccf] pt-3 text-xs leading-5 text-[#687083]" data-testid="brief-shortlist"><strong>Shortlist assessed:</strong> {shortlistSummary}</p>}</article>
-      <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{(comparison.nextSteps || []).slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
+      <article className="rounded-2xl bg-[#202840] p-5 text-[#f8f4e8]" data-testid="card-decision"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">{provisionalChoice ? 'Provisional recommendation' : decisionUsable ? 'Decision' : provisionalLensUsable || contractConfirmed ? 'Evidence-limited leader' : 'Evidence-limited result'}</p><p className="display mt-3 text-2xl font-bold text-[#d9ef66]">{decisionVisible ? visibleRecommendation : 'No definitive winner'}</p><p className="mt-3 text-xs leading-5 text-[#d4d9e4]">{decisionVisible ? renderDecisionText(decisionReason) : hasAdjustedTopScoreTie(comparison) ? renderDecisionText(decisionReason) : 'Resolve the release-quality issues before using this report for commitment.'}</p></article>
+      <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="card-business-rationale"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#b94d45]">Business rationale</p>{businessRationale && <p className="mt-3 text-sm leading-6 text-[#4f596d]">{businessRationale}</p>}{decisionUsable && runnerUp && <p className="mt-4 border-t border-[#e2dccf] pt-3 text-xs text-[#687083]"><strong>Closest alternative:</strong> {runnerUp.vendor} at {runnerUp.score}/100</p>}{shortlistSummary && <p className="mt-3 border-t border-[#e2dccf] pt-3 text-xs leading-5 text-[#687083]" data-testid="brief-shortlist"><strong>Shortlist assessed:</strong> {shortlistSummary}</p>}</article>
+      <article className="rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="card-immediate-action"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#0f766e]">Immediate action</p><ol className="mt-3 space-y-3">{immediateActions.slice(0, 3).map((step: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#39435a]" key={step}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{step}</li>)}</ol></article>
      </div>
      {decisionNote && <div className="mt-4 rounded-xl border border-[#d7c47b] bg-[#f5edc8] px-4 py-3 text-xs leading-5 text-[#715d16]" data-testid="decision-note"><strong>Note: {renderDecisionText(decisionNote)}</strong></div>}
   </section>;
@@ -1554,10 +2027,11 @@ const WEIGHTED_CRITERIA = [
   'Value for Money',
   'Brand Reputation',
   'Customer Advocacy / NPS',
+  'Safety & Security',
   'Innovation / Differentiation',
+  'Regulatory Compliance',
   'Strategic Provider Role',
   'Sustainability',
-  'Regulatory Compliance',
 ] as const;
 
 function validSwitchConditions(value: unknown): string[] {
@@ -1594,9 +2068,13 @@ function reweightedReportNarrative(
     .map((entry) => `${entry.criterion.trim()} ${entry.weight}% → ${mappedCriteriaForAdjustment(entry).join(' + ')}`)
     .join('; ');
   const recommendedVendor = vendorScores.find((vendor: any) => vendor.vendor === recommendation);
-  const allCriterionScoresIdentical = WEIGHTED_CRITERIA.every((criterion) => (
-    new Set(vendorScores.map((vendor: any) => vendor.weightedScores?.find((entry: any) => entry.criterion === criterion)?.score ?? 50)).size <= 1
-  ));
+  const allCriterionScoresIdentical = WEIGHTED_CRITERIA.every((criterion) => {
+    const scores = vendorScores.map((vendor: any) => (
+      vendor.weightedScores?.find((entry: any) => entry.criterion === criterion)
+    )).filter((entry: any) => Number.isFinite(entry?.score) && !isFallbackNeutralCriterion(entry))
+      .map((entry: any) => Number(entry.score));
+    return scores.length === vendorScores.length && new Set(scores).size <= 1;
+  });
   const hasTopScoreTie = vendorScores.filter((vendor: any) => vendor.score === topScore).length > 1;
   const refreshedVendorScores = vendorScores.map((vendor: any) => {
     const weightedAdvantages = (vendor.weightedScores || []).flatMap((criterion: any) => {
@@ -1631,28 +2109,99 @@ function reweightedReportNarrative(
   const recommendationReason = hasTopScoreTie
     ? `The adjusted weights produce a tie at ${topScore}/100, so no option has an evidence-backed lead. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || 'your selected criteria'}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ''}${evidenceLimitation}`
     : `Based on your adjusted weights, ${recommendation} leads the weighted score at ${topScore}/100. The underlying evidence and criterion scores were retained; the active emphasis is ${weightSummary || 'your selected criteria'}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ''}${evidenceLimitation}`;
+  const subject = hasTopScoreTie ? 'each shortlisted option' : recommendation;
+  const alternative = vendorScores.find((vendor: any) => vendor.vendor !== recommendation)?.vendor || 'another shortlisted option';
+  const focus = additionalWeights.find((entry) => entry.weight > 0)?.criterion
+    || activeWeights[0]?.criterion || 'the highest-priority requirement';
+  const vehicle = isVehiclePurchaseReport(comparison);
+  const business = !vehicle && (
+    /\b(?:software|saas|platform|crm|erp|cloud|cms|business system)\b/i.test(comparison.prompt || '')
+    || /\b(?:CRM|Customer support|Work management|Analytics|Cloud infrastructure|Marketing|Accounting|Digital experience)\b/i.test(comparison.category || '')
+  );
+  const checks = vehicle
+    ? ['exact locally available variant, safety and warranty terms', 'written drive-away quotes and ownership costs', 'test drives before placing an order']
+    : business
+      ? ['a representative workflow pilot and IT/security approval', 'like-for-like implementation, recurring and exit costs', 'a phased migration plan with a rollback checkpoint']
+      : ['the exact product or plan and required features', 'written quotes, exclusions and ownership terms', 'a final review before buying or signing'];
+  const plan = [
+    ['Validation gates', `Validate ${subject} against ${focus}: require ${checks[0]}. Adjusted scores do not verify product claims or qualification.`],
+    ['Trade-off', `Compare ${subject} with ${alternative} using ${checks[1]}; the modeled lead may change after these checks.`],
+    ['Sequence', `First agree the ${focus} acceptance test; then verify ${checks[0]}; obtain ${checks[1]}; finish with ${checks[2]}.`],
+    ['Owner', business
+      ? 'Business owner: pilot and adoption. IT/security: integration and data. Procurement: commercial terms. Sponsor: go/no-go.'
+      : 'Buyer: requirements and budget. Seller or provider: current written terms. Buyer or adviser: check ongoing costs and conditions.'],
+    ['Change the choice', hasTopScoreTie
+      ? `Keep the choice open until one option passes ${focus} and the comparable commercial checks.`
+      : `Reconsider ${alternative} if ${recommendation} fails ${focus} or verified like-for-like terms make ${alternative} the better fit.`],
+  ];
   return {
     vendorScores: refreshedVendorScores,
     executiveSummary,
     recommendationReason,
-    weightAdjustments: additionalWeights.map((entry) => ({
+    weightAdjustments: additionalWeights.filter((entry) => entry.criterion.trim() && entry.weight > 0).map((entry) => ({
       criterion: entry.criterion.trim(),
       weight: entry.weight,
       mappedCriteria: mappedCriteriaForAdjustment(entry),
     })),
     insights: [
       `Adjusted decision model — ${weightSummary || 'selected criteria'}.${additionalSummary ? ` Custom factors: ${additionalSummary}.` : ''}`,
-      ...(comparison.insights || []).filter((insight: string) => !insight.startsWith('Adjusted decision model —')),
+      ...(comparison.insights || []).filter((insight: string) =>
+        !/^(?:Adjusted decision model —|Decision basis —|Review-signal winner:|Provisional lens winner —)/i.test(insight)),
+    ],
+    nextSteps: [
+      ...(comparison.nextSteps || []).filter((step: string) => !step.startsWith('Decision strategy — ')),
+      ...plan.map(([label, text]) => `Decision strategy — ${label}: ${text}`),
     ],
   };
 }
 
+function guestComparableCriterionScores(comparison: any, criterion: string): Record<string, number> | null {
+  const rows = (comparison.vendorScores || []).map((vendor: any) => ({
+    vendor: vendor.vendor as string,
+    evidence: (vendor.weightedScores?.find((row: any) => row.criterion === criterion)?.evidence || [])
+      .filter((entry: any) => /^docsha256:[a-f0-9]{64}$/i.test(String(entry.sourceId ?? ''))
+        && String(entry.sourceId).slice(10).toLowerCase() === String(entry.documentSha256 ?? '').toLowerCase()
+        && Number.isInteger(entry.sourceTextStart) && Number.isInteger(entry.sourceTextEnd)
+        && entry.sourceTextEnd > entry.sourceTextStart && entry.sourceTextStart >= 0
+        && ['quantitative', 'percentage'].includes(entry.evidenceKind)
+        && Number.isFinite(entry.normalizedScore)
+        && String(entry.metricSubject ?? '').toLowerCase() === String(vendor.vendor).toLowerCase()
+        && entry.supportDirection !== 'contradicts'
+        && String(entry.metricKey ?? '').trim() && String(entry.metricBasis ?? '').trim()
+        && !/winner_share|analyst_judgment|missing_evidence|insufficient_comparable|provider_role/i.test(String(entry.normalizationMethod ?? ''))),
+  }));
+  const key = (entry: any) => [entry.metricKey, entry.metricBasis, entry.rawMetricUnit, entry.normalizationDirection]
+    .map((part) => String(part ?? '').toLowerCase().trim()).join('|');
+  const shared = rows[0]?.evidence.map(key).filter((value: string) => rows.every((row: any) => row.evidence.some((entry: any) => key(entry) === value))) || [];
+  if (!shared.length) return null;
+  return Object.fromEntries(rows.map((row: any) => {
+    const scores = [...new Set(shared)].map((value) => {
+      const entries = row.evidence.filter((entry: any) => key(entry) === value);
+      return entries.reduce((sum: number, entry: any) => sum + entry.normalizedScore, 0) / entries.length;
+    });
+    return [row.vendor, Math.round(scores.reduce((sum: number, score: number) => sum + score, 0) / scores.length)];
+  }));
+}
+
 function reweightGuestComparison(comparison: any, weights: Record<string, number>, additionalWeights: AdditionalWeight[]) {
+  const documentedScores = Object.fromEntries(WEIGHTED_CRITERIA.map((criterion) => [
+    criterion, guestComparableCriterionScores(comparison, criterion),
+  ]));
+  const qualifiedModel = (comparison.vendorScores || []).some((vendor: any) => Boolean(vendor.qualificationStatus));
+  const blockedByQualification = qualifiedModel && (comparison.vendorScores || []).some((vendor: any) =>
+    !['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(vendor.qualificationStatus)
+    || vendor.qualificationGates?.some((gate: any) => gate.mandatory && gate.status === 'FAIL'));
+  const comparableWeightedLead = WEIGHTED_CRITERIA.some((criterion) =>
+    (weights[criterion] || 0) > 0 && documentedScores[criterion]
+    && new Set(Object.values(documentedScores[criterion] as Record<string, number>).map(Math.round)).size > 1);
+  const evidenceBlocked = qualifiedModel && (blockedByQualification || !comparableWeightedLead);
   const vendorScores = (comparison.vendorScores || []).map((vendor: any) => {
     const weightedScores = WEIGHTED_CRITERIA.map((criterion) => {
       const source = (vendor.weightedScores || []).find((entry: any) => entry.criterion === criterion);
       const weight = weights[criterion] ?? source?.weight ?? 0;
       const evidence = source?.evidence || [];
+      const documentedScore = documentedScores[criterion]?.[vendor.vendor];
+      const score = documentedScore ?? 50;
       const usable = evidence.filter((entry: any) => entry.evidenceKind !== 'unverified');
       const allocationWeights = evidence.map((entry: any) => usable.length && entry.evidenceKind === 'unverified' ? 0 : Math.max(1, entry.confidence ?? 1));
       const totalAllocationWeight = allocationWeights.reduce((sum: number, value: number) => sum + value, 0) || 1;
@@ -1660,43 +2209,25 @@ function reweightGuestComparison(comparison: any, weights: Record<string, number
         ...source,
         criterion,
         weight,
+        score,
+        rationale: documentedScore === undefined
+          ? 'No comparable verified metric for every option; this criterion remains neutral.'
+          : 'Recalculated from the original comparable documented metric evidence.',
         evidence: evidence.map((evidence: any, index: number) => ({
           ...evidence,
           criterionWeight: weight,
-          weightedContribution: Number(((source?.score ?? 50) * weight / 100 * allocationWeights[index]! / totalAllocationWeight).toFixed(2)),
+          weightedContribution: documentedScore === undefined ? 0 : Number((score * weight / 100 * allocationWeights[index]! / totalAllocationWeight).toFixed(2)),
         })),
       };
     });
+    const score = evidenceBlocked ? 0 : Math.round(weightedScores.reduce((total, entry) => total + entry.score * entry.weight, 0) / 100);
     return {
       ...vendor,
       weightedScores,
-      score: Math.round(weightedScores.reduce((total, entry) => total + (entry.score ?? 50) * entry.weight, 0) / 100),
+      score,
+      ...(qualifiedModel ? { modelScore: score } : {}),
     };
   });
-  const rolePriority: Record<string, number> = { core_provider: 1, accelerator: 2, expert: 3, leader: 4 };
-  for (const vendor of vendorScores) {
-    const roleCriterion = vendor.weightedScores.find((entry: any) => entry.criterion === 'Strategic Provider Role');
-    if (roleCriterion) roleCriterion.score = 0;
-    const baseCriteria = vendor.weightedScores.filter((entry: any) => entry.criterion !== 'Strategic Provider Role');
-    const baseWeight = baseCriteria.reduce((total: number, entry: any) => total + entry.weight, 0);
-    vendor.baseScore = baseWeight > 0
-      ? Math.round(baseCriteria.reduce((total: number, entry: any) => total + (entry.score ?? 50) * entry.weight, 0) / baseWeight)
-      : vendor.score;
-    vendor.providerRoleTieBreakBonus = 0;
-    vendor.score = vendor.baseScore;
-  }
-  const baseTopScore = Math.max(...vendorScores.map((vendor: any) => vendor.baseScore), 0);
-  const baseTied = vendorScores.filter((vendor: any) => vendor.baseScore === baseTopScore);
-  if (baseTied.length > 1) {
-    const highestRole = Math.max(...baseTied.map((vendor: any) => rolePriority[vendor.providerRole] ?? rolePriority.leader));
-    const preferred = baseTied.filter((vendor: any) => (rolePriority[vendor.providerRole] ?? rolePriority.leader) === highestRole);
-    if (preferred.length === 1) {
-      preferred[0].providerRoleTieBreakBonus = 2;
-      preferred[0].score = Math.min(100, preferred[0].baseScore + 2);
-      const roleCriterion = preferred[0].weightedScores.find((entry: any) => entry.criterion === 'Strategic Provider Role');
-      if (roleCriterion) roleCriterion.score = 100;
-    }
-  }
   const ranked = [...vendorScores].sort((a: any, b: any) => b.score - a.score);
   const topScore = ranked[0]?.score ?? comparison.score;
   const tied = ranked.filter((vendor: any) => vendor.score === topScore);
@@ -1707,8 +2238,21 @@ function reweightGuestComparison(comparison: any, weights: Record<string, number
   return {
     ...comparison,
     ...narrative,
-    score: topScore,
-    recommendation: tied.length > 1 ? 'No definitive winner' : recommendation,
+    ...(evidenceBlocked ? {
+      vendorScores: narrative.vendorScores.map((vendor: any) => ({
+        ...vendor,
+        verdict: vendor.qualificationStatus === 'NOT_QUALIFIED'
+          ? vendor.verdict : `${vendor.vendor} has no confirmed adjusted winner: qualification or comparable evidence is incomplete.`,
+      })),
+      executiveSummary: 'This report was regenerated with your adjusted weights, but the original qualification gates or comparable evidence do not support a new winner.',
+      recommendationReason: 'No qualified option: adjusted weights cannot override failed qualification gates or missing comparable evidence.',
+    } : {}),
+    score: evidenceBlocked ? 0 : topScore,
+    recommendation: evidenceBlocked ? 'No qualified option' : tied.length > 1 ? 'No definitive winner' : recommendation,
+    ...(qualifiedModel ? { confirmedRecommendation: {
+      status: 'NO_CONFIRMED_RECOMMENDATION', option: null, score: null, basis: 'NONE',
+      rationale: 'A regenerated decision must be checked against the updated weights.',
+    } } : {}),
   };
 }
 
@@ -1719,10 +2263,11 @@ export function WeightEditor({ comparison, guest, onUpdated }: { comparison: any
     'Value for Money': 20,
     'Brand Reputation': 7,
     'Customer Advocacy / NPS': 10,
+    'Safety & Security': 0,
     'Innovation / Differentiation': 8,
+    'Regulatory Compliance': 3,
     'Strategic Provider Role': 2,
     Sustainability: 5,
-    'Regulatory Compliance': 3,
   };
   const initialAdditionalWeights = (): AdditionalWeight[] => (
     Array.isArray(comparison.weightAdjustments)
@@ -1736,23 +2281,20 @@ export function WeightEditor({ comparison, guest, onUpdated }: { comparison: any
       : []
   );
   const initialWeights = () => {
-    const roleWeight = 2;
-    const variableTotal = 100 - roleWeight;
     const raw = Object.fromEntries(
       WEIGHTED_CRITERIA.map((criterion) => [
         criterion,
         Number(comparison.vendorScores?.[0]?.weightedScores?.find((entry: any) => entry.criterion === criterion)?.weight ?? standardWeights[criterion]),
       ]),
     );
-    const variableCriteria = WEIGHTED_CRITERIA.filter((criterion) => criterion !== 'Strategic Provider Role');
-    const rawVariableTotal = variableCriteria.reduce((sum, criterion) => sum + Math.max(0, raw[criterion] || 0), 0);
-    const normalized: Record<string, number> = { ...raw, 'Strategic Provider Role': roleWeight };
-    if (rawVariableTotal !== variableTotal) {
-      let remainder = variableTotal;
-      variableCriteria.forEach((criterion, index) => {
-        const value = index === variableCriteria.length - 1
+    const rawTotal = WEIGHTED_CRITERIA.reduce((sum, criterion) => sum + Math.max(0, raw[criterion] || 0), 0);
+    const normalized: Record<string, number> = { ...raw };
+    if (rawTotal !== 100) {
+      let remainder = 100;
+      WEIGHTED_CRITERIA.forEach((criterion, index) => {
+        const value = index === WEIGHTED_CRITERIA.length - 1
           ? remainder
-          : Math.floor((Math.max(0, raw[criterion] || 0) / Math.max(1, rawVariableTotal)) * variableTotal);
+          : Math.floor((Math.max(0, raw[criterion] || 0) / Math.max(1, rawTotal)) * 100);
         normalized[criterion] = value;
         remainder -= value;
       });
@@ -1773,15 +2315,14 @@ export function WeightEditor({ comparison, guest, onUpdated }: { comparison: any
       comparison.weightAdjustments || [],
     ],
   );
-  const fixedRoleWeight = Math.max(0, Math.min(100, Math.round(weights['Strategic Provider Role'] ?? 2)));
   const effectiveWeights = weightsIncludingAdditional(
-    { ...weights, 'Strategic Provider Role': fixedRoleWeight },
+    weights,
     additionalWeights,
   );
   const total = Object.values(effectiveWeights).reduce((sum, weight) => sum + (Number(weight) || 0), 0);
   const weightValidationMessage = weightTotalValidationMessage(total);
   const irrelevantWeightMessage = additionalWeights
-    .map((item) => additionalWeightRelevanceError(item.criterion, comparison))
+    .map((item) => additionalWeightRelevanceError(item.criterion, comparison, mappedCriteriaForAdjustment(item)))
     .find(Boolean) || '';
   useEffect(() => {
     setWeights(initialWeights());
@@ -1834,13 +2375,24 @@ export function WeightEditor({ comparison, guest, onUpdated }: { comparison: any
   };
   const addAdditionalWeight = () => {
     const criterion = newAdditionalCriterion.trim();
-    const relevanceError = additionalWeightRelevanceError(criterion, comparison);
+    const mappedCriteria = defaultCriterionMatches(criterion);
+    const relevanceError = additionalWeightRelevanceError(criterion, comparison, mappedCriteria);
     if (relevanceError) {
       setError(relevanceError);
       return;
     }
-    if (additionalWeights.some((item) => item.criterion.toLowerCase() === criterion.toLowerCase())) return;
-    setAdditionalWeights((current) => [...current, { id: current.length + 1, criterion, weight: 0 }]);
+    if (additionalWeights.length >= 8) {
+      setError('You can add up to eight custom factors.');
+      return;
+    }
+    if (additionalWeights.some((item) => item.criterion.toLowerCase() === criterion.toLowerCase())) {
+      setError('This custom factor is already in the model.');
+      return;
+    }
+    setAdditionalWeights((current) => [...current, {
+      id: Math.max(0, ...current.map((item) => item.id)) + 1,
+      criterion, weight: 0, mappedCriteria, mappedCriteriaSource: criterion,
+    }]);
     setNewAdditionalCriterion('');
     setError('');
   };
@@ -1850,32 +2402,28 @@ export function WeightEditor({ comparison, guest, onUpdated }: { comparison: any
       ? { ...item, weight: Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 0 }
       : item));
   };
-  const applyPriceFeaturePreset = () => setWeights({
-    ...standardWeights,
-    'Meets Needs / Features': 35,
-    'Quality & Reliability': 0,
-    'Value for Money': 63,
-    'Brand Reputation': 0,
-    'Customer Advocacy / NPS': 0,
-    'Innovation / Differentiation': 0,
-    'Strategic Provider Role': 2,
-    Sustainability: 0,
-    'Regulatory Compliance': 0,
-  });
   return <section className="mt-14 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-5 sm:p-7" data-testid="section-weight-editor">
     <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
       <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">01A / Adjust the decision model</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Regenerate with your priorities</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">Change the relative importance of each criterion. The evidence and criterion scores stay the same; only the weighted totals and recommendation change. This is useful when a factor is non-negotiable.</p></div>
       <div className={`shrink-0 rounded-xl px-4 py-3 text-center ${total === 100 ? 'bg-[#dcefe9] text-[#0f766e]' : 'bg-[#f7dfdc] text-[#9a3e38]'}`}><p className="mono text-[9px] uppercase tracking-[.12em]">Total weight</p><p className="mt-1 text-xl font-bold">{total}%</p></div>
     </div>
-    {isPriceCriterionProvided(comparison) && <div className="mt-5 rounded-xl border border-[#b7c9a6] bg-[#f8f4e8] p-4" data-testid="panel-price-feature-rationale"><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#0f766e]">Active lens rationale</p><p className="mt-2 text-xs leading-5 text-[#566074]">Because price is one of the requested criteria, the primary lens uses <strong>65% pricing evidence</strong> and <strong>35% feature evidence</strong>. The displayed 65%/35% split is represented in the full model as 63% Value for Money, 35% Features, and the reserved 2% provider-role tie-break.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={applyPriceFeaturePreset} className="focus-ring rounded-lg bg-[#0f766e] px-3 py-2 text-[11px] font-bold text-[#f8f4e8]" data-testid="button-apply-price-feature-preset">Use 65/35 lens</button><button type="button" onClick={() => { setWeights(standardWeights); setAdditionalWeights([]); }} className="focus-ring rounded-lg border border-[#9ebbb0] px-3 py-2 text-[11px] font-bold text-[#566074]" data-testid="button-restore-standard-weights">Restore standard weights</button></div></div>}
     {weightValidationMessage && <p className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7dfdc] px-3 py-2 text-xs font-bold text-[#9a3e38]" role="alert" data-testid="status-weight-total">{weightValidationMessage}</p>}
     <div className="mt-6 grid gap-x-6 gap-y-5 md:grid-cols-2">
-      {WEIGHTED_CRITERIA.map((criterion) => { const fixed = criterion === 'Strategic Provider Role'; const maxAllowed = fixed ? 2 : 100; return <label className="block" key={criterion}><div className="flex items-center justify-between gap-3 text-xs font-bold text-[#202840]"><span>{criterion}{fixed ? ' (fixed)' : ''}</span><div className="flex items-center gap-1"><input type="number" min={fixed ? 2 : 0} max={maxAllowed} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-2 py-1.5 text-right text-xs font-bold text-[#202840] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight`} /><span>%</span></div></div><input type="range" min={fixed ? 2 : 0} max={maxAllowed} disabled={fixed} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="mt-2 w-full accent-[#0f766e] disabled:cursor-not-allowed disabled:opacity-60" aria-label={`${criterion} weight slider`} /></label>; })}
+      {WEIGHTED_CRITERIA.map((criterion) => <label className="block" key={criterion}>
+        <div className="flex items-center justify-between gap-3 text-xs font-bold text-[#202840]">
+          <span>{criterion === 'Customer Advocacy / NPS' ? 'Customer Advocacy' : criterion}</span>
+          <div className="flex items-center gap-1">
+            <input type="number" min={0} max={100} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`${criterion} weight`} />
+            <span>%</span>
+          </div>
+        </div>
+        <input type="range" min={0} max={100} value={weights[criterion]} onChange={(event) => updateWeight(criterion, event.target.value)} className="mt-2 w-full accent-[#0f766e]" aria-label={`${criterion} weight slider`} />
+      </label>)}
     </div>
-     <div className="mt-7 border-t border-[#c8d99a] pt-5" data-testid="section-additional-weights"><div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#35665c]">Additional weights</p><p className="mt-1 text-[11px] leading-5 text-[#566074]">Add a relevant named factor and allocate part of the same 100% model. Domain-specific factors are accepted only when they apply to this comparison.</p></div><div className="flex w-full gap-2 sm:max-w-md"><input value={newAdditionalCriterion} onChange={(event) => { setNewAdditionalCriterion(event.target.value); setError(''); }} placeholder="e.g. implementation speed" className="focus-ring min-w-0 flex-1 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-3 py-2 text-xs text-[#202840]" aria-label="Additional criterion" /><button type="button" onClick={addAdditionalWeight} className="focus-ring rounded-lg bg-[#202840] px-3 py-2 text-xs font-bold text-[#f8f4e8]" data-testid="button-additional-weight">Add</button></div></div>{additionalWeights.length > 0 && <div className="mt-4 grid gap-3 md:grid-cols-2">{additionalWeights.map((item) => { const relevanceError = additionalWeightRelevanceError(item.criterion, comparison); return <div className={`rounded-lg border bg-[#f8f4e8] p-3 ${relevanceError ? 'border-[#d99b91]' : 'border-[#b7c9a6]'}`} key={item.id}><div className="flex items-center gap-2"><input value={item.criterion} onChange={(event) => { setAdditionalWeights((current) => current.map((entry) => entry.id === item.id ? { ...entry, criterion: event.target.value } : entry)); setError(''); }} className="focus-ring min-w-0 flex-1 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id}`} /><input type="number" min="0" max="98" value={item.weight} onChange={(event) => updateAdditionalWeight(item.id, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id} weight`} /><span className="text-xs">%</span><button type="button" onClick={() => setAdditionalWeights((current) => current.filter((entry) => entry.id !== item.id))} className="focus-ring rounded p-1 text-[#9a3e38]" aria-label={`Remove additional criterion ${item.criterion}`}><X size={14} /></button></div>{relevanceError ? <p className="mt-2 text-[10px] font-bold leading-4 text-[#9a3e38]" role="alert">{relevanceError}</p> : <p className="mt-2 text-[10px] text-[#687083]">Maps to {defaultCriterionMatches(item.criterion).join(' + ')}</p>}</div>; })}</div>}</div>
+     <div className="mt-7 border-t border-[#c8d99a] pt-5" data-testid="section-additional-weights"><div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="mono text-[9px] font-bold uppercase tracking-[.14em] text-[#35665c]">Your own weights</p><p className="mt-1 text-[11px] leading-5 text-[#566074]">Name a factor and choose which built-in evidence score it uses. Its percentage comes from the same 100% total, not an extra bonus.</p></div><div className="flex w-full gap-2 sm:max-w-md"><input value={newAdditionalCriterion} onChange={(event) => { setNewAdditionalCriterion(event.target.value); setError(''); }} placeholder="e.g. local support" className="focus-ring min-w-0 flex-1 rounded-lg border border-[#b7c9a6] bg-[#f8f4e8] px-3 py-2 text-xs text-[#202840]" aria-label="Additional criterion" /><button type="button" onClick={addAdditionalWeight} className="focus-ring rounded-lg bg-[#202840] px-3 py-2 text-xs font-bold text-[#f8f4e8]" data-testid="button-additional-weight">Add</button></div></div>{additionalWeights.length > 0 && <div className="mt-4 grid gap-3 md:grid-cols-2">{additionalWeights.map((item) => { const relevanceError = additionalWeightRelevanceError(item.criterion, comparison, mappedCriteriaForAdjustment(item)); return <div className={`rounded-lg border bg-[#f8f4e8] p-3 ${relevanceError ? 'border-[#d99b91]' : 'border-[#b7c9a6]'}`} key={item.id}><div className="flex items-center gap-2"><input value={item.criterion} onChange={(event) => { setAdditionalWeights((current) => current.map((entry) => entry.id === item.id ? { ...entry, criterion: event.target.value, mappedCriteriaSource: event.target.value } : entry)); setError(''); }} className="focus-ring min-w-0 flex-1 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id}`} /><input type="number" min="0" max="100" value={item.weight} onChange={(event) => updateAdditionalWeight(item.id, event.target.value)} className="focus-ring w-16 rounded-lg border border-[#d0c8b7] bg-white px-2 py-1.5 text-right text-xs font-bold text-[#202840]" aria-label={`Additional criterion ${item.id} weight`} /><span className="text-xs">%</span><button type="button" onClick={() => setAdditionalWeights((current) => current.filter((entry) => entry.id !== item.id))} className="focus-ring rounded p-1 text-[#9a3e38]" aria-label={`Remove additional criterion ${item.criterion}`}><X size={14} /></button></div><label className="mt-2 block text-[10px] text-[#687083]">Use evidence from<select value={mappedCriteriaForAdjustment(item)[0]} onChange={(event) => setAdditionalWeights((current) => current.map((entry) => entry.id === item.id ? { ...entry, mappedCriteria: [event.target.value], mappedCriteriaSource: entry.criterion } : entry))} className="focus-ring mt-1 w-full rounded border border-[#d0c8b7] bg-white px-2 py-1.5 text-xs" aria-label={`Evidence criterion for ${item.criterion}`}>{WEIGHTED_CRITERIA.map((criterion) => <option value={criterion} key={criterion}>{criterion === 'Customer Advocacy / NPS' ? 'Customer Advocacy' : criterion}</option>)}</select></label>{relevanceError && <p className="mt-2 text-[10px] font-bold leading-4 text-[#9a3e38]" role="alert">{relevanceError}</p>}</div>; })}</div>}</div>
     <div className="mt-6 flex flex-col gap-3 border-t border-[#c8d99a] pt-5 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-[11px] leading-5 text-[#566074]">Current winner: <strong>{comparison.recommendation}</strong>. {guest ? 'A regenerated report will update this result for the current session.' : 'A regenerated report will replace this saved result for your workspace.'}</p>
-       <div className="flex gap-2"><button type="button" onClick={() => { setWeights(initialWeights()); setAdditionalWeights([]); setError(''); }} className="focus-ring rounded-xl border border-[#9ebbb0] bg-[#f8f4e8] px-4 py-3 text-xs font-bold text-[#566074]">Reset</button><button type="button" onClick={regenerate} disabled={pending || total !== 100 || Boolean(irrelevantWeightMessage)} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="animate-spin" size={15} />}{pending ? 'Regenerating report' : 'Regenerate report'}</button></div>
+       <div className="flex gap-2"><button type="button" onClick={() => { setWeights(initialWeights()); setAdditionalWeights(initialAdditionalWeights()); setError(''); }} className="focus-ring rounded-xl border border-[#9ebbb0] bg-[#f8f4e8] px-4 py-3 text-xs font-bold text-[#566074]">Reset</button><button type="button" onClick={regenerate} disabled={pending || total !== 100 || Boolean(irrelevantWeightMessage)} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:opacity-50">{pending && <LoaderCircle className="animate-spin" size={15} />}{pending ? 'Regenerating report' : 'Regenerate report'}</button></div>
     </div>
     {error && <p className="mt-3 text-xs font-bold text-[#9a3e38]" role="alert">{error}</p>}
   </section>;
@@ -1915,7 +2463,9 @@ export function HeadToHead({ comparison }: { comparison: any }) {
   const alternatives = (comparison.vendorScores || []).filter((vendor: any) => vendor.vendor !== recommendation?.vendor);
   const [selectedName, setSelectedName] = useState(alternatives[0]?.vendor ?? '');
   const selected = alternatives.find((vendor: any) => vendor.vendor === selectedName) ?? alternatives[0];
-  if (!recommendation || !selected) return null;
+  if (!recommendation || !selected
+    || !qualificationAllowsScore(recommendation)
+    || !qualificationAllowsScore(selected)) return null;
   const switchConditions = validSwitchConditions(selected.switchConditions);
   const rows = (recommendation.weightedScores || []).map((criterion: any) => {
     const challenger = selected.weightedScores?.find((item: any) => item.criterion === criterion.criterion);
@@ -1958,9 +2508,9 @@ function VrioSection({ vendorScores = [] }: { vendorScores?: any[] }) {
   return <section className="mt-14" data-testid="section-vrio"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Strategic advantage</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">VRIO framework across the shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">VRIO tests whether each option creates value, is rare, is difficult to imitate, and is organized to capture that advantage.</p><div className="mt-5 grid gap-4 lg:grid-cols-2">{vendorScores.map((vendor) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor}><div className="flex items-center justify-between"><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3><span className="mono text-[10px] font-bold text-[#0f766e]">{vendor.score}/100</span></div><div className="mt-5 grid gap-3 sm:grid-cols-2">{dimensions.map(([key, label]) => { const item = vendor.vrio?.[key]; return <div className="rounded-xl bg-[#e7e2d4] p-3" key={key}><div className="flex items-center justify-between"><p className="text-xs font-bold text-[#202840]">{label}</p><span className="rounded-full bg-[#f8f4e8] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(item?.status || 'not available').replace('_', ' ')}</span></div>{item?.rationale && <p className="mt-2 text-[11px] leading-5 text-[#687083]">{item.rationale}</p>}</div>; })}</div><p className="mt-4 border-t border-[#e3ddcf] pt-4 text-xs leading-5 text-[#556075]"><strong>Implication:</strong> {vendor.vrio?.implication || 'No implication available.'}</p></article>)}</div></section>;
 }
 
-function MarketPositionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
+export function MarketPositionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
   if (!vendorScores.some((vendor) => vendor.marketPosition)) return null;
-  return <section className="mt-14" data-testid="section-market-position"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Market context</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Strategic role and market position</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Each option is classified for this decision as an accelerator, leader, core provider, or expert. Market position uses the latest local share, sales, or rank found, with its entity level, denominator, and period kept explicit.</p><div className="mt-5 overflow-x-auto rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><table className="w-full min-w-[960px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3">Option</th><th className="px-4 py-3">Strategic role</th><th className="px-4 py-3">Why</th><th className="px-4 py-3">Market share / sales / rank</th><th className="px-4 py-3">Scope / period</th><th className="px-4 py-3">Share value</th><th className="px-5 py-3">Evidence note</th></tr></thead><tbody>{vendorScores.map((vendor) => { const item = vendor.marketPosition || {}; return <tr className="border-t border-[#e7e2d4]" key={vendor.vendor}><td className="px-5 py-4 font-bold text-[#202840]">{vendor.vendor}</td><td className="px-4 py-4"><span className="rounded-full bg-[#dcefe9] px-2 py-1 text-[10px] font-bold uppercase text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></td><td className="max-w-[260px] px-4 py-4 leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Classification unavailable for this saved comparison.'}</td><td className="px-4 py-4 text-[#0f766e]">{item.marketShare || 'Unavailable'}</td><td className="px-4 py-4 text-[#687083]">{item.market || 'Relevant segment'}<br />{item.marketSharePeriod || ''}</td><td className="px-4 py-4 text-[#687083]">{item.shareValue || 'Not applicable'}<br />{item.shareValueAsOf || ''}</td><td className="px-5 py-4 leading-5 text-[#687083]">{item.evidence || item.applicability || 'No evidence note available.'}</td></tr>; })}</tbody></table></div></section>;
+  return <section className="mt-14" data-testid="section-market-position"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Market context</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Strategic role and market position</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Strategic roles are shown only when provenance-complete evidence supports the option's classification. Market position keeps the latest supported local share, sales, or rank explicit with its entity level, denominator, and period.</p><div className="mt-5 overflow-x-auto rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><table className="w-full min-w-[960px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3">Option</th><th className="px-4 py-3">Strategic role</th><th className="px-4 py-3">Why</th><th className="px-4 py-3">Market share / sales / rank</th><th className="px-4 py-3">Scope / period</th><th className="px-4 py-3">Share value</th><th className="px-5 py-3">Evidence note</th></tr></thead><tbody>{vendorScores.map((vendor) => { const item = vendor.marketPosition || {}; const role = providerRolePresentation(vendor); return <tr className="border-t border-[#e7e2d4]" key={vendor.vendor}><td className="px-5 py-4 font-bold text-[#202840]">{vendor.vendor}</td><td className="px-4 py-4"><span className="rounded-full bg-[#dcefe9] px-2 py-1 text-[10px] font-bold uppercase text-[#0f766e]">{role.label}</span></td><td className="max-w-[260px] px-4 py-4 leading-5 text-[#687083]">{role.rationale}</td><td className="px-4 py-4 text-[#0f766e]">{item.marketShare || 'Unavailable'}</td><td className="px-4 py-4 text-[#687083]">{item.market || 'Relevant segment'}<br />{item.marketSharePeriod || ''}</td><td className="px-4 py-4 text-[#687083]">{item.shareValue || 'Not applicable'}<br />{item.shareValueAsOf || ''}</td><td className="px-5 py-4 leading-5 text-[#687083]">{item.evidence || item.applicability || 'No evidence note available.'}</td></tr>; })}</tbody></table></div></section>;
 }
 
 function parseFrameworkOptionEntry(value: unknown, vendors: string[]): { vendor: string; text: string } | null {
@@ -2007,11 +2557,13 @@ export function actionableSoarEntries(
     `${comparison.category || ''} ${comparison.prompt || ''}`,
   );
   const vendorScores = Array.isArray(comparison.vendorScores) ? comparison.vendorScores : [];
+  const qualificationModelReport = vendorScores.some(hasVendorScoreExtension);
+  const hasQualifiedOverallRecommendation = comparison.confirmedRecommendation?.status === 'CONFIRMED'
+    && ['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS'].includes(comparison.confirmedRecommendation?.basis);
   const optionText = (vendor: string, dimension: string) => {
-    const stored = existing.get(`${dimension.toLowerCase()}::${vendor.toLowerCase()}`);
-    if (stored) return stored;
     const scorecard = vendorScores.find((entry: any) => String(entry.vendor).toLowerCase() === vendor.toLowerCase()) || {};
     const criteria = (Array.isArray(scorecard.weightedScores) ? scorecard.weightedScores : [])
+      .filter((entry: any) => Number.isFinite(entry.score) && !isFallbackNeutralCriterion(entry))
       .map((entry: any) => ({
         criterion: String(entry.criterion || 'Decision fit'),
         score: Math.max(0, Math.min(100, Math.round(Number(entry.score) || 0))),
@@ -2020,27 +2572,74 @@ export function actionableSoarEntries(
       }))
       .filter((entry: any) => entry.criterion !== 'Strategic Provider Role')
       .sort((left: any, right: any) => (right.score * right.weight) - (left.score * left.weight));
-    const strongest = criteria[0] || { criterion: 'overall decision fit', score: Math.round(Number(scorecard.score) || 0), weight: 0, rationale: '' };
-    const weakest = [...criteria].sort((left: any, right: any) => left.score - right.score)[0] || strongest;
+    const comparableScoresAvailable = qualificationAllowsScore(scorecard) && criteria.length > 0;
+    const stored = existing.get(`${dimension.toLowerCase()}::${vendor.toLowerCase()}`);
+    const storedContainsFallbackScore = /(?:\b\d+(?:\.\d+)?\/100\b|validate this provisional score against current product research)/i.test(stored || '');
+    if (stored && (!storedContainsFallbackScore || comparableScoresAvailable)) {
+      return hasQualifiedOverallRecommendation
+        ? stored.replace(
+            /No unique pricing or feature-row win is established yet\./gi,
+            'No unique leader for this individual evidence row; this does not change the conditional overall recommendation.',
+          )
+        : stored;
+    }
+    const capabilityContext = (() => {
+      const row = (comparison.features || []).find((feature: any) =>
+        String(feature?.dimension || feature?.item || '').trim().toLowerCase()
+          === 'retrieved capability context (not feature parity)',
+      );
+      const raw = row?.values?.[vendor];
+      const text = typeof raw === 'string'
+        ? raw
+        : String(raw?.excerpt || raw?.quote || raw?.text || raw?.value || '');
+      const url = typeof raw === 'object' && raw
+        ? String(raw.sourceUrl || raw.url || raw.evidenceUrl || '')
+        : (text.match(/https?:\/\/\S+/)?.[0] || '');
+      const quote = text.match(/["“][^"”]+["”]/)?.[0];
+      return quote && /^https?:\/\//i.test(url) ? { quote, url } : null;
+    })();
+    if (!comparableScoresAvailable) {
+      if (capabilityContext && dimension === 'Strengths') {
+        return `Publisher-stated capability context — ${capabilityContext.quote} This is context, not proven superiority. Buyer pilot check: confirm this claim in the stated source (${capabilityContext.url}) and test the capability against the brief using a representative workflow.`;
+      }
+      if (capabilityContext && dimension === 'Results') {
+        return `Evidence-backed acceptance check — use the publisher-stated context ${capabilityContext.quote} as a testable hypothesis, not a measured result. Buyer pilot check: reproduce the stated capability in a representative workflow and record pass/fail evidence against the brief (${capabilityContext.url}).`;
+      }
+      if (dimension === 'Strengths') return 'No score-backed strength is established; compare the same user requirements across every shortlisted option before relying on a claimed advantage.';
+      if (dimension === 'Opportunities') return 'No score-backed gap is established; collect comparable criterion ratings before deciding which option needs improvement.';
+      if (dimension === 'Aspirations') return 'Build a defensible position by testing the same stated requirements across the shortlisted options.';
+      return 'Acceptance test — compare the shortlisted options using the same workflow and record whether each meets the agreed requirements.';
+    }
+    const strongest = criteria[0]!;
+    const weakest = [...criteria].sort((left: any, right: any) => left.score - right.score)[0]!;
     const target = Math.min(85, Math.max(60, weakest.score + 10));
     const winningRows = [...(comparison.pricing || []), ...(comparison.features || [])]
       .filter((row: any) => String(row?.winner || '').toLowerCase() === vendor.toLowerCase())
       .map((row: any) => String(row.dimension || row.item || row.feature || '').trim())
       .filter(Boolean);
-    const verifiedRationale = hasOptionSpecificFrameworkEvidence(strongest.rationale)
+    const verifiedRationale = !qualificationModelReport && hasOptionSpecificFrameworkEvidence(strongest.rationale)
       ? ` ${strongest.rationale}`
       : '';
     const validationMethod = isVehicle
       ? 'a representative test drive, written on-road quote, warranty terms, and local service evidence'
       : 'a representative pilot, implementation plan, written commercial quote, and reference checks';
     if (dimension === 'Strengths') {
-      return `Current advantage — ${strongest.criterion} is the strongest weighted area at ${strongest.score}/100.${verifiedRationale} Product-manager use: make this the lead value proposition and test whether the advantage is defensible. Buyer use: treat it as a must-pass proof point, not a marketing claim.`;
+      if (capabilityContext) {
+        return `Publisher-stated capability context — ${capabilityContext.quote} This is context, not proven superiority. Buyer pilot check: confirm this claim in the stated source (${capabilityContext.url}) and test the capability against the brief using a representative workflow.`;
+      }
+      return qualificationModelReport
+        ? `Current advantage — ${strongest.criterion} has the strongest verified evidence coverage.${verifiedRationale} Product-manager use: make this the lead value proposition and test whether the advantage is defensible. Buyer use: treat it as a must-pass proof point, not a marketing claim.`
+        : `Current advantage — ${strongest.criterion} is the strongest weighted area at ${strongest.score}/100.${verifiedRationale} Product-manager use: make this the lead value proposition and test whether the advantage is defensible. Buyer use: treat it as a must-pass proof point, not a marketing claim.`;
     }
     if (dimension === 'Opportunities') {
       const win = winningRows[0]
         ? `Its clearest comparison win is ${winningRows[0]}.`
-        : 'No unique pricing or feature-row win is established yet.';
-      return `Decision opportunity — ${win} Improve ${weakest.criterion} from ${weakest.score}/100 toward at least ${target}/100 while preserving the ${strongest.criterion} advantage. Product managers should prioritize the gap in the roadmap or offer; buyers should use it in validation and negotiation.`;
+        : hasQualifiedOverallRecommendation
+          ? 'No unique leader for this individual evidence row; this does not change the conditional overall recommendation.'
+          : 'No unique leader is established for this individual evidence row.';
+      return qualificationModelReport
+        ? `Decision opportunity — ${win} Increase verified evidence coverage for ${weakest.criterion} while preserving the ${strongest.criterion} advantage. Product managers should prioritize the gap in the roadmap or offer; buyers should use it in validation and negotiation.`
+        : `Decision opportunity — ${win} Improve ${weakest.criterion} from ${weakest.score}/100 toward at least ${target}/100 while preserving the ${strongest.criterion} advantage. Product managers should prioritize the gap in the roadmap or offer; buyers should use it in validation and negotiation.`;
     }
     if (dimension === 'Aspirations') {
       const position = vendor === comparison.recommendation
@@ -2048,7 +2647,12 @@ export function actionableSoarEntries(
         : `Become a credible alternative to ${comparison.recommendation || 'the current leader'}`;
       return `Best-fit future state — ${position} by pairing ${strongest.criterion} with acceptable ${weakest.criterion}. The desired outcome is a choice that remains strong after real-world validation, ownership or implementation costs, and the user's highest-priority criteria are applied.`;
     }
-    return `Acceptance test — validate ${strongest.criterion} and ${weakest.criterion} through ${validationMethod}. Proceed only if ${weakest.criterion} reaches the ${target}/100 decision target without reducing ${strongest.criterion} below its current ${strongest.score}/100 level; otherwise keep the option conditional or switch.`;
+    if (dimension === 'Results' && capabilityContext) {
+      return `Evidence-backed acceptance check — use the publisher-stated context ${capabilityContext.quote} as a testable hypothesis, not a measured result. Buyer pilot check: reproduce the stated capability in a representative workflow and record pass/fail evidence against the brief (${capabilityContext.url}).`;
+    }
+    return qualificationModelReport
+      ? `Acceptance test — validate ${strongest.criterion} and ${weakest.criterion} through ${validationMethod}. Proceed only when both have sufficient verified evidence coverage; otherwise keep the option conditional or switch.`
+      : `Acceptance test — validate ${strongest.criterion} and ${weakest.criterion} through ${validationMethod}. Proceed only if ${weakest.criterion} reaches the ${target}/100 decision target without reducing ${strongest.criterion} below its current ${strongest.score}/100 level; otherwise keep the option conditional or switch.`;
   };
   return dimensions.map((dimension) => [
     dimension,
@@ -2056,29 +2660,122 @@ export function actionableSoarEntries(
   ]);
 }
 
-function StrategicFrameworkSection({ title, eyebrow, description, entries, vendors = [], testId }: { title: string; eyebrow: string; description: string; entries: [string, string[]][]; vendors?: string[]; testId: string }) {
+export function StrategicFrameworkSection({ title, eyebrow, description, entries, vendors = [], testId }: { title: string; eyebrow: string; description: string; entries: [string, string[]][]; vendors?: string[]; testId: string }) {
   if (!entries.length) return null;
   const optionSpecificEntries = entries.flatMap(([dimension, values]) => values
     .map((value) => ({ dimension, parsed: parseFrameworkOptionEntry(value, vendors) }))
     .filter((entry): entry is { dimension: string; parsed: { vendor: string; text: string } } => Boolean(entry.parsed && hasOptionSpecificFrameworkEvidence(entry.parsed.text))));
   if (vendors.length > 0 && optionSpecificEntries.length === 0) return null;
   const showByOption = vendors.length > 0;
+  const optionEntries = showByOption ? vendors.map((vendor) => ({
+    vendor,
+    entries: entries.flatMap(([dimension, values]) => {
+      const item = values
+        .map((value) => parseFrameworkOptionEntry(value, vendors))
+        .find((parsed) => parsed?.vendor.toLowerCase() === vendor.toLowerCase());
+      return item && hasOptionSpecificFrameworkEvidence(item.text) ? [{ dimension, text: item.text }] : [];
+    }),
+  })) : [];
+  const normalizedEntry = (text: string) => text.toLowerCase()
+    .replace(new RegExp(vendors.map((vendor) => vendor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi'), '[option]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const isGenericFallback = (text: string) => /(?:Product-manager use:|Buyer use:|Acceptance test\s*[—-]\s*validate|Best-fit future state\s*[—-])/i.test(text);
+  const entryCounts = new Map<string, number>();
+  optionEntries.forEach(({ entries: vendorEntries }) => vendorEntries.forEach(({ text }) => {
+    if (!isGenericFallback(text)) return;
+    const key = normalizedEntry(text);
+    entryCounts.set(key, (entryCounts.get(key) || 0) + 1);
+  }));
+  const sharedEvidenceGaps = [...entryCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([key]) => key);
   return <section className="mt-14" data-testid={testId}>
     <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">{eyebrow}</p>
     <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">{title}</h2>
     <p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{description}</p>
     {showByOption
-      ? <div className="mt-5 grid gap-4 lg:grid-cols-2">{vendors.map((vendor) => {
-        const vendorEntries = entries.flatMap(([dimension, values]) => {
-          const item = values
-            .map((value) => parseFrameworkOptionEntry(value, vendors))
-            .find((parsed) => parsed?.vendor.toLowerCase() === vendor.toLowerCase());
-          return item && hasOptionSpecificFrameworkEvidence(item.text) ? [{ dimension, text: item.text }] : [];
-        });
-        if (!vendorEntries.length) return null;
-        return <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor} data-testid={`${testId}-${vendor.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><h3 className="display text-xl font-bold text-[#202840]">{vendor}</h3><div className="mt-5 space-y-3">{vendorEntries.map(({ dimension, text }) => <div className="rounded-xl bg-[#e7e2d4] p-3" key={`${vendor}-${dimension}`}><p className="mono text-[9px] font-bold uppercase tracking-[.12em] text-[#b94d45]">{dimension}</p><p className="mt-2 text-xs leading-5 text-[#626b7b]">{text}</p></div>)}</div></article>;
+      ? <>{sharedEvidenceGaps.length > 0 && <div className="mt-5 rounded-xl border border-[#d7c47b] bg-[#f5edc8] px-4 py-3 text-xs leading-5 text-[#715d16]" data-testid={`${testId}-shared-evidence-gap`}><strong>Shared evidence gap:</strong> Repeated fallback findings were consolidated because no distinct option-specific evidence was available for those dimensions. Validate the options against the same source-linked checks before deciding.</div>}<div className="mt-5 grid gap-4 lg:grid-cols-2">{optionEntries.map(({ vendor, entries: vendorEntries }) => {
+        const visibleEntries = vendorEntries.filter(({ text }) => !isGenericFallback(text) || !sharedEvidenceGaps.includes(normalizedEntry(text)));
+        if (!visibleEntries.length) return null;
+        return <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor} data-testid={`${testId}-${vendor.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><h3 className="display text-xl font-bold text-[#202840]">{vendor}</h3><div className="mt-5 space-y-3">{visibleEntries.map(({ dimension, text }) => <div className="rounded-xl bg-[#e7e2d4] p-3" key={`${vendor}-${dimension}`}><p className="mono text-[9px] font-bold uppercase tracking-[.12em] text-[#b94d45]">{dimension}</p><p className="mt-2 text-xs leading-5 text-[#626b7b]">{text}</p></div>)}</div></article>;
       })}</div>
+      </>
       : <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{entries.map(([key, values]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={key}><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#b94d45]">{key}</p><ul className="mt-4 space-y-3">{values.map((value, index) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={`${key}-${index}`}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#d9ef66] ring-1 ring-[#8a9640]" />{value}</li>)}</ul></article>)}</div>}
+  </section>;
+}
+
+export function buildOnDemandStrengthsLedEntries(comparison: any, vendors: string[]): [string, string[]][] {
+  const requested = Array.isArray(comparison.criteria)
+    ? comparison.criteria.map((criterion: unknown) => String(criterion).toLowerCase()).filter(Boolean)
+    : [];
+  const criterionTokens = (value: string): string[] => value.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const vendorFindings = vendors.flatMap((vendor) => {
+    const row = (comparison.vendorScores || []).find((item: any) => item.vendor === vendor);
+    const scoreRows = qualificationAllowsScore(row)
+      ? (row?.weightedScores || []).filter((item: any) => Number.isFinite(item.score) && !isFallbackNeutralCriterion(item))
+      : [];
+    const selectedRows = requested.length
+      ? scoreRows.filter((item: any) => {
+        const tokens = new Set(criterionTokens(item.criterion || ""));
+        return requested.some((criterion: string) => (
+          criterion === String(item.criterion || "").toLowerCase()
+          || criterion.includes(String(item.criterion || "").toLowerCase())
+          || String(item.criterion || "").toLowerCase().includes(criterion)
+          || criterionTokens(criterion).some((token) => token.length > 3 && tokens.has(token))
+        ));
+      })
+      : scoreRows;
+    const usableRows = (selectedRows.length ? selectedRows : scoreRows)
+      .slice()
+      .sort((left: any, right: any) => right.score - left.score);
+    if (!usableRows.length) return [];
+    const strongest = usableRows[0];
+    const weakest = usableRows[usableRows.length - 1];
+    return [{
+      vendor,
+      strongest: `${strongest.criterion} (${strongest.score}/100)`,
+      weakest: `${weakest.criterion} (${weakest.score}/100)`,
+    }];
+  });
+  if (!vendorFindings.length) {
+    return [["Strategy", ["No comparable criterion ratings are available. Run a new comparison after ensuring each option has ratings for the requested criteria."]]];
+  }
+  return [
+    ["Strengths", vendorFindings.map(({ vendor, strongest }) => (
+      `${vendor}: ${strongest} is its strongest indicative criterion. Test whether that advantage matters in the intended workflow before relying on it.`
+    ))],
+    ["Opportunities", vendorFindings.map(({ vendor, weakest }) => (
+      `${vendor}: ${weakest} is its lowest indicative criterion. Confirm the gap and set a minimum acceptable threshold before selection.`
+    ))],
+    ["Aspirations", vendorFindings.map(({ vendor, strongest, weakest }) => (
+      `${vendor}: Preserve the ${strongest} result while improving ${weakest} in a representative pilot.`
+    ))],
+    ["Results", vendorFindings.map(({ vendor, strongest, weakest }) => (
+      `${vendor}: Test ${strongest} and ${weakest} using the same task and time window; record outcomes and choose only if the agreed threshold is met.`
+    ))],
+  ];
+}
+
+export function LazyStrengthsLedStrategySection({ comparison, vendors }: { comparison: any; vendors: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [loadedEntries, setLoadedEntries] = useState<[string, string[]][] | null>(null);
+  const toggle = () => {
+    if (!expanded && !loadedEntries) setLoadedEntries(buildOnDemandStrengthsLedEntries(comparison, vendors));
+    setExpanded((value) => !value);
+  };
+  return <section className="mt-14 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]" data-testid="section-soar">
+    <button type="button" onClick={toggle} aria-expanded={expanded} aria-controls="section-soar-loaded" className="focus-ring flex w-full items-center justify-between gap-5 rounded-2xl p-5 text-left sm:p-6" data-testid="button-load-soar">
+      <span><span className="mono block text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Strengths-led strategy</span><span className="display mt-2 block text-2xl font-bold tracking-[-.04em] text-[#202840]">What should each option build on?</span><span className="mt-2 block text-xs leading-5 text-[#687083]">Open to generate a strategy from this report’s requested-criteria scores.</span></span>
+      <ChevronDown size={20} className={`shrink-0 text-[#0f766e] transition-transform ${expanded ? "rotate-180" : ""}`} />
+    </button>
+    {expanded && loadedEntries && <div id="section-soar-loaded" className="grid gap-4 px-5 pb-5 sm:grid-cols-2 sm:px-6 sm:pb-6" data-testid="section-soar-loaded">
+      {loadedEntries.map(([dimension, findings]) => <article className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] p-4" key={dimension}>
+        <p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#b94d45]">{dimension}</p>
+        <ul className="mt-3 space-y-3">{findings.map((finding) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={finding}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#0f766e]" />{finding}</li>)}</ul>
+      </article>)}
+      <p className="text-[11px] leading-5 text-[#687083] sm:col-span-2">This strategy is generated from indicative scores in the report; it does not independently verify the underlying datapoints.</p>
+    </div>}
   </section>;
 }
 
@@ -2326,49 +3023,128 @@ function ComparisonRow({ item, index, onDelete }: { item: any; index: number; on
 function ParsedBrief({ parsed, onCreate, pending }: { parsed: any; onCreate: (input: any) => void; pending: boolean }) {
   const [vendors, setVendors] = useState<string[]>(parsed.vendors || []);
   const [criteria, setCriteria] = useState<string[]>(parsed.criteria || []);
-  const [urls, setUrls] = useState<string[]>(parsed.urls || []);
-  const [urlDraft, setUrlDraft] = useState('');
-  const [urlError, setUrlError] = useState('');
-  const addUrl = () => {
-    const value = urlDraft.trim();
-    try {
-      const url = new URL(value);
-      if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error();
-      setUrls([...urls, value]);
-      setUrlDraft('');
-      setUrlError('');
-    } catch {
-      setUrlError('Enter a valid HTTP or HTTPS URL.');
-    }
-  };
   const remove = (list: string[], value: string, setter: (value: string[]) => void) => setter(list.filter((item) => item !== value));
   const context = parsed.context;
   const contextValid = context?.valid !== false;
-  return <div className="animate-rise mt-8 grid gap-5 lg:grid-cols-[1.15fr_.85fr]"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 sm:p-7"><div className="flex items-center justify-between"><div><p className="mono text-[10px] uppercase tracking-[.17em] text-[#0f766e]">Parsed brief</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Check the shape of it.</h2></div><span className="grid size-9 place-items-center rounded-xl bg-[#dcefe9] text-[#0f766e]"><Check size={17} /></span></div><div className="mt-7 border-l-2 border-[#d9ef66] pl-4 text-sm leading-6 text-[#566074]">{parsed.prompt}</div><div className="mt-8"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#888b82]">Vendors <span className="text-[#0f766e]">· {vendors.length}/4</span></p><div className="mt-3 flex flex-wrap gap-2">{vendors.map((vendor) => <span key={vendor} className="inline-flex items-center gap-1 rounded-lg bg-[#e7e2d4] px-3 py-2 text-xs font-bold text-[#202840]">{vendor}<button className="focus-ring rounded p-0.5 text-[#96988e] hover:text-[#b94d45]" onClick={() => remove(vendors, vendor, setVendors)} data-testid={`button-remove-vendor-${vendor}`}><X size={13} /></button></span>)}</div></div><div className="mt-7"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#888b82]">Criteria <span className="text-[#0f766e]">· {criteria.length}</span></p><div className="mt-3 flex flex-wrap gap-2">{criteria.map((criterion) => <span key={criterion} className="inline-flex items-center gap-1 rounded-lg bg-[#e8f2bd] px-3 py-2 text-xs font-bold text-[#4b654f]">{criterion}<button className="focus-ring rounded p-0.5 text-[#819170] hover:text-[#b94d45]" onClick={() => remove(criteria, criterion, setCriteria)} data-testid={`button-remove-criterion-${criterion}`}><X size={13} /></button></span>)}</div></div><div className={`mt-7 rounded-xl border px-4 py-3 text-xs leading-5 ${contextValid ? 'border-[#b7d9cb] bg-[#e5f2ec] text-[#35665c]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`} data-testid="comparison-context-validation"><p className="font-bold">{contextValid ? 'Comparison context ready' : 'Add comparison context'}</p><p className="mt-1">{context?.message ?? 'Name what you are comparing and the target market or use case.'}</p></div></div><div className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5 sm:p-7"><div className="flex items-center gap-2 text-[#b94d45]"><FileSearch size={17} /><p className="mono text-[10px] font-bold uppercase tracking-[.15em]">Product research</p></div><p className="mt-3 text-xs leading-5 text-[#6f7582]">We’ll search current product, pricing, warranty, and ownership information for you. Add a URL only when there is a specific page you want included.</p><div className="mt-5 flex gap-2"><input className="focus-ring min-w-0 flex-1 rounded-xl border border-[#c9c1ae] bg-[#f8f4e8] px-3 py-2.5 text-xs text-[#202840] placeholder:text-[#9a9a90]" placeholder="Optional: https://..." value={urlDraft} onChange={(event) => { setUrlDraft(event.target.value); setUrlError(''); }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addUrl(); } }} data-testid="input-source-url" /><button className="focus-ring grid size-10 shrink-0 place-items-center rounded-xl bg-[#202840] text-[#f8f4e8] hover:bg-[#0f766e]" onClick={addUrl} data-testid="button-add-url"><Plus size={17} /></button></div>{urlError && <p className="mt-2 text-xs font-bold text-[#b94d45]" data-testid="status-url-error">{urlError}</p>}<div className="mt-4 space-y-2">{urls.map((url) => <div className="flex items-center gap-2 rounded-lg bg-[#f8f4e8] px-3 py-2 text-xs text-[#566074]" key={url}><ExternalLink size={13} className="shrink-0 text-[#0f766e]" /><span className="min-w-0 flex-1 truncate">{url}</span><button className="focus-ring text-[#9a9a90] hover:text-[#b94d45]" onClick={() => remove(urls, url, setUrls)} data-testid={`button-remove-url-${url}`}><X size={13} /></button></div>)}</div><PrimaryButton className="mt-8 w-full" disabled={pending || vendors.length < 2 || !contextValid} onClick={() => onCreate({ prompt: parsed.prompt, vendors, urls, criteria })} testId="button-generate-analysis">{pending ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />} {pending ? 'Researching products' : contextValid ? 'Research and compare' : 'Complete the comparison brief'}</PrimaryButton></div></div>;
+  return <div className="animate-rise mt-8 grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
+    <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 sm:p-7">
+      <div className="flex items-center justify-between"><div><p className="mono text-[10px] uppercase tracking-[.17em] text-[#0f766e]">Parsed brief</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Check the shape of it.</h2></div><span className="grid size-9 place-items-center rounded-xl bg-[#dcefe9] text-[#0f766e]"><Check size={17} /></span></div>
+      <div className="mt-7 border-l-2 border-[#d9ef66] pl-4 text-sm leading-6 text-[#566074]">{parsed.prompt}</div>
+      <div className="mt-8"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#888b82]">Vendors <span className="text-[#0f766e]">· {vendors.length}/4</span></p><div className="mt-3 flex flex-wrap gap-2">{vendors.map((vendor) => <span key={vendor} className="inline-flex items-center gap-1 rounded-lg bg-[#e7e2d4] px-3 py-2 text-xs font-bold text-[#202840]">{vendor}<button className="focus-ring rounded p-0.5 text-[#96988e] hover:text-[#b94d45]" onClick={() => remove(vendors, vendor, setVendors)} data-testid={`button-remove-vendor-${vendor}`}><X size={13} /></button></span>)}</div></div>
+      <div className="mt-7"><p className="mono text-[10px] uppercase tracking-[.15em] text-[#888b82]">Criteria <span className="text-[#0f766e]">· {criteria.length}</span></p><div className="mt-3 flex flex-wrap gap-2">{criteria.map((criterion) => <span key={criterion} className="inline-flex items-center gap-1 rounded-lg bg-[#e8f2bd] px-3 py-2 text-xs font-bold text-[#4b654f]">{criterion}<button className="focus-ring rounded p-0.5 text-[#819170] hover:text-[#b94d45]" onClick={() => remove(criteria, criterion, setCriteria)} data-testid={`button-remove-criterion-${criterion}`}><X size={13} /></button></span>)}</div></div>
+      <div className={`mt-7 rounded-xl border px-4 py-3 text-xs leading-5 ${contextValid ? 'border-[#b7d9cb] bg-[#e5f2ec] text-[#35665c]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`} data-testid="comparison-context-validation"><p className="font-bold">{contextValid ? 'Comparison context ready' : 'Add comparison context'}</p><p className="mt-1">{context?.message ?? 'Name what you are comparing and the target market or use case.'}</p></div>
+    </div>
+    <div className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5 sm:p-7"><div className="flex items-center gap-2 text-[#0f766e]"><Compass size={17} /><p className="mono text-[10px] font-bold uppercase tracking-[.15em]">Decision Mode</p></div><p className="mt-3 text-xs leading-6 text-[#566074]">Build a weighted comparison using targeted context for your priorities. Scores are modelled, not source-by-source verified. After saving, the separate Verify workflow can review accessible sources.</p><PrimaryButton className="mt-8 w-full" disabled={pending || vendors.length < 2 || !contextValid} onClick={() => onCreate({ prompt: parsed.prompt, vendors, urls: [], criteria })} testId="button-generate-analysis">{pending ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />} {pending ? 'Building decision' : contextValid ? 'Build decision' : 'Complete the comparison brief'}</PrimaryButton></div>
+  </div>;
 }
 
 function comparisonErrorMessage(error: unknown) {
-  const data = (error as { data?: { error?: string; message?: string } } | null)?.data;
+  const data = (error as { data?: { error?: string; message?: string; code?: string } } | null)?.data;
   const message = error instanceof Error ? error.message.replace(/^HTTP \d+\s*[^:]*:\s*/, '') : '';
+  if (/^\s*<!doctype html|^\s*<html\b|internal server error/i.test(message)) {
+    return 'The interpretation service could not process that request. Please try again; your query has not started research.';
+  }
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
-    return 'The research connection was interrupted before the result arrived. Your request is safe to retry.';
+    return 'The research server could not be reached. Retry to reconnect to the same request; a new comparison will not be started if the first one is still running.';
   }
   return data?.error || data?.message || message || 'The comparison research could not be completed. Please try again.';
 }
 
+function isInvalidComparisonError(error: unknown): boolean {
+  const responseError = error as { status?: number; data?: { code?: string } } | null;
+  return responseError?.status === 400 && responseError.data?.code === 'invalid_comparison';
+}
+
 type ComparisonJobState = {
-  status: 'processing' | 'complete' | 'failed';
-  stage: 'finding_official_sources' | 'building_evidence' | 'analysing_evidence' | 'validating_comparison' | 'preparing_result' | 'completed';
+  status: 'processing' | 'partial' | 'complete' | 'failed';
+  stage: 'finding_official_sources' | 'building_evidence' | 'analysing_evidence' | 'validating_comparison' | 'preparing_result' | 'completed' | 'partial_result' | 'targeted_research';
   progress: { entities: string[]; subject: string };
+  saveStatus?: 'pending' | 'saved' | 'failed' | 'unconfirmed';
+  previewDecision?: {
+    winner: string;
+    decisionType: string;
+    coverage: number;
+    reason: string;
+    provisional: boolean;
+    priorities: Array<{ lens: string; weight: number }>;
+  };
   result?: Comparison;
   message?: string;
-  errorCode?: 'research_failed' | 'validation_failed' | 'insufficient_quantitative_evidence';
+  errorCode?: 'research_failed' | 'validation_failed' | 'insufficient_quantitative_evidence' | 'latency_budget_exceeded';
+  connectionInterrupted?: boolean;
 };
+
+export function hasPartialResearchStatus(
+  comparison: { status?: string; researchStatus?: string } | null | undefined,
+): boolean {
+  return comparison?.researchStatus === 'partial' || comparison?.status === 'partial';
+}
+
+function hasExplicitDecisionPriority(prompt: string): boolean {
+  return /\b(?:prioriti[sz]\w*|budget|price|cost|value|feature|capabilit\w*|roi|return on investment|family|child(?:ren)?|safety|reliabilit\w*|support|maintenance|range|performance|expansion|regional demand|service revenue|growth|security)\b/i.test(prompt);
+}
+
+function priorityChoicesForPrompt(prompt: string): Array<{ id: string; label: string }> {
+  if (/\b(?:dealership|franchise|market entry|investment|investor|roi)\b/i.test(prompt)) {
+    return [
+      { id: 'roi', label: 'ROI / investment return' },
+      { id: 'regional-demand', label: 'Regional demand' },
+      { id: 'expansion', label: 'Expansion potential' },
+      { id: 'service-revenue', label: 'Service revenue' },
+    ];
+  }
+  const choices = [
+    { id: 'budget', label: 'Budget / value' },
+    { id: 'features', label: 'Features / capability' },
+  ];
+  if (/\b(?:family|families|children|child|vehicle|car|automotive|passenger)\b/i.test(prompt)) {
+    choices.push({ id: 'family', label: 'Family suitability' });
+  } else {
+    choices.push({ id: 'roi', label: 'ROI / investment return' });
+  }
+  return choices;
+}
 
 class ComparisonJobError extends Error {
   constructor(message: string, readonly errorCode?: ComparisonJobState['errorCode']) {
     super(message);
     this.name = 'ComparisonJobError';
+  }
+}
+
+class ComparisonJobStreamError extends Error {
+  constructor(message = 'Live job updates are unavailable.') {
+    super(message);
+    this.name = 'ComparisonJobStreamError';
+  }
+}
+
+class ComparisonRequestTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ComparisonRequestTimeoutError';
+  }
+}
+
+export async function fetchComparisonWithDeadline<T>(
+  input: RequestInfo | URL,
+  options: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await customFetch<T>(input, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) throw new ComparisonRequestTimeoutError(timeoutMessage);
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
@@ -2386,31 +3162,28 @@ function formatNaturalList(values: string[]): string {
   return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
 }
 
-function phraseComparisonPrompt(parsed: ParsedComparison, market: ResearchMarketCode): string {
+function sourceComparisonPrompt(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, ' ').trim();
+  const generatedOriginalRequest = normalized.search(/\boriginal\s+request\s*:/i);
+  if (generatedOriginalRequest < 0) return normalized;
+  const editedRequest = normalized.slice(0, generatedOriginalRequest).trim();
+  return editedRequest.length >= 8 ? editedRequest : normalized;
+}
+
+function phraseComparisonPrompt(
+  parsed: ParsedComparison,
+  market: ResearchMarketCode,
+  sourcePrompt: string,
+): string {
   const marketName = RESEARCH_MARKET_NAMES[market];
-  const category = parsed.context.segment && parsed.context.segment !== 'Product or service comparison'
-    ? ` for ${parsed.context.segment}`
-    : '';
-  const sentences = [
-    `Compare ${formatNaturalList(parsed.vendors)}${category} in ${marketName}.`,
-  ];
-  if (parsed.intent.useCase) sentences.push(`Use case: ${parsed.intent.useCase}.`);
-  const qualifiers = parsed.intent.qualifiers.filter((qualifier) => (
-    !new RegExp(`^(?:in\\s+)?${marketName.replace(/^the\s+/i, '(?:the )?')}$`, 'i').test(qualifier.trim())
-  ));
-  if (qualifiers.length > 0) {
-    sentences.push(`Apply these constraints: ${formatNaturalList(qualifiers)}.`);
-  }
-  if (parsed.criteria.length > 0) {
-    sentences.push(`Evaluate ${formatNaturalList(parsed.criteria)}.`);
-  }
-  if (
-    parsed.intent.decisionCriterion
-    && parsed.intent.decisionCriterion !== 'compare the options against the requested criteria'
-  ) {
-    sentences.push(`Recommend the ${parsed.intent.decisionCriterion}.`);
-  }
-  return sentences.join(' ');
+  // The interpretation service may normalize labels, but it cannot author new
+  // use cases, criteria, or geography. Keep those user-owned details in the
+  // source request rather than copying model-inferred fields into a new prompt.
+  const phrased = `Compare ${formatNaturalList(parsed.vendors)} in ${marketName}.`;
+  const original = sourceComparisonPrompt(sourcePrompt);
+  if (!original || phrased === original) return phrased;
+  const intentPreservingPrompt = `${phrased} Original request: ${original}`;
+  return intentPreservingPrompt.length <= 2000 ? intentPreservingPrompt : original;
 }
 
 type ComparisonRequest = {
@@ -2423,12 +3196,22 @@ type ComparisonRequest = {
   ownershipPeriodYears?: number;
 };
 
-type SourcePreflightResult = {
-  url: string;
-  state: 'accepted' | 'inaccessible' | 'stale' | 'wrong_market' | 'unrelated';
-  reason: string;
-  replacementUrl?: string;
-};
+const COMPARISON_JOB_CLIENT_DEADLINE_MS = 20_000;
+const COMPARISON_JOB_START_TIMEOUT_MS = 8_000;
+const COMPARISON_INTERPRETATION_TIMEOUT_MS = 15_000;
+
+function mergeComparisonJobState(
+  previous: ComparisonJobState | undefined,
+  incoming: ComparisonJobState,
+): ComparisonJobState {
+  return {
+    ...previous,
+    ...incoming,
+    previewDecision: incoming.previewDecision ?? previous?.previewDecision,
+    result: incoming.result ?? previous?.result,
+    connectionInterrupted: incoming.connectionInterrupted,
+  };
+}
 
 type PromptTypoReview = {
   original: string;
@@ -2475,42 +3258,257 @@ function reviewPromptTypos(prompt: string): PromptTypoReview | null {
   return { original: prompt, revised, corrections };
 }
 
-async function runComparisonJob(
+export async function runComparisonJob(
   guest: boolean,
   data: ComparisonRequest,
   onProgress: (job: ComparisonJobState) => void,
+  startRequestTimeoutMs = COMPARISON_JOB_START_TIMEOUT_MS,
 ): Promise<Comparison> {
   const basePath = guest ? '/api/guest/comparison-jobs' : '/api/comparison-jobs';
-  const created = await customFetch<{ jobId: string; status: 'processing'; stage: ComparisonJobState['stage']; progress: ComparisonJobState['progress'] }>(basePath, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  onProgress(created);
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    const job = await customFetch<ComparisonJobState>(`${basePath}/${created.jobId}`);
-    onProgress(job);
-    if (job.status === 'complete' && job.result) return job.result;
-    if (job.status === 'failed') {
-      throw new ComparisonJobError(
-        job.message || 'Product research could not be completed.',
-        job.errorCode,
-      );
+  const body = JSON.stringify(data);
+  const storageKey = `comparison-request-${guest ? 'guest' : 'user'}`;
+  const stored = window.sessionStorage.getItem(storageKey);
+  let request: { body: string; id: string; at: number } | null = null;
+  try { request = stored ? JSON.parse(stored) : null; } catch { /* Discard malformed browser state. */ }
+  if (request?.body !== body || Date.now() - request.at > 14 * 60_000) {
+    request = { body, id: window.crypto.randomUUID(), at: Date.now() };
+  }
+  window.sessionStorage.setItem(storageKey, JSON.stringify(request));
+  let created: { jobId: string; status: 'processing'; stage: ComparisonJobState['stage']; progress: ComparisonJobState['progress']; previewDecision?: ComparisonJobState['previewDecision'] } | undefined;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      created = await fetchComparisonWithDeadline<typeof created>(basePath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': request.id },
+        body,
+      }, startRequestTimeoutMs, 'The research server did not respond while starting this comparison. Retry to reconnect to the same request.');
+      break;
+    } catch (error) {
+      if (!isTransientComparisonConnectionError(error) || attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
-  throw new Error('Product research did not finish within five minutes. Please try again.');
+  if (!created) throw new Error('The research job could not be started. Please try again.');
+  const jobStartedAt = Date.now();
+  let latestJob: ComparisonJobState | undefined;
+  const reportProgress = (job: ComparisonJobState) => {
+    latestJob = mergeComparisonJobState(latestJob, job);
+    onProgress(latestJob);
+  };
+  reportProgress(created);
+  const remainingMs = Math.max(0, COMPARISON_JOB_CLIENT_DEADLINE_MS - (Date.now() - jobStartedAt));
+  try {
+    let result: Comparison;
+    try {
+      result = await streamComparisonJob(basePath, created.jobId, reportProgress, remainingMs);
+    } catch (error) {
+      if (!(error instanceof ComparisonJobStreamError)) throw error;
+      result = await pollComparisonJob(
+        basePath,
+        created.jobId,
+        reportProgress,
+        undefined,
+        undefined,
+        Math.max(0, COMPARISON_JOB_CLIENT_DEADLINE_MS - (Date.now() - jobStartedAt)),
+        latestJob,
+      );
+    }
+    window.sessionStorage.removeItem(storageKey);
+    if (!guest && latestJob?.status === 'partial' && !latestJob.result?.id) {
+      void reconcilePartialComparisonSave(basePath, created.jobId, latestJob, reportProgress);
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof ComparisonJobError) window.sessionStorage.removeItem(storageKey);
+    throw error;
+  }
+}
+
+const partialSaveReconciliations = new Map<string, Promise<void>>();
+
+/** A partial report is usable immediately; check its background save without blocking the user. */
+export async function reconcilePartialComparisonSave(
+  basePath: string,
+  jobId: string,
+  initialJob: ComparisonJobState,
+  onProgress: (job: ComparisonJobState) => void,
+  wait: (milliseconds: number) => Promise<unknown> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  fetchJob: (path: string, signal?: AbortSignal) => Promise<ComparisonJobState> = (path, signal) => customFetch<ComparisonJobState>(path, { signal }),
+  attempts = 7,
+): Promise<void> {
+  const key = `${basePath}/${jobId}`;
+  const existing = partialSaveReconciliations.get(key);
+  if (existing) return existing;
+
+  const reconciliation = (async () => {
+    let latest = initialJob;
+    const deadlineAt = Date.now() + 10_000;
+    for (let attempt = 0; attempt < attempts && Date.now() < deadlineAt; attempt += 1) {
+      await wait(Math.min(1_000, deadlineAt - Date.now()));
+      if (Date.now() >= deadlineAt) break;
+      const controller = new AbortController();
+      const timer = window.setTimeout(
+        () => controller.abort(),
+        Math.max(1, Math.min(1_500, deadlineAt - Date.now())),
+      );
+      try {
+        latest = mergeComparisonJobState(latest, await fetchJob(`${basePath}/${jobId}`, controller.signal));
+        onProgress(latest);
+        if (latest.result?.id || latest.saveStatus === 'saved' || latest.saveStatus === 'failed') return;
+      } catch {
+        // A dropped status check must not remove the partial report or restart research.
+      } finally {
+        window.clearTimeout(timer);
+      }
+    }
+    onProgress({
+      ...latest,
+      saveStatus: 'unconfirmed',
+    });
+  })();
+  partialSaveReconciliations.set(key, reconciliation);
+  try {
+    await reconciliation;
+  } finally {
+    partialSaveReconciliations.delete(key);
+  }
+}
+
+function isTransientComparisonConnectionError(error: unknown): boolean {
+  if (error instanceof ComparisonRequestTimeoutError) return true;
+  const status = (error as { status?: number } | null)?.status;
+  return typeof status === 'number'
+    ? status >= 500
+    : /failed to fetch|networkerror|load failed|fetch failed/i.test(error instanceof Error ? error.message : '');
+}
+
+export function streamComparisonJob(
+  basePath: string,
+  jobId: string,
+  onProgress: (job: ComparisonJobState) => void,
+  timeoutMs = COMPARISON_JOB_CLIENT_DEADLINE_MS,
+): Promise<Comparison> {
+  if (typeof window.EventSource !== 'function') {
+    return Promise.reject(new ComparisonJobStreamError('This browser does not support live comparison updates.'));
+  }
+  return new Promise((resolve, reject) => {
+    let source: EventSource;
+    try {
+      source = new window.EventSource(`${basePath}/${encodeURIComponent(jobId)}/events`, { withCredentials: true });
+    } catch {
+      reject(new ComparisonJobStreamError());
+      return;
+    }
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(deadlineTimer);
+      source.close();
+      callback();
+    };
+    const deadlineTimer = window.setTimeout(
+      () => finish(() => reject(new ComparisonJobStreamError('The decision reached its 20-second time limit. Checking the same job for a partial report…'))),
+      timeoutMs,
+    );
+    let latestJob: ComparisonJobState | undefined;
+    source.addEventListener('state', (event) => {
+      try {
+        const state = mergeComparisonJobState(
+          latestJob,
+          JSON.parse((event as MessageEvent<string>).data) as ComparisonJobState,
+        );
+        latestJob = state;
+        onProgress(state);
+        if ((state.status === 'partial' || state.status === 'complete') && state.result) {
+          finish(() => resolve(state.result!));
+        } else if (state.status === 'failed') {
+          finish(() => reject(new ComparisonJobError(state.message || 'Product research could not be completed.', state.errorCode)));
+        }
+      } catch {
+        finish(() => reject(new ComparisonJobStreamError('The live comparison update was unreadable.')));
+      }
+    });
+    source.onerror = () => finish(() => reject(new ComparisonJobStreamError()));
+  });
+}
+
+export async function pollComparisonJob(
+  basePath: string,
+  jobId: string,
+  onProgress: (job: ComparisonJobState) => void,
+  wait: (milliseconds: number) => Promise<unknown> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  fetchJob: (path: string, signal?: AbortSignal) => Promise<ComparisonJobState> = (path, signal) => customFetch<ComparisonJobState>(path, { signal }),
+  timeoutMs = COMPARISON_JOB_CLIENT_DEADLINE_MS,
+  initialJob?: ComparisonJobState,
+): Promise<Comparison> {
+  let lastJob = initialJob;
+  const deadlineAt = Date.now() + timeoutMs;
+  let finalCheck = false;
+  while (true) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs > 0) {
+      await wait(Math.min(1_000, remainingMs));
+    }
+    if (Date.now() >= deadlineAt && finalCheck) {
+      throw new ComparisonJobError(
+        lastJob?.message || 'The decision reached its 20-second time limit before a partial report was available.',
+        lastJob?.errorCode,
+      );
+    }
+    if (Date.now() >= deadlineAt) {
+      finalCheck = true;
+    }
+    let job: ComparisonJobState;
+    const controller = new AbortController();
+    const requestTimeout = window.setTimeout(
+      () => controller.abort(),
+      Math.max(250, Math.min(1_000, deadlineAt - Date.now() + 250)),
+    );
+    try {
+      job = await fetchJob(`${basePath}/${jobId}`, controller.signal);
+    } catch (error) {
+      if (!isTransientComparisonConnectionError(error) && !(error instanceof DOMException && error.name === 'AbortError')) throw error;
+      if (lastJob) {
+        lastJob = { ...lastJob, connectionInterrupted: true };
+        onProgress(lastJob);
+      }
+      if (finalCheck) {
+        throw new ComparisonJobError('The decision reached its 20-second time limit. Reopen this comparison to retry the interrupted research.');
+      }
+      continue; // A dropped status poll does not start a new research job.
+    } finally {
+      window.clearTimeout(requestTimeout);
+    }
+    lastJob = mergeComparisonJobState(lastJob, job);
+    onProgress(lastJob);
+    if ((lastJob.status === 'partial' || lastJob.status === 'complete') && lastJob.result) return lastJob.result;
+    if (job.status === 'failed') {
+      throw new ComparisonJobError(job.message || 'Product research could not be completed.', job.errorCode);
+    }
+    if (finalCheck) {
+      throw new ComparisonJobError('The decision reached its 20-second time limit before a partial report was available.', job.errorCode);
+    }
+  }
 }
 
 function useComparisonJob(guest: boolean) {
   const [jobState, setJobState] = useState<ComparisonJobState>();
+  const jobStateRef = useRef<ComparisonJobState | undefined>(undefined);
+  const requestSequence = useRef(0);
   const mutation = useMutation({
     mutationFn: (data: ComparisonRequest) => {
+      const sequence = ++requestSequence.current;
       setJobState(undefined);
-      return runComparisonJob(guest, data, setJobState);
+      jobStateRef.current = undefined;
+      return runComparisonJob(guest, data, (job) => {
+        if (requestSequence.current !== sequence) return;
+        jobStateRef.current = job;
+        setJobState(job);
+      });
     },
   });
-  return { ...mutation, jobState };
+  return { ...mutation, jobState, jobStateRef };
 }
 
 export function RoutedComparisonComposer({
@@ -2530,122 +3528,152 @@ export function RoutedComparisonComposer({
       pending={create.isPending}
       error={create.error}
       jobState={create.jobState}
-      onSubmit={(data) => create.mutate(data, { onSuccess })}
+      onReset={create.reset}
+      onSubmit={(data) => create.mutate(data, {
+        onSuccess: (comparison) => {
+          if (create.jobStateRef.current?.status !== 'partial') onSuccess?.(comparison);
+        },
+      })}
     />
   );
 }
 
-export function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onSubmit: (data: ComparisonRequest) => void }) {
+export function ComparisonComposer({ initialPrompt = '', guest = false, pending, error, jobState, onReset, onSubmit }: { initialPrompt?: string; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onReset?: () => void; onSubmit: (data: ComparisonRequest) => void }) {
   const [prompt, setPrompt] = useState(initialPrompt);
+  const partialResultRef = useRef<HTMLElement | null>(null);
+  const partialResultWasRevealed = useRef(false);
   const [typoReview, setTypoReview] = useState<PromptTypoReview | null>(null);
   const [interpretation, setInterpretation] = useState<ParsedComparison | null>(null);
   const [interpretationPrompt, setInterpretationPrompt] = useState('');
+  const [interpretationSourcePrompt, setInterpretationSourcePrompt] = useState('');
   const [phrasedPrompt, setPhrasedPrompt] = useState('');
   const [phrasedPromptBaseline, setPhrasedPromptBaseline] = useState('');
   const [interpretationPending, setInterpretationPending] = useState(false);
   const [interpretationError, setInterpretationError] = useState('');
+  const [customPriority, setCustomPriority] = useState('');
+  const [priorityClarificationAnswer, setPriorityClarificationAnswer] = useState('');
+  const [priorityClarificationError, setPriorityClarificationError] = useState('');
   const interpretationRequestId = useRef(0);
   const [market, setMarket] = useState<ResearchMarketCode | ''>('');
-  const [urls, setUrls] = useState<string[]>([]);
-  const [urlDraft, setUrlDraft] = useState('');
-  const [urlError, setUrlError] = useState('');
-  const [sourcePreflight, setSourcePreflight] = useState<SourcePreflightResult[]>([]);
-  const [sourcePreflightKey, setSourcePreflightKey] = useState('');
-  const [sourcePreflightPending, setSourcePreflightPending] = useState(false);
   const [annualDistanceKm, setAnnualDistanceKm] = useState('');
   const [ownershipPeriodYears, setOwnershipPeriodYears] = useState('');
-  const isVehicleComparison = /\b(?:vehicle|car|suv|ev|electric vehicle|baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
-
-  const addUrl = () => {
-    const value = urlDraft.trim();
-    if (!value) return;
-    try {
-      const url = new URL(value);
-      if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
-      if (urls.includes(value)) return;
-      setUrls((current) => [...current, value]);
-      setSourcePreflight([]);
-      setSourcePreflightKey('');
-      setUrlDraft('');
-      setUrlError('');
-    } catch {
-      setUrlError('Enter a complete HTTP or HTTPS URL.');
+  const [dismissedResearchError, setDismissedResearchError] = useState(false);
+  const isBaasScenario = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
+  const researchErrorMessage = error ? comparisonErrorMessage(error) : '';
+  const blockingValidationError = !dismissedResearchError && isInvalidComparisonError(error);
+  const promptLengthError = prompt.trim().length > 2000
+    ? 'Keep the comparison prompt to 2,000 characters or fewer.'
+    : '';
+  const annualDistance = Number(annualDistanceKm);
+  const ownershipPeriod = Number(ownershipPeriodYears);
+  const baasValidationError = !isBaasScenario
+    ? ''
+    : Boolean(annualDistanceKm) !== Boolean(ownershipPeriodYears)
+      ? 'Enter both annual distance and ownership period, or leave both blank.'
+      : annualDistanceKm && (!Number.isInteger(annualDistance) || annualDistance < 1 || annualDistance > 500000)
+        ? 'Annual driving distance must be a whole number from 1 to 500,000 km.'
+        : ownershipPeriodYears && (ownershipPeriod < 0.5 || ownershipPeriod > 30 || !Number.isInteger(ownershipPeriod * 2))
+          ? 'Ownership period must be from 0.5 to 30 years in half-year increments.'
+          : '';
+  const actionableValidationMessage = interpretationError
+    || (blockingValidationError ? researchErrorMessage : '')
+    || promptLengthError;
+  useEffect(() => {
+    if (!isBaasScenario) {
+      setAnnualDistanceKm('');
+      setOwnershipPeriodYears('');
     }
+  }, [isBaasScenario]);
+  useEffect(() => {
+    setDismissedResearchError(false);
+  }, [error]);
+  useEffect(() => {
+    if (jobState?.status !== 'partial' || !jobState.result) {
+      if (jobState?.status !== 'partial') partialResultWasRevealed.current = false;
+      return;
+    }
+    if (partialResultWasRevealed.current) return;
+    partialResultWasRevealed.current = true;
+    partialResultRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [jobState?.status, jobState?.result]);
+  const focusPromptForEdit = () => {
+    onReset?.();
+    setDismissedResearchError(true);
+    interpretationRequestId.current += 1;
+    setInterpretation(null);
+    setInterpretationPrompt('');
+    setInterpretationSourcePrompt('');
+    setPhrasedPrompt('');
+    setPhrasedPromptBaseline('');
+    setInterpretationError('');
+    setCustomPriority('');
+    setPriorityClarificationAnswer('');
+    setPriorityClarificationError('');
+    setInterpretationPending(false);
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
   };
 
-  const startResearch = async (confirmedPrompt: string, reviewedInterpretation?: ParsedComparison) => {
-    if (pending || sourcePreflightPending || interpretationPending || confirmedPrompt.length < 8 || !market) return;
-    const listedOptions = confirmedPrompt.match(
-      /\b(?:across|among|between|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
-    )?.[1]?.split(/\s*,\s*|\s*,?\s+and\s+/i).filter(Boolean) ?? [];
-    if (listedOptions.length > 6) {
-      setUrlError('You can compare up to 6 products or vendors at a time. Remove one or more options and try again.');
-      return;
-    }
-    const preflightKey = JSON.stringify([confirmedPrompt, market, urls]);
-    if (urls.length > 0 && sourcePreflightKey !== preflightKey) {
-      setSourcePreflightPending(true);
-      setUrlError('');
-      try {
-        const response = await customFetch<{ sources: SourcePreflightResult[] }>(
-          guest ? '/api/guest/comparisons/source-preflight' : '/api/comparisons/source-preflight',
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt: confirmedPrompt, market, urls }),
-          },
-        );
-        setSourcePreflight(response.sources);
-        setSourcePreflightKey(preflightKey);
-      } catch (preflightError) {
-        setUrlError(comparisonErrorMessage(preflightError));
-      } finally {
-        setSourcePreflightPending(false);
-      }
-      return;
-    }
-    if (sourcePreflight.some((source) => source.state !== 'accepted')) {
-      setUrlError('Remove or replace rejected sources before research starts.');
-      return;
-    }
-    setUrlError('');
+  const startResearch = (confirmedPrompt: string, reviewedInterpretation?: ParsedComparison) => {
+    if (pending || interpretationPending || confirmedPrompt.length < 8 || confirmedPrompt.length > 2000 || !market || baasValidationError) return;
+    // The reviewed interpretation already validates the option count. Parsing
+    // "across ..." here also counts comma-separated decision criteria as vendors.
     onSubmit({
       prompt: confirmedPrompt,
       market,
-      urls,
+      urls: [],
       ...(reviewedInterpretation ? {
         vendors: reviewedInterpretation.vendors,
         criteria: reviewedInterpretation.criteria,
       } : {}),
-      ...(isVehicleComparison && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
-      ...(isVehicleComparison && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
+      ...(isBaasScenario && annualDistanceKm ? { annualDistanceKm: Number(annualDistanceKm) } : {}),
+      ...(isBaasScenario && ownershipPeriodYears ? { ownershipPeriodYears: Number(ownershipPeriodYears) } : {}),
     });
   };
 
-  const requestInterpretation = async (requestedPrompt: string) => {
-    if (pending || sourcePreflightPending || interpretationPending || requestedPrompt.length < 8 || !market) return;
+  const requestInterpretation = async (
+    requestedPrompt: string,
+    sourcePrompt = requestedPrompt,
+    preservedReview?: ParsedComparison,
+  ) => {
+    if (pending || interpretationPending || requestedPrompt.length < 8 || requestedPrompt.length > 2000 || !market || baasValidationError) return;
     const requestId = ++interpretationRequestId.current;
     setInterpretationPending(true);
     setInterpretationError('');
     try {
-      const parsed = await customFetch<ParsedComparison>(
+      const parsed = await fetchComparisonWithDeadline<ParsedComparison>(
         guest ? '/api/guest/comparisons/parse' : '/api/comparisons/parse',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: requestedPrompt }),
+          body: JSON.stringify({ prompt: requestedPrompt, market }),
         },
+        COMPARISON_INTERPRETATION_TIMEOUT_MS,
+        'The comparison setup service did not respond within 15 seconds. Research has not started; please try again.',
       );
       if (interpretationRequestId.current !== requestId) return;
-      const nextPhrasedPrompt = phraseComparisonPrompt(parsed, market);
-      setInterpretation(parsed);
+      const reviewedParse = preservedReview
+        ? {
+          ...parsed,
+          vendors: preservedReview.vendors,
+          intent: { ...parsed.intent, options: preservedReview.vendors },
+          comparisonIdentity: preservedReview.comparisonIdentity,
+        }
+        : parsed;
+       // A clarification response must keep the user's wording intact. Do not
+       // replace an ambiguous request with an interpretation before they review it.
+        const nextPhrasedPrompt = !reviewedParse.context.valid && /^CLARIFICATION_REQUIRED:/i.test(reviewedParse.context.message)
+         ? sourceComparisonPrompt(requestedPrompt)
+          : phraseComparisonPrompt(reviewedParse, market, requestedPrompt);
+       setInterpretation(reviewedParse);
       setInterpretationPrompt(requestedPrompt);
+       setInterpretationSourcePrompt(sourcePrompt);
       setPhrasedPrompt(nextPhrasedPrompt);
       setPhrasedPromptBaseline(nextPhrasedPrompt);
     } catch (parseError) {
       if (interpretationRequestId.current !== requestId) return;
       setInterpretation(null);
       setInterpretationPrompt('');
+       setInterpretationSourcePrompt('');
       setPhrasedPrompt('');
       setPhrasedPromptBaseline('');
       setInterpretationError(comparisonErrorMessage(parseError));
@@ -2657,13 +3685,27 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const trimmedPrompt = prompt.trim();
-    if (pending || trimmedPrompt.length < 8 || !market) return;
+    if (pending || trimmedPrompt.length < 8 || trimmedPrompt.length > 2000 || !market || baasValidationError) return;
     const review = reviewPromptTypos(trimmedPrompt);
     if (review) {
       setTypoReview(review);
       return;
     }
     void requestInterpretation(trimmedPrompt);
+  };
+
+  const clarifyPriority = (answer: string) => {
+    const priority = answer.trim();
+    if (!priority || !interpretationSourcePrompt || !interpretation) return;
+    const clarifiedPrompt = `${interpretationSourcePrompt}\n\nPrimary decision priority: ${priority}.`;
+    if (clarifiedPrompt.length > 2000) {
+      setPriorityClarificationError('Shorten the original request slightly to add a priority and review it again.');
+      return;
+    }
+    setCustomPriority('');
+    setPriorityClarificationAnswer(priority);
+    setPriorityClarificationError('');
+    void requestInterpretation(clarifiedPrompt, interpretationSourcePrompt, interpretation);
   };
 
   const acceptTypoCorrection = () => {
@@ -2684,11 +3726,12 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
   };
 
   const researchStages: Array<{ stage: ComparisonJobState['stage']; label: string }> = [
-    { stage: 'finding_official_sources', label: 'Finding official sources' },
-    { stage: 'building_evidence', label: 'Building evidence base' },
-    { stage: 'analysing_evidence', label: 'Analysing evidence' },
-    { stage: 'validating_comparison', label: 'Validating comparison' },
-    { stage: 'preparing_result', label: 'Preparing result' },
+    { stage: 'finding_official_sources', label: 'Framing the decision' },
+    { stage: 'building_evidence', label: 'Mapping options and assumptions' },
+    { stage: 'targeted_research', label: 'Gathering targeted context' },
+    { stage: 'analysing_evidence', label: 'Weighing trade-offs' },
+    { stage: 'validating_comparison', label: 'Checking the recommendation' },
+    { stage: 'preparing_result', label: 'Preparing decision' },
   ];
   const activeStageIndex = researchStages.findIndex(({ stage }) => stage === jobState?.stage);
   const parsedProgress = [
@@ -2709,25 +3752,40 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           : new Set(trimmedInterpretedVendors.map((vendor) => vendor.toLocaleLowerCase())).size !== trimmedInterpretedVendors.length
             ? 'Each interpreted option must be unique.'
             : '';
+  const priorityClarificationRequired = Boolean(
+    interpretation
+    && interpretation.context.valid
+    && !priorityClarificationAnswer
+    && !hasExplicitDecisionPriority(interpretationPrompt),
+  );
   const interpretationConfirmable = Boolean(
     interpretation
     && interpretation.context.valid
-    && !interpretationOptionError,
+    && !interpretationOptionError
+    && !priorityClarificationRequired,
+  );
+  const clarificationRequired = Boolean(
+    interpretation
+    && !interpretation.context.valid
+    && /^CLARIFICATION_REQUIRED:/i.test(interpretation.context.message),
   );
   const phrasedPromptChanged = phrasedPrompt.trim() !== phrasedPromptBaseline;
   const confirmInterpretation = () => {
     if (!interpretation) return;
     const reviewedPrompt = phrasedPrompt.trim();
     if (phrasedPromptChanged) {
-      if (reviewedPrompt.length < 8) return;
+      if (reviewedPrompt.length < 8 || reviewedPrompt.length > 2000) return;
       setPrompt(reviewedPrompt);
       setInterpretation(null);
       setInterpretationPrompt('');
       setInterpretationError('');
-      void requestInterpretation(reviewedPrompt);
+      const clarifiedPrompt = priorityClarificationAnswer && !hasExplicitDecisionPriority(reviewedPrompt)
+        ? `${reviewedPrompt}\n\nPrimary decision priority: ${priorityClarificationAnswer}.`
+        : reviewedPrompt;
+      void requestInterpretation(clarifiedPrompt, reviewedPrompt);
       return;
     }
-    if (!interpretationConfirmable) return;
+    if (!interpretationConfirmable || baasValidationError) return;
     const reviewedInterpretation = {
       ...interpretation,
       vendors: trimmedInterpretedVendors,
@@ -2735,7 +3793,22 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
     };
     setInterpretation(null);
     setInterpretationPrompt('');
-    void startResearch(reviewedPrompt, reviewedInterpretation);
+    // Keep the original request intact, but send the explicit clarification
+    // with it so the research and decision policy receive the chosen priority.
+    void startResearch(priorityClarificationAnswer ? interpretationPrompt : interpretationSourcePrompt, reviewedInterpretation);
+  };
+  const editInterpretation = () => {
+    setPrompt(phrasedPrompt);
+    setInterpretation(null);
+    setInterpretationPrompt('');
+    setInterpretationSourcePrompt('');
+    setPhrasedPrompt('');
+    setPhrasedPromptBaseline('');
+    setInterpretationError('');
+    setCustomPriority('');
+    setPriorityClarificationAnswer('');
+    setPriorityClarificationError('');
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
   };
 
   return (
@@ -2761,15 +3834,22 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           className={`focus-ring mt-4 min-h-[170px] w-full resize-y rounded-xl border p-4 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#2b344e] text-[#f8f4e8] placeholder:text-[#8d98ae]' : 'border-[#d0c8b7] bg-white text-[#202840] placeholder:text-[#9a9a90]'}`}
           placeholder="Example: Compare BYD vs Tesla for an electric car I’ll own for five years in Australia. My budget is A$50,000 and I care about maintenance, features, range, and resale value."
           value={prompt}
+          maxLength={2000}
           onChange={(event) => {
             setPrompt(event.target.value);
+            onReset?.();
+            setDismissedResearchError(true);
             setTypoReview(null);
             interpretationRequestId.current += 1;
             setInterpretation(null);
             setInterpretationPrompt('');
+             setInterpretationSourcePrompt('');
             setPhrasedPrompt('');
             setPhrasedPromptBaseline('');
             setInterpretationError('');
+             setCustomPriority('');
+             setPriorityClarificationAnswer('');
+             setPriorityClarificationError('');
             setInterpretationPending(false);
           }}
           data-testid={guest ? 'input-guest-prompt' : 'input-portal-prompt'}
@@ -2777,7 +3857,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
 
         {typoReview && (
           <div className={`mt-4 rounded-xl border p-4 ${guest ? 'border-[#d9ef66] bg-[#29334e]' : 'border-[#d3a83d] bg-[#fff8df]'}`} role="alert" data-testid="prompt-typo-review">
-            <p className={`text-xs font-bold ${guest ? 'text-[#d9ef66]' : 'text-[#7a5712]'}`}>Typo found. Please confirm the revised prompt before research starts.</p>
+            <p className={`text-xs font-bold ${guest ? 'text-[#d9ef66]' : 'text-[#7a5712]'}`}>Typo found. Please confirm the revised prompt before building the decision.</p>
             <p className={`mt-2 text-[10px] uppercase tracking-[.12em] ${guest ? 'text-[#a8b0c2]' : 'text-[#8a7956]'}`}>{typoReview.corrections.join(' · ')}</p>
             <div className={`mt-3 rounded-lg border px-3 py-3 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#e4d49c] bg-white text-[#202840]'}`} data-testid="text-revised-prompt">
               {typoReview.revised}
@@ -2790,8 +3870,8 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           </div>
         )}
 
-        <AlertDialog open={Boolean(interpretation && interpretationPrompt === prompt.trim())}>
-          {interpretation && interpretationPrompt === prompt.trim() && <AlertDialogContent
+        <AlertDialog open={Boolean(interpretation && interpretationSourcePrompt === prompt.trim())}>
+          {interpretation && interpretationSourcePrompt === prompt.trim() && <AlertDialogContent
             className={`max-h-[90vh] max-w-2xl overflow-y-auto border p-5 sm:p-7 ${guest ? 'border-[#d9ef66] bg-[#202840] text-[#f8f4e8]' : interpretation.context.valid ? 'border-[#b7d9cb] bg-[#f8f4e8] text-[#202840]' : 'border-[#e3b6ac] bg-[#f8f4e8] text-[#202840]'}`}
             data-testid="interpretation-review"
           >
@@ -2799,11 +3879,106 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
               <p className={`mono text-[10px] font-bold uppercase tracking-[.16em] ${guest ? 'text-[#d9ef66]' : interpretation.context.valid ? 'text-[#35665c]' : 'text-[#8d5650]'}`}>Comparison validation</p>
               <AlertDialogTitle className="display text-2xl font-bold tracking-[-.04em]">Review the interpreted comparison</AlertDialogTitle>
               <AlertDialogDescription className={`text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-              {interpretation.context.valid
-                ? 'Confirm these options and criteria before any research begins.'
-                : interpretation.context.message}
+                {interpretation.context.valid
+                  ? 'Confirm these options and criteria before building your decision.'
+                  : 'This comparison cannot proceed until the prompt is corrected.'}
               </AlertDialogDescription>
             </AlertDialogHeader>
+            {!interpretation.context.valid && (
+              <div
+                className={`mt-4 rounded-xl border px-4 py-3 text-sm font-bold leading-6 ${guest ? 'border-[#d9ef66] bg-[#29334e] text-[#f8f4e8]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`}
+                role="alert"
+                data-testid="status-comparison-validation-error"
+              >
+                {interpretation.context.message}
+              </div>
+            )}
+            {clarificationRequired && (
+              <div
+                className={`mt-4 rounded-xl border px-4 py-4 ${guest ? 'border-[#d9ef66] bg-[#29334e]' : 'border-[#d3a83d] bg-[#fff8df]'}`}
+                data-testid="clarification-required-review"
+              >
+                <p className={`mono text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#d9ef66]' : 'text-[#7a5712]'}`}>
+                  CLARIFICATION_REQUIRED
+                </p>
+                <p className={`mt-2 text-sm font-bold leading-6 ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
+                  Which meaning should we use for Apple and Orange in the UK?
+                </p>
+                <div className={`mt-3 grid gap-2 text-xs leading-5 sm:grid-cols-2 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+                  <div className={`rounded-lg border px-3 py-2 ${guest ? 'border-[#49536e] bg-[#202840]' : 'border-[#e4d49c] bg-white'}`} data-testid="interpretation-apple-options">
+                    <strong>Apple:</strong> technology company vs fruit
+                  </div>
+                  <div className={`rounded-lg border px-3 py-2 ${guest ? 'border-[#49536e] bg-[#202840]' : 'border-[#e4d49c] bg-white'}`} data-testid="interpretation-orange-options">
+                    <strong>Orange:</strong> telecom brand vs fruit
+                  </div>
+                </div>
+                <p className={`mt-3 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#687083]'}`}>
+                  Edit the request below to choose one meaning for each option, then review it again. Research is locked until the ambiguity is resolved.
+                </p>
+              </div>
+            )}
+            {priorityClarificationRequired && (
+              <section
+                className={`mt-4 rounded-xl border p-4 ${guest ? 'border-[#d9ef66] bg-[#29334e]' : 'border-[#b7d9cb] bg-[#eef6f1]'}`}
+                aria-labelledby={guest ? 'guest-priority-question' : 'priority-question'}
+                data-testid="priority-clarification"
+              >
+                <p className={`mono text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#d9ef66]' : 'text-[#35665c]'}`}>
+                  One quick question
+                </p>
+                <p id={guest ? 'guest-priority-question' : 'priority-question'} className={`mt-2 text-sm font-bold leading-6 ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
+                  Which outcome should matter most in this comparison?
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Choose a decision priority">
+                  {priorityChoicesForPrompt(interpretationSourcePrompt).map((choice) => (
+                    <button
+                      type="button"
+                      key={choice.id}
+                      disabled={interpretationPending}
+                      onClick={() => clarifyPriority(choice.label)}
+                      className={`focus-ring rounded-lg border px-3 py-2 text-xs font-bold disabled:cursor-wait disabled:opacity-60 ${guest ? 'border-[#66728e] text-[#f8f4e8] hover:border-[#d9ef66]' : 'border-[#a8c6bb] bg-white text-[#202840] hover:border-[#0f766e]'}`}
+                      data-testid={`button-priority-${choice.id}`}
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    type="text"
+                    value={customPriority}
+                    onChange={(event) => {
+                      setCustomPriority(event.target.value);
+                      setPriorityClarificationError('');
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        clarifyPriority(customPriority);
+                      }
+                    }}
+                    maxLength={120}
+                    placeholder="Or enter your own priority"
+                    aria-label="Custom decision priority"
+                    className={`focus-ring min-w-0 flex-1 rounded-lg border px-3 py-2 text-xs ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8] placeholder:text-[#8d98ae]' : 'border-[#c7dcd3] bg-white text-[#202840] placeholder:text-[#85877f]'}`}
+                    data-testid="input-custom-priority"
+                  />
+                  <button
+                    type="button"
+                    disabled={interpretationPending || !customPriority.trim()}
+                    onClick={() => clarifyPriority(customPriority)}
+                    className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    data-testid="button-submit-custom-priority"
+                  >
+                    Use this priority
+                  </button>
+                </div>
+                <p className={`mt-2 text-[11px] leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#687083]'}`}>
+                  We’ll re-check the interpretation and include your answer with your original decision brief.
+                </p>
+                {priorityClarificationError && <p className="mt-2 text-xs font-bold text-[#b94d45]" role="alert" data-testid="status-priority-error">{priorityClarificationError}</p>}
+              </section>
+            )}
             <label
               htmlFor={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
               className={`mt-4 block text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#a8b0c2]' : 'text-[#85877f]'}`}
@@ -2814,6 +3989,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
               id={guest ? 'guest-phrased-comparison' : 'phrased-comparison'}
               value={phrasedPrompt}
               onChange={(event) => setPhrasedPrompt(event.target.value)}
+              maxLength={2000}
               className={`focus-ring mt-2 min-h-[150px] w-full resize-y rounded-lg border px-3 py-3 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#c7dcd3] bg-white text-[#202840]'}`}
               aria-label="Phrased comparison request"
               data-testid="input-phrased-comparison"
@@ -2823,30 +3999,29 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
                 ? 'Review the edited request again so the option list and criteria stay aligned.'
                 : `${interpretation.vendors.length} options identified. Edit this request if anything needs changing.`}
             </p>
+            {interpretation.vendors.some((vendor) => /^other card-management systems$/i.test(vendor)) && (
+              <p className={`mt-2 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`} data-testid="discovery-scope-note">
+                “Other card-management systems” describes alternatives to consider; it is not a named product. Visa and Mastercard remain scheme-support requirements, not comparison options. Decision Mode does not verify alternatives against sources.
+              </p>
+            )}
             {interpretationOptionError && <p className="mt-2 text-xs font-bold text-[#b94d45]" data-testid="status-interpretation-options">{interpretationOptionError}</p>}
             <p className={`mt-3 text-xs ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-              <strong>Context:</strong> {interpretation.context.segment}. {interpretation.context.message}
+              <strong>Context:</strong> {interpretation.context.segment}.{interpretation.context.valid ? ` ${interpretation.context.message}` : ''}
             </p>
             <AlertDialogFooter className="mt-3">
-              <AlertDialogAction
-                disabled={interpretationPending || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 : !interpretationConfirmable)}
-                onClick={confirmInterpretation}
-                className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                data-testid="button-confirm-interpretation"
-              >
-                {phrasedPromptChanged ? 'Review revised prompt' : 'Confirm and research'}
-              </AlertDialogAction>
+              {interpretation.context.valid && (
+                <AlertDialogAction
+                  disabled={interpretationPending || Boolean(baasValidationError) || (phrasedPromptChanged ? phrasedPrompt.trim().length < 8 || phrasedPrompt.trim().length > 2000 : !interpretationConfirmable)}
+                  onClick={confirmInterpretation}
+                  className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="button-confirm-interpretation"
+                >
+                  {phrasedPromptChanged ? 'Review revised prompt' : 'Confirm decision brief'}
+                </AlertDialogAction>
+              )}
               <AlertDialogCancel
-                onClick={() => {
-                  setPrompt(phrasedPrompt);
-                  setInterpretation(null);
-                  setInterpretationPrompt('');
-                  setPhrasedPrompt('');
-                  setPhrasedPromptBaseline('');
-                  setInterpretationError('');
-                  window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
-                }}
-                className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`}
+                onClick={editInterpretation}
+                className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${!interpretation.context.valid ? 'border-[#b94d45] bg-[#b94d45] text-white hover:bg-[#a4423b]' : guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`}
                 data-testid="button-edit-interpretation"
               >
                 Edit prompt
@@ -2855,18 +4030,12 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           </AlertDialogContent>}
         </AlertDialog>
 
-        {interpretationError && (
-          <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert" data-testid="status-interpretation-error">
-            {interpretationError}
-          </div>
-        )}
-
         <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
           <label htmlFor={guest ? 'guest-research-market' : 'research-market'} className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
-            02 / Set your research market
+            02 / Set your decision market
           </label>
           <p className={`mt-1 text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
-            Required. MVP coverage currently supports India, Australia, the United States, and the United Kingdom so local rates, currency, regulations, availability, and official sources can be verified.
+            Required. Choose India, Australia, the United States, or the United Kingdom to frame local assumptions. Decision Mode does not verify local rates or availability.
           </p>
           <select
             id={guest ? 'guest-research-market' : 'research-market'}
@@ -2874,8 +4043,6 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
             value={market}
             onChange={(event) => {
               setMarket(event.target.value as ResearchMarketCode | '');
-              setSourcePreflight([]);
-              setSourcePreflightKey('');
               interpretationRequestId.current += 1;
               setInterpretation(null);
               setInterpretationPrompt('');
@@ -2895,7 +4062,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           </select>
         </div>
 
-        {isVehicleComparison && (
+        {isBaasScenario && (
           <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
             <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
               03 / Set a BaaS cost scenario <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
@@ -2941,106 +4108,119 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
                 </div>
               </label>
             </div>
-            {Boolean(annualDistanceKm) !== Boolean(ownershipPeriodYears) && (
-              <p className="mt-2 text-[11px] font-bold text-[#b94d45]">Enter both values to include a scenario total.</p>
+            {baasValidationError && (
+              <p className="mt-2 text-[11px] font-bold text-[#b94d45]" role="alert" data-testid="status-baas-validation">{baasValidationError}</p>
             )}
           </div>
         )}
 
-        <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`}>
-          <div className="flex items-center gap-2">
-            <Link2 size={14} className={guest ? 'text-[#bde3d8]' : 'text-[#0f766e]'} />
-            <p className={`text-xs font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
-              {isVehicleComparison ? '04' : '03'} / Provide source URLs <span className={`font-normal ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>· optional</span>
-            </p>
-          </div>
-
-          <p className={`mt-1 text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
-            Leave this empty and we’ll research current sources. For a stronger subsequent attempt, add exact current pages for each option; irrelevant or outdated resources are excluded.
-          </p>
-
-          <div className="mt-3 flex gap-2">
-            <input
-              type="url"
-              className={`focus-ring min-w-0 flex-1 rounded-lg border px-3 py-2.5 text-xs ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8] placeholder:text-[#7f8aa2]' : 'border-[#c9c1ae] bg-white text-[#202840]'}`}
-              placeholder="https://example.com/product-page"
-              value={urlDraft}
-              onChange={(event) => { setUrlDraft(event.target.value); setUrlError(''); }}
-              onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addUrl(); } }}
-              data-testid="input-composer-url"
-            />
-            <button
-              type="button"
-              className={`focus-ring rounded-lg px-4 text-xs font-bold ${guest ? 'bg-[#f8f4e8] text-[#202840]' : 'bg-[#202840] text-[#f8f4e8]'}`}
-              onClick={addUrl}
-              data-testid="button-composer-add-url"
-            >
-              Add
-            </button>
-          </div>
-
-          {urlError && <p className="mt-2 text-xs font-bold text-[#df7b70]">{urlError}</p>}
-
-          {urls.length > 0 && (
-            <div className="mt-3 grid gap-2">
-              {urls.map((url) => {
-                const validation = sourcePreflight.find((source) => source.url === url);
-                const accepted = validation?.state === 'accepted';
-                return <div key={url} className={`max-w-full rounded-lg px-3 py-2 text-[11px] ${guest ? 'bg-[#202840] text-[#c9cfdb]' : 'bg-white text-[#566074]'}`} data-testid={`source-preflight-${validation?.state ?? 'pending'}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate">{url}</span>
-                    {validation && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${accepted ? 'bg-[#dcefe9] text-[#0f766e]' : 'bg-[#f7dfdc] text-[#9a3e38]'}`}>{accepted ? 'Primary context' : validation.state.replace('_', ' ')}</span>}
-                    <button type="button" aria-label={`Remove ${url}`} onClick={() => {
-                      setUrls((current) => current.filter((item) => item !== url));
-                      setSourcePreflight([]);
-                      setSourcePreflightKey('');
-                    }}>
-                      <X size={12} />
-                    </button>
-                  </div>
-                  {validation && <p className={`mt-1.5 leading-4 ${accepted ? 'text-[#4d766e]' : 'text-[#b94d45]'}`}>{validation.reason}</p>}
-                  {validation && !accepted && <button type="button" className="mt-1.5 font-bold text-[#0f766e] underline" onClick={() => {
-                    setUrlDraft(url);
-                    setUrls((current) => current.filter((item) => item !== url));
-                    setSourcePreflight([]);
-                    setSourcePreflightKey('');
-                    window.setTimeout(() => document.querySelector<HTMLInputElement>('[data-testid="input-composer-url"]')?.focus(), 0);
-                  }}>Replace source</button>}
-                </div>;
-              })}
-            </div>
-          )}
+        <div className={`mt-5 rounded-xl border p-4 ${guest ? 'border-[#3a4664] bg-[#29334e]' : 'border-[#ddd5c5] bg-[#f2eee2]'}`} data-testid="composer-decision-mode-note">
+          <p className={`mono text-[10px] font-bold uppercase tracking-[.15em] ${guest ? 'text-[#d9ef66]' : 'text-[#0f766e]'}`}>Decision Mode / targeted research</p>
+          <p className={`mt-2 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>Decision Mode gathers bounded context for your priorities and labels modelled scores clearly. It is not a source-by-source verification; treat current prices, availability, and other decision-critical facts as unverified.</p>
         </div>
+
+        {actionableValidationMessage && (
+          <div className={`mt-5 rounded-xl border px-4 py-3 ${guest ? 'border-[#d9ef66] bg-[#29334e] text-[#f8f4e8]' : 'border-[#e3b6ac] bg-[#f7e4df] text-[#8d5650]'}`} role="alert" data-testid="status-comparison-validation-error">
+            <p className="text-xs font-bold">{actionableValidationMessage}</p>
+          </div>
+        )}
 
         <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className={`max-w-lg text-[11px] leading-5 ${guest ? 'text-[#a8b0c2]' : 'text-[#7f817e]'}`}>
-            Your selected market controls the rates, currency, regulations, availability, and sources used in the comparison.
+            Your selected market helps target the research. Modelled scores are not source verification; check time-sensitive prices and availability before acting.
           </p>
-          <PrimaryButton
-            type="submit"
-             disabled={pending || sourcePreflightPending || interpretationPending || prompt.trim().length < 8 || !market}
-            className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
-            testId={guest ? 'button-guest-research' : 'button-research-comparison'}
-          >
-             {pending || sourcePreflightPending || interpretationPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
-            {pending
-              ? 'Researching and scoring'
-              : sourcePreflightPending
-                ? 'Validating sources'
+          {actionableValidationMessage ? (
+            <button type="button" onClick={focusPromptForEdit} className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-xs font-bold ${guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : 'bg-[#b94d45] text-white hover:bg-[#a4423b]'}`} data-testid="button-edit-prompt-action">
+              Edit prompt
+            </button>
+          ) : (
+            <PrimaryButton
+              type="submit"
+              disabled={pending || interpretationPending || Boolean(baasValidationError) || prompt.trim().length < 8 || prompt.trim().length > 2000 || !market}
+              className={guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : ''}
+              testId={guest ? 'button-guest-research' : 'button-research-comparison'}
+            >
+              {pending || interpretationPending ? <LoaderCircle className="animate-spin" size={16} /> : <FileSearch size={16} />}
+              {pending
+                ? 'Building decision'
                 : interpretationPending
                   ? 'Interpreting request'
-                : urls.length > 0 && sourcePreflightKey !== JSON.stringify([prompt.trim(), market, urls])
-                  ? 'Validate supplied sources'
-                  : `${isVehicleComparison ? '05' : '04'} / Research and compare`}
-          </PrimaryButton>
+                  : `${isBaasScenario ? '05' : '04'} / Build decision`}
+            </PrimaryButton>
+          )}
         </div>
 
-        {Boolean(error) && (
+        {Boolean(error) && !blockingValidationError && (
           <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert">
-            {comparisonErrorMessage(error)}
+            {researchErrorMessage}
+          </div>
+        )}
+        {(jobState?.status === 'failed' || Boolean(error)) && jobState?.previewDecision?.winner && (
+          <div className="mt-4 rounded-xl border border-[#d3a83d] bg-[#fff8df] p-4 text-sm text-[#5f4d1f]" data-testid="failed-research-preview">
+            <p className="font-bold">Early recommendation preserved: {jobState.previewDecision.winner}</p>
+            <p className="mt-1 text-xs">The research did not finish, so this is a provisional recommendation based on the available data. Check the report’s assumptions and unresolved details before acting.</p>
           </div>
         )}
       </form>
+
+      {jobState?.status === 'partial' && jobState.result && (
+        <section
+          ref={partialResultRef}
+          className={`mt-7 space-y-5 rounded-2xl border p-5 sm:p-7 ${guest ? 'border-[#53627f] bg-[#202840] text-[#f8f4e8]' : 'border-[#c8d9a2] bg-[#f4f7e9] text-[#202840]'}`}
+          aria-labelledby="partial-decision-heading"
+          aria-live="polite"
+          data-testid="partial-decision-result"
+        >
+          <div>
+            <p className={`mono text-[10px] font-bold uppercase tracking-[.16em] ${guest ? 'text-[#d9ef66]' : 'text-[#0f766e]'}`}>
+              Decision report · partial research
+            </p>
+            <h3 id="partial-decision-heading" className="display mt-2 text-2xl font-bold tracking-[-.04em]">
+              {jobState.result.recommendation && jobState.result.recommendation !== 'INSUFFICIENT_DATA'
+                ? `Early recommendation: ${jobState.result.recommendation}`
+                : 'Decision data is incomplete'}
+            </h3>
+            <p className={`mt-2 max-w-2xl text-sm leading-6 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+              {jobState.message || 'The research reached its 20-second limit. This is the best available partial result; its modelled scores are not verified facts.'}
+            </p>
+          </div>
+          <DecisionRecommendationCard comparison={jobState.result} />
+          <div className={`grid gap-4 border-t pt-4 sm:grid-cols-2 ${guest ? 'border-[#53627f]' : 'border-[#d5dfbf]'}`}>
+            <div>
+              <h4 className="text-xs font-bold">What may still be missing</h4>
+              <p className={`mt-1 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+                {jobState.result.insights?.find((insight) => /missing|not established|incomplete|unavailable|timed out/i.test(insight))
+                  || 'Some targeted research did not finish. Treat unreported details and time-sensitive facts as unknown.'}
+              </p>
+            </div>
+            <div>
+              <h4 className="text-xs font-bold">Suggested next action</h4>
+              <p className={`mt-1 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+                {jobState.result.nextSteps?.[0] || 'Review the assumptions and missing details, then retry with a narrower brief if you need more context.'}
+              </p>
+              {jobState.result.id && (
+                <Link href={`/comparisons/${jobState.result.id}`} className={`focus-ring mt-3 inline-flex items-center gap-2 text-xs font-bold underline ${guest ? 'text-[#d9ef66]' : 'text-[#0f766e]'}`} data-testid="link-open-partial-report">
+                  Open saved report <ArrowRight size={14} />
+                </Link>
+              )}
+              {!guest && !jobState.result.id && (
+                <div className="mt-3 space-y-2">
+                  <p className={`text-xs leading-5 ${jobState.saveStatus === 'failed' ? 'text-[#b94d45]' : guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`} role="status" data-testid="partial-save-status">
+                    {jobState.saveStatus === 'failed'
+                      ? 'This partial report could not be saved. Keep the result above and retry when ready.'
+                      : jobState.saveStatus === 'unconfirmed'
+                        ? 'Saving has not been confirmed. The result above remains available here; check History later.'
+                        : 'Your partial report is being saved. You can use the result above now.'}
+                  </p>
+                  <Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold underline text-[#0f766e]" data-testid="link-partial-history">
+                    Check History <ArrowRight size={14} />
+                  </Link>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
 
       {pending && (
         <div
@@ -3051,7 +4231,7 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
           <div className="flex items-center gap-3 mb-6">
             <LoaderCircle className="animate-spin text-[#0f766e] dark:text-[#d9ef66] motion-reduce:animate-none" size={24} />
             <h3 className={`display text-xl font-bold tracking-[-.035em] ${guest ? 'text-[#f8f4e8]' : 'text-[#202840] dark:text-[#f8f4e8]'}`}>
-              Researching and building your comparison
+              Researching and scoring your decision
             </h3>
           </div>
 
@@ -3059,8 +4239,46 @@ export function ComparisonComposer({ initialPrompt = '', guest = false, pending,
             Live job progress
           </p>
           <p className={`mb-8 text-sm font-medium ${guest ? 'text-[#a8b0c2]' : 'text-[#556075] dark:text-[#b8c1d3]'}`}>
-            Updates appear only when the research pipeline reaches a measured stage.
+            We’re gathering targeted context and weighing your priorities. Scores are modelled estimates, not verified facts.
           </p>
+          {jobState?.connectionInterrupted && <p className="mb-6 rounded-lg border border-[#d3a83d] bg-[#fff8df] p-3 text-xs text-[#715d16]" data-testid="status-reconnecting">Connection interrupted. Reconnecting to this decision job without starting another one…</p>}
+          {jobState?.previewDecision && (
+            <section
+              className={`mb-7 rounded-xl border p-4 ${guest ? 'border-[#d9ef66] bg-[#29334e]' : 'border-[#b7d9cb] bg-[#eef6f1]'}`}
+              aria-live="polite"
+              data-testid="preview-decision"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className={`mono text-[10px] font-bold uppercase tracking-[.14em] ${guest ? 'text-[#d9ef66]' : 'text-[#35665c]'}`}>
+                  Early recommendation · modelled, not verified
+                </p>
+                <span className={`rounded-full px-2 py-1 text-[9px] font-bold uppercase ${guest ? 'bg-[#202840] text-[#d9ef66]' : 'bg-white text-[#35665c]'}`}>
+                  {jobState.previewDecision.provisional ? 'Provisional' : 'Preliminary'}
+                </span>
+              </div>
+              <p className={`mt-2 display text-xl font-bold ${guest ? 'text-[#f8f4e8]' : 'text-[#202840]'}`}>
+                {jobState.previewDecision.winner}
+              </p>
+              <p className={`mt-1 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+                {jobState.previewDecision.decisionType} · {Math.round(jobState.previewDecision.coverage)}% coverage
+              </p>
+              <p className={`mt-2 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
+                {jobState.previewDecision.reason}
+              </p>
+              {jobState.previewDecision.priorities.length > 0 && (
+                <ul className={`mt-3 flex flex-wrap gap-2 text-[10px] ${guest ? 'text-[#f8f4e8]' : 'text-[#39435a]'}`}>
+                  {jobState.previewDecision.priorities.map((priority) => (
+                    <li key={priority.lens} className={`rounded-full px-2.5 py-1 ${guest ? 'bg-[#202840]' : 'bg-white'}`}>
+                      {priority.lens} · {Math.round(priority.weight)}%
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className={`mt-3 text-[10px] leading-4 ${guest ? 'text-[#a8b0c2]' : 'text-[#687083]'}`}>
+                Targeted research may refine this recommendation. Facts are not checked source by source.
+              </p>
+            </section>
+          )}
 
           <div className="mb-10 flex w-full max-w-lg flex-col gap-4">
             {[...parsedProgress.map((label) => ({ label, state: 'complete' as const })), ...researchStages.map(({ stage: itemStage, label }, index) => ({
@@ -3110,7 +4328,7 @@ function Portal() {
     window.sessionStorage.removeItem('vendor-compare-draft');
     return draft;
   }, []);
-   return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A researched decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Describe the choice in plain language. URLs are optional—we’ll identify the right comparison criteria, research current evidence, and calculate weighted scores.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Last Compared', summary?.recentComparisons?.[0]?.category || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><RoutedComparisonComposer initialPrompt={initialPrompt} onSuccess={(comparison) => setLocation(`/comparisons/${comparison.id}`)} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
+  return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">One question. A clearer decision.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Decision Mode gathers targeted context to weigh your priorities and explain trade-offs. Scores are modelled, not verified facts; current prices and availability may still need checking.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]">View history <ArrowRight size={14} /></Link></div><BetaApiAccessPanel /><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Last Compared', summary?.recentComparisons?.[0]?.category || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><RoutedComparisonComposer initialPrompt={initialPrompt} onSuccess={(comparison) => setLocation(`/comparisons/${comparison.id}`)} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div></div></AppShell>;
 }
 
 function BetaApiAccessPanel() {
@@ -3128,7 +4346,7 @@ function GuestPortal() {
     window.sessionStorage.setItem('vendor-compare-guest-result', JSON.stringify(comparison));
     setLocation('/guest/result');
   };
-  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Describe the choice. We’ll research the rest.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Start with natural language. Add source URLs only if you have specific pages; otherwise the app will find current evidence for the comparison.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]"><ArrowLeft size={14} /> Back to home</Link></div><RoutedComparisonComposer initialPrompt={initialPrompt} guest onSuccess={handleSuccess} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div><div className="animate-rise animate-rise-2 mt-12 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / DESCRIBE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the products or brands, your intended outcome, budget, market, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / RESEARCH</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We find current product, pricing, reliability, support, and sustainability evidence.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / SCORE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Weighted charts make the trade-offs and recommendation visible.</p></div></div></div></GuestShell>;
+  return <GuestShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Guest mode / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Describe the choice. See the trade-offs.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">Decision Mode gathers targeted context to compare your options and explain trade-offs. Scores are modelled, not verified facts; current prices and availability may still need checking.</p></div><Link href="/" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]"><ArrowLeft size={14} /> Back to home</Link></div><RoutedComparisonComposer initialPrompt={initialPrompt} guest onSuccess={handleSuccess} /><div className="mt-8 max-w-4xl"><FeatureComparisonTile compact /></div><div className="animate-rise animate-rise-2 mt-12 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / DESCRIBE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the products or brands, your intended outcome, budget, market, and priorities.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / DECIDE</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Review a targeted, modelled fit assessment; source-by-source verification is not included.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / VERIFY LATER</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">A separate Verify workflow can examine accessible sources.</p></div></div></div></GuestShell>;
 }
 
 function ParsedBriefPortal() {
@@ -3153,7 +4371,13 @@ function ParsedBriefPortal() {
   });
   const [parsed, setParsed] = useState<any>(null);
   const submitPrompt = (event: FormEvent) => { event.preventDefault(); if (prompt.trim().length < 8) return; parse.mutate({ data: { prompt: prompt.trim() } }, { onSuccess: setParsed }); };
-  const createComparison = (data: any) => create.mutate({ data }, { onSuccess: (comparison) => setLocation(`/comparisons/${comparison.id}`) });
+  const createComparison = (data: any) => create.mutate({ data }, { onSuccess: (comparison) => {
+    if (!('id' in comparison)) {
+      window.alert('The comparison is still processing. Please use the comparison job flow to check its result.');
+      return;
+    }
+    setLocation(`/comparisons/${comparison.id}`);
+  } });
   return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="animate-rise flex flex-col justify-between gap-6 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Overview / decision desk</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Put the messy question here.</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#687083]">We’ll turn it into a brief with vendors, criteria, and a clear path to a recommendation.</p></div><Link href="/history" className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e]" data-testid="link-portal-history">View history <ArrowRight size={14} /></Link></div><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">{[['Comparisons', summary?.totalComparisons ?? 0], ['This month', summary?.thisMonth ?? 0], ['Last Compared', summary?.recentComparisons?.[0]?.category || '—']].map(([label, value]) => <div className="rounded-xl border border-[#d5cebd] bg-[#e7e2d4] px-4 py-3" key={label as string} data-testid={`portal-stat-${String(label).toLowerCase().replaceAll(' ', '-')}`}><p className="mono text-[9px] uppercase tracking-[.14em] text-[#888b82]">{label as string}</p><p className="display mt-2 truncate text-xl font-bold text-[#202840]">{value as string | number}</p></div>)}</div><form className="animate-rise animate-rise-1 mt-9 max-w-4xl" onSubmit={submitPrompt}><div className="relative"><textarea className="focus-ring min-h-[180px] w-full resize-none rounded-2xl border border-[#bcb5a5] bg-[#f8f4e8] p-5 pr-16 text-base leading-7 text-[#202840] shadow-[4px_4px_0_#d9ef66] placeholder:text-[#9a9a90]" placeholder="Compare customer support tools for a 12-person SaaS team. We care about fast setup, a shared inbox, and predictable pricing..." value={prompt} onChange={(event) => setPrompt(event.target.value)} data-testid="input-portal-prompt" /><button className="focus-ring absolute bottom-4 right-4 grid size-10 place-items-center rounded-xl bg-[#0f766e] text-[#f8f4e8] shadow-[2px_2px_0_#202840] transition-transform hover:-translate-y-0.5 disabled:opacity-50" type="submit" disabled={parse.isPending || prompt.trim().length < 8} data-testid="button-parse-prompt">{parse.isPending ? <LoaderCircle size={17} className="animate-spin" /> : <ArrowRight size={17} />}</button></div><div className="mt-3 flex items-center justify-between text-[11px] text-[#85877f]"><span>Minimum 8 characters</span>{parse.isError && <span className="font-bold text-[#b94d45]" data-testid="status-parse-error">Could not parse this prompt. Try adding more context.</span>}</div></form>{parsed && <ParsedBrief parsed={parsed} onCreate={createComparison} pending={create.isPending} />}{!parsed && !parse.isPending && <div className="animate-rise animate-rise-2 mt-16 grid gap-6 border-t border-[#d9d1bf] pt-8 md:grid-cols-3"><div><span className="mono text-[10px] font-bold text-[#b94d45]">01 / START BROAD</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Name the decision in plain language. Specificity can come next.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">02 / REVIEW THE BRIEF</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">We’ll pull out the options and the lens your team is using.</p></div><div><span className="mono text-[10px] font-bold text-[#b94d45]">03 / MAKE THE CALL</span><p className="mt-3 text-sm leading-6 text-[#626b7b]">Add source URLs, then get a recommendation with receipts.</p></div></div>}</div></AppShell>;
 }
 
@@ -3269,6 +4493,8 @@ function LegacyHistoryPage() {
 function AnalysisPage() {
   const [location, setLocation] = useLocation();
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
+  const [quoteBundle, setQuoteBundle] = useState<QuoteBundle | null>(null);
+  const onQuoteChanged = useCallback((next: QuoteBundle | null) => setQuoteBundle(next), []);
   const [jsonStatus, setJsonStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
   const [alternativeError, setAlternativeError] = useState('');
   const guest = location === '/guest/result';
@@ -3288,13 +4514,14 @@ function AnalysisPage() {
   if (!guest && isLoading) return <AppShell><LoadingPanel label="Building the analysis" /></AppShell>;
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
   if (guest && !guestComparison) return <GuestShell><div className="mx-auto max-w-3xl px-5 py-20 text-center lg:px-10"><p className="mono text-xs uppercase tracking-[.2em] text-[#b94d45]">Guest result unavailable</p><h1 className="display mt-4 text-4xl font-bold tracking-[-.05em] text-[#202840]">That comparison has expired.</h1><p className="mt-4 text-sm leading-6 text-[#687083]">Run another guest comparison or create an account to keep a private 30-day history.</p><Link href="/guest" className="focus-ring mt-7 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]" data-testid="link-guest-result-restart"><ArrowLeft size={15} /> Run another comparison</Link></div></GuestShell>;
-  const comparison = (guest ? guestComparison : data) as Comparison;
+  const comparison = reconcileReportScores((guest ? guestComparison : data) as Comparison);
+  const isPartialReport = hasPartialResearchStatus(comparison as Comparison & { researchStatus?: string });
   const decisionQuality = computeDecisionQuality(comparison);
   const exportPdf = async () => {
     if (pdfStatus === 'exporting') return;
     setPdfStatus('exporting');
     try {
-      await downloadComparisonPdf(comparison);
+      await downloadComparisonPdf({ ...comparison, quoteBundle: guest ? null : quoteBundle });
       setPdfStatus('idle');
     } catch (error) {
       console.error('PDF export failed', error);
@@ -3315,6 +4542,7 @@ function AnalysisPage() {
   const evidenceRecords = (comparison.vendorScores || []).flatMap((vendor: any) => (
     (vendor.weightedScores || []).flatMap((criterion: any) => criterion.evidence || [])
   ));
+  const sourceObservationCount = (comparison.insights || []).filter((insight: string) => insight.startsWith('Source observation — ')).length;
   const verifiedEvidenceCount = evidenceRecords.filter((evidence: any) => (
     evidence.evidenceKind !== 'unverified'
     && evidence.evidenceKind !== 'analyst_judgment'
@@ -3323,21 +4551,19 @@ function AnalysisPage() {
   const strategicEntries = Object.entries(comparison.swot || {}) as [string, string[]][];
   const swotEntries = strategicEntries.filter(([key]) => !key.startsWith('PESTLE —') && !key.startsWith('SOAR —'));
   const pestleEntries = strategicEntries.filter(([key]) => key.startsWith('PESTLE —')).map(([key, values]) => [key.replace('PESTLE — ', ''), values] as [string, string[]]);
-  const soarEntries = actionableSoarEntries(
-    comparison,
-    strategicEntries.filter(([key]) => key.startsWith('SOAR —')).map(([key, values]) => [key.replace('SOAR — ', ''), values] as [string, string[]]),
-  );
   const visibleInsights = (comparison.insights || []).filter(
     (item: string) => !/^Evidence unavailable\b/i.test(item.trim()),
   );
   const comparedOptionNames = comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || [];
-  const alternativeInsights = visibleInsights.filter((item: string) => {
+  const alternativeInsights = visibleInsights.filter((item: string, index: number) => {
     if (!item.startsWith('Alternative outside comparison —')) return false;
     const alternativeName = item.replace('Alternative outside comparison —', '').split(':')[0]?.trim();
     if (!alternativeName) return false;
-    return !comparedOptionNames.some((option: string) => comparisonOptionNamesOverlap(alternativeName, option));
+    return !comparedOptionNames.some((option: string) => comparisonOptionNamesOverlap(alternativeName, option))
+      && !visibleInsights.slice(0, index).some((earlier: string) => earlier.startsWith('Alternative outside comparison —')
+        && comparisonOptionNamesOverlap(alternativeName, earlier.replace('Alternative outside comparison —', '').split(':')[0]?.trim()));
   }).slice(0, 3);
-  const coreInsights = visibleInsights.filter((item: string) => !item.startsWith('Alternative outside comparison —'));
+  const coreInsights = visibleInsights.filter((item: string) => !item.startsWith('Alternative outside comparison —') && !item.startsWith('Source observation — '));
   const compareAlternative = (insight: string) => {
     const alternative = insight.replace('Alternative outside comparison — ', '').split(':')[0]?.trim();
     if (!alternative) return;
@@ -3352,16 +4578,36 @@ function AnalysisPage() {
     );
     setLocation(guest ? '/guest' : '/user-portal');
   };
-  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{comparison.executiveSummary}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div><DecisionRecommendationCard comparison={comparison} /></div>
-         <ExecutiveDecisionBrief comparison={comparison} />
+  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 max-w-3xl text-base leading-7 text-[#687083]">{evidenceSafeExecutiveSummary(comparison)}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div>{guest ? <div className="mt-7 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="guest-verify-guidance"><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Verification for saved decisions</p><p className="mt-2 text-sm leading-6 text-[#39435a]">This guest result is not saved. Sign in and create a saved comparison to access its dedicated verification page. Signing in does not automatically save this guest result.</p><Link href="/sign-in" className="focus-ring mt-4 inline-flex rounded-xl bg-[#202840] px-4 py-2.5 text-xs font-bold text-[#f8f4e8]" data-testid="link-guest-verify-sign-in">Sign in to save future decisions <ArrowRight size={14} className="ml-2" /></Link></div> : <Link href={`/verify/${id}`} className="focus-ring mt-7 inline-flex items-center gap-3 rounded-xl bg-[#0f766e] px-5 py-3.5 text-sm font-bold text-[#f8f4e8] transition-colors hover:bg-[#095e58]" data-testid="link-verify-decision"><ShieldCheck size={18} /> Verify this decision <ArrowRight size={16} /></Link>}<DecisionRecommendationCard comparison={comparison} /></div>
+          {isPartialReport && (
+            <section className="mt-6 rounded-2xl border border-[#d4b85f] bg-[#fff8df] p-5 text-[#5f4d1f] lg:col-span-2" aria-labelledby="partial-report-heading" aria-live="polite" data-testid="partial-report-banner">
+              <h2 id="partial-report-heading" className="text-sm font-bold">Partial decision report · research reached its time limit</h2>
+              <p className="mt-2 text-xs leading-5">This recommendation uses the best available targeted research. Modelled scores are not independently verified; treat unreported and time-sensitive details as unknown.</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <h3 className="text-xs font-bold">What may still be missing</h3>
+                  <p className="mt-1 text-xs leading-5">{comparison.insights?.find((insight: string) => /missing|not established|incomplete|unavailable|timed out/i.test(insight)) || 'Some research did not finish. Review assumptions and unreported details before acting.'}</p>
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold">Suggested next action</h3>
+                  <p className="mt-1 text-xs leading-5">{comparison.nextSteps?.[0] || 'Check the missing information and retry with a narrower brief if additional context is needed.'}</p>
+                </div>
+              </div>
+            </section>
+          )}
+          <ExecutiveDecisionBrief comparison={comparison} />
+          <DecisionStrategySection comparison={comparison} />
+           {isVehiclePurchaseReport(comparison) && !isProvisionalChoice(comparison) && comparison.vendorScores?.some((vendor: any) =>
+            !vendor.qualificationGates?.some((gate: any) => gate.gate === 'Market availability' && gate.status === 'PASS')
+           ) && <section className="mt-6 rounded-2xl border border-[#d6a39f] bg-[#fff0e9] p-5" data-testid="vehicle-decision-readiness" role="status"><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#9a3e38]">Purchase decision on hold</p><p className="mt-2 text-sm leading-6 text-[#39435a]">A performance lead is not an overall buying recommendation while local availability and like-for-like buying evidence remain unverified. Confirm the exact current variants, written on-road prices, safety, warranty and local service costs before choosing.</p></section>}
         <section className="mt-6 rounded-2xl border border-[#9ebbb0] bg-[#dcefe9] p-5 sm:p-6" data-testid="tile-evidence-dataset">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex gap-4">
               <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#0f766e] text-[#f8f4e8]"><FileSearch size={19} /></div>
               <div>
                 <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Evidence dataset</p>
-                <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Validate every score.</h2>
-                <p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">Download the complete report plus its claims, raw metrics, normalization method, canonical weights, and weighted contributions.</p>
+                 <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Inspect the data and sources.</h2>
+                 <p className="mt-2 max-w-2xl text-xs leading-5 text-[#566074]">The initial comparison uses current accessible sources. Open the claim-to-source list below or download the report; request a separate evidence check above when you need deeper verification.</p>
               </div>
             </div>
             <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center">
@@ -3371,17 +4617,33 @@ function AnalysisPage() {
               <button type="button" onClick={exportJson} disabled={jsonStatus === 'exporting'} className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-[#202840] px-4 py-3 text-xs font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-evidence-json">{jsonStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={15} /> : <Download size={15} />}{jsonStatus === 'exporting' ? 'Preparing JSON' : 'Download JSON'}</button>
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[#b9d3c7] pt-4 text-[11px] text-[#566074]" data-testid="text-evidence-dataset-summary"><span><strong className="text-[#202840]">{verifiedEvidenceCount}</strong> verified claims</span><span>JSON includes the full comparison</span><span>Suitable for independent model validation</span></div>
+           <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[#b9d3c7] pt-4 text-[11px] text-[#566074]" data-testid="text-evidence-dataset-summary"><span><strong className="text-[#202840]">{verifiedEvidenceCount}</strong> source-linked claims</span><span><strong className="text-[#202840]">{sourceObservationCount}</strong> retrieved observations</span><span>Source links alone are not independent verification</span></div>
           {jsonStatus === 'failed' && <p className="mt-3 text-xs font-bold text-[#b94d45]" role="alert" data-testid="status-evidence-json-error">The JSON export could not be generated. Please try again.</p>}
         </section>
-       <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> Open equivalency, gaps, migration, and governance</Link></div>
+       <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> {isVehiclePurchaseReport(comparison) ? 'Open vehicle buying checks' : 'Open equivalency, gaps, migration, and governance'}</Link></div>
         <div className="mt-6 flex flex-col items-end gap-2"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
-    <section className="mt-12"><div className="mb-5 flex items-end justify-between"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div><span className="hidden text-xs text-[#8b8b83] sm:block">Scores are relative to your criteria</span></div><div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{displayedVendorScore(vendor)}</span></div><div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{String(vendor.providerRole || 'Not classified').replace('_', ' ')}</span></div><p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p><p className="mt-2 text-xs leading-5 text-[#687083]">{vendor.verdict}</p><p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{vendor.providerRoleRationale || 'Strategic role is unavailable for this saved comparison.'}</p><div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${displayedVendorScoreWidth(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div></div>)}</div></section>
+    <section className="mt-12">
+      <div className="mb-5 flex items-end justify-between">
+        <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">01 / Vendor fit</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Who fits the brief?</h2></div>
+        <span className="hidden text-xs text-[#8b8b83] sm:block">{isProvisionalChoice(comparison) ? 'Indicative fit estimates are not verified product scores' : 'Scores are relative to your criteria'}</span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">{comparison.vendorScores?.map((vendor: any) => {
+        const role = providerRolePresentation(vendor);
+        const estimate = isProvisionalChoice(comparison) ? indicativeFitScore(comparison, vendor.vendor) : null;
+        return <div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor} data-testid={`card-vendor-${vendor.vendor}`}>
+          <div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl text-sm font-bold text-[#f8f4e8]" style={{ backgroundColor: vendor.color || '#0f766e' }}>{vendor.vendor.slice(0, 2).toUpperCase()}</div><span className="mono min-w-[4.5rem] text-right text-xs font-bold tabular-nums text-[#0f766e]">{estimate !== null ? `Est. ${estimate}/100` : displayedVendorScore(vendor)}</span></div>
+          <div className="mt-7"><span className="rounded-full bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">{estimate !== null ? 'Indicative fit' : role.label}</span></div>
+          <p className="display mt-3 text-xl font-bold text-[#202840]">{vendor.vendor}</p>
+          <p className="mt-2 text-xs leading-5 text-[#687083]">{estimate !== null ? 'Assumption-led fit estimate, not a verified product score or qualified winner.' : vendorVerdictPresentation(vendor)}</p>
+          <p className="mt-3 border-t border-[#e3ddcf] pt-3 text-[11px] leading-5 text-[#687083]">{estimate !== null ? 'Compare source-linked capabilities and obtain like-for-like commercial quotes before deciding.' : role.rationale}</p>
+          <div className="mt-5 h-1.5 rounded-full bg-[#ded8ca]"><div className="h-1.5 rounded-full" style={{ width: `${estimate ?? displayedVendorScoreWidth(vendor)}%`, backgroundColor: vendor.color || '#0f766e' }} /></div>
+        </div>;
+      })}</div>
+    </section>
          <ScoreCharts vendorScores={comparison.vendorScores} />
-         <VendorScoreExtensionSection vendorScores={comparison.vendorScores} />
+          <VendorScoreExtensionSection vendorScores={comparison.vendorScores} comparison={comparison} />
          {!comparison.vendorScores?.some(hasVendorScoreExtension) && <UserCriteriaDashboard criteria={comparison.criteria} vendorScores={comparison.vendorScores} />}
-          <PricingFeatureLensPanel comparison={comparison} />
-          {!comparison.vendorScores?.some(hasVendorScoreExtension) && <WeightEditor
+           <WeightEditor
            comparison={comparison}
            guest={guest}
            onUpdated={(updated) => {
@@ -3394,19 +4656,66 @@ function AnalysisPage() {
                 queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
              }
            }}
-          />}
+           />
     {!comparison.vendorScores?.some(hasVendorScoreExtension) && <HeadToHead comparison={comparison} />}
-    <section className="mt-14 grid gap-7 lg:grid-cols-2"><AnalysisTable title="Pricing lens" rows={comparison.pricing} /><AnalysisTable title="Feature lens" rows={comparison.features} /></section>
+     {!guest && <QuotePanel id={id} vendors={comparison.vendors || []} onChanged={onQuoteChanged} />}
+     {/\b(?:CRM|customer relationship|sales cloud|DXP|digital[- ]experience)\b/i.test(`${comparison.category || ''} ${comparison.prompt || ''}`)
+       && !(comparison.features || []).length && <div className="mt-10 rounded-xl border border-[#d7c47b] bg-[#f5edc8] p-4 text-xs leading-5 text-[#715d16]" role="status" data-testid="legacy-lenses-notice">
+         <strong>This saved report has no source-specific feature rows.</strong> A fresh comparison can research current product capabilities and pricing. The original report will remain in your history.
+         <button type="button" className="focus-ring ml-2 font-bold underline" onClick={() => {
+           window.sessionStorage.setItem('vendor-compare-draft', comparison.prompt);
+           setLocation(guest ? '/guest' : '/user-portal');
+         }}>Start a refreshed comparison</button>
+       </div>}
+     <section className="mt-14 grid gap-7 lg:grid-cols-2"><AnalysisTable title="Pricing lens (research and estimates)" rows={presentedDxpLensRows(comparison).pricing} indicative={isIndicativeDxpReport(comparison)} /><AnalysisTable title="Feature lens" rows={presentedDxpLensRows(comparison).features} indicative={isIndicativeDxpReport(comparison)} /></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Strategic read</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{swotEntries.map(([key, values]) => <div key={key} className="rounded-2xl border border-[#d5cebd] bg-[#e7e2d4] p-5"><p className="mono text-[10px] font-bold uppercase tracking-[.14em] text-[#0f766e]">{key}</p><ul className="mt-4 space-y-3">{values.map((value) => <li className="flex gap-2 text-xs leading-5 text-[#626b7b]" key={value}><span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#b94d45]" />{value}</li>)}</ul></div>)}</div></section>
       <StrategicFrameworkSection title="PESTLE adherence by option" eyebrow="Macro environment" description="How each brand, service, product, edition, or plan is addressing political, economic, social, technological, legal, and environmental forces, with evidence gaps called out." entries={pestleEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-pestle" />
-      <StrategicFrameworkSection title="SOAR decision strategy by option" eyebrow="Strengths-led strategy" description="What each option is strongest at, where it must improve, the outcome it should enable, and the measurable acceptance test. Each finding includes a product-management action and a buyer decision implication." entries={soarEntries} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} testId="section-soar" />
-      {alternativeInsights.length > 0 && <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-alternative-insights"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Alternative path</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Alternatives outside your shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">These options were not included in the weighted ranking. Add an alternative to every option in the current shortlist and rerun the same decision context and criteria. Comparisons are limited to {MAX_COMPARISON_OPTIONS} options.</p>{alternativeError && <p className="mt-3 rounded-lg border border-[#d6a39f] bg-[#f7dfdc] px-3 py-2 text-xs font-bold text-[#9a3e38]" role="alert" data-testid="status-alternative-limit">{alternativeError}</p>}<ul className="mt-5 space-y-4">{alternativeInsights.map((item: string) => { const alternative = item.replace('Alternative outside comparison — ', '').split(':')[0]?.trim(); const atLimit = !canAddAlternativeToComparison(comparison, alternative); return <li className="flex flex-col gap-3 rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4 text-sm leading-6 text-[#39435a] sm:flex-row sm:items-start sm:justify-between" key={item}><div className="flex gap-3"><Compass size={17} className="mt-1 shrink-0 text-[#0f766e]" /><span>{item.replace('Alternative outside comparison — ', '')}</span></div><button type="button" onClick={() => compareAlternative(item)} disabled={atLimit} className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:bg-[#87918b]" data-testid={`button-compare-alternative-${item.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> {atLimit ? `${MAX_COMPARISON_OPTIONS}-option limit` : 'Add to comparison'}</button></li>; })}</ul></section>}
+      <LazyStrengthsLedStrategySection comparison={comparison} vendors={comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || []} />
+      {alternativeInsights.length > 0 && <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-alternative-insights"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Alternative path</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Alternatives outside your shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">These options were not included in the weighted ranking. Add an alternative to every option in the current shortlist and rerun the same decision context and criteria. Comparisons are limited to {MAX_COMPARISON_OPTIONS} options.</p>{alternativeError && <p className="mt-3 rounded-lg border border-[#d6a39f] bg-[#f7dfdc] px-3 py-2 text-xs font-bold text-[#9a3e38]" role="alert" data-testid="status-alternative-limit">{alternativeError}</p>}<ul className="mt-5 space-y-4">{alternativeInsights.map((item: string) => { const alternative = item.replace('Alternative outside comparison — ', '').split(':')[0]?.trim(); const atLimit = !canAddAlternativeToComparison(comparison, alternative); return <li className="flex flex-col gap-3 rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4 text-sm leading-6 text-[#39435a] sm:flex-row sm:items-start sm:justify-between" key={item}><div className="flex gap-3"><Compass size={17} className="mt-1 shrink-0 text-[#0f766e]" /><AlternativeExplanation insight={item} /></div><button type="button" onClick={() => compareAlternative(item)} disabled={atLimit} className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:bg-[#87918b]" data-testid={`button-compare-alternative-${item.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> {atLimit ? `${MAX_COMPARISON_OPTIONS}-option limit` : 'Add to comparison'}</button></li>; })}</ul></section>}
      <VrioSection vendorScores={comparison.vendorScores} />
      <MarketPositionSection vendorScores={comparison.vendorScores} />
      <MarketHistorySection vendorScores={comparison.vendorScores} />
-     <section className="mt-14 grid gap-7 lg:grid-cols-3"><InsightList title="Opportunities" items={comparison.opportunities} accent="teal" /><InsightList title="Key insights" items={coreInsights} accent="yellow" /><InsightList title="Next steps" items={comparison.nextSteps} accent="red" /></section>
-       {(comparison.sourceAvailability?.length > 0 || comparison.urls?.length > 0) && <SourceAvailabilityList comparison={comparison} />}
+      <section className="mt-14 grid gap-7 lg:grid-cols-3"><InsightList title="Opportunities" items={comparison.opportunities} accent="teal" /><InsightList title="Key insights" items={coreInsights} accent="yellow" /><InsightList title="Next steps" items={(comparison.nextSteps || []).filter((step: string) => !step.startsWith('Decision strategy — '))} accent="red" /></section>
+        <ComparisonSourcesOnDemand comparison={comparison} />
      </div></AppShell>;
+}
+
+function ComparisonSourcesOnDemand({ comparison }: { comparison: Comparison }) {
+  const restrictedUrls = new Set((comparison.sourceAvailability || [])
+    .filter((source: any) => source.status === 'restricted' || source.accessStatus === 'PROHIBITED')
+    .map((source: any) => source.url));
+  const claims = (comparison.vendorScores || []).flatMap((vendor: any) =>
+    (vendor.weightedScores || []).flatMap((criterion: any) =>
+      (criterion.evidence || []).filter((evidence: any) => evidence.sourceUrl && !restrictedUrls.has(evidence.sourceUrl)).map((evidence: any) => ({
+        vendor: vendor.vendor,
+        criterion: criterion.criterion,
+        claim: evidence.exactClaim,
+        url: evidence.sourceUrl,
+        publisher: evidence.sourcePublisher,
+        date: evidence.sourceDate || evidence.retrievalDate,
+      })),
+    ),
+  );
+  const observations = (comparison.insights || []).flatMap((insight: string) => {
+    const match = insight.match(/^Source observation — (.+?): (.+) Source: (https?:\/\/\S+)$/);
+    return match ? [{ vendor: match[1], criterion: 'Retrieved page · contextual observation', claim: match[2], url: match[3], publisher: 'Accessible public page', date: null }] : [];
+  });
+  const sourcePoints = [...claims, ...observations];
+  const hasAvailability = Boolean(comparison.sourceAvailability?.length || comparison.urls?.length);
+  if (!sourcePoints.length && !hasAvailability) return null;
+  return <details className="mt-14 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 sm:p-6" data-testid="section-sources-on-demand">
+    <summary className="focus-ring cursor-pointer text-sm font-bold text-[#0f766e]">View data points, sources and availability ({sourcePoints.length} linked points)</summary>
+    <p className="mt-3 text-xs leading-5 text-[#687083]">These are the pages used for the initial comparison, not the result of an independent evidence check. Direct product pages, expert coverage and customer reviews may differ in reliability; check dates and sample sizes before relying on a claim.</p>
+    {sourcePoints.length > 0 && <div className="mt-5 max-h-[600px] space-y-2 overflow-auto" data-testid="list-claim-sources">
+      {sourcePoints.map((item: any, index: number) => <article className="rounded-lg border border-[#e3ddcf] bg-white p-3 text-xs" key={`${item.vendor}-${item.url}-${index}`}>
+        <p className="font-bold text-[#202840]">{item.vendor} · {item.criterion}</p>
+        <p className="mt-1 text-[#566074]">{item.claim}</p>
+        <p className="mt-1 text-[11px] text-[#85877f]">{item.publisher || 'Publisher not recorded'}{item.date ? ` · As of ${new Date(item.date).toLocaleDateString()}` : ' · Date not recorded'}</p>
+        <a className="mt-1 block break-all text-[#0f766e] underline" href={item.url} target="_blank" rel="noopener noreferrer">{item.url}</a>
+      </article>)}
+    </div>}
+    {hasAvailability && <SourceAvailabilityList comparison={comparison} />}
+  </details>;
 }
 
 export function isVisibleSourceInList(source: { status?: unknown }): boolean {
@@ -3433,8 +4742,33 @@ function SourceAvailabilityList({ comparison }: { comparison: Comparison }) {
   return <section className="mt-14 border-t border-[#d9d1bf] pt-8" data-testid="section-source-availability"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Sources</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Citation availability</h2><div className="mt-4 grid gap-3">{sources.map((source: any) => { const verified = source.status === 'reachable'; return <article className={`rounded-xl border p-4 ${verified ? 'border-[#9ebbb0] bg-[#f8f4e8]' : 'border-[#d8cfc0] bg-[#f2eee4]'}`} key={`${source.url}-${source.status}`} data-testid={`source-${source.status}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><a className={`focus-ring inline-flex min-w-0 items-center gap-2 break-all text-xs ${verified ? 'font-bold text-[#0f766e] hover:underline' : 'text-[#566074] hover:text-[#202840]'}`} href={source.replacementUrl || source.url} target="_blank" rel="noreferrer" data-testid={`link-source-${source.url}`}><ExternalLink size={13} className="shrink-0" />{source.url}</a><div className="flex shrink-0 gap-2">{source.primaryContext && <span className="rounded-full border border-[#9ebbb0] bg-[#dcefe9] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] text-[#0f766e]">Primary context</span>}<span className={`rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[.08em] ${styles[source.status] || styles.unavailable}`}>{String(source.status).replace('_', ' ')}</span></div></div><p className="mt-2 text-[11px] leading-5 text-[#687083]">{source.reason}</p>{source.replacementUrl && <p className="mt-1 text-[11px] text-[#514d88]">Current location: {source.replacementUrl}</p>}</article>; })}</div></section>;
 }
 
-function AnalysisTable({ title, rows = [] }: { title: string; rows?: any[] }) {
-  return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]"><div className="border-b border-[#e3ddcf] px-5 py-4"><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[450px] text-left text-xs"><thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3 font-bold">Dimension</th>{rows[0] && Object.keys(rows[0].values || {}).map((vendor) => <th className="px-3 py-3 font-bold" key={vendor}>{vendor}</th>)}<th className="px-5 py-3 font-bold">Winner</th></tr></thead><tbody>{rows.map((row) => { const inconclusive = !row.winner || row.winner === 'Not established' || /^No evidence-backed winner$/i.test(row.winner); const tie = inconclusive || /^Tie:/i.test(row.winner); return <tr className="border-t border-[#e7e2d4]" key={row.dimension}><td className="px-5 py-4 font-bold text-[#202840]">{row.dimension}</td>{Object.values(row.values || {}).map((value, index) => <td className="px-3 py-4 text-[#687083]" key={`${row.dimension}-${index}`}>{value as string}</td>)}<td className={`px-5 py-4 font-bold ${tie ? 'text-[#85877f]' : 'text-[#0f766e]'}`}>{tie ? 'Tie' : row.winner}</td></tr>; })}</tbody></table>{!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No lens data available for this comparison.</div>}</div><p className="border-t border-[#e3ddcf] px-5 py-3 text-[11px] leading-5 text-[#85877f]">A lens winner is shown only when the available evidence supports a like-for-like comparison; ties remain ties.</p></div>;
+function AnalysisTable({ title, rows = [], indicative = false }: { title: string; rows?: any[]; indicative?: boolean }) {
+  const displayValue = (value: unknown) => {
+    const text = String(value ?? '');
+    const source = text.match(/^(.*) Source: (https?:\/\/\S+)$/s);
+    return source
+      ? <>{source[1]} <a href={source[2]} target="_blank" rel="noopener noreferrer" className="break-all text-[#0f766e] underline">Source</a></>
+      : text;
+  };
+  return <div className="overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">
+    <div className="border-b border-[#e3ddcf] px-5 py-4"><h3 className="display text-lg font-bold text-[#202840]">{title}</h3></div>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[450px] text-left text-xs">
+        <thead className="bg-[#e7e2d4] text-[10px] uppercase tracking-[.12em] text-[#83857c]"><tr><th className="px-5 py-3 font-bold">Dimension</th>{rows[0] && Object.keys(rows[0].values || {}).map((vendor) => <th className="px-3 py-3 font-bold" key={vendor}>{vendor}</th>)}<th className="px-5 py-3 font-bold">Supported lead</th></tr></thead>
+        <tbody>{rows.map((row) => {
+          const inconclusive = !row.winner || row.winner === 'Not established' || /^No evidence-backed winner$/i.test(row.winner);
+          const tie = /^Tie:/i.test(row.winner);
+          return <tr className="border-t border-[#e7e2d4]" key={row.dimension}>
+            <td className="px-5 py-4 font-bold text-[#202840]">{row.dimension}</td>
+            {Object.values(row.values || {}).map((value, index) => <td className="px-3 py-4 text-[#687083]" key={`${row.dimension}-${index}`}>{displayValue(value)}</td>)}
+            <td className={`px-5 py-4 font-bold ${inconclusive || tie ? 'text-[#85877f]' : 'text-[#0f766e]'}`}>{inconclusive ? 'Not established' : tie ? 'Tie' : row.winner}</td>
+          </tr>;
+        })}</tbody>
+      </table>
+      {!rows.length && <div className="p-8 text-center text-xs text-[#85877f]">No lens data available for this comparison.</div>}
+    </div>
+    <p className="border-t border-[#e3ddcf] px-5 py-3 text-[11px] leading-5 text-[#85877f]">{indicative ? 'Fit ratings are assumption-led estimates, not measured prices or verified feature scores. A supported lead requires comparable evidence for every option.' : 'A lens winner is shown only when the available evidence supports a like-for-like comparison; ties remain ties.'}</p>
+  </div>;
 }
 
 const fieldLabel = (field: string) => field.replace(/([A-Z])/g, ' $1').replace(/^./, (value) => value.toUpperCase());
@@ -3444,6 +4778,15 @@ function StructuredTable({ title, rows = [], columns, compact = false }: { title
 }
 
 function DecisionArchitectureContent({ comparison }: { comparison: any }) {
+  if (isVehiclePurchaseReport(comparison)) {
+    const checks = [
+      ['Exact vehicle', 'Confirm the same current diesel trim, seating layout, transmission and equipment for every quote.'],
+      ['Price to drive away', 'Get written on-road prices for both variants including taxes, registration, insurance and delivery.'],
+      ['Safety and ownership', 'Check variant-applicable crash results, safety equipment, warranty exclusions, local service coverage and scheduled maintenance costs.'],
+      ['Final choice', 'Test-drive both and make the purchase decision only when these conditions can be compared on the same basis.'],
+    ];
+    return <section className="rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6" data-testid="vehicle-buyer-checks"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">Vehicle buying checks</p><h2 className="display mt-2 text-2xl font-bold text-[#202840]">What to verify before you choose</h2><ol className="mt-5 grid gap-4 sm:grid-cols-2">{checks.map(([title, description], index) => <li className="rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4" key={title}><p className="text-sm font-bold text-[#202840]">{index + 1}. {title}</p><p className="mt-2 text-xs leading-5 text-[#566074]">{description}</p></li>)}</ol></section>;
+  }
   return <div>
     <section className="rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">Context and assumptions</p><h2 className="display mt-2 text-2xl font-bold text-[#202840]">What must be true for this analysis to hold</h2><ul className="mt-5 space-y-3">{(comparison.contextAssumptions || []).map((item: string, index: number) => <li className="flex gap-3 text-xs leading-5 text-[#566074]" key={`${item}-${index}`}><span className="mono font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</span>{item}</li>)}</ul></section>
     <div className="mt-7 grid gap-7"><StructuredTable title="Product equivalency mapping" rows={comparison.productEquivalency} columns={['capability', 'currentArrangement', 'targetArrangement', 'equivalency', 'gap']} /><StructuredTable title="Functional gap analysis" rows={comparison.functionalGaps} columns={['capability', 'currentState', 'targetState', 'gap', 'mitigation', 'severity']} /><StructuredTable title="Service / product arrangement mapping" rows={comparison.serviceProductMap} columns={['businessService', 'currentProduct', 'targetProduct', 'dependencies', 'owner']} /><StructuredTable title="Migration sequence" rows={comparison.migrationSequence} columns={['phase', 'objective', 'dependencies', 'exitCriteria', 'risk']} /><StructuredTable title="Decision governance" rows={comparison.decisionGovernance} columns={['decision', 'owner', 'approvers', 'evidenceRequired', 'decisionGate']} /></div>
@@ -3472,9 +4815,9 @@ function DecisionArchitecturePage() {
   const { data, isLoading, isError, refetch } = useGetComparison(id, { query: { enabled: !guest && Boolean(id), queryKey: getGetComparisonQueryKey(id) } });
   if (!guest && isLoading) return <AppShell><LoadingPanel label="Loading decision plan" /></AppShell>;
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
-  const comparison = guest ? guestComparison : data;
+  const comparison = reconcileReportScores(guest ? guestComparison : data);
   if (!comparison) return <AppShell guest={guest}><ErrorPanel /></AppShell>;
-  return <AppShell guest={guest}><main className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? '/guest/result' : `/comparisons/${id}`} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline"><ArrowLeft size={14} /> Back to comparison</Link><div className="mt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#b94d45]">Decision architecture</p><h1 className="display mt-3 max-w-4xl text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">Equivalency, gaps, migration, and governance.</h1><p className="mt-4 max-w-3xl text-sm leading-6 text-[#687083]">A structured transition view for {comparison.recommendation}. Validate assumptions and evidence with accountable stakeholders before contract or cutover approval.</p></div><div className="mt-10"><DecisionArchitectureContent comparison={comparison} /></div></main></AppShell>;
+  return <AppShell guest={guest}><main className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? '/guest/result' : `/comparisons/${id}`} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline"><ArrowLeft size={14} /> Back to comparison</Link><div className="mt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#b94d45]">{isVehiclePurchaseReport(comparison) ? 'Buyer decision' : 'Decision architecture'}</p><h1 className="display mt-3 max-w-4xl text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">{isVehiclePurchaseReport(comparison) ? 'Choose only when the buying conditions are verified.' : 'Equivalency, gaps, migration, and governance.'}</h1><p className="mt-4 max-w-3xl text-sm leading-6 text-[#687083]">{isVehiclePurchaseReport(comparison) ? 'Use the same current variant and ownership assumptions for every option. A narrow feature lead is not proof of the best purchase.' : `A structured transition view for ${comparison.recommendation}. Validate assumptions and evidence with accountable stakeholders before contract or cutover approval.`}</p></div><div className="mt-10"><DecisionArchitectureContent comparison={comparison} /></div></main></AppShell>;
 }
 
 function ApiDocsPage() {
@@ -3574,7 +4917,7 @@ return {
   return <div className="grain min-h-[100dvh] bg-[#f2eee2]"><header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 lg:px-10"><Logo /><div className="flex gap-3"><Link href="/" className="focus-ring rounded-xl px-4 py-2.5 text-sm font-bold text-[#556075]">Home</Link><Link href="/sign-up" className="focus-ring rounded-xl bg-[#202840] px-4 py-2.5 text-sm font-bold text-[#f8f4e8] shadow-[3px_3px_0_#d9ef66]">Get beta access</Link></div></header><main className="mx-auto max-w-7xl px-5 pb-20 pt-10 lg:px-10">
     <section className="grid gap-10 lg:grid-cols-[1fr_340px]"><div><p className="mono text-xs font-bold uppercase tracking-[.2em] text-[#0f766e]">Developer API / free beta</p><h1 className="display mt-4 text-5xl font-bold tracking-[-.06em] text-[#202840] sm:text-7xl">Add researched decisions to any AI workflow.</h1><p className="mt-6 max-w-3xl text-base leading-7 text-[#667083]">Send a natural-language buying question and receive a structured comparison with weighted recommendations, evidence, strategic frameworks, risks, migration planning, and next steps. Beta access does not require payment.</p></div><aside className="rounded-2xl border border-[#202840] bg-[#202840] p-6 text-[#f8f4e8]"><p className="mono text-[10px] uppercase tracking-[.16em] text-[#bde3d8]">Authentication standard</p><p className="display mt-4 text-2xl font-bold text-[#d9ef66]">HTTP Bearer API key</p><code className="mt-5 block rounded-lg bg-[#151b2c] p-3 text-[11px] text-[#bde3d8]">Authorization: Bearer vc_beta_...</code><p className="mt-4 text-xs leading-5 text-[#c9cfdb]">Create a scoped key once using your signed-in Clerk session. Store it in your workflow tool’s encrypted credential or secret store. Never place it in a prompt, browser URL, or client-side application.</p></aside></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Create an API key</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Use Clerk once, then automate with a bearer key</h2><p className="mt-3 max-w-3xl text-sm leading-6 text-[#687083]">Clerk protects account administration. The generated DecisionIntel key is the standard credential your server, agent, n8n workflow, Zapier action, Make scenario, or other HTTP-capable tool sends on every <code>/api/v1</code> request.</p><pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{createKeyExample}</pre></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / NLP request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Submit the decision in plain language</h2><p className="mt-3 text-sm leading-6 text-[#687083]"><code>prompt</code> is required. The API infers vendors and criteria when possible. You may supply two to five <code>vendors</code>, optional <code>criteria</code>, and trusted <code>urls</code>. Use a unique <code>Idempotency-Key</code> for every workflow execution so retries cannot create duplicate comparisons or consume allowance twice.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{requestExample}</pre></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Structured response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Map fields into downstream agents</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns HTTP <code>201</code> after research completes. Configure workflow HTTP steps with a timeout of at least 120 seconds. Route <code>recommendation</code> and <code>executiveSummary</code> into concise outputs, while retaining evidence, assumptions, gaps, and governance fields for audit and review.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / NLP request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Submit the decision in plain language</h2><p className="mt-3 text-sm leading-6 text-[#687083]"><code>prompt</code> is required. The API infers vendors and criteria when possible. You may supply two to six <code>vendors</code>, optional <code>criteria</code>, and trusted <code>urls</code>. Use a unique <code>Idempotency-Key</code> for every workflow execution so retries cannot create duplicate comparisons or consume allowance twice.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{requestExample}</pre></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">03 / Structured response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Map fields into downstream agents</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns HTTP <code>201</code> after research completes. Configure workflow HTTP steps with a timeout of at least 120 seconds. Route <code>recommendation</code> and <code>executiveSummary</code> into concise outputs, while retaining evidence, assumptions, gaps, and governance fields for audit and review.</p><pre className="mt-5 max-h-[560px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / White-label architecture</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Your product owns the customer experience</h2><div className="mt-6 grid gap-4 md:grid-cols-3"><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Call from your backend</h3><p className="mt-2 text-xs leading-5 text-[#687083]">Your branded web app, mobile app, chatbot, or agent calls your own server. Your server adds the bearer key and calls this API. Never expose the key or call the API directly from customer browsers.</p></article><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Render neutral JSON</h3><p className="mt-2 text-xs leading-5 text-[#687083]">The API returns data, not provider-branded HTML. Select the fields you need and apply your own product name, terminology, components, colours, reports, notifications, and approval flow.</p></article><article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Keep decisions traceable</h3><p className="mt-2 text-xs leading-5 text-[#687083]">Map the returned comparison ID and your idempotency key to your own customer or case ID. Preserve sources, assumptions, confidence limits, and material warnings even when changing presentation.</p></article></div><pre className="mt-5 max-h-[620px] overflow-auto whitespace-pre-wrap rounded-2xl bg-[#202840] p-5 text-[11px] leading-5 text-[#d9ef66]">{whiteLabelExample}</pre></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">05 / Endpoint reference</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Versioned integration surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_250px_1fr_230px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
     <section className="mt-14 grid gap-5 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">Retries</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Retry transient <code>502</code> responses with exponential backoff and the same idempotency key. A completed key replays its original response.</p></div><div><h3 className="font-bold text-[#202840]">Limits</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>429</code> includes <code>Retry-After</code>. Usage responses and comparison responses include quota headers. Beta allowances may change before general availability.</p></div><div><h3 className="font-bold text-[#202840]">Security</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Use the minimum scopes required, rotate exposed keys, keep calls server-side, validate returned evidence, and require human approval before procurement or migration actions.</p></div></section>
@@ -3649,7 +4992,7 @@ function LegacyApiDocsPage() {
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">01 / Get access</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">From signup to your first API call</h2><div className="mt-6 grid gap-4 md:grid-cols-2">{[['1', 'Create an account', 'Sign in with Clerk. The app creates your tenant workspace.'], ['2', 'Create an API key', 'Create a scoped key, copy it once, and store it in a server-side secret manager.']].map(([number, title, text]) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={number}><span className="mono text-xs font-bold text-[#b94d45]">{number}</span><h3 className="mt-3 font-bold text-[#202840]">{title}</h3><p className="mt-2 text-xs leading-5 text-[#687083]">{text}</p></article>)}</div><div className="mt-5 rounded-xl border border-[#c8d99a] bg-[#e8f2bd] px-5 py-4 text-xs leading-5 text-[#35665c]"><strong>Beta availability:</strong> No checkout or payment setup is required.</div><Link href="/user-portal" className="focus-ring mt-5 inline-flex rounded-xl bg-[#0f766e] px-5 py-3 text-sm font-bold text-[#f8f4e8]">Sign in to manage API access</Link></section>
     <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">02 / Authentication</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Two credentials, two purposes</h2><div className="mt-5 space-y-3"><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Beta API key</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer vc_beta_...</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use this for every <code>/api/v1</code> request. Grant only the needed scopes: <code>comparisons:read</code>, <code>comparisons:write</code>, and <code>usage:read</code>.</p></div><div className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5"><h3 className="font-bold text-[#202840]">Clerk session token</h3><code className="mt-3 block text-xs text-[#0f766e]">Authorization: Bearer &lt;Clerk session token&gt;</code><p className="mt-3 text-xs leading-5 text-[#687083]">Use only for account and key management. Tenant operations also require <code>X-Tenant-Id</code> and owner/admin membership. Do not use a Clerk token for <code>/api/v1</code>.</p></div></div></div></section>
     <section className="mt-14"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">04 / Endpoints</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Current API surface</h2><div className="mt-5 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{endpoints.map(([method, path, purpose, auth]) => <div className="grid gap-2 border-b border-[#e7e2d4] p-4 last:border-0 md:grid-cols-[70px_240px_1fr_220px] md:items-center" key={`${method}-${path}`}><span className={`mono text-[10px] font-bold ${method === 'GET' ? 'text-[#0f766e]' : 'text-[#b94d45]'}`}>{method}</span><code className="text-xs font-bold text-[#202840]">{path}</code><span className="text-xs text-[#687083]">{purpose}</span><span className="text-[11px] text-[#85877f]">{auth}</span></div>)}</div></section>
-    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to five named options and any number of distinct HTTP/HTTPS evidence URLs. Include current and target arrangements, constraints, regulatory and security requirements, integrations, migration scope, budget, and timing when known; omitted context is returned as explicit assumptions.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The contract includes weighted score rationale, product equivalency, functional gaps, service/product arrangements, migration phases, decision governance, VRIO, SWOT, alternatives, and every distinct collected source. Cost never determines the recommendation by itself.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[620px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
+    <section className="mt-14 grid gap-6 lg:grid-cols-2"><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">05 / Sample request</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Create a comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">The prompt is required. Vendor names, criteria, and source URLs are optional because they can be inferred. A comparison accepts two to six named options and any number of distinct HTTP/HTTPS evidence URLs. Include current and target arrangements, constraints, regulatory and security requirements, integrations, migration scope, budget, and timing when known; omitted context is returned as explicit assumptions.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="overflow-x-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{example}</pre></div></div><div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">06 / Sample response</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Completed comparison</h2><p className="mt-3 text-sm leading-6 text-[#687083]">A successful request returns <code>201</code> with rate-limit and quota headers. The contract includes weighted score rationale, product equivalency, functional gaps, service/product arrangements, migration phases, decision governance, VRIO, SWOT, alternatives, and every distinct collected source. Cost never determines the recommendation by itself.</p><div className="mt-5 rounded-2xl bg-[#202840] p-5"><pre className="max-h-[620px] overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#d9ef66]">{responseExample}</pre></div></div></section>
      <section className="mt-14 rounded-2xl border border-[#c8d99a] bg-[#e8f2bd] p-6"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#35665c]">07 / Errors and limits</p><h2 className="display mt-2 text-3xl font-bold text-[#202840]">Build for explicit failure states</h2><div className="mt-6 grid gap-5 md:grid-cols-3"><div><h3 className="font-bold text-[#202840]">401 / 403</h3><p className="mt-2 text-xs leading-5 text-[#566074]">Missing or invalid keys return <code>invalid_api_key</code>. A valid key without the operation scope returns <code>insufficient_scope</code>.</p></div><div><h3 className="font-bold text-[#202840]">402 / 429</h3><p className="mt-2 text-xs leading-5 text-[#566074]"><code>quota_exhausted</code> means the prepaid allowance is consumed. <code>rate_limit_exceeded</code> includes a <code>Retry-After</code> header.</p></div><div><h3 className="font-bold text-[#202840]">409 / 502</h3><p className="mt-2 text-xs leading-5 text-[#566074]">A changed body cannot reuse an idempotency key. Upstream research failures do not consume quota and may be retried with the same key.</p></div></div><pre className="mt-5 overflow-x-auto rounded-xl bg-[#202840] p-4 text-[11px] text-[#d9ef66]">{`{ "code": "insufficient_scope", "message": "The API key requires the comparisons:write scope." }`}</pre></section>
   </main></div>;
 }
@@ -3702,7 +5045,7 @@ function AuthTokenBridge() {
 }
 
 function Router() {
-  return <RoutedErrorBoundary><Switch><Route path="/" component={ClerkHomeRoute} /><Route path="/sign-in/*?" component={() => <AuthPage mode="sign-in" />} /><Route path="/sign-up/*?" component={() => <AuthPage mode="sign-up" />} /><Route path="/api-docs" component={ApiDocsPage} /><Route path="/guest" component={GuestPortal} /><Route path="/guest/result" component={AnalysisPage} /><Route path="/guest/decision-plan" component={DecisionArchitecturePage} /><Route path="/user-portal" component={ClerkPortalRoute} /><Route path="/history" component={() => <ClerkProtectedRoute><HistoryPage /></ClerkProtectedRoute>} /><Route path="/comparisons/:id/decision-plan" component={() => <ClerkProtectedRoute><DecisionArchitecturePage /></ClerkProtectedRoute>} /><Route path="/comparisons/:id" component={() => <ClerkProtectedRoute><AnalysisPage /></ClerkProtectedRoute>} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
+  return <RoutedErrorBoundary><Switch><Route path="/" component={ClerkHomeRoute} /><Route path="/sign-in/*?" component={() => <AuthPage mode="sign-in" />} /><Route path="/sign-up/*?" component={() => <AuthPage mode="sign-up" />} /><Route path="/api-docs" component={ApiDocsPage} /><Route path="/guest" component={GuestPortal} /><Route path="/guest/result" component={AnalysisPage} /><Route path="/guest/decision-plan" component={DecisionArchitecturePage} /><Route path="/user-portal" component={ClerkPortalRoute} /><Route path="/history" component={() => <ClerkProtectedRoute><HistoryPage /></ClerkProtectedRoute>} /><Route path="/verify/:id" component={() => <ClerkProtectedRoute><VerifyPage Shell={AppShell} DecisionCard={DecisionRecommendationCard} /></ClerkProtectedRoute>} /><Route path="/comparisons/:id/decision-plan" component={() => <ClerkProtectedRoute><DecisionArchitecturePage /></ClerkProtectedRoute>} /><Route path="/comparisons/:id" component={() => <ClerkProtectedRoute><AnalysisPage /></ClerkProtectedRoute>} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>;
 }
 
 function App() {

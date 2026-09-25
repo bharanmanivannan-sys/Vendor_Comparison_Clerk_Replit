@@ -18,29 +18,35 @@ import type { Comparison } from './comparison';
 import type { ComparisonJobProgress } from './comparisonJobProgress';
 import type { ComparisonJobStage } from './comparisonJobStage';
 import type { ComparisonJobStateErrorCode } from './comparisonJobStateErrorCode';
+import type { ComparisonJobStateSaveStatus } from './comparisonJobStateSaveStatus';
 import type { ComparisonJobStateStatus } from './comparisonJobStateStatus';
+import type { ComparisonPreviewDecision } from './comparisonPreviewDecision';
 import type { GuestComparison } from './guestComparison';
 
 /**
- * Pollable state for asynchronous comparison research.
+ * Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.
  */
 export interface ComparisonJobState {
   status: ComparisonJobStateStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   /**
-     * Server-measured milliseconds since this job was created.
+     * Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
      * @minimum 0
      */
   elapsedMs: number;
   /**
-     * Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+     * Hard deadline in seconds for reaching a terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;
+  /** Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds. */
   result?: Comparison | GuestComparison;
-  /** User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt. */
+  /** Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs. */
+  saveStatus?: ComparisonJobStateSaveStatus;
+  previewDecision?: ComparisonPreviewDecision;
+  /** User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report. */
   message?: string;
-  /** Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking. */
+  /** Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report. */
   errorCode?: ComparisonJobStateErrorCode;
 }

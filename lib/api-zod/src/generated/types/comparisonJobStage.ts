@@ -25,4 +25,5 @@ export const ComparisonJobStage = {
   validating_comparison: 'validating_comparison',
   preparing_result: 'preparing_result',
   completed: 'completed',
+  partial_result: 'partial_result',
 } as const;

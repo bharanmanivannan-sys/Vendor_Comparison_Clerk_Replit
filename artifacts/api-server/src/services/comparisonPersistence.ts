@@ -2,7 +2,12 @@ import { and, eq } from "drizzle-orm";
 import { comparisonEvidenceTable, comparisonsTable, db, type InsertComparison } from "@workspace/db";
 import { normalizeEvidenceRecords } from "../lib/analysis";
 
-type Executor = { insert: (table: unknown) => any };
+type Executor = { insert: (table: unknown) => any; update?: (table: unknown) => any };
+
+export type ComparisonPersistedCallback = (
+  executor: Executor,
+  comparison: typeof comparisonsTable.$inferSelect,
+) => Promise<void>;
 
 export function flattenComparisonEvidence(
   comparisonId: number,
@@ -67,6 +72,7 @@ export function flattenComparisonEvidence(
 export async function persistComparisonWithEvidence(
   executor: Executor,
   values: InsertComparison,
+  onPersisted?: ComparisonPersistedCallback,
 ) {
   const [comparison] = await executor.insert(comparisonsTable).values(values).returning();
   if (!comparison) throw new Error("Comparison insert returned no row.");
@@ -74,12 +80,16 @@ export async function persistComparisonWithEvidence(
   if (evidence.length) {
     await executor.insert(comparisonEvidenceTable).values(evidence).onConflictDoNothing();
   }
+  if (onPersisted) await onPersisted(executor, comparison);
   return comparison;
 }
 
 /** Atomically persist a comparison and its evidence outside an existing transaction. */
-export function persistComparisonAtomically(values: InsertComparison) {
-  return db.transaction((tx) => persistComparisonWithEvidence(tx, values));
+export function persistComparisonAtomically(
+  values: InsertComparison,
+  onPersisted?: ComparisonPersistedCallback,
+) {
+  return db.transaction((tx) => persistComparisonWithEvidence(tx, values, onPersisted));
 }
 
 export async function updateComparisonWithEvidence(
@@ -87,13 +97,16 @@ export async function updateComparisonWithEvidence(
   userId: string,
   values: Pick<
     InsertComparison,
-    "score" | "recommendation" | "recommendationReason" | "executiveSummary" | "insights" | "weightAdjustments" | "vendorScores"
+    "score" | "recommendation" | "recommendationReason" | "executiveSummary" | "insights" | "nextSteps" | "weightAdjustments" | "vendorScores"
   >,
 ) {
   return db.transaction(async (tx) => {
     const [updated] = await tx
       .update(comparisonsTable)
-      .set(values)
+      // Any regeneration changes the decision and/or the evidence snapshot.
+      // Clearing the review in the same update invalidates an in-flight job's
+      // jobId guard as well as a previously completed review.
+      .set({ ...values, evidenceReview: null })
       .where(and(eq(comparisonsTable.id, comparisonId), eq(comparisonsTable.userId, userId)))
       .returning();
     if (!updated) return undefined;

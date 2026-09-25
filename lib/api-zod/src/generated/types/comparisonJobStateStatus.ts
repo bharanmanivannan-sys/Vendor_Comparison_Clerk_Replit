@@ -21,5 +21,6 @@ export type ComparisonJobStateStatus = typeof ComparisonJobStateStatus[keyof typ
 export const ComparisonJobStateStatus = {
   processing: 'processing',
   complete: 'complete',
+  partial: 'partial',
   failed: 'failed',
 } as const;

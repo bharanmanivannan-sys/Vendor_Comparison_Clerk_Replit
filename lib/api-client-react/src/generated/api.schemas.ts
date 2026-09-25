@@ -188,12 +188,22 @@ export interface AdditionalComparisonWeight {
 export interface RegenerateComparisonInput {
   /**
      * @minItems 9
-     * @maxItems 9
+     * @maxItems 10
      */
   weights: ComparisonWeight[];
   /** @maxItems 8 */
   additionalWeights?: AdditionalComparisonWeight[];
 }
+
+export type ComparisonPromptInputMarket = typeof ComparisonPromptInputMarket[keyof typeof ComparisonPromptInputMarket];
+
+
+export const ComparisonPromptInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
 
 export interface ComparisonPromptInput {
   /**
@@ -201,8 +211,12 @@ export interface ComparisonPromptInput {
      * @maxLength 2000
      */
   prompt: string;
+  market?: ComparisonPromptInputMarket;
 }
 
+/**
+ * Optional. When omitted, the market is inferred from the prompt using the same policy as comparison submission.
+ */
 export type SourcePreflightInputMarket = typeof SourcePreflightInputMarket[keyof typeof SourcePreflightInputMarket];
 
 
@@ -219,7 +233,8 @@ export interface SourcePreflightInput {
      * @maxLength 4000
      */
   prompt: string;
-  market: SourcePreflightInputMarket;
+  /** Optional. When omitted, the market is inferred from the prompt using the same policy as comparison submission. */
+  market?: SourcePreflightInputMarket;
   /**
      * @minItems 1
      * @maxItems 12
@@ -323,12 +338,12 @@ export interface ComparisonIdentity {
   originalQuery: string;
   category: string;
   /**
-     * @minItems 2
+     * @minItems 0
      * @maxItems 6
      */
   entities: ComparisonIdentityEntitiesItem[];
   /**
-     * @minimum 2
+     * @minimum 0
      * @maximum 6
      */
   entityCount: number;
@@ -340,12 +355,13 @@ export interface ComparisonIdentity {
 /**
  * One-shot parse result. Entity boundaries are resolved before source retrieval.
  * The response preserves user order and exposes the qualifiers, decision criterion,
- * and freshness requirements that downstream research must honor.
+ * and freshness requirements that downstream research must honor. Incomplete
+ * requests return context.valid=false with a clarification, not a server error.
  */
 export interface ParsedComparison {
   prompt: string;
   /**
-     * @minItems 2
+     * @minItems 0
      * @maxItems 6
      */
   vendors: string[];
@@ -373,6 +389,7 @@ export const ComparisonJobStage = {
   validating_comparison: 'validating_comparison',
   preparing_result: 'preparing_result',
   completed: 'completed',
+  partial_result: 'partial_result',
 } as const;
 
 export interface ComparisonJobProgress {
@@ -384,16 +401,55 @@ export interface ComparisonJobProgress {
   subject: string;
 }
 
+export type ComparisonPreviewDecisionDecisionType = typeof ComparisonPreviewDecisionDecisionType[keyof typeof ComparisonPreviewDecisionDecisionType];
+
+
+export const ComparisonPreviewDecisionDecisionType = {
+  Product_Selection: 'Product Selection',
+  Service_Selection: 'Service Selection',
+  Vendor_Evaluation: 'Vendor Evaluation',
+  Dealership_Investment: 'Dealership Investment',
+  Franchise_Opportunity: 'Franchise Opportunity',
+  Market_Entry: 'Market Entry',
+  Technology_Platform_Selection: 'Technology Platform Selection',
+} as const;
+
+export type ComparisonPreviewDecisionPrioritiesItem = {
+  lens: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  weight: number;
+};
+
 /**
- * Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
+ * An early assumption-led starting choice, not a verified finding. Research continues after this is returned.
+ */
+export interface ComparisonPreviewDecision {
+  winner: string;
+  decisionType: ComparisonPreviewDecisionDecisionType;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  coverage: number;
+  reason: string;
+  provisional: boolean;
+  priorities: ComparisonPreviewDecisionPrioritiesItem[];
+}
+
+/**
+ * Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.
  */
 export interface ComparisonJobAccepted {
   jobId: string;
   status: ComparisonJobAcceptedStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
+  previewDecision?: ComparisonPreviewDecision;
   /**
-     * Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+     * Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;
@@ -405,11 +461,24 @@ export type ComparisonJobStateStatus = typeof ComparisonJobStateStatus[keyof typ
 export const ComparisonJobStateStatus = {
   processing: 'processing',
   complete: 'complete',
+  partial: 'partial',
   failed: 'failed',
 } as const;
 
 /**
- * Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
+ * Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.
+ */
+export type ComparisonJobStateSaveStatus = typeof ComparisonJobStateSaveStatus[keyof typeof ComparisonJobStateSaveStatus];
+
+
+export const ComparisonJobStateSaveStatus = {
+  pending: 'pending',
+  saved: 'saved',
+  failed: 'failed',
+} as const;
+
+/**
+ * Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.
  */
 export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[keyof typeof ComparisonJobStateErrorCode];
 
@@ -418,6 +487,7 @@ export const ComparisonJobStateErrorCode = {
   research_failed: 'research_failed',
   validation_failed: 'validation_failed',
   insufficient_quantitative_evidence: 'insufficient_quantitative_evidence',
+  latency_budget_exceeded: 'latency_budget_exceeded',
 } as const;
 
 export type ComparisonSummaryStatus = typeof ComparisonSummaryStatus[keyof typeof ComparisonSummaryStatus];
@@ -427,6 +497,17 @@ export const ComparisonSummaryStatus = {
   complete: 'complete',
   processing: 'processing',
   failed: 'failed',
+} as const;
+
+/**
+ * Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
+ */
+export type ComparisonSummaryResearchStatus = typeof ComparisonSummaryResearchStatus[keyof typeof ComparisonSummaryResearchStatus];
+
+
+export const ComparisonSummaryResearchStatus = {
+  partial: 'partial',
+  complete: 'complete',
 } as const;
 
 export interface ComparisonSummary {
@@ -448,6 +529,8 @@ export interface ComparisonSummary {
   providerRoleTieBreakBonus?: number;
   createdAt: string;
   status: ComparisonSummaryStatus;
+  /** Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out. */
+  researchStatus?: ComparisonSummaryResearchStatus;
 }
 
 export type ReportSourceStatus = typeof ReportSourceStatus[keyof typeof ReportSourceStatus];
@@ -563,11 +646,213 @@ export interface ReportSource {
   registryDecision?: SourceRegistryDecision;
 }
 
+export type DecisionAdviceConfidenceBand = typeof DecisionAdviceConfidenceBand[keyof typeof DecisionAdviceConfidenceBand];
+
+
+export const DecisionAdviceConfidenceBand = {
+  Low: 'Low',
+  Moderate: 'Moderate',
+  High: 'High',
+} as const;
+
+export type DecisionAdviceConfidence = {
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  score: number;
+  band: DecisionAdviceConfidenceBand;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  dataCoverage: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  sourceConsistency: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  scoreSeparation: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  priorityClarity: number;
+  basis: string;
+};
+
+export type DecisionAdviceScenarioLeadersItem = {
+  lens: string;
+  leader: string;
+};
+
+/**
+ * Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.
+ */
+export interface DecisionAdvice {
+  decisionType: string;
+  winner: string;
+  runnerUp: string;
+  provisional: boolean;
+  confidence: DecisionAdviceConfidence;
+  whyItWon: string;
+  bestFor: string;
+  notRecommendedIf: string;
+  tradeoffs: string[];
+  scenarioLeaders: DecisionAdviceScenarioLeadersItem[];
+}
+
+export type ComparisonEvidenceReviewStatus = typeof ComparisonEvidenceReviewStatus[keyof typeof ComparisonEvidenceReviewStatus];
+
+
+export const ComparisonEvidenceReviewStatus = {
+  processing: 'processing',
+  complete: 'complete',
+  failed: 'failed',
+} as const;
+
+export type ComparisonEvidenceReviewChecksItemStatus = typeof ComparisonEvidenceReviewChecksItemStatus[keyof typeof ComparisonEvidenceReviewChecksItemStatus];
+
+
+export const ComparisonEvidenceReviewChecksItemStatus = {
+  verified: 'verified',
+  contradicted: 'contradicted',
+  unavailable: 'unavailable',
+} as const;
+
+export type ComparisonEvidenceReviewAssumptionRegisterItemStatus = typeof ComparisonEvidenceReviewAssumptionRegisterItemStatus[keyof typeof ComparisonEvidenceReviewAssumptionRegisterItemStatus];
+
+
+export const ComparisonEvidenceReviewAssumptionRegisterItemStatus = {
+  unverified: 'unverified',
+  validated: 'validated',
+  contradicted: 'contradicted',
+} as const;
+
+export type ComparisonEvidenceReviewSourceRegisterItemAvailability = typeof ComparisonEvidenceReviewSourceRegisterItemAvailability[keyof typeof ComparisonEvidenceReviewSourceRegisterItemAvailability];
+
+
+export const ComparisonEvidenceReviewSourceRegisterItemAvailability = {
+  admitted: 'admitted',
+  restricted: 'restricted',
+  unavailable: 'unavailable',
+} as const;
+
+export type ComparisonEvidenceReviewSourceRegisterItemFreshness = typeof ComparisonEvidenceReviewSourceRegisterItemFreshness[keyof typeof ComparisonEvidenceReviewSourceRegisterItemFreshness];
+
+
+export const ComparisonEvidenceReviewSourceRegisterItemFreshness = {
+  known: 'known',
+  unknown: 'unknown',
+} as const;
+
+export type ComparisonEvidenceReviewCompetitiveValidationStatus = typeof ComparisonEvidenceReviewCompetitiveValidationStatus[keyof typeof ComparisonEvidenceReviewCompetitiveValidationStatus];
+
+
+export const ComparisonEvidenceReviewCompetitiveValidationStatus = {
+  not_assessed: 'not_assessed',
+  partial: 'partial',
+  contradiction_found: 'contradiction_found',
+} as const;
+
+export type ComparisonEvidenceReviewRiskAssessmentLevel = typeof ComparisonEvidenceReviewRiskAssessmentLevel[keyof typeof ComparisonEvidenceReviewRiskAssessmentLevel];
+
+
+export const ComparisonEvidenceReviewRiskAssessmentLevel = {
+  unknown: 'unknown',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+} as const;
+
+export type ComparisonEvidenceReviewChecksItem = {
+  vendor: string;
+  claim: string;
+  sourceUrl: string;
+  status: ComparisonEvidenceReviewChecksItemStatus;
+  quote?: string;
+  reason: string;
+  checkedAt?: string;
+};
+
+export type ComparisonEvidenceReviewAssumptionRegisterItem = {
+  assumption: string;
+  status: ComparisonEvidenceReviewAssumptionRegisterItemStatus;
+  reason: string;
+  sourceUrls: string[];
+};
+
+export type ComparisonEvidenceReviewSourceRegisterItem = {
+  url: string;
+  availability: ComparisonEvidenceReviewSourceRegisterItemAvailability;
+  freshness: ComparisonEvidenceReviewSourceRegisterItemFreshness;
+  publicationDate?: string;
+  ageDays?: number;
+  lastCheckedAt: string;
+  checkCount: number;
+  verifiedCount: number;
+  contradictedCount: number;
+  unavailableCount: number;
+};
+
+export type ComparisonEvidenceReviewCompetitiveValidation = {
+  status: ComparisonEvidenceReviewCompetitiveValidationStatus;
+  recommendation: string;
+  checkedCompetitors: string[];
+  summary: string;
+};
+
+export type ComparisonEvidenceReviewRiskAssessment = {
+  level: ComparisonEvidenceReviewRiskAssessmentLevel;
+  items: string[];
+  summary: string;
+};
+
+export type ComparisonEvidenceReviewAuditTrailItem = {
+  timestamp: string;
+  event: string;
+  detail: string;
+};
+
+export interface ComparisonEvidenceReview {
+  jobId: string;
+  status: ComparisonEvidenceReviewStatus;
+  startedAt: string;
+  completedAt?: string;
+  initialRecommendation: string;
+  reviewedRecommendation?: string;
+  reviewReason?: string;
+  error?: string;
+  checks: ComparisonEvidenceReviewChecksItem[];
+  /**
+     * Percentage of completed, available checks that were verified; null when no such checks are available.
+     * @nullable
+     */
+  verificationScore?: number | null;
+  /**
+     * Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.
+     * @nullable
+     */
+  evidenceCoverage?: number | null;
+  assumptionRegister?: ComparisonEvidenceReviewAssumptionRegisterItem[];
+  sourceRegister?: ComparisonEvidenceReviewSourceRegisterItem[];
+  competitiveValidation?: ComparisonEvidenceReviewCompetitiveValidation;
+  riskAssessment?: ComparisonEvidenceReviewRiskAssessment;
+  validationReport?: string;
+  governanceReport?: string;
+  auditTrail?: ComparisonEvidenceReviewAuditTrailItem[];
+}
+
 export type ConfirmedRecommendationStatus = typeof ConfirmedRecommendationStatus[keyof typeof ConfirmedRecommendationStatus];
 
 
 export const ConfirmedRecommendationStatus = {
   CONFIRMED: 'CONFIRMED',
+  PROVISIONAL: 'PROVISIONAL',
   NO_CONFIRMED_RECOMMENDATION: 'NO_CONFIRMED_RECOMMENDATION',
 } as const;
 
@@ -1071,6 +1356,8 @@ export type Comparison = ComparisonSummary & {
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  decisionAdvice?: DecisionAdvice;
+  evidenceReview?: ComparisonEvidenceReview;
   confirmedRecommendation: ConfirmedRecommendation;
   /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
   alternatives: ComparedAlternative[];
@@ -1106,9 +1393,22 @@ export const GuestComparisonStatus = {
   failed: 'failed',
 } as const;
 
+/**
+ * Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
+ */
+export type GuestComparisonResearchStatus = typeof GuestComparisonResearchStatus[keyof typeof GuestComparisonResearchStatus];
+
+
+export const GuestComparisonResearchStatus = {
+  partial: 'partial',
+  complete: 'complete',
+} as const;
+
 export type GuestComparisonSwot = {[key: string]: string[]};
 
 export interface GuestComparison {
+  /** Present for a partially completed authenticated comparison only after its report has been persisted. */
+  id?: number;
   prompt: string;
   /** @maxItems 6 */
   vendors: string[];
@@ -1117,12 +1417,15 @@ export interface GuestComparison {
   recommendation: string;
   score: number;
   status: GuestComparisonStatus;
+  /** Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out. */
+  researchStatus?: GuestComparisonResearchStatus;
   createdAt: string;
   urls: string[];
   sourceAvailability: ReportSource[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  decisionAdvice?: DecisionAdvice;
   confirmedRecommendation: ConfirmedRecommendation;
   /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
   alternatives: ComparedAlternative[];
@@ -1142,27 +1445,119 @@ export interface GuestComparison {
 }
 
 /**
- * Pollable state for asynchronous comparison research.
+ * Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.
  */
 export interface ComparisonJobState {
   status: ComparisonJobStateStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   /**
-     * Server-measured milliseconds since this job was created.
+     * Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
      * @minimum 0
      */
   elapsedMs: number;
   /**
-     * Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+     * Hard deadline in seconds for reaching a terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;
+  /** Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds. */
   result?: Comparison | GuestComparison;
-  /** User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt. */
+  /** Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs. */
+  saveStatus?: ComparisonJobStateSaveStatus;
+  previewDecision?: ComparisonPreviewDecision;
+  /** User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report. */
   message?: string;
-  /** Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking. */
+  /** Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report. */
   errorCode?: ComparisonJobStateErrorCode;
+}
+
+export type ComparisonVerificationAccessAccess = typeof ComparisonVerificationAccessAccess[keyof typeof ComparisonVerificationAccessAccess];
+
+
+export const ComparisonVerificationAccessAccess = {
+  active: 'active',
+  payment_required: 'payment_required',
+  not_configured: 'not_configured',
+} as const;
+
+export interface ComparisonVerificationAccess {
+  access: ComparisonVerificationAccessAccess;
+  message?: string;
+}
+
+export interface ComparisonVerificationCheckout {
+  purchaseUrl: string;
+}
+
+export type BuyerQuoteCurrency = typeof BuyerQuoteCurrency[keyof typeof BuyerQuoteCurrency];
+
+
+export const BuyerQuoteCurrency = {
+  AUD: 'AUD',
+  USD: 'USD',
+  EUR: 'EUR',
+  GBP: 'GBP',
+} as const;
+
+export type BuyerQuoteTaxBasis = typeof BuyerQuoteTaxBasis[keyof typeof BuyerQuoteTaxBasis];
+
+
+export const BuyerQuoteTaxBasis = {
+  ex_gst: 'ex_gst',
+  inc_gst: 'inc_gst',
+} as const;
+
+/**
+ * Buyer-entered terms linked to a private written quote, not independently verified.
+ */
+export interface BuyerQuote {
+  vendor: string;
+  /** Calendar date YYYY-MM-DD */
+  documentDate: string;
+  /** Calendar date YYYY-MM-DD */
+  validUntil: string;
+  currency: BuyerQuoteCurrency;
+  termMonths: number;
+  licenseAnnual: string;
+  implementationOnce: string;
+  serviceAnnual: string;
+  audPerUnit: string;
+  /** Calendar date YYYY-MM-DD */
+  exchangeRateDate?: string;
+  exchangeRateSource?: string;
+  scope: string;
+  taxBasis: BuyerQuoteTaxBasis;
+  exclusions: string;
+  fileName: string;
+  fileSha256: string;
+  documentUrl: string;
+  totalAud: string;
+}
+
+export type BuyerQuoteAssessmentStatus = typeof BuyerQuoteAssessmentStatus[keyof typeof BuyerQuoteAssessmentStatus];
+
+
+export const BuyerQuoteAssessmentStatus = {
+  ready: 'ready',
+  incomplete: 'incomplete',
+} as const;
+
+export type BuyerQuoteAssessmentScores = {[key: string]: number};
+
+export interface BuyerQuoteAssessment {
+  status: BuyerQuoteAssessmentStatus;
+  flags: string[];
+  horizonMonths?: number;
+  /** @nullable */
+  winner: string | null;
+  rows: AnalysisRow[];
+  scores: BuyerQuoteAssessmentScores;
+}
+
+export interface BuyerQuoteBundle {
+  quotes: BuyerQuote[];
+  assessment: BuyerQuoteAssessment;
 }
 
 export interface DashboardSummary {

@@ -15,6 +15,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ComparisonIdentity } from './comparisonIdentity';
+import type { ComparisonSummaryResearchStatus } from './comparisonSummaryResearchStatus';
 import type { ComparisonSummaryStatus } from './comparisonSummaryStatus';
 
 export interface ComparisonSummary {
@@ -36,4 +37,6 @@ export interface ComparisonSummary {
   providerRoleTieBreakBonus?: number;
   createdAt: Date;
   status: ComparisonSummaryStatus;
+  /** Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out. */
+  researchStatus?: ComparisonSummaryResearchStatus;
 }

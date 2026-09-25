@@ -10,8 +10,22 @@ import {
   clerkProxyMiddleware,
   getClerkProxyHost,
 } from "./middlewares/clerkProxyMiddleware";
+import { quoteDeletionOutboxReady, retryQuotePdfDeletions } from "./lib/quoteObjects";
 
 const app: Express = express();
+
+const runQuoteDeletionRetry = async () => {
+  if (!await quoteDeletionOutboxReady()) {
+    logger.warn("Private quote deletion outbox schema is not ready; retry deferred");
+    return;
+  }
+  await retryQuotePdfDeletions((message, error) => logger.error({ message, error }, message));
+};
+void runQuoteDeletionRetry().catch((error) => logger.error({ error }, "Private quote deletion retry unavailable"));
+const quoteDeletionRetryTimer = setInterval(() => {
+  void runQuoteDeletionRetry().catch((error) => logger.error({ error }, "Private quote deletion retry unavailable"));
+}, 60_000);
+quoteDeletionRetryTimer.unref();
 
 // API responses are dynamic and frequently authenticated. Express ETags can
 // turn a fresh React Query request into a bodyless 304 after reload or tab

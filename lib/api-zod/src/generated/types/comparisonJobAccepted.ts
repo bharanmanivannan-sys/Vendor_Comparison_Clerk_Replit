@@ -17,17 +17,19 @@
 import type { ComparisonJobAcceptedStatus } from './comparisonJobAcceptedStatus';
 import type { ComparisonJobProgress } from './comparisonJobProgress';
 import type { ComparisonJobStage } from './comparisonJobStage';
+import type { ComparisonPreviewDecision } from './comparisonPreviewDecision';
 
 /**
- * Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
+ * Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.
  */
 export interface ComparisonJobAccepted {
   jobId: string;
   status: ComparisonJobAcceptedStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
+  previewDecision?: ComparisonPreviewDecision;
   /**
-     * Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+     * Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;
