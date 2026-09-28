@@ -9,7 +9,9 @@ Vendor Compare helps teams turn open-ended buying questions into structured, evi
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Required runtime configuration: Replit PostgreSQL (`DATABASE_URL`) and Replit-managed Clerk (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, and `VITE_CLERK_PUBLISHABLE_KEY`).
+- `OPENAI_API_KEY` is optional for startup; when it is absent, analysis uses the deterministic fallback instead of live OpenAI research.
+- `WHOP_COMPANY_ID` and `WHOP_PLAN_ID` are only needed for Whop checkout and billing.
 
 ## Stack
 

@@ -56,16 +56,15 @@ The application expects these server-side values:
 
 | Name | Type | Purpose |
 | --- | --- | --- |
-| `DATABASE_URL` | Secret/runtime value | PostgreSQL connection |
-| `OPENAI_API_KEY` | Secret | Product research |
-| `CLERK_PUBLISHABLE_KEY` | Secret | Clerk server configuration |
-| `CLERK_SECRET_KEY` | Secret | Clerk server authentication |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Secret | Clerk web client |
-| `SESSION_SECRET` | Secret | Server session protection |
-| `WHOP_COMPANY_ID` | Configuration | Whop company used for billing |
-| `WHOP_PLAN_ID` | Configuration | Commercial API subscription plan |
+| `DATABASE_URL` | Replit runtime value | Required PostgreSQL connection for the API |
+| `CLERK_PUBLISHABLE_KEY` | Replit-managed Clerk value | Required server-side Clerk configuration |
+| `CLERK_SECRET_KEY` | Replit-managed Clerk secret | Required API authentication |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Replit-managed Clerk value | Required Clerk web client configuration |
+| `OPENAI_API_KEY` | Optional secret | Enables OpenAI-backed product research; without it, the server uses its deterministic fallback |
+| `WHOP_COMPANY_ID` | Optional configuration | Required only for Whop checkout and billing |
+| `WHOP_PLAN_ID` | Optional configuration | Required only for Whop checkout and billing |
 
-Do not commit secret values. Whop credentials are obtained server-side through the connected Replit integration.
+PostgreSQL is supplied by the Replit project database. Clerk values are provisioned through Replit-managed Clerk. Do not commit secret values. Whop credentials are obtained server-side through the connected Replit integration.
 
 ## Install
 

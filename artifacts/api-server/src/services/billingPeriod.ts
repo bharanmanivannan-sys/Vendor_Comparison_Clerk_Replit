@@ -1,8 +1,8 @@
 export function deriveBillingPeriod(
-  membership: { created_at: string; current_period_end: string | null },
+  membership: { created_at?: string | null; current_period_end: string | null },
   payment: { paid_at: string | null },
 ) {
-  const periodStart = new Date(payment.paid_at ?? membership.created_at);
+  const periodStart = new Date(payment.paid_at ?? membership.created_at ?? "");
   const periodEnd = new Date(membership.current_period_end ?? "");
   const now = Date.now();
   if (
