@@ -170,9 +170,11 @@ function cleanVendorName(value: string): string {
   const knownName = Object.keys(knownProviders)
     .sort((a, b) => b.length - a.length)
     .find((provider) => new RegExp(`\\b${provider}\\b`, "i").test(cleaned));
-  return knownName ? knownProviders[knownName] : /^[a-z0-9\s-]+$/.test(cleaned)
-    ? cleaned.replace(/\b[a-z]/g, (character) => character.toUpperCase())
-    : cleaned;
+  const preservesAcronym = /(?:^|\s)[A-Z0-9]{2,}(?:\s|$)/.test(cleaned);
+  const preservesBrandCasing = /[a-z][A-Z]/.test(cleaned);
+  return knownName ? knownProviders[knownName] : preservesAcronym || preservesBrandCasing
+    ? cleaned
+    : cleaned.replace(/\b[a-z]/g, (character) => character.toUpperCase());
 }
 
 function isPlaceholderVendor(value: string): boolean {
@@ -180,8 +182,16 @@ function isPlaceholderVendor(value: string): boolean {
     || /^(?:any|another|other)\s+(?:other\s+)?relevant\s+(?:provider|vendor|brand|product|service)s?$/i.test(value.trim());
 }
 
+function vendorLabelMatches(researched: string, requested: string): boolean {
+  const words = (value: string) => value.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const actualWords = words(researched);
+  const requestedWords = words(requested);
+  return requestedWords.length > 0 && requestedWords.every((word, index) => actualWords[index] === word);
+}
+
 function trimSharedVendorQualifier(first: string, second: string): [string, string] {
   const removeRole = (value: string) => value
+    .replace(/\s+(?:(?:service|product)\s+)?(?:providers?|vendors?|companies)\s*$/i, "")
     .replace(/\s+(?:(?:ott|streaming|video|movie|film|music|subscription|on-demand)\s+)*(?:apps?|applications?|services?|platforms?|providers?|vendors?|companies)\s*$/i, "")
     .trim();
   const firstWords = removeRole(first).split(/\s+/);
@@ -433,6 +443,7 @@ function normalizeAnalysis(
   vendors: string[],
   preserveSpecificRecommendation = false,
   weightedCriteria: WeightedCriterion[] = [...WEIGHTED_CRITERIA],
+  isAspectFocused = false,
 ): AnalysisPayload {
   const normalized = replaceVendorPlaceholders({ ...fallback, ...analysis }, vendors) as Partial<AnalysisPayload>;
   const allowed = new Set(vendors);
@@ -484,32 +495,36 @@ function normalizeAnalysis(
         Object.entries(row.values ?? {}).map(([vendor, value]) => [cleanVendorName(vendor), value]),
       );
       const canonicalWinner = cleanVendorName(row.winner ?? "");
-      const focusedCriterion = weightedCriteria.length < 3
-        ? weightedCriteria.find(({ criterion }) => criterion.toLowerCase() === row.dimension?.toLowerCase())
-        : undefined;
-      const focusedScores = focusedCriterion
-        ? vendorScores.map((vendor) => ({
-          vendor: vendor.vendor,
-          score: vendor.weightedScores.find((entry) => entry.criterion === focusedCriterion.criterion)?.score,
-        }))
-        : [];
-      const leadingScore = Math.max(...focusedScores.map(({ score }) => score ?? -1));
-      const leaders = focusedScores.filter(({ score }) => score === leadingScore).map(({ vendor }) => vendor);
-      const focusedWinner = focusedScores.length === vendors.length && leadingScore >= 0
-        ? leaders.length === 1 ? leaders[0] : `Tie: ${leaders.join(", ")}`
-        : "";
       return {
         ...row,
         values: Object.fromEntries(vendors.map((vendor) => [vendor, canonicalValues[vendor] ?? "Validate with the vendor"])),
-        winner: focusedWinner.startsWith("Tie:") ? focusedWinner : normalizeLensWinner(
+        winner: normalizeLensWinner(
           row.dimension,
           canonicalValues,
           vendors,
-          focusedWinner || (allowed.has(canonicalWinner) ? canonicalWinner : ""),
+          allowed.has(canonicalWinner) ? canonicalWinner : "",
         ),
       };
     })
     : [];
+  const normalizedFeatures = normalizeRows(normalized.features ?? []);
+  const focusedFeatures = weightedCriteria.map(({ criterion }) => {
+    const evidenceRow = normalizedFeatures.find((row) => row.dimension.toLowerCase() === criterion.toLowerCase());
+    const aspectScores = vendorScores.map((vendor) => ({
+      vendor: vendor.vendor,
+      score: vendor.weightedScores.find((entry) => entry.criterion === criterion)?.score,
+      rationale: vendor.weightedScores.find((entry) => entry.criterion === criterion)?.rationale,
+    }));
+    const validScores = aspectScores.filter((entry) => typeof entry.score === "number" && Number.isFinite(entry.score));
+    const leadingScore = Math.max(...validScores.map((entry) => entry.score as number));
+    const leaders = validScores.filter((entry) => entry.score === leadingScore).map((entry) => entry.vendor);
+    const winner = validScores.length === vendors.length && leadingScore >= 0
+      ? leaders.length === 1 ? leaders[0] : `Tie: ${leaders.join(", ")}`
+      : "Not established";
+    const values = evidenceRow?.values
+      ?? Object.fromEntries(aspectScores.map((entry) => [entry.vendor, entry.rationale || "No evidence returned for this aspect."]));
+    return { dimension: criterion, values, winner };
+  });
   const rankedScores = [...vendorScores].sort((a, b) => b.score - a.score);
   const recommendedVendor = rankedScores[0]?.vendor ?? fallback.recommendation;
   const suppliedRecommendation = typeof normalized.recommendation === "string"
@@ -519,8 +534,8 @@ function normalizeAnalysis(
     ...fallback,
     ...normalized,
     vendorScores,
-    pricing: normalizeRows(normalized.pricing ?? fallback.pricing),
-    features: normalizeRows(normalized.features ?? fallback.features),
+    pricing: isAspectFocused ? [] : normalizeRows(normalized.pricing ?? fallback.pricing),
+    features: isAspectFocused ? focusedFeatures : normalizedFeatures.length ? normalizedFeatures : normalizeRows(fallback.features),
     recommendation: preserveSpecificRecommendation && suppliedRecommendation
       ? suppliedRecommendation
       : recommendedVendor,
@@ -708,6 +723,9 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
   const assortmentGuidance = input.criteria.some((criterion) => /\b(?:product range|assortment)\b/i.test(criterion))
     ? " For assortment, distinguish catalog breadth from stock availability that varies by location or time."
     : "";
+  const movieVarietyGuidance = input.criteria.some((criterion) => /\b(?:movies?|films?)\b/i.test(criterion))
+    ? " For movie variety in India, compare titles included with the streaming subscription; do not count rent-or-buy catalogs or add-on channels as included titles. Distinguish films from television series, compare genres and regional/language coverage, prioritize current India-specific sources, and state when comparable title counts are unavailable."
+    : "";
   const userSuppliedUrls = [...input.urls];
   if (!client) {
     if (focusedCriteria.length) throw new Error("Live research is required to compare the requested aspect. Configure OPENAI_API_KEY and try again.");
@@ -716,6 +734,11 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
   try {
     const context = validateComparisonContext(input.prompt, input.vendors);
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
+      const userLocation = /\b(?:india|indian)\b/i.test(input.prompt)
+        ? { type: "approximate" as const, country: "IN", timezone: "Asia/Kolkata" }
+        : context.industry.toLowerCase().includes("australian")
+          ? { type: "approximate" as const, country: "AU", timezone: "Australia/Sydney" }
+          : undefined;
     const researchResponse = await retryAiStage("Product research", async () => {
       const response = await client.responses.create({
         model: "gpt-4.1-mini",
@@ -724,9 +747,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
           type: "web_search",
           search_context_size: "low",
           external_web_access: true,
-          ...(context.industry.toLowerCase().includes("australian") ? {
-            user_location: { type: "approximate" as const, country: "AU", timezone: "Australia/Sydney" },
-          } : {}),
+          ...(userLocation ? { user_location: userLocation } : {}),
         }],
         input: [
           {
@@ -746,7 +767,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               criteria: input.criteria,
               shape: analysisOutputShape(input.vendors, weightedCriteria),
               researchScope: focusedCriteria.length
-                ? `Focus the comparison, scores, and recommendation on the requested aspects: ${input.criteria.join(", ")}. Research concrete, comparable evidence for each named option.${assortmentGuidance} Include a features row for each requested aspect with per-option evidence. Do not let unrelated default criteria determine the winner. Mark unavailable data explicitly and include supporting URLs.`
+                ? `Focus the comparison, scores, and recommendation on the requested aspects: ${input.criteria.join(", ")}. Research concrete, comparable evidence for each named option.${assortmentGuidance}${movieVarietyGuidance} Include one features row per requested aspect, use the exact aspect wording as its dimension, and provide per-option evidence. Do not let unrelated default criteria determine the winner. Mark unavailable data explicitly and include supporting URLs.`
                 : "Customer outcomes, ease of use, market positioning, competitive advantage, long-term sustainability, needs/features, reliability, value, reputation, service, innovation, sustainability, compliance, purchase and ongoing costs, warranty, lifespan, reviews, target-market fit, differentiation, and after-sales support. Where applicable include security, legacy-system integration, time-to-market, and vendor support. For every named option, research VRIO evidence, the latest credible market-share figure for the relevant segment and geography, and public parent-company share price/value when applicable. Explicitly state unavailable or not applicable instead of inventing figures. Research credible options outside the named shortlist that could solve the underlying problem better.",
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
@@ -808,15 +829,19 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     addParsedSourceUrls(parsed.sources, input.urls);
     if (focusedCriteria.length) {
       const scores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
-      const hasFocusedScores = input.vendors.every((vendor) => scores.some((entry) =>
-        entry.vendor?.toLowerCase() === vendor.toLowerCase()
-        && weightedCriteria.every(({ criterion }) => entry.weightedScores?.some((score) =>
+      const matchedScores = input.vendors.map((vendor) => scores.find((entry) =>
+        vendorLabelMatches(entry.vendor ?? "", vendor),
+      ));
+      const hasFocusedScores = matchedScores.every((entry, index) =>
+        Boolean(entry)
+        && matchedScores.indexOf(entry) === index
+        && weightedCriteria.every(({ criterion }) => entry?.weightedScores?.some((score) =>
           score.criterion?.toLowerCase() === criterion.toLowerCase()
           && typeof score.score === "number"
           && Number.isFinite(score.score)
           && Boolean(score.rationale?.trim()),
         )),
-      ));
+      );
       if (!hasFocusedScores || input.urls.length === 0) {
         throw new Error("Research did not return evidence-backed scores for every requested aspect and option.");
       }
@@ -883,6 +908,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       input.vendors,
       isProviderLevelCreditCardDiscovery,
       weightedCriteria,
+      focusedCriteria.length > 0,
     );
     if (isProviderLevelCreditCardDiscovery) {
       if (!/minimum (?:credit )?limit/i.test(normalized.recommendationReason)) {
