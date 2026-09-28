@@ -83,6 +83,7 @@ function categoryFor(prompt: string, vendors: string[]): string {
   if (/\b(?:car|auto|vehicle|home|travel|health)?\s*insurance\b/.test(normalized)) return "Insurance";
   if (/\b(?:home loans?|mortgages?|housing loans?)\b/.test(normalized)) return "Home loans";
   if (/\b(?:electric car|electric vehicle|evs?|battery electric|tesla|byd)\b/.test(normalized)) return "Electric vehicles";
+  if (/\b(?:ott|streaming(?:\s+(?:apps?|services?|platforms?))?|video[\s-]*on[\s-]*demand)\b/.test(normalized)) return "Video streaming";
   if (/(crm|sales|customer relationship)/.test(normalized)) return "CRM";
   if (/(support|help desk|shared inbox|customer service)/.test(normalized)) return "Customer support";
   if (/(project|task|work management|collaboration)/.test(normalized)) return "Work management";
@@ -180,7 +181,9 @@ function isPlaceholderVendor(value: string): boolean {
 }
 
 function trimSharedVendorQualifier(first: string, second: string): [string, string] {
-  const removeRole = (value: string) => value.replace(/\s+(?:(?:service|product)\s+)?(?:providers?|vendors?|companies)\s*$/i, "").trim();
+  const removeRole = (value: string) => value
+    .replace(/\s+(?:(?:ott|streaming|video|movie|film|music|subscription|on-demand)\s+)*(?:apps?|applications?|services?|platforms?|providers?|vendors?|companies)\s*$/i, "")
+    .trim();
   const firstWords = removeRole(first).split(/\s+/);
   const secondWords = removeRole(second).split(/\s+/);
   let shared = 0;
@@ -244,6 +247,7 @@ export function parsePrompt(prompt: string) {
 export function validateComparisonContext(prompt: string, vendors: string[]): ComparisonContext {
   const normalized = prompt.toLowerCase();
   const segmentMatches = [
+    { label: "Video streaming", pattern: /\b(?:ott|streaming(?:\s+(?:apps?|services?|platforms?))?|video[\s-]*on[\s-]*demand)\b/ },
     { label: "Credit cards", pattern: /\b(?:credit cards?|card products?|balance transfers?|rewards cards?)\b/ },
     { label: "Insurance", pattern: /\b(?:car|auto|vehicle|home|travel|health)?\s*insurance\b/ },
     { label: "Home loans", pattern: /\b(?:home loans?|mortgages?|housing loans?|owner.?occupier loans?)\b/ },
