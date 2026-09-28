@@ -33,7 +33,51 @@ export const WEIGHTED_CRITERIA = [
 
 const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
-function categoryFor(prompt: string): string {
+type WeightedCriterion = { criterion: string; weight: number };
+
+function explicitCriteriaFor(prompt: string): string[] {
+  const labeled = prompt.match(/\b(?:aspects?|criteria|criterion|focus)\s*:\s*([^.!?;\n]+)/i)?.[1];
+  if (!labeled) return [];
+  return [...new Set(labeled.split(",").map((item) => {
+    const value = item.trim().replace(/\s+/g, " ");
+    if (!value || value.length > 80) return "";
+    return /^(?:product range|product assortment|catalog(?:ue)? breadth)$/i.test(value)
+      ? "Product range and assortment"
+      : value[0].toUpperCase() + value.slice(1);
+  }).filter(Boolean))].slice(0, 8);
+}
+
+function weightedCriteriaFor(input: AnalysisInput): WeightedCriterion[] {
+  if (!explicitCriteriaFor(input.prompt).length || !input.criteria.length) return [...WEIGHTED_CRITERIA];
+  const criteria = input.criteria.slice(0, 8);
+  const baseWeight = Math.floor(100 / criteria.length);
+  return criteria.map((criterion, index) => ({
+    criterion,
+    weight: baseWeight + (index < 100 % criteria.length ? 1 : 0),
+  }));
+}
+
+function openSegmentFor(prompt: string, vendors: string[]): string {
+  const firstClause = prompt.split(/\b(?:aspects?|criteria|criterion|focus)\s*:/i)[0]
+    ?.split(/[.!?;]/)[0] ?? "";
+  const withoutVendors = vendors.reduce(
+    (text, vendor) => text.replace(
+      new RegExp(`\\b${vendor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"),
+      " ",
+    ),
+    firstClause,
+  );
+  const words = withoutVendors
+    .replace(/\b(?:compare|comparing|comparison|between|against|versus|vs|and|or|as|for|from|the|a|an|of|options?|service|services|providers?|platforms?|companies|brands|vendors)\b/gi, " ")
+    .replace(/\b(?:in|within|across)\b.*$/i, "")
+    .match(/[a-z][a-z-]*/gi) ?? [];
+  const unique = words.filter((word, index) => words.findIndex((entry) => entry.toLowerCase() === word.toLowerCase()) === index);
+  return unique.length && unique.length <= 5
+    ? unique.join(" ").replace(/^./, (character) => character.toUpperCase())
+    : "General comparison";
+}
+
+function categoryFor(prompt: string, vendors: string[]): string {
   const normalized = prompt.toLowerCase();
   if (/\b(?:credit cards?|card products?|rewards cards?)\b/.test(normalized)) return "Credit cards";
   if (/\b(?:car|auto|vehicle|home|travel|health)?\s*insurance\b/.test(normalized)) return "Insurance";
@@ -46,10 +90,12 @@ function categoryFor(prompt: string): string {
   if (/(cloud|hosting|infrastructure)/.test(normalized)) return "Cloud infrastructure";
   if (/(marketing automation|email marketing|campaign)/.test(normalized)) return "Marketing";
   if (/(accounting|bookkeeping|finance software)/.test(normalized)) return "Accounting";
-  return "Business software";
+  return openSegmentFor(prompt, vendors);
 }
 
 function criteriaFor(prompt: string): string[] {
+  const explicit = explicitCriteriaFor(prompt);
+  if (explicit.length) return explicit;
   const normalized = prompt.toLowerCase();
   const criteria = [
     { label: "Premium, excess and total insurance cost", pattern: /\b(?:insurance premium|premium|excess|deductible|insurance cost|quote)\b/ },
@@ -72,7 +118,8 @@ function criteriaFor(prompt: string): string[] {
     { label: "Five-year ownership cost", pattern: /\b(?:five|5)[ -]?year|\bretain\b|\bownership\b|\btotal cost\b/ },
     { label: "Features", pattern: /\b(?:features?|technology|safety|comfort)\b/ },
     { label: "Budget fit", pattern: /\b(?:budget|afford|price|pricing|aud|a\$|\$)\b/ },
-    { label: "Range and charging", pattern: /\b(?:range|battery|charging|charger)\b/ },
+    { label: "Product range and assortment", pattern: /\b(?:product range|product assortment|assortment|catalog(?:ue)? breadth|range of products|product selection)\b/ },
+    { label: "Range and charging", pattern: /\b(?:driving range|vehicle range|ev range|battery range|battery|charging|charger)\b/ },
     { label: "Resale value", pattern: /\b(?:resale|depreciation|retained value)\b/ },
     { label: "Warranty", pattern: /\b(?:warranty|coverage)\b/ },
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
@@ -88,6 +135,12 @@ function criteriaFor(prompt: string): string[] {
     { label: "Vendor support", pattern: /\b(?:vendor support|after-sales|technical support|customer service)\b/ },
   ].filter(({ pattern }) => pattern.test(normalized)).map(({ label }) => label);
   const selected = Array.from(new Set([...criteria, ...contextual]));
+  if (
+    /\brange\b/.test(normalized)
+    && /\b(?:electric cars?|electric vehicles?|evs?|battery electric|byd|tesla)\b/.test(normalized)
+    && !/\bproduct range\b/.test(normalized)
+    && !selected.includes("Range and charging")
+  ) selected.push("Range and charging");
   return selected.length ? selected : ["Customer outcomes", "Ease of use", "Value for money", "Quality and reliability"];
 }
 
@@ -116,7 +169,9 @@ function cleanVendorName(value: string): string {
   const knownName = Object.keys(knownProviders)
     .sort((a, b) => b.length - a.length)
     .find((provider) => new RegExp(`\\b${provider}\\b`, "i").test(cleaned));
-  return knownName ? knownProviders[knownName] : cleaned;
+  return knownName ? knownProviders[knownName] : /^[a-z0-9\s-]+$/.test(cleaned)
+    ? cleaned.replace(/\b[a-z]/g, (character) => character.toUpperCase())
+    : cleaned;
 }
 
 function isPlaceholderVendor(value: string): boolean {
@@ -124,12 +179,26 @@ function isPlaceholderVendor(value: string): boolean {
     || /^(?:any|another|other)\s+(?:other\s+)?relevant\s+(?:provider|vendor|brand|product|service)s?$/i.test(value.trim());
 }
 
+function trimSharedVendorQualifier(first: string, second: string): [string, string] {
+  const removeRole = (value: string) => value.replace(/\s+(?:(?:service|product)\s+)?(?:providers?|vendors?|companies)\s*$/i, "").trim();
+  const firstWords = removeRole(first).split(/\s+/);
+  const secondWords = removeRole(second).split(/\s+/);
+  let shared = 0;
+  while (
+    shared < firstWords.length - 1 && shared < secondWords.length - 1
+    && firstWords[firstWords.length - 1 - shared].toLowerCase() === secondWords[secondWords.length - 1 - shared].toLowerCase()
+  ) shared += 1;
+  if (shared < 2) return [firstWords.join(" "), secondWords.join(" ")];
+  return [firstWords.slice(0, -shared).join(" "), secondWords.slice(0, -shared).join(" ")];
+}
+
 export function parsePrompt(prompt: string) {
   const normalized = prompt.replace(/\s+/g, " ").trim();
-  const chosen = normalized.match(
+  const entityPrompt = normalized.split(/\b(?:aspects?|criteria|criterion|focus)\s*:/i)[0] ?? normalized;
+  const chosen = entityPrompt.match(
     /\b(?:choose|include|use|shortlist)\s+(.+?)(?=\.\s|\?|;\s|$)/i,
   );
-  const list = normalized.match(
+  const list = entityPrompt.match(
     /\b(?:across|among|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
   );
   const explicitList = chosen?.[1] ?? list?.[1];
@@ -137,17 +206,20 @@ export function parsePrompt(prompt: string) {
     ?.split(/\s*,\s*|\s*,?\s+and\s+/i)
     .map(cleanVendorName)
     .filter((value) => value && !isPlaceholderVendor(value)) ?? [];
-  const betweenPair = normalized.match(
+  const betweenPair = entityPrompt.match(
     /\b(?:compare|comparing|comparison\s+(?:of|between))?.*?\bbetween\s+(.+?)\s+and\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i,
   );
-  const pair = betweenPair ?? normalized.match(
+  const pair = betweenPair ?? entityPrompt.match(
     /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i,
   );
-  const before = normalized.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? normalized;
+  const before = entityPrompt.split(/\b(?:vs\.?|versus|or|and|against)\b/i)[0] ?? entityPrompt;
   const firstVendor = pair?.[1] ?? before.match(/(?:compare|between|for)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i)?.[1];
   const secondVendor = pair?.[2];
+  const pairVendors = firstVendor && secondVendor
+    ? trimSharedVendorQualifier(firstVendor, secondVendor)
+    : [firstVendor, secondVendor];
   const vendors = Array.from(
-    new Set((listedVendors.length >= 2 ? listedVendors : [firstVendor, secondVendor].filter(Boolean).map((value) => cleanVendorName(value as string)))),
+    new Set((listedVendors.length >= 2 ? listedVendors : pairVendors.filter(Boolean).map((value) => cleanVendorName(value as string)))),
   )
     .filter((value) => value && !isPlaceholderVendor(value));
   if (
@@ -217,7 +289,7 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
     "automotive",
   ].filter((industry) => new RegExp(`\\b${industry.replace(" ", "\\s+")}\\b`, "i").test(normalized)),
   ];
-  const segment = segmentMatches[0] ?? "";
+  const segment = segmentMatches[0] ?? openSegmentFor(prompt, vendors);
   const vendorDomains = vendors.map((vendor) => {
     if (bankBrands.test(vendor)) return "banking";
     if (technologyBrands.test(vendor)) return "technology";
@@ -252,27 +324,22 @@ export function validateComparisonContext(prompt: string, vendors: string[]): Co
       message: "Credit card comparisons must use providers that offer credit card products. Replace unrelated brands or change the comparison criterion.",
     };
   }
-  if (segmentMatches.length === 0) {
-    return { valid: false, segment, industry, message: "Name what you are comparing, such as electric vehicles, CRM platforms, customer support tools, or analytics products." };
-  }
-  if (segmentMatches.length > 1) {
-    return { valid: false, segment, industry, message: `Keep the comparison focused on one primary segment. We found ${segmentMatches.join(" and ")}.` };
-  }
   if (!industry) {
-    return { valid: true, segment, industry: "General market", message: `Comparing options in ${segment}. Add a market or use case for a more tailored result.` };
+    return { valid: true, segment, industry: "General market", message: `Comparing ${vendors.join(" and ")}${segment === "General comparison" ? "" : ` in ${segment}`}. Add a market or use case for a more tailored result.` };
   }
   return { valid: true, segment, industry, message: `Comparing options in ${segment} for ${industry}.` };
 }
 
 function fallbackAnalysis(input: AnalysisInput): AnalysisPayload {
-  const category = categoryFor(input.prompt);
+  const category = categoryFor(input.prompt, input.vendors);
   const vendors = input.vendors.slice(0, 5);
+  const weightedCriteria = weightedCriteriaFor(input);
   const scores = vendors.map((vendor, index) => ({
     vendor,
     score: Math.max(68, 91 - index * 7),
     color: ["#1c7c78", "#df7b48", "#6b61c9", "#bc5a85"][index] ?? "#1c7c78",
     verdict: index === 0 ? "Best overall fit" : index === 1 ? "Strong alternative" : "Worth a closer look",
-    weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }, criterionIndex) => ({
+    weightedScores: weightedCriteria.map(({ criterion, weight }, criterionIndex) => ({
       criterion,
       weight,
       score: Math.max(60, 90 - index * 6 - (criterionIndex % 3) * 3),
@@ -361,6 +428,7 @@ function normalizeAnalysis(
   fallback: AnalysisPayload,
   vendors: string[],
   preserveSpecificRecommendation = false,
+  weightedCriteria: WeightedCriterion[] = [...WEIGHTED_CRITERIA],
 ): AnalysisPayload {
   const normalized = replaceVendorPlaceholders({ ...fallback, ...analysis }, vendors) as Partial<AnalysisPayload>;
   const allowed = new Set(vendors);
@@ -371,7 +439,7 @@ function normalizeAnalysis(
       const suppliedScores = Array.isArray(item.weightedScores) ? item.weightedScores : [];
       const suppliedScaleMaximum = Math.max(0, ...suppliedScores.map((entry) => Number(entry.score) || 0));
       const scoreMultiplier = suppliedScaleMaximum <= 5 ? 20 : suppliedScaleMaximum <= 10 ? 10 : 1;
-      const weightedScores = WEIGHTED_CRITERIA.map(({ criterion, weight }) => {
+      const weightedScores = weightedCriteria.map(({ criterion, weight }) => {
         const supplied = suppliedScores.find((entry) => entry.criterion?.toLowerCase() === criterion.toLowerCase());
         const fallbackEntry = fallbackVendor?.weightedScores?.find((entry) => entry.criterion === criterion);
         return {
@@ -412,14 +480,28 @@ function normalizeAnalysis(
         Object.entries(row.values ?? {}).map(([vendor, value]) => [cleanVendorName(vendor), value]),
       );
       const canonicalWinner = cleanVendorName(row.winner ?? "");
+      const focusedCriterion = weightedCriteria.length < 3
+        ? weightedCriteria.find(({ criterion }) => criterion.toLowerCase() === row.dimension?.toLowerCase())
+        : undefined;
+      const focusedScores = focusedCriterion
+        ? vendorScores.map((vendor) => ({
+          vendor: vendor.vendor,
+          score: vendor.weightedScores.find((entry) => entry.criterion === focusedCriterion.criterion)?.score,
+        }))
+        : [];
+      const leadingScore = Math.max(...focusedScores.map(({ score }) => score ?? -1));
+      const leaders = focusedScores.filter(({ score }) => score === leadingScore).map(({ vendor }) => vendor);
+      const focusedWinner = focusedScores.length === vendors.length && leadingScore >= 0
+        ? leaders.length === 1 ? leaders[0] : `Tie: ${leaders.join(", ")}`
+        : "";
       return {
         ...row,
         values: Object.fromEntries(vendors.map((vendor) => [vendor, canonicalValues[vendor] ?? "Validate with the vendor"])),
-        winner: normalizeLensWinner(
+        winner: focusedWinner.startsWith("Tie:") ? focusedWinner : normalizeLensWinner(
           row.dimension,
           canonicalValues,
           vendors,
-          allowed.has(canonicalWinner) ? canonicalWinner : "",
+          focusedWinner || (allowed.has(canonicalWinner) ? canonicalWinner : ""),
         ),
       };
     })
@@ -556,7 +638,7 @@ function addParsedSourceUrls(sources: unknown, urls: string[]): void {
   }
 }
 
-function analysisOutputShape(vendors: string[]) {
+function analysisOutputShape(vendors: string[], weightedCriteria: WeightedCriterion[]) {
   const values = Object.fromEntries(vendors.map((vendor) => [vendor, ""]));
   const vrioDimension = { status: "strong|partial|weak|not_applicable", rationale: "" };
   return {
@@ -571,7 +653,7 @@ function analysisOutputShape(vendors: string[]) {
       score: 0,
       color: "",
       verdict: "",
-      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({ criterion, weight, score: 0, rationale: "" })),
+      weightedScores: weightedCriteria.map(({ criterion, weight }) => ({ criterion, weight, score: 0, rationale: "" })),
       switchConditions: ["", ""],
       vrio: {
         value: vrioDimension,
@@ -617,8 +699,16 @@ function analysisOutputShape(vendors: string[]) {
 
 export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPayload> {
   const fallback = fallbackAnalysis(input);
+  const focusedCriteria = explicitCriteriaFor(input.prompt);
+  const weightedCriteria = weightedCriteriaFor(input);
+  const assortmentGuidance = input.criteria.some((criterion) => /\b(?:product range|assortment)\b/i.test(criterion))
+    ? " For assortment, distinguish catalog breadth from stock availability that varies by location or time."
+    : "";
   const userSuppliedUrls = [...input.urls];
-  if (!client) return fallback;
+  if (!client) {
+    if (focusedCriteria.length) throw new Error("Live research is required to compare the requested aspect. Configure OPENAI_API_KEY and try again.");
+    return fallback;
+  }
   try {
     const context = validateComparisonContext(input.prompt, input.vendors);
     const isProviderLevelCreditCardDiscovery = context.segment === "Credit cards";
@@ -650,11 +740,13 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
               context,
               suppliedUrls: input.urls,
               criteria: input.criteria,
-              shape: analysisOutputShape(input.vendors),
-              researchScope: "Customer outcomes, ease of use, market positioning, competitive advantage, long-term sustainability, needs/features, reliability, value, reputation, service, innovation, sustainability, compliance, purchase and ongoing costs, warranty, lifespan, reviews, target-market fit, differentiation, and after-sales support. Where applicable include security, legacy-system integration, time-to-market, and vendor support. For every named option, research VRIO evidence, the latest credible market-share figure for the relevant segment and geography, and public parent-company share price/value when applicable. Explicitly state unavailable or not applicable instead of inventing figures. Research credible options outside the named shortlist that could solve the underlying problem better.",
+              shape: analysisOutputShape(input.vendors, weightedCriteria),
+              researchScope: focusedCriteria.length
+                ? `Focus the comparison, scores, and recommendation on the requested aspects: ${input.criteria.join(", ")}. Research concrete, comparable evidence for each named option.${assortmentGuidance} Include a features row for each requested aspect with per-option evidence. Do not let unrelated default criteria determine the winner. Mark unavailable data explicitly and include supporting URLs.`
+                : "Customer outcomes, ease of use, market positioning, competitive advantage, long-term sustainability, needs/features, reliability, value, reputation, service, innovation, sustainability, compliance, purchase and ongoing costs, warranty, lifespan, reviews, target-market fit, differentiation, and after-sales support. Where applicable include security, legacy-system integration, time-to-market, and vendor support. For every named option, research VRIO evidence, the latest credible market-share figure for the relevant segment and geography, and public parent-company share price/value when applicable. Explicitly state unavailable or not applicable instead of inventing figures. Research credible options outside the named shortlist that could solve the underlying problem better.",
               outputInstructions: isProviderLevelCreditCardDiscovery
                 ? "Replace every empty value in the shape. Do not add top-level prompt or vendors fields. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use at least one current official Australian card URL for every named provider and include every URL in sources. Select one exact card product per provider. Compare purchase interest rate, annual fee, interest-free days, rewards earn and redemption value, welcome-offer conditions, eligibility, and minimum credit limit. Recommend one exact product by full name, explain why it wins, and state its minimum credit limit. Do not claim that a provider name is itself a product. For the Customer Advocacy / NPS weighted criterion, cite a comparable survey with publisher, year, population, methodology, and each provider's NPS in the rationale. Never present company-level NPS as product-level NPS. If comparable NPS is unavailable, say so explicitly and give every provider the same neutral score so missing data cannot change the ranking. Use 0–100 scores, preserve the supplied weights, complete every framework field, and include exact source URLs. Include one or two credible cards outside the four named providers as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs."
-                : "Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores, preserve the supplied weights, and complete every framework field. For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs.",
+                : `Replace every empty value in the shape. Also return criteriaMet as a boolean and unmetCriteriaReason as a string. Use 0–100 scores and preserve the supplied weights. ${focusedCriteria.length ? "Rank only by the explicitly requested aspects and support each score with researched evidence. Do not substitute a general overall ranking." : "Complete every framework field."} For financial products, insurance, vehicles, and business software, identify up to two credible outside-shortlist alternatives as insights beginning exactly 'Alternative outside comparison — <name>:' with rationale and trade-offs. Include decision conditions that could make each named option preferable. Put exact supporting URLs in marketPosition.evidence and include source URLs.`,
             }),
           },
         ],
@@ -694,7 +786,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 prompt: input.prompt,
                 vendors: input.vendors,
                 criteria: input.criteria,
-                shape: analysisOutputShape(input.vendors),
+                shape: analysisOutputShape(input.vendors, weightedCriteria),
                 draft: researchResponse.output_text,
                 instructions: `Preserve supported facts and complete missing fields concisely. Return criteriaMet and unmetCriteriaReason. Use 0–100 scores and the supplied weights.${isProviderLevelCreditCardDiscovery ? " Recommend one exact card product by full name. State the minimum credit limit or explicitly say it was unavailable. Include annual-fee trade-offs and one or two outside-card alternatives as insights beginning exactly 'Alternative outside comparison — <name>:'." : ""}`,
               }),
@@ -710,6 +802,21 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       throw new Error("Your input criteria can't be met across the products or services or brands chosen");
     }
     addParsedSourceUrls(parsed.sources, input.urls);
+    if (focusedCriteria.length) {
+      const scores = Array.isArray(parsed.vendorScores) ? parsed.vendorScores : [];
+      const hasFocusedScores = input.vendors.every((vendor) => scores.some((entry) =>
+        entry.vendor?.toLowerCase() === vendor.toLowerCase()
+        && weightedCriteria.every(({ criterion }) => entry.weightedScores?.some((score) =>
+          score.criterion?.toLowerCase() === criterion.toLowerCase()
+          && typeof score.score === "number"
+          && Number.isFinite(score.score)
+          && Boolean(score.rationale?.trim()),
+        )),
+      ));
+      if (!hasFocusedScores || input.urls.length === 0) {
+        throw new Error("Research did not return evidence-backed scores for every requested aspect and option.");
+      }
+    }
     const missingSources = isProviderLevelCreditCardDiscovery
       ? missingCreditCardSourceVendors(input.vendors, input.urls)
       : [];
@@ -736,7 +843,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
                 vendors: input.vendors,
                 missingOfficialSourcesFor: missingSources,
                 existingDraft: parsed,
-                shape: analysisOutputShape(input.vendors),
+                shape: analysisOutputShape(input.vendors, weightedCriteria),
                 instructions: "Return a complete replacement analysis plus criteriaMet, unmetCriteriaReason, and sources. Include at least one exact official product URL for every named provider. Every pricing and feature value must be supported by those sources; use 'Not publicly available' rather than inference. Determine row winners from the displayed values, use ties where values are equal, and do not default wins to the first provider. If NPS is requested, report it only from a comparable cited survey with publisher, year, population, and methodology; otherwise state that comparable provider NPS is unavailable.",
               }),
             },
@@ -771,6 +878,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
       fallback,
       input.vendors,
       isProviderLevelCreditCardDiscovery,
+      weightedCriteria,
     );
     if (isProviderLevelCreditCardDiscovery) {
       if (!/minimum (?:credit )?limit/i.test(normalized.recommendationReason)) {
@@ -788,6 +896,7 @@ export async function buildAnalysis(input: AnalysisInput): Promise<AnalysisPaylo
     if (error instanceof Error && (
       error.message === "Your input criteria can't be met across the products or services or brands chosen"
       || error.message.startsWith("Insufficient source coverage:")
+      || error.message.startsWith("Research did not return evidence-backed scores")
     )) {
       throw error;
     }

@@ -43,6 +43,35 @@ test("allows cross-sector market insight requests", () => {
   assert.equal(parsed.context.segment, "Market insights");
 });
 
+test("accepts an unlisted segment and extracts the requested product-range aspect", () => {
+  const parsed = parsePrompt("compare zepto quick commerce and blinkit quick commerce service providers. Aspect: product range");
+  assert.deepEqual(parsed.vendors, ["Zepto", "Blinkit"]);
+  assert.deepEqual(parsed.criteria, ["Product range and assortment"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Quick commerce");
+});
+
+test("accepts other unlisted segments and keeps custom aspects", () => {
+  const parsed = parsePrompt("Compare Atlas vs Boreal for carbon capture projects. Aspect: capture efficiency");
+  assert.deepEqual(parsed.vendors, ["Atlas", "Boreal"]);
+  assert.deepEqual(parsed.criteria, ["Capture efficiency"]);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.context.segment, "Carbon capture projects");
+});
+
+test("keeps all explicitly named aspects instead of silently dropping one", () => {
+  const parsed = parsePrompt("Compare Atlas vs Boreal for drone delivery. Aspect: product range and delivery speed, service coverage");
+  assert.deepEqual(parsed.criteria, ["Product range and delivery speed", "Service coverage"]);
+  assert.equal(parsed.context.valid, true);
+});
+
+test("does not confuse product range with electric-vehicle driving range", () => {
+  const parsed = parsePrompt("Compare Zepto vs Blinkit for grocery delivery in India. Focus: product range");
+  assert.deepEqual(parsed.vendors, ["Zepto", "Blinkit"]);
+  assert.deepEqual(parsed.criteria, ["Product range and assortment"]);
+  assert.equal(parsed.context.valid, true);
+});
+
 test("parses a provider list introduced by from for product discovery", () => {
   const prompt = "Compare credit cards from ANZ, Westpac, NAB, CBA. Provide me a product with best features and lowest rates across merchants and with great rewards. Why should I go with the product and the minimum limit I must go with";
   const parsed = parsePrompt(prompt);

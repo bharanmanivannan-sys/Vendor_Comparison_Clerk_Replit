@@ -38,14 +38,14 @@ Vendor Compare helps teams turn open-ended buying questions into structured, evi
 - Browser API requests use Clerk session cookies; protected server routes derive the user ID from Clerk and scope every comparison query to that identity.
 - Comparison creation stores structured analysis JSON in PostgreSQL so the result and the 30-day history remain available after reloads.
 - User-entered comparison text is validated server-side against XML-like markup, SQL-shaped input, and prompt-injection phrases before parsing or sending to the model.
-- Comparison prompts must contain actual vendor names plus one recognizable product/service segment and target industry before analysis runs.
+- Comparison prompts must name at least two actual options, but product/service segments are open-ended: known segment patterns are hints, not an allowlist, and a target industry is optional. Retain unsafe-input and clear cross-domain mismatch checks.
 - Analysis performs live web research for current product, pricing, warranty, maintenance, and local-market information; user-supplied URLs are optional source hints.
-- The primary comparison journey is one NLP-first form: prompt required, source URLs optional. New results include an eight-criterion weighted scorecard and comparison charts.
+- The primary comparison journey is one NLP-first form: prompt required, source URLs optional. Unlabeled prompts use the eight-criterion weighted scorecard; explicitly labeled aspects use only those aspects for scores and recommendation, with focused score cards.
 - Result pages can download a self-contained PDF report. Research may also surface credible alternatives outside the named shortlist, with rationale and explicit trade-offs.
 - NLP shortlists support wording such as “across,” “among,” and “against.” While research runs, the form shows a spinner, process explanation, keep-page-open guidance, and “While you wait” notes.
 - Results include an interactive recommendation-vs-shortlist selector, switch conditions, SWOT, VRIO, PESTLE, SOAR, and sourced market-share/share-value context. Public API documentation is available at `/api-docs`.
 - Authenticated API requests obtain a current Clerk bearer token and refresh cached workspace data when an inactive tab becomes visible or reconnects.
-- AI analysis uses the configured OpenAI key when available and a deterministic, safe fallback when the model is unavailable.
+- AI analysis uses the configured OpenAI key when available. Generic requests have a deterministic fallback, but explicitly focused requests must fail rather than present unevidenced fallback scores when live research is unavailable.
 
 ## Product
 
