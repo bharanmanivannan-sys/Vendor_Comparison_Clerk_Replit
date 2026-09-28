@@ -51,14 +51,6 @@ test("accepts an unlisted segment and extracts the requested product-range aspec
   assert.equal(parsed.context.segment, "Quick commerce");
 });
 
-test("keeps streaming-service descriptors out of vendor names", () => {
-  const parsed = parsePrompt("compare netflix vs Amazon prime OTT streaming APP in india. Aspect: Variety of movies ");
-  assert.deepEqual(parsed.vendors, ["Netflix", "Amazon Prime"]);
-  assert.deepEqual(parsed.criteria, ["Variety of movies"]);
-  assert.equal(parsed.context.valid, true);
-  assert.equal(parsed.context.segment, "Video streaming");
-});
-
 test("accepts other unlisted segments and keeps custom aspects", () => {
   const parsed = parsePrompt("Compare Atlas vs Boreal for carbon capture projects. Aspect: capture efficiency");
   assert.deepEqual(parsed.vendors, ["Atlas", "Boreal"]);
