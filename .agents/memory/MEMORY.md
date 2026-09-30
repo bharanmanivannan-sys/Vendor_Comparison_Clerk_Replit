@@ -1,2 +1,3 @@
 - [API client compiler settings](api-client-dom-iterable.md) — generated Headers helpers require DOM.Iterable in the API client TypeScript libs.
 - [OpenAI web-search output](openai-web-search-output.md) — Responses web search cannot use JSON mode; request plain text and safely extract the JSON object.
+- [GitHub connector and Git transport](github-connector-git-transport.md) — GitHub REST access does not imply HTTPS git push is authenticated; preserve commit ancestry in API fallbacks.
