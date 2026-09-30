@@ -24,6 +24,285 @@ tags:
   - name: analytics
     description: Privacy-preserving traction analytics
 paths:
+  /comparison-drafts/interpret:
+    post:
+      operationId: interpretComparisonDraft
+      tags: [comparisons]
+      summary: Interpret and persist a fast comparison draft
+      description: Local deterministic interpretation only; this operation does not perform research. Requires a request correlation header and echoes draftId, draftVersion, and requestId on the draft response. If idempotencyKey is omitted, the server assigns a unique key when creating the draft.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonDraftInterpretInput"
+      responses:
+        "201":
+          description: Persisted draft created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraft"
+        "200":
+          description: Existing draft returned for the idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraft"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+        "409":
+          description: Idempotency key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+        "503":
+          description: Persistence unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+  /comparison-drafts/{id}:
+    get:
+      operationId: getComparisonDraft
+      tags: [comparisons]
+      summary: Fetch the current owner-scoped comparison draft
+      description: Requires a UUID X-Request-Id header and echoes draftId, draftVersion, and requestId with the current draft. The optional draftVersion query parameter can assert the expected version; a mismatch returns 409.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
+      responses:
+        "200":
+          description: Current persisted draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraft"
+        "400":
+          description: Invalid or missing X-Request-Id or a mismatched expected draft version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "404":
+          description: Draft not found for this owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+    patch:
+      operationId: updateComparisonDraftOptions
+      tags: [comparisons]
+      summary: Save local review edits to an owned comparison draft
+      description: >-
+        Requires a UUID X-Request-Id, an Idempotency-Key, and the current
+         draftVersion. Options, criteria, market/currency, URL rows, and
+         includeClosingProducts may be saved together; each supplied field is
+         validated locally and URLs are never fetched. Option edits create new
+         option IDs. Criteria and URL-only edits preserve option IDs and order.
+         Option or market edits invalidate prior market proof, source
+         associations, preflight results, suggestions, and older enrichment
+         jobs. Replays require the same key and edit body at the current version.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonDraftOptionEditInput"
+      responses:
+        "200":
+          description: Saved draft; echoes the new draftVersion and this requestId
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraft"
+        "400":
+          description: Invalid or missing X-Request-Id, Idempotency-Key, draftVersion, or local review edits
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "404":
+          description: Draft not found for this owner
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "409":
+          description: Draft version is stale or Idempotency-Key was reused for a different edit
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+  /comparison-drafts/{id}/options/{optionId}/suggestions:
+    get:
+      operationId: getComparisonDraftOptionSuggestions
+      tags: [comparisons]
+      summary: Get fast contextual suggestions for one draft option
+      description: Requires a UUID X-Request-Id and echoes draftId, draftVersion, requestId, and the requested optionId so suggestions can only be applied to that draft option. The optional draftVersion query parameter can assert the expected version; a mismatch returns 409. An optional typedText query may provide current safely validated text of 2-120 characters to contextualize suggestions; the accepted value is described here rather than as a generated operation parameter to avoid a TypeScript *Params export collision.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: optionId
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
+      responses:
+        "200":
+          description: Context-ranked local identity suggestions; market status is explicitly unverified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftSuggestions"
+        "400":
+          description: Invalid or missing X-Request-Id or a stale expected draft version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "404":
+          description: Draft or option not found for this owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+  /comparison-drafts/{id}/enrichment-jobs:
+    post:
+      operationId: startComparisonDraftEnrichment
+      tags: [comparisons]
+      summary: Queue targeted enrichment for a persisted draft
+      description: Submit the current draftVersion and a UUID X-Request-Id. The queued response echoes draftId, the new draftVersion, and requestId.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComparisonDraftEnrichmentInput" }
+      responses:
+        "202":
+          description: Enrichment job queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftEnrichmentJob"
+        "400":
+          description: Invalid or missing X-Request-Id or draftVersion
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "409":
+          description: Draft version changed before enrichment could be queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "404":
+          description: Draft not found for this owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+  /comparison-draft-enrichment-jobs/{jobId}:
+    get:
+      operationId: getComparisonDraftEnrichmentJob
+      tags: [comparisons]
+      summary: Poll queued enrichment job status
+      description: Requires a UUID X-Request-Id for this poll and echoes the current draftId, draftVersion, and requestId. Optional draftId and draftVersion query parameters assert the expected draft association; a mismatch returns 409.
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
+      responses:
+        "200":
+          description: Current job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftEnrichmentJobStatus"
+        "400":
+          description: Invalid or missing X-Request-Id or mismatched draft correlation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "409":
+          description: Job does not match the supplied draft correlation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonDraftError" }
+        "404":
+          description: Job not found for this owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+  /comparison-drafts/{id}/urls/{urlId}/validate:
+    post:
+      operationId: validateComparisonDraftUrl
+      tags: [comparisons]
+      summary: Validate one optional URL associated with a comparison draft
+      description: Requires a UUID X-Request-Id and echoes draftId, draftVersion, requestId, urlId, the checked URL, requestedUrl, and its required optionId; a URL never resolves or changes comparison identity.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: urlId
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonDraftUrlValidationInput"
+      responses:
+        "200":
+          description: One URL was safely preflighted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftUrlValidation"
+        "400":
+          description: Invalid URL request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+        "409":
+          description: URL identifier conflicts or draft version changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
+        "404":
+          description: Draft not found for this owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonDraftError"
   /healthz:
     get:
       operationId: healthCheck
@@ -87,6 +366,23 @@ paths:
       operationId: createComparison
       tags: [comparisons]
       summary: Create and analyze a new vendor comparison
+      description: Requires a UUID X-Request-Id and a confirmed draft handoff. Successful report and asynchronous job responses echo draftId, draftVersion, and requestId.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
+        - name: Prefer
+          in: header
+          required: false
+          description: Set to respond-async to start a durable, idempotent comparison job instead of waiting for synchronous analysis.
+          schema:
+            type: string
+            example: respond-async
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: "Required with Prefer: respond-async. Must contain 8 to 100 alphanumeric or hyphen characters."
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9-]{8,100}$"
       requestBody:
         required: true
         content:
@@ -99,7 +395,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Comparison"
+                $ref: "#/components/schemas/ComparisonWithDraftCorrelation"
+        "202":
+          description: Asynchronous comparison job is still researching or has produced a partial result
+          headers:
+            Location:
+              description: Pollable comparison job resource
+              schema: { type: string, example: /api/comparison-jobs/00000000-0000-4000-8000-000000000000 }
+            X-Comparison-Job-Id:
+              description: Comparison job identifier
+              schema: { type: string, format: uuid }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonJobState"
         "400":
           description: Invalid comparison input
           content:
@@ -112,11 +421,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+        "409":
+          description: Idempotency key was reused with a different request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "503":
+          description: Existing request is still in progress but has no live job in this process, or the job did not reach a terminal state within the wait budget
+          headers:
+            Retry-After:
+              description: Suggested delay before retrying
+              schema: { type: string, example: "5" }
+            Location:
+              description: Pollable comparison job URL when available
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
   /guest/comparisons:
     post:
       operationId: createGuestComparison
       tags: [comparisons]
       summary: Create an unsaved guest vendor comparison
+      description: Requires a UUID X-Request-Id and a confirmed draft handoff. The response echoes draftId, draftVersion, and requestId.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
       requestBody:
         required: true
         content:
@@ -129,7 +460,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/GuestComparison"
+                $ref: "#/components/schemas/GuestComparisonWithDraftCorrelation"
         "400":
           description: Invalid comparison input
           content:
@@ -142,6 +473,58 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/suggest:
+    post:
+      operationId: suggestComparisonOptions
+      tags: [comparisons]
+      summary: Suggest comparison identities using the decision context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComparisonSuggestInput" }
+      responses:
+        "200":
+          description: Contextual suggestions; availability is not asserted unless evidence is available
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonSuggestResponse" }
+        "400":
+          description: Invalid suggestion input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+  /guest/comparisons/suggest:
+    post:
+      operationId: suggestGuestComparisonOptions
+      tags: [comparisons]
+      summary: Suggest comparison identities for a guest using decision context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComparisonSuggestInput" }
+      responses:
+        "200":
+          description: Contextual suggestions; availability is not asserted unless evidence is available
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonSuggestResponse" }
+        "400":
+          description: Invalid suggestion input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "429":
+          description: Guest usage limit reached
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /comparisons/parse:
     post:
       operationId: parseComparisonPrompt
@@ -172,11 +555,57 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/review:
+    post:
+      operationId: reviewComparisonContext
+      tags: [comparisons]
+      summary: Revalidate edited comparison context before research
+      description: Requires a UUID X-Request-Id and the owned draftId/draftVersion. The validated response echoes the draft correlation tuple.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonInput"
+      responses:
+        "200":
+          description: Validated comparison context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonReview"
+        "400":
+          description: Invalid comparison context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Confirmed draft not found for this account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "409":
+          description: Draft version is stale
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /comparisons/source-preflight:
     post:
       operationId: preflightComparisonSources
       tags: [comparisons]
       summary: Validate supplied sources before authenticated research
+      description: Requires a UUID X-Request-Id and confirmed draft handoff; the response echoes draftId, draftVersion, and requestId.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
       requestBody:
         required: true
         content:
@@ -202,6 +631,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Confirmed draft not found for this account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "409":
+          description: Draft version or confirmed handoff is stale or mismatched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /guest/comparisons/parse:
     post:
       operationId: parseGuestComparisonPrompt
@@ -232,11 +671,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /guest/comparisons/review:
+    post:
+      operationId: reviewGuestComparisonContext
+      tags: [comparisons]
+      summary: Revalidate an edited guest comparison before research
+      description: Requires a UUID X-Request-Id and the guest-owned draftId/draftVersion. The validated response echoes the draft correlation tuple.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComparisonInput"
+      responses:
+        "200":
+          description: Validated comparison context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonReview"
+        "400":
+          description: Invalid comparison context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Confirmed guest draft not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "409":
+          description: Draft version is stale
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /guest/comparisons/source-preflight:
     post:
       operationId: preflightGuestComparisonSources
       tags: [comparisons]
       summary: Validate supplied sources before guest research
+      description: Requires a UUID X-Request-Id and confirmed draft handoff; the response echoes draftId, draftVersion, and requestId.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
       requestBody:
         required: true
         content:
@@ -262,11 +741,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Confirmed guest draft not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "409":
+          description: Draft version or confirmed handoff is stale or mismatched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /comparison-jobs:
     post:
       operationId: createComparisonJob
       tags: [comparisons]
       summary: Start an authenticated comparison research job
+      description: Requires a UUID X-Request-Id and confirmed draft handoff. The accepted job response echoes draftId, draftVersion, and requestId.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
       requestBody:
         required: true
         content:
@@ -292,16 +784,46 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Confirmed draft not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "409":
+          description: Draft version or confirmed handoff is stale or mismatched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+  /comparison-jobs/retryable:
+    get:
+      operationId: listRetryableComparisonJobs
+      tags: [comparisons]
+      summary: List recent failed market checks that can be retried from the unchanged owned draft
+      responses:
+        "200":
+          description: Retryable failed jobs. A retry is a new comparison attempt and rechecks market proof.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryableComparisonJobs"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
   /comparison-jobs/{id}:
     get:
       operationId: getComparisonJob
       tags: [comparisons]
       summary: Get an authenticated comparison research job
+      description: Requires a UUID X-Request-Id and echoes the job's draftId, draftVersion, and requestId. The optional draftId and draftVersion query parameters reject a poll for the wrong confirmed draft; these optional guards are documented here to avoid generated operation-parameter type-name collisions.
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
       responses:
         "200":
           description: Current comparison research job state
@@ -309,6 +831,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ComparisonJobState"
+        "400":
+          description: Invalid or missing X-Request-Id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
         "401":
           description: Unauthorized
           content:
@@ -321,11 +848,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+        "409":
+          description: Supplied draftId or draftVersion does not match the job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+  /comparison-jobs/{id}/events:
+    get:
+      operationId: streamComparisonJobEvents
+      tags: [comparisons]
+      summary: Stream authenticated comparison job state changes
+      description: Each state event contains the same correlated payload as polling. Supply the UUID as X-Request-Id, or use the requestId query parameter for EventSource clients that cannot set headers; if both are sent, they must match. Optional draftId/draftVersion query parameters bind the stream to the confirmed draft. Query alternatives are documented here rather than modeled as operation parameters to avoid generated operation-parameter type-name collisions.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/EventStreamRequestId"
+      responses:
+        "200":
+          description: Event stream of changed comparison job states
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "event: state\ndata: {\"status\":\"processing\",\"stage\":\"finding_official_sources\",\"draftId\":\"00000000-0000-4000-8000-000000000001\",\"draftVersion\":3,\"requestId\":\"00000000-0000-4000-8000-000000000002\"}\n\n"
+        "400":
+          description: Invalid or missing X-Request-Id/requestId
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Job not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "409":
+          description: Supplied draftId or draftVersion does not match the job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /comparisons/{id}/regenerate:
     post:
       operationId: regenerateComparison
       tags: [comparisons]
       summary: Recalculate a saved comparison with adjusted criterion weights
+      description: Reweights the existing saved report without repeating research, validation, or discovery. The result remains under the same comparison ID and is appended as the next immutable report version.
+      security: [{ ClerkBearer: [] }]
       parameters:
         - name: id
           in: path
@@ -362,11 +938,192 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}/refresh-research:
+    post:
+      operationId: refreshComparisonResearch
+      tags: [comparisons]
+      summary: Re-research an owned saved comparison using current sources
+      description: Explicitly repeats source checks, eligibility, research, and scoring for the saved prompt and shortlist. Appends an immutable report version; never rewrites earlier versions.
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Newly researched comparison version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comparison" }
+        "400":
+          description: Saved brief or supplied sources cannot be revalidated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "404":
+          description: Comparison not found or not owned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "409":
+          description: A refresh or another report update is in progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+  /comparisons/{id}/versions:
+    get:
+      operationId: listComparisonVersions
+      tags: [comparisons]
+      summary: List immutable report versions for an owned comparison
+      description: Returns each full report snapshot, including its version-specific weights and winner. Version 1 is the original report; owner-initiated weight changes or fresh research append later versions without changing earlier snapshots.
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Full report snapshots in ascending version order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComparisonVersions" }
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "404":
+          description: Comparison not found or not owned by the signed-in user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+  /comparisons/{id}/verification-access:
+    get:
+      operationId: getComparisonVerificationAccess
+      tags: [comparisons]
+      summary: Get premium verification access for a saved comparison
+      description: Requires a signed-in user and returns access only for a saved comparison owned by that user.
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Premium verification access state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonVerificationAccess"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "402":
+          description: Payment required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Comparison not found or not owned by the signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "503":
+          description: Verification access could not be confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonVerificationAccess"
+  /comparisons/{id}/verification-checkout:
+    post:
+      operationId: createComparisonVerificationCheckout
+      tags: [comparisons]
+      summary: Create a premium verification checkout for a saved comparison
+      description: Requires a signed-in user and creates checkout only for a saved comparison owned by that user.
+      security: [{ ClerkBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "201":
+          description: Hosted checkout created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonVerificationCheckout"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "402":
+          description: Payment required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Comparison not found or not owned by the signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "503":
+          description: Checkout could not be created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}/evidence-check:
+    post:
+      operationId: startComparisonEvidenceCheck
+      tags: [comparisons]
+      summary: Start an opt-in source-by-source review of a saved comparison
+      description: Requires premium verification access for the saved comparison; purchase access through the verification checkout endpoint when payment is required.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "202":
+          description: Review accepted; poll the comparison detail for status and results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComparisonEvidenceReview"
+        "401":
+          description: Unauthorized
+        "402":
+          description: Payment required for premium verification
+        "404":
+          description: Comparison not found
+        "409":
+          description: Review already processing
   /guest/comparison-jobs:
     post:
       operationId: createGuestComparisonJob
       tags: [comparisons]
       summary: Start a guest comparison research job
+      description: Requires a UUID X-Request-Id and confirmed draft handoff. The accepted job response echoes draftId, draftVersion, and requestId.
+      parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
       requestBody:
         required: true
         content:
@@ -392,16 +1149,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+        "404":
+          description: Confirmed guest draft not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "409":
+          description: Draft version or confirmed handoff is stale or mismatched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /guest/comparison-jobs/{id}:
     get:
       operationId: getGuestComparisonJob
       tags: [comparisons]
       summary: Get a guest comparison research job
+      description: Requires a UUID X-Request-Id and echoes the job's draftId, draftVersion, and requestId. The optional draftId and draftVersion query parameters reject a poll for the wrong confirmed draft; these optional guards are documented here to avoid generated operation-parameter type-name collisions.
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DraftRequestId"
       responses:
         "200":
           description: Current comparison research job state
@@ -409,12 +1178,58 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ComparisonJobState"
+        "400":
+          description: Invalid or missing X-Request-Id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
         "404":
           description: Job not found or expired
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+        "409":
+          description: Supplied draftId or draftVersion does not match the job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+  /guest/comparison-jobs/{id}/events:
+    get:
+      operationId: streamGuestComparisonJobEvents
+      tags: [comparisons]
+      summary: Stream guest comparison job state changes
+      description: Server-sent events named state carry the same correlated JSON payload as GET /guest/comparison-jobs/{id}; each payload includes draftId, draftVersion, and requestId. Supply the UUID as X-Request-Id, or use the requestId query parameter for EventSource clients that cannot set headers; if both are sent, they must match. Optional draftId/draftVersion query parameters bind the stream to the confirmed draft. The stream is scoped to the submitting guest. Query alternatives are documented here rather than modeled as operation parameters to avoid generated operation-parameter type-name collisions.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/EventStreamRequestId"
+      responses:
+        "200":
+          description: Event stream of changed comparison job states
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "event: state\ndata: {\"status\":\"processing\",\"stage\":\"finding_official_sources\",\"draftId\":\"00000000-0000-4000-8000-000000000001\",\"draftVersion\":3,\"requestId\":\"00000000-0000-4000-8000-000000000002\"}\n\n"
+        "400":
+          description: Invalid or missing X-Request-Id/requestId
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "404":
+          description: Job not found or expired or owned by another guest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyErrorResponse"
+        "409":
+          description: Supplied draftId or draftVersion does not match the job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
   /comparisons/{id}:
     get:
       operationId: getComparison
@@ -470,6 +1285,87 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LegacyErrorResponse"
+  /comparisons/{id}/quotes:
+    get:
+      operationId: getComparisonQuotes
+      tags: [comparisons]
+      summary: Read private buyer-supplied quote summaries and comparable pricing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Quote summaries and pricing assessment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BuyerQuoteBundle" }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison not found }
+    post:
+      operationId: uploadComparisonQuote
+      tags: [comparisons]
+      summary: Upload a private written quote and buyer-entered commercial terms
+      description: Multipart form with a details JSON string and a PDF file field (maximum 8 MB). The submitted amounts remain buyer-entered.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Updated quote summaries and assessment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BuyerQuoteBundle" }
+        "400": { description: Invalid file or quote terms }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison not found }
+  /comparisons/{id}/quotes/{vendor}:
+    delete:
+      operationId: deleteComparisonQuote
+      tags: [comparisons]
+      summary: Remove a private buyer quote
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: vendor
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated quote summaries and assessment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BuyerQuoteBundle" }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison or quote not found }
+  /comparisons/{id}/quotes/{vendor}/document:
+    get:
+      operationId: downloadComparisonQuote
+      tags: [comparisons]
+      summary: Download an owned quote document privately
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: vendor
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Private PDF attachment
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "401": { description: Unauthorized }
+        "404": { description: Comparison or quote not found }
   /v1/comparisons:
     get:
       operationId: externalListComparisons
@@ -503,9 +1399,10 @@ paths:
       operationId: externalCreateComparison
       tags: [commercial]
       summary: Create a metered tenant comparison
-      description: Requires an API key with the comparisons:write scope and an Idempotency-Key. Only successful completed comparisons consume usage; retries with the same request are replayed.
+      description: Requires an API key with the comparisons:write scope, an Idempotency-Key, and a UUID X-Request-Id. Submit a persisted, user-confirmed draft by supplying draftId, draftVersion, explicit market, and comparisonValues. The completed response echoes draftId, draftVersion, and requestId. Only successful completed comparisons consume usage; retries with the same request are replayed.
       security: [{ ApiKeyAuth: [] }]
       parameters:
+        - $ref: "#/components/parameters/DraftRequestId"
         - name: Idempotency-Key
           in: header
           required: true
@@ -517,8 +1414,13 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/ComparisonInput" }
             example:
+              draftId: 00000000-0000-4000-8000-000000000001
+              draftVersion: 3
               prompt: Compare Tesla Model 3 and BYD Seal for an Australian buyer with a A$50,000 budget.
-              vendors: [Tesla Model 3, BYD Seal]
+              market: AU
+              comparisonValues:
+                - { rawText: Tesla Model 3, confirmedName: Tesla Model 3 }
+                - { rawText: BYD Seal, confirmedName: BYD Seal }
               criteria: [Purchase price, Driving range, Warranty, Running costs]
               urls: []
       responses:
@@ -533,10 +1435,13 @@ paths:
             X-Quota-Remaining: { $ref: "#/components/headers/QuotaRemaining" }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Comparison" }
+              schema: { $ref: "#/components/schemas/ComparisonWithDraftCorrelation" }
               example:
                 id: 142
                 status: complete
+                draftId: 00000000-0000-4000-8000-000000000001
+                draftVersion: 3
+                requestId: 00000000-0000-4000-8000-000000000002
                 category: Electric vehicles
                 recommendation: BYD Seal
                 score: 84
@@ -564,6 +1469,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "402": { $ref: "#/components/responses/QuotaExceeded" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -683,6 +1589,7 @@ paths:
       operationId: listTenantApiKeys
       tags: [management]
       summary: List API key metadata
+      description: List key metadata for this tenant; plaintext secrets are never returned here.
       security: [{ ClerkBearer: [] }]
       parameters:
         - name: X-Tenant-Id
@@ -704,6 +1611,7 @@ paths:
       operationId: createTenantApiKey
       tags: [management]
       summary: Create an API key (plaintext is returned once)
+      description: Create a tenant-scoped key. The plaintext is returned only in this response and cannot be retrieved later.
       security: [{ ClerkBearer: [] }]
       parameters:
         - name: X-Tenant-Id
@@ -743,6 +1651,7 @@ paths:
       operationId: rotateTenantApiKey
       tags: [management]
       summary: Revoke an API key and issue a replacement
+      description: Revoke the selected key and create a replacement whose plaintext is returned only once.
       security: [{ ClerkBearer: [] }]
       parameters:
         - name: X-Tenant-Id
@@ -768,6 +1677,7 @@ paths:
       operationId: revokeTenantApiKey
       tags: [management]
       summary: Revoke an API key
+      description: Revoke a tenant API key. Revoked keys cannot authenticate future requests.
       security: [{ ClerkBearer: [] }]
       parameters:
         - name: X-Tenant-Id
@@ -803,6 +1713,18 @@ components:
       required: true
       description: Unique key for this request. Reusing it with a changed body returns 409.
       schema: { type: string, minLength: 8, maxLength: 255 }
+    DraftRequestId:
+      name: X-Request-Id
+      in: header
+      required: true
+      description: Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+      schema: { type: string, format: uuid }
+    EventStreamRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: UUID echoed as requestId in every event payload. EventSource clients may instead supply the same UUID in the requestId query parameter; if both are present, they must match.
+      schema: { type: string, format: uuid }
     TenantIdHeader:
       name: X-Tenant-Id
       in: header
@@ -850,7 +1772,7 @@ components:
       description: Resource not found
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     Conflict:
-      description: Idempotency key conflict
+      description: Idempotency key or draft-version conflict
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     RateLimited:
       description: Minute rate limit exceeded
@@ -875,6 +1797,241 @@ components:
       description: Comparison analysis or durable finalization failed upstream
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   schemas:
+    ComparisonDraftInterpretInput:
+      type: object
+      additionalProperties: false
+      properties:
+        query: { type: string, minLength: 8, maxLength: 4000 }
+        market: { type: string, enum: [IN, AU, US, GB] }
+        currency: { type: string, enum: [INR, AUD, USD, GBP] }
+        idempotencyKey:
+          type: string
+          format: uuid
+          description: Optional stable key for safely repeating the same draft request. A key is generated when omitted.
+      required: [query, market, currency]
+    ComparisonDraftEnrichmentInput:
+      type: object
+      additionalProperties: false
+      properties:
+        draftVersion: { type: integer, minimum: 1 }
+      required: [draftVersion]
+    ComparisonDraftOptionEditInput:
+      type: object
+      additionalProperties: false
+      description: Save one or more local review edits. Omitted fields remain unchanged, except replacing options clears old URL rows. Options replace the complete option set with 2-6 unique names. Criteria allow at most 8 unique nonblank strings. Market and currency must be supplied together and match. URL rows are syntactically checked only; no network request occurs.
+      properties:
+        draftVersion: { type: integer, minimum: 1 }
+        options:
+          type: array
+          minItems: 2
+          maxItems: 6
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              name: { type: string, minLength: 1, maxLength: 120 }
+              entityLevel: { type: string, enum: [PRODUCT, SERVICE, BRAND] }
+            required: [name, entityLevel]
+        criteria:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 120 }
+        market: { type: string, enum: [IN, AU, US, GB] }
+        currency: { type: string, enum: [INR, AUD, USD, GBP] }
+        urls:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/ComparisonDraftUrlEdit" }
+        includeClosingProducts: { type: boolean }
+      required: [draftVersion]
+      anyOf:
+        - required: [options]
+        - required: [criteria]
+        - required: [market, currency]
+        - required: [urls]
+        - required: [includeClosingProducts]
+    ComparisonDraftUrlEdit:
+      type: object
+      additionalProperties: false
+      properties:
+        url: { type: string, minLength: 1, maxLength: 2048, format: uri }
+        optionId: { type: string, format: uuid }
+      required: [url]
+    ComparisonDraftUrl:
+      type: object
+      properties:
+        urlId: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        requestedUrl: { type: string }
+        status: { type: string }
+        optionId: { type: string, format: uuid }
+      required: [urlId, url, status]
+    ComparisonDraftOption:
+      type: object
+      properties:
+        optionId: { type: string, format: uuid }
+        originalText: { type: string }
+        comparisonValue: { type: string }
+        canonicalName: { type: ["string", "null"] }
+        resolutionStatus: { type: string, enum: [SUGGESTED] }
+        entityLevel: { type: string, enum: [PRODUCT, SERVICE, BRAND] }
+        marketVerificationStatus: { type: string, enum: [NOT_ASSESSED] }
+        availabilityStatus: { type: string, enum: [NOT_ASSESSED] }
+        demographicRelevanceStatus: { type: string, enum: [NOT_ASSESSED] }
+        participationStatus: { type: string, enum: [NOT_ASSESSED] }
+      required: [optionId, originalText, comparisonValue, canonicalName, resolutionStatus, entityLevel, marketVerificationStatus, availabilityStatus, demographicRelevanceStatus, participationStatus]
+    ComparisonDraftWarning:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }
+      required: [code, message]
+    ComparisonDraft:
+      type: object
+      properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
+        idempotencyKey:
+          type: string
+          format: uuid
+          description: Server-provided value to retain when repeating this exact draft submission.
+        version: { type: integer }
+        status: { type: string, enum: [READY_FOR_REVIEW, READY_FOR_REVIEW_WITH_FALLBACK] }
+        originalQuery: { type: string }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/ComparisonDraftOption" }
+        comparisonLevel: { type: string, enum: [PRODUCT, SERVICE, BRAND, MIXED] }
+        decisionObjective: { type: string }
+        decisionDomain: { type: string }
+        category: { type: string }
+        market:
+          type: object
+          properties:
+            country: { type: string }
+            currency: { type: string }
+          required: [country, currency]
+        criteria:
+          type: array
+          items: { type: string }
+        includeClosingProducts: { type: boolean }
+        enrichmentStatus: { type: string, enum: [NOT_STARTED, QUEUED, COMPLETE, PARTIAL, FAILED] }
+        marketSuggestions:
+          type: object
+          additionalProperties: true
+        urls:
+          type: array
+          items: { $ref: "#/components/schemas/ComparisonDraftUrl" }
+        warnings:
+          type: array
+          items: { $ref: "#/components/schemas/ComparisonDraftWarning" }
+      required: [draftId, draftVersion, requestId, version, status, originalQuery, options, comparisonLevel, decisionObjective, decisionDomain, category, market, criteria, enrichmentStatus]
+    ComparisonDraftSuggestion:
+      type: object
+      properties:
+        canonicalEntityId: { type: string }
+        displayName: { type: string }
+        entityLevel: { type: string, enum: [PRODUCT, SERVICE, BRAND, PROVIDER, MIXED] }
+        category: { type: string }
+        parentBrand: { type: ["string", "null"] }
+        contextFit: { type: number }
+        marketRelevance: { type: string, enum: [HIGH, MODERATE, LOW, NOT_ASSESSED] }
+        availabilityMode: { type: string }
+        reason: { type: string }
+        selected: { type: boolean }
+        marketVerificationStatus: { type: string, enum: [NOT_ASSESSED] }
+      required: [canonicalEntityId, displayName, entityLevel, category, parentBrand, contextFit, marketRelevance, availabilityMode, reason, selected, marketVerificationStatus]
+    ComparisonDraftSuggestions:
+      type: object
+      description: Suggestions echo draftId, draftVersion, requestId, and the requested optionId.
+      properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
+        optionId: { type: string, format: uuid }
+        suggestions:
+          type: array
+          items: { $ref: "#/components/schemas/ComparisonDraftSuggestion" }
+        status: { type: string, enum: [SUGGESTED_NOT_VERIFIED] }
+        message: { type: string }
+      required: [draftId, draftVersion, requestId, optionId, suggestions, status, message]
+    ComparisonDraftEnrichmentJob:
+      type: object
+      description: Correlation tuple identifies the draft version and caller request that queued this asynchronous operation.
+      properties:
+        jobId: { type: string, format: uuid }
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
+        status: { type: string, enum: [queued] }
+        pollUrl: { type: string }
+      required: [jobId, draftId, draftVersion, requestId, status, pollUrl]
+    ComparisonDraftEnrichmentJobStatus:
+      type: object
+      description: Echoes the current polling request's requestId with the current draftId and draftVersion.
+      properties:
+        jobId: { type: string, format: uuid }
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, complete, partial, failed, stale] }
+        result:
+          type: object
+          additionalProperties: true
+        error: { type: string }
+        message: { type: string }
+      required: [jobId, draftId, draftVersion, requestId, status]
+    ComparisonDraftUrlValidationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        url: { type: string, format: uri, maxLength: 2048 }
+        optionId: { type: string, format: uuid }
+        draftVersion: { type: integer, minimum: 1 }
+      required: [url, optionId, draftVersion]
+    ComparisonDraftUrlValidation:
+      type: object
+      description: Echoes draftId, draftVersion, requestId, the checked URL, and its required optionId. requestedUrl retains the supplied URL; url is the validated URL.
+      properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
+        urlId: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        optionId: { type: string, format: uuid }
+        requestedUrl: { type: string, format: uri }
+        state: { type: string, enum: [accepted, inaccessible, stale, wrong_market, unrelated] }
+        reason: { type: string }
+        replacementUrl: { type: string, format: uri }
+        version: { type: integer }
+      required: [draftId, draftVersion, requestId, urlId, url, optionId, requestedUrl, state, reason, version]
+    DraftRequestCorrelation:
+      type: object
+      description: Correlation tuple returned with draft-scoped operation responses.
+      properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer, minimum: 1 }
+        requestId: { type: string, format: uuid }
+      required: [draftId, draftVersion, requestId]
+    ComparisonDraftError:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }
+        errors:
+          type: array
+          description: Field-specific request validation details. Unknown fields are reported separately from value validation.
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              code: { type: string }
+              message: { type: string }
+            required: [field, code, message]
+      required: [code, message]
     LegacyErrorResponse:
       type: object
       properties:
@@ -954,9 +2111,37 @@ components:
           type: string
       required:
         - status
-    ComparisonInput:
+    ComparisonReview:
       type: object
       properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
+        comparisonType: { type: string }
+        decisionDomain: { type: string }
+        category: { type: string }
+        customerLocation: { type: ["string", "null"] }
+        criteria:
+          type: array
+          items: { type: string }
+        comparisonValues:
+          type: array
+          items: { $ref: "#/components/schemas/ConfirmedComparisonValue" }
+        comparisonLevel:
+          $ref: "#/components/schemas/ComparisonLevel"
+      required: [draftId, draftVersion, requestId, comparisonType, decisionDomain, category, customerLocation, criteria, comparisonValues]
+    ComparisonInput:
+      type: object
+      description: Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.
+      properties:
+        draftId:
+          type: string
+          format: uuid
+          description: Required persisted review draft whose options the user confirmed.
+        draftVersion:
+          type: integer
+          minimum: 1
+          description: Required draft version observed at confirmation; later enrichment-only versions may be compatible.
         prompt:
           type: string
           minLength: 8
@@ -965,6 +2150,49 @@ components:
           type: string
           description: Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.
           enum: [IN, AU, US, GB]
+        validatedComparisonType:
+          type: string
+          maxLength: 80
+          description: User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.
+        comparisonLevel:
+          $ref: "#/components/schemas/ComparisonLevel"
+        comparisonValues:
+          type: array
+          minItems: 2
+          maxItems: 6
+          description: Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.
+          items:
+            $ref: "#/components/schemas/ConfirmedComparisonValue"
+        demographicContext:
+          $ref: "#/components/schemas/DemographicContext"
+        sourceAssociations:
+          type: array
+          maxItems: 12
+          description: Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.
+          items: { $ref: "#/components/schemas/ComparisonSourceAssociation" }
+        validatedDecisionDomain:
+          type: string
+          maxLength: 100
+          description: User-confirmed decision domain, checked against the option identities and selected type.
+        validatedCategory:
+          type: string
+          maxLength: 100
+          description: User-confirmed category, checked against the option identities and selected type.
+        customerSegment:
+          type: string
+          maxLength: 100
+          description: Optional buyer/customer segment to apply to this decision.
+        customerLocation:
+          type: string
+          maxLength: 120
+          description: Customer origin city or postcode for a dealer decision; never a dealer address.
+        crossMarketConfirmed:
+          type: boolean
+          description: Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.
+        includeClosingProducts:
+          type: boolean
+          default: false
+          description: Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.
         annualDistanceKm:
           type: integer
           minimum: 1
@@ -996,14 +2224,126 @@ components:
             type: string
             minLength: 1
             maxLength: 100
-      required: [prompt]
+      required: [draftId, draftVersion, prompt, market, comparisonValues]
+    ComparisonLevel:
+      type: string
+      description: Generic comparison granularity, independent of the dynamically inferred category.
+      enum: [PRODUCT, SERVICE, BRAND, PROVIDER, MIXED]
+    ConfirmedComparisonValue:
+      type: object
+      properties:
+        rawText:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Original extracted wording, preserved verbatim.
+        confirmedName:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: User-confirmed option name; research must not silently replace it.
+        canonicalEntityId:
+          type: string
+          maxLength: 160
+          description: Optional identity selected by the user from contextual suggestions.
+        entityLevel:
+          $ref: "#/components/schemas/ComparisonLevel"
+      required: [rawText, confirmedName]
+    DemographicContext:
+      type: object
+      description: Optional decision-specific market and customer context. Omit attributes not relevant to the decision.
+      properties:
+        country: { type: string, maxLength: 120 }
+        region: { type: string, maxLength: 120 }
+        stateOrRegion: { type: string, maxLength: 120 }
+        city: { type: string, maxLength: 120 }
+        postcode: { type: string, maxLength: 120 }
+        customerSegment: { type: string, maxLength: 120 }
+        ageGroup: { type: string, maxLength: 120 }
+        businessOrConsumer:
+          type: string
+          enum: [CONSUMER, SMALL_BUSINESS, ENTERPRISE]
+        useCase: { type: string, maxLength: 120 }
+        deliveryNeed:
+          type: string
+          enum: [LOCAL_STORE, LOCAL_ONLINE, CROSS_BORDER, DIGITAL]
+        currency: { type: string, maxLength: 120 }
+        language: { type: string, maxLength: 120 }
+        regulatoryContext:
+          type: array
+          maxItems: 12
+          items: { type: string, maxLength: 120 }
+      required: [country]
+    ComparisonSourceAssociation:
+      type: object
+      properties:
+        url: { type: string, format: uri }
+        option:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Must exactly match one confirmed comparison value name.
+      required: [url, option]
+    ComparisonSuggestInput:
+      type: object
+      properties:
+        typedText: { type: string, minLength: 2, maxLength: 120 }
+        fullQuery: { type: string, maxLength: 2000 }
+        otherOptions:
+          type: array
+          maxItems: 6
+          items: { type: string, maxLength: 120 }
+        decisionObjective: { type: string, maxLength: 500 }
+        market:
+          description: User-selected market context. Market relevance is NOT_ASSESSED unless verified evidence is available.
+          oneOf:
+            - type: string
+              enum: [IN, AU, US, GB]
+            - type: object
+              properties:
+                country: { type: string, maxLength: 120 }
+                stateOrRegion: { type: string, maxLength: 120 }
+                city: { type: string, maxLength: 120 }
+                postcode: { type: string, maxLength: 120 }
+        customerContext:
+          $ref: "#/components/schemas/DemographicContext"
+      required: [typedText, fullQuery, otherOptions, decisionObjective]
+    ComparisonSuggestion:
+      type: object
+      properties:
+        canonicalEntityId: { type: string }
+        displayName: { type: string }
+        entityLevel: { $ref: "#/components/schemas/ComparisonLevel" }
+        category: { type: string }
+        parentBrand: { type: ["string", "null"] }
+        contextFit: { type: number, minimum: 0, maximum: 1 }
+        marketRelevance:
+          type: string
+          enum: [HIGH, MODERATE, LOW, NOT_ASSESSED]
+        availabilityMode: { type: string }
+        reason: { type: string }
+      required: [canonicalEntityId, displayName, entityLevel, category, parentBrand, contextFit, marketRelevance, availabilityMode, reason]
+    ComparisonSuggestResponse:
+      type: object
+      properties:
+        suggestions:
+          type: array
+          items: { $ref: "#/components/schemas/ComparisonSuggestion" }
+      required: [suggestions]
     RegenerateComparisonInput:
       type: object
       properties:
+        suppliedUrls:
+          type: array
+          maxItems: 12
+          description: Optional replacement list of user-supplied research URLs. Omitting it preserves the existing list. Changing the list does not rerun research.
+          items:
+            type: string
+            format: uri
         weights:
           type: array
           minItems: 9
-          maxItems: 9
+          maxItems: 10
           items:
             $ref: "#/components/schemas/ComparisonWeight"
         additionalWeights:
@@ -1015,6 +2355,9 @@ components:
     ComparisonWeight:
       type: object
       properties:
+        criterionId:
+          type: string
+          description: Stable built-in criterion identifier. Optional only for older clients.
         criterion:
           type: string
         weight:
@@ -1025,6 +2368,9 @@ components:
     AdditionalComparisonWeight:
       type: object
       properties:
+        criterionId:
+          type: string
+          description: Stable generated custom criterion identifier. Optional only for older clients.
         criterion:
           type: string
           minLength: 1
@@ -1039,7 +2385,37 @@ components:
           maxItems: 2
           items:
             type: string
+        overlapResolution:
+          type: string
+          enum: [KEEP_SEPARATE]
+          description: Explicit acknowledgement that a related built-in factor measures something distinct.
+        overlapReason:
+          type: string
+          description: User's distinction between the custom and overlapping built-in factors.
       required: [criterion, weight, mappedCriteria]
+    ComparisonWeightModel:
+      type: object
+      description: Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.
+      properties:
+        version: { type: integer, enum: [1] }
+        criteria:
+          type: array
+          items:
+            type: object
+            properties:
+              criterionId: { type: string }
+              criterionLabel: { type: string }
+              criterionType: { type: string, enum: [BUILT_IN, CUSTOM] }
+              weight: { type: integer, minimum: 0, maximum: 100 }
+              mappedLensId: { type: string }
+              mappingConfidence: { type: number, minimum: 0, maximum: 1 }
+              validationStatus: { type: string, enum: [VALIDATED] }
+              overlapResolution: { type: string, enum: [KEEP_SEPARATE] }
+              overlapReason: { type: string }
+            required: [criterionId, criterionLabel, criterionType, weight, mappedLensId, mappingConfidence, validationStatus]
+        totalWeight: { type: integer, minimum: 1, maximum: 100 }
+        unallocatedWeight: { type: integer, minimum: 0, maximum: 99 }
+      required: [version, criteria, totalWeight, unallocatedWeight]
     ComparisonPromptInput:
       type: object
       properties:
@@ -1047,10 +2423,15 @@ components:
           type: string
           minLength: 8
           maxLength: 2000
+        market:
+          type: string
+          enum: [IN, AU, US, GB]
       required: [prompt]
     SourcePreflightInput:
       type: object
       properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer, minimum: 1 }
         prompt:
           type: string
           minLength: 8
@@ -1058,6 +2439,12 @@ components:
         market:
           type: string
           enum: [IN, AU, US, GB]
+          description: Explicit selected market bound to the confirmed draft.
+        comparisonValues:
+          type: array
+          minItems: 2
+          maxItems: 6
+          items: { $ref: "#/components/schemas/ConfirmedComparisonValue" }
         urls:
           type: array
           minItems: 1
@@ -1065,7 +2452,13 @@ components:
           items:
             type: string
             format: uri
-      required: [prompt, market, urls]
+        vendors:
+          type: array
+          minItems: 2
+          maxItems: 6
+          description: Optional user-confirmed option names for URL relevance checks only; source URLs never define identity.
+          items: { type: string, minLength: 1, maxLength: 120 }
+      required: [draftId, draftVersion, prompt, market, comparisonValues, urls]
     SourcePreflightResult:
       type: object
       properties:
@@ -1084,23 +2477,32 @@ components:
     SourcePreflightResponse:
       type: object
       properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
         sources:
           type: array
           items:
             $ref: "#/components/schemas/SourcePreflightResult"
-      required: [sources]
+      required: [draftId, draftVersion, requestId, sources]
     ParsedComparison:
       type: object
       description: |
         One-shot parse result. Entity boundaries are resolved before source retrieval.
         The response preserves user order and exposes the qualifiers, decision criterion,
-        and freshness requirements that downstream research must honor.
+        and freshness requirements that downstream research must honor. Incomplete
+        requests return context.valid=false with a clarification, not a server error.
       properties:
         prompt:
           type: string
+        comparisonLevel:
+          $ref: "#/components/schemas/ComparisonLevel"
+        comparisonValues:
+          type: array
+          items: { $ref: "#/components/schemas/ConfirmedComparisonValue" }
         vendors:
           type: array
-          minItems: 2
+          minItems: 0
           maxItems: 6
           items:
             type: string
@@ -1119,10 +2521,58 @@ components:
         comparisonIdentity:
           $ref: "#/components/schemas/ComparisonIdentity"
       required: [prompt, vendors, urls, criteria, context, intent, comparisonIdentity]
+    ComparisonOptionClassification:
+      type: object
+      properties:
+        name:
+          type: string
+        originalText:
+          type: string
+          description: Exact submitted option, never replaced by a research-generated label.
+        canonicalEntityId:
+          type: string
+        canonicalName:
+          type: string
+        entityType:
+          type: string
+        brand:
+          type: string
+        productCategory:
+          type: string
+        classificationConfidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        resolutionStatus:
+          type: string
+          enum: [RESOLVED, AMBIGUOUS, CONFLICTING, UNRESOLVED, USER_CONFIRMED]
+        alternativeCandidates:
+          type: array
+          items:
+            type: string
+        type:
+          type: string
+          enum: [brand, product, service, platform, dealer, bank, curriculum, vehicle, hotel, healthcare_provider, education, unknown]
+        decisionDomain:
+          type: string
+        customerSegment:
+          type: string
+          description: Canonical decision domain when the option is recognized.
+        subcategory:
+          type: string
+          description: Product subtype shown for context but not required to match within one decision domain.
+        primaryMarket:
+          type: string
+          enum: [IN, AU, US, GB]
+          description: Known primary country code. Omitted when the option's footprint is not established.
+      required: [name, type]
     ComparisonJobAccepted:
       type: object
-      description: Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
+      description: Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.
       properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
         jobId:
           type: string
           format: uuid
@@ -1133,15 +2583,17 @@ components:
           $ref: "#/components/schemas/ComparisonJobStage"
         progress:
           $ref: "#/components/schemas/ComparisonJobProgress"
+        previewDecision:
+          $ref: "#/components/schemas/ComparisonPreviewDecision"
         targetCompletionSeconds:
           type: integer
           minimum: 1
-          example: 120
-          description: Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
-      required: [jobId, status, stage, progress, targetCompletionSeconds]
+          example: 20
+          description: Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.
+      required: [draftId, draftVersion, requestId, jobId, status, stage, progress, targetCompletionSeconds]
     ComparisonJobStage:
       type: string
-      enum: [finding_official_sources, building_evidence, analysing_evidence, validating_comparison, preparing_result, completed]
+      enum: [finding_official_sources, building_evidence, analysing_evidence, verifying_market, validating_market_eligibility, validating_comparison, preparing_result, completed, partial_result]
     ComparisonJobProgress:
       type: object
       properties:
@@ -1153,13 +2605,52 @@ components:
         subject:
           type: string
       required: [entities, subject]
+    ComparisonPreviewDecision:
+      type: object
+      description: An early assumption-led starting choice, not a verified finding. Research continues after this is returned.
+      properties:
+        winner: { type: string }
+        decisionType:
+          type: string
+          enum: [Product Selection, Service Selection, Vendor Evaluation, Dealership Investment, Franchise Opportunity, Market Entry, Technology Platform Selection]
+        coverage: { type: integer, minimum: 0, maximum: 100 }
+        reason: { type: string }
+        provisional: { type: boolean }
+        priorities:
+          type: array
+          items:
+            type: object
+            properties:
+              lens: { type: string }
+              weight: { type: integer, minimum: 0, maximum: 100 }
+            required: [lens, weight]
+      required: [winner, decisionType, coverage, reason, provisional, priorities]
+    RetryableComparisonJob:
+      type: object
+      properties:
+        jobId: { type: string, format: uuid }
+        failedAt: { type: string, format: date-time }
+        request:
+          $ref: "#/components/schemas/ComparisonInput"
+      required: [jobId, failedAt, request]
+    RetryableComparisonJobs:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetryableComparisonJob"
+      required: [items]
     ComparisonJobState:
       type: object
-      description: Pollable state for asynchronous comparison research.
+      description: Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.
       properties:
+        draftId: { type: string, format: uuid }
+        draftVersion: { type: integer }
+        requestId: { type: string, format: uuid }
         status:
           type: string
-          enum: [processing, complete, failed]
+          enum: [processing, complete, partial, failed]
         stage:
           $ref: "#/components/schemas/ComparisonJobStage"
         progress:
@@ -1167,24 +2658,31 @@ components:
         elapsedMs:
           type: integer
           minimum: 0
-          description: Server-measured milliseconds since this job was created.
+          description: Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
         targetCompletionSeconds:
           type: integer
           minimum: 1
-          example: 120
-          description: Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+          example: 20
+          description: Hard deadline in seconds for reaching a terminal job state.
         result:
+          description: Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds.
           oneOf:
             - $ref: "#/components/schemas/Comparison"
             - $ref: "#/components/schemas/GuestComparison"
+        saveStatus:
+          type: string
+          enum: [pending, saved, failed]
+          description: Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.
+        previewDecision:
+          $ref: "#/components/schemas/ComparisonPreviewDecision"
         message:
           type: string
-          description: User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.
+          description: User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report.
         errorCode:
           type: string
-          description: Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
-          enum: [research_failed, validation_failed, insufficient_quantitative_evidence]
-      required: [status, stage, progress, elapsedMs, targetCompletionSeconds]
+          description: Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.
+          enum: [research_failed, validation_failed, insufficient_quantitative_evidence, latency_budget_exceeded]
+      required: [draftId, draftVersion, requestId, status, stage, progress, elapsedMs, targetCompletionSeconds]
     ComparisonIdentity:
       type: object
       description: Canonical comparison set used by every downstream label and recommendation.
@@ -1193,7 +2691,7 @@ components:
         category: { type: string }
         entities:
           type: array
-          minItems: 2
+          minItems: 0
           maxItems: 6
           items:
             type: object
@@ -1201,7 +2699,7 @@ components:
               id: { type: string }
               name: { type: string }
             required: [id, name]
-        entityCount: { type: integer, minimum: 2, maximum: 6 }
+        entityCount: { type: integer, minimum: 0, maximum: 6 }
         comparisonType:
           type: string
           enum: [pair, multi_entity]
@@ -1256,10 +2754,37 @@ components:
           type: string
         message:
           type: string
+        comparisonType:
+          type: string
+          description: Deterministic comparison category derived from identified options, such as Vehicle Comparison or Curriculum Comparison.
+        decisionDomain:
+          type: string
+          description: Shared recognized decision domain for the compared options.
+        optionClassifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComparisonOptionClassification"
+        crossMarket:
+          type: boolean
+          description: True only when a known primary market differs between options or from the selected market.
+        market:
+          type: string
+          enum: [IN, AU, US, GB]
+          description: Validated or inferred customer market code when known.
+        country:
+          type: string
+          description: Human-readable validated or inferred country when known.
+        customerLocation:
+          type: string
+          description: Explicit customer city, state, or postcode when known.
       required: [valid, segment, industry, message]
     ComparisonSummary:
       type: object
       properties:
+        provenanceGapCount:
+          type: integer
+          minimum: 0
+          description: Number of cited scorecard claims without complete document provenance; a review does not change the original citations.
         id:
           type: integer
         prompt:
@@ -1291,7 +2816,183 @@ components:
         status:
           type: string
           enum: [complete, processing, failed]
+        researchStatus:
+          type: string
+          enum: [partial, complete]
+          description: Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
       required: [id, prompt, vendors, comparisonIdentity, category, recommendation, score, createdAt, status]
+    ComparisonEvidenceReview:
+      type: object
+      required: [jobId, status, startedAt, initialRecommendation, checks]
+      properties:
+        jobId: { type: string, format: uuid }
+        status: { type: string, enum: [processing, complete, failed] }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        initialRecommendation: { type: string }
+        reviewedRecommendation: { type: string }
+        reviewReason: { type: string }
+        error: { type: string }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [vendor, claim, sourceUrl, status, reason]
+            properties:
+              vendor: { type: string }
+              claim: { type: string }
+              criterion: { type: string }
+              sourceUrl: { type: string }
+              status: { type: string, enum: [verified, contradicted, unavailable] }
+              quote: { type: string }
+              reason: { type: string }
+              checkedAt: { type: string, format: date-time }
+              sourceId: { type: string }
+              documentSha256: { type: string }
+              sourceTextStart: { type: integer }
+              sourceTextEnd: { type: integer }
+              retrievedAt: { type: string, format: date-time }
+              accessStatus: { type: string, enum: [ALLOWED, LICENSED, CUSTOMER_SUPPLIED] }
+              permissionCheckedAt: { type: string, format: date-time }
+        verificationScore:
+          type: ["number", "null"]
+          description: Percentage of completed, available checks that were verified; null when no such checks are available.
+        evidenceCoverage:
+          type: ["number", "null"]
+          description: Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.
+        assumptionRegister:
+          type: array
+          items:
+            type: object
+            required: [assumption, status, reason, sourceUrls]
+            properties:
+              assumption: { type: string }
+              status: { type: string, enum: [unverified, validated, contradicted] }
+              reason: { type: string }
+              sourceUrls:
+                type: array
+                items: { type: string }
+        sourceRegister:
+          type: array
+          items:
+            type: object
+            required: [url, availability, freshness, lastCheckedAt, checkCount, verifiedCount, contradictedCount, unavailableCount]
+            properties:
+              url: { type: string }
+              availability: { type: string, enum: [admitted, restricted, unavailable] }
+              freshness: { type: string, enum: [known, unknown] }
+              publicationDate: { type: string }
+              ageDays: { type: integer }
+              lastCheckedAt: { type: string, format: date-time }
+              checkCount: { type: integer }
+              verifiedCount: { type: integer }
+              contradictedCount: { type: integer }
+              unavailableCount: { type: integer }
+        competitiveValidation:
+          type: object
+          required: [status, recommendation, checkedCompetitors, summary]
+          properties:
+            status: { type: string, enum: [not_assessed, partial, contradiction_found] }
+            recommendation: { type: string }
+            checkedCompetitors:
+              type: array
+              items: { type: string }
+            summary: { type: string }
+        riskAssessment:
+          type: object
+          required: [level, items, summary]
+          properties:
+            level: { type: string, enum: [unknown, low, medium, high] }
+            items:
+              type: array
+              items: { type: string }
+            summary: { type: string }
+        validationReport: { type: string }
+        governanceReport: { type: string }
+        auditTrail:
+          type: array
+          items:
+            type: object
+            required: [timestamp, event, detail]
+            properties:
+              timestamp: { type: string, format: date-time }
+              event: { type: string }
+              detail: { type: string }
+    ComparisonVerificationAccess:
+      type: object
+      required: [access]
+      properties:
+        access: { type: string, enum: [active, payment_required, not_configured] }
+        message: { type: string }
+    ComparisonVerificationCheckout:
+      type: object
+      required: [purchaseUrl]
+      properties:
+        purchaseUrl: { type: string, format: uri }
+    ValidatedComparisonContext:
+      type: object
+      description: Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.
+      required: [decisionType, country, state, customerLocation, currency, productAvailability, industry, organisationSize, dataResidency, market, marketContext]
+      properties:
+        validatedUserPrompt:
+          type: string
+          description: Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.
+        comparisonType:
+          type: string
+        decisionDomain:
+          type: string
+        customerSegment:
+          type: string
+        optionClassifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComparisonOptionClassification"
+        crossMarket:
+          type: boolean
+        comparisonLevel:
+          $ref: "#/components/schemas/ComparisonLevel"
+        comparisonValues:
+          type: array
+          items: { $ref: "#/components/schemas/ConfirmedComparisonValue" }
+        demographicContext:
+          $ref: "#/components/schemas/DemographicContext"
+        sourceAssociations:
+          type: array
+          description: Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.
+          items:
+            type: object
+            properties:
+              url: { type: string, format: uri }
+              option: { type: string }
+              preflightState:
+                type: string
+                enum: [accepted, inaccessible, stale, wrong_market, unrelated, NOT_CHECKED]
+              preflightReason: { type: string }
+            required: [url, option, preflightState]
+        sourcePreflightResults:
+          type: array
+          description: URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.
+          items:
+            type: object
+            properties:
+              url: { type: string, format: uri }
+              state:
+                type: string
+                enum: [accepted, inaccessible, stale, wrong_market, unrelated]
+              reason: { type: string }
+              replacementUrl: { type: string, format: uri }
+            required: [url, state, reason]
+        decisionType: { type: string }
+        country: { type: string }
+        state: { type: ["string", "null"] }
+        customerLocation: { type: ["string", "null"] }
+        currency: { type: string }
+        productAvailability: { type: string }
+        industry: { type: ["string", "null"] }
+        organisationSize: { type: ["string", "null"] }
+        dataResidency: { type: ["string", "null"] }
+        market: { type: string }
+        marketContext: { type: string }
     Comparison:
       allOf:
         - $ref: "#/components/schemas/ComparisonSummary"
@@ -1301,11 +3002,24 @@ components:
               type: array
               items:
                 type: string
+            suppliedUrls:
+              type: array
+              description: URLs explicitly supplied by the user, separate from discovered evidence sources.
+              items:
+                type: string
             sourceAvailability:
               type: array
               description: Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.
               items:
                 $ref: "#/components/schemas/ReportSource"
+            decisionStatus:
+              type: string
+              enum: [ELIGIBLE, CONDITIONALLY_ELIGIBLE, INELIGIBLE, CLARIFICATION_REQUIRED]
+              description: Participation status for the selected recommendation in its validated market and demographic context.
+            marketRelevance:
+              type: array
+              description: Per-option demographic and geographic relevance assessments.
+              items: { $ref: "#/components/schemas/MarketRelevanceAssessment" }
             criteria:
               type: array
               items:
@@ -1314,6 +3028,10 @@ components:
               type: string
             recommendationReason:
               type: string
+            decisionAdvice:
+              $ref: "#/components/schemas/DecisionAdvice"
+            evidenceReview:
+              $ref: "#/components/schemas/ComparisonEvidenceReview"
             confirmedRecommendation:
               $ref: "#/components/schemas/ConfirmedRecommendation"
             alternatives:
@@ -1326,6 +3044,10 @@ components:
               maxItems: 8
               items:
                 $ref: "#/components/schemas/AdditionalComparisonWeight"
+            weightModel:
+              oneOf:
+                - $ref: "#/components/schemas/ComparisonWeightModel"
+                - type: "null"
             vendorScores:
               type: array
               items:
@@ -1360,6 +3082,8 @@ components:
               type: array
               description: Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.
               items: { type: string }
+            validatedContext:
+              $ref: "#/components/schemas/ValidatedComparisonContext"
             productEquivalency:
               type: array
               description: Like-for-like mapping of current and target products or services, including partial equivalence and uncovered scope.
@@ -1381,9 +3105,44 @@ components:
               description: Decision rights, evidence requirements, approvers, and approval gates.
               items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
           required: [urls, sourceAvailability, criteria, executiveSummary, recommendationReason, confirmedRecommendation, alternatives, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
+    ComparisonVersions:
+      type: object
+      properties:
+        comparisonId:
+          type: integer
+          description: Stable identity shared by the current comparison and every immutable report version.
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComparisonReportVersion"
+      required: [comparisonId, versions]
+    ComparisonReportVersion:
+      type: object
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+          description: Time this immutable report snapshot was created.
+        report:
+          $ref: "#/components/schemas/Comparison"
+      required: [version, createdAt, report]
     GuestComparison:
       type: object
       properties:
+        suppliedUrls:
+          type: array
+          items:
+            type: string
+        weightModel:
+          oneOf:
+            - $ref: "#/components/schemas/ComparisonWeightModel"
+            - type: "null"
+        id:
+          type: integer
+          description: Present for a partially completed authenticated comparison only after its report has been persisted.
         prompt:
           type: string
         vendors:
@@ -1402,6 +3161,10 @@ components:
         status:
           type: string
           enum: [complete, processing, failed]
+        researchStatus:
+          type: string
+          enum: [partial, complete]
+          description: Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
         createdAt:
           type: string
           format: date-time
@@ -1413,6 +3176,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReportSource"
+        decisionStatus:
+          type: string
+          enum: [ELIGIBLE, CONDITIONALLY_ELIGIBLE, INELIGIBLE, CLARIFICATION_REQUIRED]
+        marketRelevance:
+          type: array
+          items: { $ref: "#/components/schemas/MarketRelevanceAssessment" }
         criteria:
           type: array
           items:
@@ -1421,6 +3190,8 @@ components:
           type: string
         recommendationReason:
           type: string
+        decisionAdvice:
+          $ref: "#/components/schemas/DecisionAdvice"
         confirmedRecommendation:
           $ref: "#/components/schemas/ConfirmedRecommendation"
         alternatives:
@@ -1461,6 +3232,8 @@ components:
         contextAssumptions:
           type: array
           items: { type: string }
+        validatedContext:
+          $ref: "#/components/schemas/ValidatedComparisonContext"
         productEquivalency:
           type: array
           items: { $ref: "#/components/schemas/ProductEquivalencyItem" }
@@ -1477,12 +3250,54 @@ components:
           type: array
           items: { $ref: "#/components/schemas/DecisionGovernanceItem" }
       required: [prompt, vendors, comparisonIdentity, category, recommendation, score, status, createdAt, urls, sourceAvailability, criteria, executiveSummary, recommendationReason, confirmedRecommendation, alternatives, vendorScores, pricing, features, swot, opportunities, insights, nextSteps, contextAssumptions, productEquivalency, functionalGaps, serviceProductMap, migrationSequence, decisionGovernance]
+    ComparisonWithDraftCorrelation:
+      allOf:
+        - $ref: "#/components/schemas/Comparison"
+        - $ref: "#/components/schemas/DraftRequestCorrelation"
+    GuestComparisonWithDraftCorrelation:
+      allOf:
+        - $ref: "#/components/schemas/GuestComparison"
+        - $ref: "#/components/schemas/DraftRequestCorrelation"
+    DecisionAdvice:
+      type: object
+      description: Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.
+      required: [decisionType, winner, runnerUp, provisional, confidence, whyItWon, bestFor, notRecommendedIf, tradeoffs, scenarioLeaders]
+      properties:
+        decisionType: { type: string }
+        winner: { type: string }
+        runnerUp: { type: string }
+        provisional: { type: boolean }
+        confidence:
+          type: object
+          required: [score, band, dataCoverage, sourceConsistency, scoreSeparation, priorityClarity, basis]
+          properties:
+            score: { type: integer, minimum: 0, maximum: 100 }
+            band: { type: string, enum: [Low, Moderate, High] }
+            dataCoverage: { type: integer, minimum: 0, maximum: 100 }
+            sourceConsistency: { type: integer, minimum: 0, maximum: 100 }
+            scoreSeparation: { type: integer, minimum: 0, maximum: 100 }
+            priorityClarity: { type: integer, minimum: 0, maximum: 100 }
+            basis: { type: string }
+        whyItWon: { type: string }
+        bestFor: { type: string }
+        notRecommendedIf: { type: string }
+        tradeoffs:
+          type: array
+          items: { type: string }
+        scenarioLeaders:
+          type: array
+          items:
+            type: object
+            required: [lens, leader]
+            properties:
+              lens: { type: string }
+              leader: { type: string }
     ConfirmedRecommendation:
       type: object
       properties:
         status:
           type: string
-          enum: [CONFIRMED, NO_CONFIRMED_RECOMMENDATION]
+          enum: [CONFIRMED, PROVISIONAL, NO_CONFIRMED_RECOMMENDATION]
         option:
           type: [string, "null"]
         score:
@@ -1600,6 +3415,10 @@ components:
           type: string
         verdict:
           type: string
+        marketEligibility:
+          $ref: "#/components/schemas/MarketEligibility"
+        marketRelevance:
+          $ref: "#/components/schemas/MarketRelevanceAssessment"
         providerRole:
           type: string
           description: Strategic market role of the product, service, or brand in this decision context.
@@ -1660,6 +3479,115 @@ components:
         marketHistory:
           $ref: "#/components/schemas/MarketHistory"
       required: [vendor, score, color, verdict]
+    MarketEligibility:
+      type: object
+      description: Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.
+      properties:
+        status:
+          type: string
+          enum: [ELIGIBLE, LIMITED, CLOSING, INELIGIBLE, UNKNOWN]
+          description: Market/product eligibility outcome; this is independent of supporting evidence verification.
+        evidenceStatus:
+          type: string
+          description: Verification state of evidence supporting the eligibility decision.
+          enum: [CONFIRMED, VERIFIED, INCOMPLETE, MISSING, CONFLICTING, TIMED_OUT]
+        basis:
+          type: string
+          description: Basis for the eligibility classification.
+          enum: [OFFICIAL_DOCUMENT, KNOWN_OFFERING, UNESTABLISHED]
+        newApplicationAcceptance:
+          type: string
+          description: Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.
+          enum: [VERIFIED, UNVERIFIED]
+        newCustomerStatus:
+          type: string
+          description: Current new-customer acquisition state, separate from category/market participation.
+          enum: [OPEN, RESTRICTED, CLOSING, CLOSED, UNKNOWN]
+        market: { type: string }
+        product: { type: string }
+        customerSegment: { type: string }
+        subcategory: { type: string }
+        effectiveDate: { type: string, format: date }
+        reason: { type: string }
+        checkedAt: { type: string, format: date-time }
+        sourceUrl: { type: string, format: uri }
+        exactClaim: { type: string }
+      required: [status, market, product, reason, checkedAt]
+    MarketRelevanceAssessment:
+      type: object
+      description: Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.
+      properties:
+        optionId: { type: string }
+        optionName:
+          type: string
+          description: User-confirmed option display name associated with this assessment.
+        market:
+          $ref: "#/components/schemas/DemographicContext"
+        availabilityStatus:
+          type: string
+          enum: [LOCALLY_AVAILABLE, ONLINE_LOCALLY_AVAILABLE, CROSS_BORDER_AVAILABLE, DIGITALLY_AVAILABLE, LIMITED_AVAILABILITY, NOT_AVAILABLE, NOT_VERIFIED]
+        demographicRelevanceStatus:
+          type: string
+          enum: [HIGH, MODERATE, LOW, NOT_RELEVANT, NOT_ASSESSED]
+        participationStatus:
+          type: string
+          enum: [ELIGIBLE, CONDITIONALLY_ELIGIBLE, INELIGIBLE, CLARIFICATION_REQUIRED]
+        relevanceScore: { type: number, minimum: 0, maximum: 100 }
+        relevantForObjective: { type: ["boolean", "null"] }
+        localPhysicalPresence: { type: ["boolean", "null"] }
+        localOnlinePresence: { type: ["boolean", "null"] }
+        crossBorderAccess: { type: ["boolean", "null"] }
+        digitalAccess: { type: ["boolean", "null"] }
+        localPricingAvailable: { type: ["boolean", "null"] }
+        localSupportAvailable: { type: ["boolean", "null"] }
+        mandatoryGateResults:
+          type: array
+          items:
+            type: object
+            properties:
+              gate:
+                type: string
+                enum: [MARKET_AVAILABILITY, PHYSICAL_STORE_REQUIRED, ROUTE_SERVICEABILITY, ENTERPRISE_DATA_RESIDENCY, CUSTOMER_SEGMENT, REGULATORY_REQUIREMENT, LOCAL_RETURNS_REQUIRED]
+              status:
+                type: string
+                enum: [PASS, FAIL, CONDITIONAL, NOT_APPLICABLE]
+              mandatory: { type: boolean }
+              reason: { type: string }
+              evidenceIds:
+                type: array
+                items: { type: string }
+            required: [gate, status, mandatory, reason, evidenceIds]
+        evidence:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              optionId: { type: string }
+              gate:
+                type: string
+                enum: [MARKET_AVAILABILITY, PHYSICAL_STORE_REQUIRED, ROUTE_SERVICEABILITY, ENTERPRISE_DATA_RESIDENCY, CUSTOMER_SEGMENT, REGULATORY_REQUIREMENT, LOCAL_RETURNS_REQUIRED]
+              outcome: { type: string, enum: [PASS, FAIL] }
+              country: { type: string }
+              location: { type: string }
+              accessMode: { type: string, enum: [PHYSICAL_STORE, LOCAL_ONLINE, CROSS_BORDER, DIGITAL] }
+              sourceUrl: { type: string, format: uri }
+              sourceTitle: { type: string }
+              publisher: { type: string }
+              exactClaim: { type: string }
+              retrievedAt: { type: string, format: date-time }
+              currentMarketSpecific: { type: boolean }
+            required: [id, optionId, gate, outcome, country, sourceUrl, exactClaim, retrievedAt, currentMarketSpecific]
+        assumptions:
+          type: array
+          items: { type: string }
+        limitations:
+          type: array
+          items: { type: string }
+        explanation: { type: string }
+        assessedAt: { type: string, format: date-time }
+        researchStatus: { type: string, enum: [COMPLETE, PARTIAL_TIMEOUT] }
+      required: [optionId, market, availabilityStatus, demographicRelevanceStatus, participationStatus, relevantForObjective, mandatoryGateResults, evidence, assumptions, limitations, explanation, assessedAt]
     QualificationGate:
       type: object
       properties:
@@ -1833,7 +3761,7 @@ components:
         criterion:
           type: string
         weight:
-          type: integer
+          type: number
         score:
           type: integer
           minimum: 0
@@ -1971,6 +3899,51 @@ components:
         exitCriteria: { type: string }
         risk: { type: string, enum: [low, medium, high, critical] }
       required: [phase, objective, dependencies, exitCriteria, risk]
+    BuyerQuote:
+      type: object
+      description: Buyer-entered terms linked to a private written quote, not independently verified.
+      properties:
+        vendor: { type: string }
+        documentDate: { type: string, description: Calendar date YYYY-MM-DD }
+        validUntil: { type: string, description: Calendar date YYYY-MM-DD }
+        currency: { type: string, enum: [AUD, USD, EUR, GBP] }
+        termMonths: { type: integer }
+        licenseAnnual: { type: string }
+        implementationOnce: { type: string }
+        serviceAnnual: { type: string }
+        audPerUnit: { type: string }
+        exchangeRateDate: { type: string, description: Calendar date YYYY-MM-DD }
+        exchangeRateSource: { type: string }
+        scope: { type: string }
+        taxBasis: { type: string, enum: [ex_gst, inc_gst] }
+        exclusions: { type: string }
+        fileName: { type: string }
+        fileSha256: { type: string }
+        documentUrl: { type: string }
+        totalAud: { type: string }
+      required: [vendor, documentDate, validUntil, currency, termMonths, licenseAnnual, implementationOnce, serviceAnnual, audPerUnit, scope, taxBasis, exclusions, fileName, fileSha256, documentUrl, totalAud]
+    BuyerQuoteAssessment:
+      type: object
+      properties:
+        status: { type: string, enum: [ready, incomplete] }
+        flags: { type: array, items: { type: string } }
+        horizonMonths: { type: integer }
+        winner: { type: [string, "null"] }
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/AnalysisRow" }
+        scores:
+          type: object
+          additionalProperties: { type: integer }
+      required: [status, flags, winner, rows, scores]
+    BuyerQuoteBundle:
+      type: object
+      properties:
+        quotes:
+          type: array
+          items: { $ref: "#/components/schemas/BuyerQuote" }
+        assessment: { $ref: "#/components/schemas/BuyerQuoteAssessment" }
+      required: [quotes, assessment]
     DecisionGovernanceItem:
       type: object
       properties:

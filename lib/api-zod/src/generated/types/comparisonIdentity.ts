@@ -24,12 +24,12 @@ export interface ComparisonIdentity {
   originalQuery: string;
   category: string;
   /**
-     * @minItems 2
+     * @minItems 0
      * @maxItems 6
      */
   entities: ComparisonIdentityEntitiesItem[];
   /**
-     * @minimum 2
+     * @minimum 0
      * @maximum 6
      */
   entityCount: number;

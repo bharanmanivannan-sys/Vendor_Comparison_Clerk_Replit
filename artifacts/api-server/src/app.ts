@@ -10,8 +10,46 @@ import {
   clerkProxyMiddleware,
   getClerkProxyHost,
 } from "./middlewares/clerkProxyMiddleware";
+import { quoteDeletionOutboxReady, retryQuotePdfDeletions } from "./lib/quoteObjects";
+import { recoverComparisonJobs, sweepStaleComparisonJobs } from "./routes/comparisons";
+import comparisonDraftsRouter, { recoverComparisonDraftEnrichmentJobs } from "./routes/comparisonDrafts";
 
 const app: Express = express();
+
+const runQuoteDeletionRetry = async () => {
+  if (!await quoteDeletionOutboxReady()) {
+    logger.warn("Private quote deletion outbox schema is not ready; retry deferred");
+    return;
+  }
+  await retryQuotePdfDeletions((message, error) => logger.error({ message, error }, message));
+};
+void runQuoteDeletionRetry().catch((error) => logger.error({ error }, "Private quote deletion retry unavailable"));
+const quoteDeletionRetryTimer = setInterval(() => {
+  void runQuoteDeletionRetry().catch((error) => logger.error({ error }, "Private quote deletion retry unavailable"));
+}, 60_000);
+quoteDeletionRetryTimer.unref();
+
+const runComparisonJobRecovery = async () => {
+  await recoverComparisonJobs();
+};
+void runComparisonJobRecovery().catch((error) => {
+  logger.error({ error }, "Comparison job recovery unavailable");
+});
+void recoverComparisonDraftEnrichmentJobs().catch((error) => {
+  logger.error({ error }, "Comparison draft enrichment recovery unavailable");
+});
+const comparisonDraftEnrichmentRecoveryTimer = setInterval(() => {
+  void recoverComparisonDraftEnrichmentJobs().catch((error) => {
+    logger.error({ error }, "Comparison draft enrichment recovery unavailable");
+  });
+}, 15_000);
+comparisonDraftEnrichmentRecoveryTimer.unref();
+const comparisonJobLeaseSweepTimer = setInterval(() => {
+  void sweepStaleComparisonJobs().catch((error) => {
+    logger.error({ error }, "Comparison job lease sweep unavailable");
+  });
+}, 15_000);
+comparisonJobLeaseSweepTimer.unref();
 
 // API responses are dynamic and frequently authenticated. Express ETags can
 // turn a fresh React Query request into a bodyless 304 after reload or tab
@@ -51,6 +89,11 @@ app.use(
     ),
   })),
 );
+
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+}, comparisonDraftsRouter);
 
 app.use("/api", (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");

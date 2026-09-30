@@ -14,10 +14,25 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { ComparisonContextMarket } from './comparisonContextMarket';
+import type { ComparisonOptionClassification } from './comparisonOptionClassification';
 
 export interface ComparisonContext {
   valid: boolean;
   segment: string;
   industry: string;
   message: string;
+  /** Deterministic comparison category derived from identified options, such as Vehicle Comparison or Curriculum Comparison. */
+  comparisonType?: string;
+  /** Shared recognized decision domain for the compared options. */
+  decisionDomain?: string;
+  optionClassifications?: ComparisonOptionClassification[];
+  /** True only when a known primary market differs between options or from the selected market. */
+  crossMarket?: boolean;
+  /** Validated or inferred customer market code when known. */
+  market?: ComparisonContextMarket;
+  /** Human-readable validated or inferred country when known. */
+  country?: string;
+  /** Explicit customer city, state, or postcode when known. */
+  customerLocation?: string;
 }

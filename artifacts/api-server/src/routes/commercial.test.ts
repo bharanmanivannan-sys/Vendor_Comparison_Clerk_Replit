@@ -4,13 +4,18 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import { and, eq } from "drizzle-orm";
 import {
+  comparisonDraftEnrichmentJobsTable,
+  comparisonDraftsTable,
   comparisonsTable,
   db,
   idempotencyKeysTable,
+  relevanceGateCheckpointsTable,
   tenantsTable,
   usageEventsTable,
 } from "@workspace/db";
 import type { AnalysisPayload } from "../lib/analysis";
+import { assessMarketRelevance, type RelevanceEvidence } from "../lib/marketRelevance";
+import { contextForDraft, draftCandidateForOption, draftGateIdentityForOption } from "../services/draftGateIdentity";
 import { createCommercialRouter } from "./commercial";
 
 const requestBody = {
@@ -18,6 +23,124 @@ const requestBody = {
   vendors: ["Alpha CRM", "Beta CRM"],
   criteria: ["Ease of use", "Value for money"],
 };
+
+async function seedDefaultTenantDraft(tenantId: string): Promise<{ draftId: string; body: typeof requestBody & Record<string, unknown> }> {
+  const draftId = randomUUID();
+  const jobId = randomUUID();
+  const owner = `tenant:${tenantId}`;
+  const options = requestBody.vendors.map((name) => ({
+    optionId: randomUUID(),
+    originalText: name,
+    comparisonValue: name,
+    canonicalName: null,
+    entityLevel: "BRAND",
+    resolutionStatus: "SUGGESTED",
+  }));
+  const savedDraft = {
+    version: 1,
+    originalQuery: requestBody.prompt,
+    decisionObjective: requestBody.prompt,
+    category: "CRM",
+    market: { country: "AU", currency: "AUD" },
+    criteria: [],
+    options,
+  };
+  await db.insert(comparisonDraftsTable).values({
+    id: draftId,
+    owner,
+    userId: "api-key:1",
+    version: 1,
+    status: "ready",
+    originalQuery: requestBody.prompt,
+    market: "AU",
+    currency: "AUD",
+    requestHash: randomUUID(),
+    draft: savedDraft,
+  });
+  await db.insert(comparisonDraftEnrichmentJobsTable).values({
+    id: jobId, draftId, owner, status: "complete", draftVersion: 1,
+  });
+  const { context, objective, accessMode } = contextForDraft(savedDraft);
+  const checkpointRows: Array<typeof relevanceGateCheckpointsTable.$inferInsert> = [];
+  for (const option of options) {
+    const candidate = draftCandidateForOption(option, "CRM");
+    const mandatory = assessMarketRelevance({
+      optionId: candidate.canonicalEntityId, context, objective, evidence: [],
+    }).mandatoryGateResults.filter((gate) => gate.mandatory);
+    const base = { draftId, jobId, draftVersion: 1, option, candidate, context, objective, accessMode };
+    const proofs: RelevanceEvidence[] = mandatory.map(({ gate }, index) => ({
+      id: `${option.optionId}-proof-${index}`,
+      optionId: candidate.canonicalEntityId,
+      gate,
+      outcome: "PASS",
+      country: "Australia",
+      accessMode,
+      sourceUrl: "https://publisher.example/au",
+      exactClaim: `${option.comparisonValue} provides CRM services in Australia.`,
+      retrievedAt: new Date().toISOString(),
+      currentMarketSpecific: true,
+    }));
+    const checkpointBase = {
+      comparisonId: null,
+      draftId,
+      jobId,
+      status: "PASSED",
+      preservePassed: false,
+      attempt: 1,
+      evidence: [] as unknown[],
+      pendingResult: null,
+      reason: null,
+      provenance: {},
+      freshUntil: new Date(Date.now() + 60 * 60_000),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      completedAt: new Date(),
+    };
+    checkpointRows.push({
+      ...checkpointBase,
+      id: `${jobId}:${option.optionId}:SOURCE_EVIDENCE`,
+      ...draftGateIdentityForOption({
+        ...base,
+        gateType: "SOURCE_EVIDENCE",
+        conditionSpecificGates: mandatory.map(({ gate, mandatory: required }) => ({ gate, mandatory: required })),
+      }),
+      result: { marketStatus: "VERIFIED_RELEVANT", evidence: proofs.map(({ id }) => ({ id })) },
+      evidence: proofs,
+    });
+    mandatory.forEach(({ gate, mandatory: required }, index) => {
+      checkpointRows.push({
+        ...checkpointBase,
+        id: `${jobId}:${option.optionId}:${gate}`,
+        ...draftGateIdentityForOption({
+          ...base,
+          gateType: gate,
+          conditionSpecificGates: {
+            gate, mandatory: required, accessMode,
+            deliveryNeed: context.deliveryNeed,
+            customerSegment: null, region: null, city: null, postcode: null, regulatoryContext: [],
+          },
+        }),
+        result: { gateResult: { gate, status: "PASS", evidenceIds: [proofs[index]!.id] } },
+        evidence: [proofs[index]!],
+      });
+    });
+  }
+  await db.insert(relevanceGateCheckpointsTable).values(checkpointRows);
+  return {
+    draftId,
+    body: {
+      ...requestBody,
+      market: "AU",
+      draftId,
+      draftVersion: 1,
+      comparisonValues: options.map((option) => ({
+        rawText: option.originalText, confirmedName: option.comparisonValue,
+      })),
+    },
+  };
+}
 
 const analysis: AnalysisPayload = {
   category: "CRM",
@@ -41,7 +164,7 @@ const analysis: AnalysisPayload = {
 async function withCommercialServer(
   includedComparisons: number,
   buildAnalysis: () => Promise<AnalysisPayload>,
-  run: (input: { tenantId: string; post: (key: string, body?: unknown) => Promise<Response> }) => Promise<void>,
+  run: (input: { tenantId: string; post: (key: string, body?: unknown, direct?: boolean, requestId?: string) => Promise<Response>; getRateLimitCalls: () => number }) => Promise<void>,
 ) {
   const tenantId = `test_${randomUUID()}`;
   await db.insert(tenantsTable).values({
@@ -51,6 +174,8 @@ async function withCommercialServer(
     includedComparisons,
     requestsPerMinute: 100,
   });
+  const confirmedDraft = await seedDefaultTenantDraft(tenantId);
+  let rateLimitCalls = 0;
   const app = express();
   app.use(express.json());
   app.use(createCommercialRouter({
@@ -59,38 +184,215 @@ async function withCommercialServer(
       tenantId,
       scopes: ["comparisons:read", "comparisons:write", "usage:read"],
     }),
-    consumeRateLimit: async () => ({
+    consumeRateLimit: async () => {
+      rateLimitCalls += 1;
+      return ({
       allowed: true,
       limit: 100,
       remaining: 99,
       resetAt: new Date(Date.now() + 60_000),
       retryAfter: 1,
-    }),
+      });
+    },
     buildAnalysis,
   }));
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Test server did not bind to a TCP port.");
-  const post = (key: string, body: unknown = requestBody) => fetch(`http://127.0.0.1:${address.port}/v1/comparisons`, {
+  const post = (key: string, body: unknown = requestBody, direct = false, requestId = randomUUID()) => fetch(`http://127.0.0.1:${address.port}/v1/comparisons`, {
     method: "POST",
     headers: {
       authorization: "Bearer test",
       "content-type": "application/json",
       "idempotency-key": key,
+      "x-request-id": requestId,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(!direct && body === requestBody ? confirmedDraft.body : body),
   });
   try {
-    await run({ tenantId, post });
+    await run({ tenantId, post, getRateLimitCalls: () => rateLimitCalls });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((cause) => cause ? reject(cause) : resolve()));
     await db.delete(usageEventsTable).where(eq(usageEventsTable.tenantId, tenantId));
+    await db.delete(relevanceGateCheckpointsTable).where(eq(relevanceGateCheckpointsTable.draftId, confirmedDraft.draftId));
+    await db.delete(comparisonDraftEnrichmentJobsTable).where(eq(comparisonDraftEnrichmentJobsTable.draftId, confirmedDraft.draftId));
+    await db.delete(comparisonDraftsTable).where(eq(comparisonDraftsTable.id, confirmedDraft.draftId));
     await db.delete(comparisonsTable).where(eq(comparisonsTable.tenantId, tenantId));
     await db.delete(idempotencyKeysTable).where(eq(idempotencyKeysTable.tenantId, tenantId));
     await db.delete(tenantsTable).where(eq(tenantsTable.id, tenantId));
   }
 }
+
+test("commercial starter rejects a missing confirmed draft before quota, research, or job creation", async () => {
+  let executions = 0;
+  await withCommercialServer(5, async () => {
+    executions += 1;
+    return analysis;
+  }, async ({ tenantId, post, getRateLimitCalls }) => {
+    const response = await post(randomUUID(), requestBody, true);
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { code: string }).code, "confirmed_draft_required");
+    assert.equal(executions, 0);
+    assert.equal((await db.select().from(usageEventsTable).where(eq(usageEventsTable.tenantId, tenantId))).length, 0);
+    assert.equal((await db.select().from(comparisonsTable).where(eq(comparisonsTable.tenantId, tenantId))).length, 0);
+    assert.equal(getRateLimitCalls(), 0, "Invalid handoffs must not reserve commercial capacity.");
+  });
+});
+
+test("commercial starter accepts a tenant-owned confirmed draft with fresh mandatory market proof", async () => {
+  let executions = 0;
+  await withCommercialServer(5, async () => {
+    executions += 1;
+    return analysis;
+  }, async ({ tenantId, post }) => {
+    const draftId = randomUUID();
+    const jobId = randomUUID();
+    const prompt = requestBody.prompt;
+    const category = "CRM";
+    const options = requestBody.vendors.map((name) => ({
+      optionId: randomUUID(),
+      originalText: name,
+      comparisonValue: name,
+      canonicalName: null,
+      entityLevel: "BRAND",
+      resolutionStatus: "SUGGESTED",
+    }));
+    const savedDraft = {
+      version: 1,
+      originalQuery: prompt,
+      decisionObjective: prompt,
+      category,
+      market: { country: "AU", currency: "AUD" },
+      criteria: [],
+      options,
+    };
+    const owner = `tenant:${tenantId}`;
+    await db.insert(comparisonDraftsTable).values({
+      id: draftId,
+      owner,
+      userId: "api-key:1",
+      version: 1,
+      status: "ready",
+      originalQuery: prompt,
+      market: "AU",
+      currency: "AUD",
+      requestHash: randomUUID(),
+      draft: savedDraft,
+    });
+    await db.insert(comparisonDraftEnrichmentJobsTable).values({
+      id: jobId,
+      draftId,
+      owner,
+      status: "complete",
+      draftVersion: 1,
+    });
+    const { context, objective, accessMode } = contextForDraft(savedDraft);
+    const checkpointRows: Array<typeof relevanceGateCheckpointsTable.$inferInsert> = [];
+    for (const option of options) {
+      const candidate = draftCandidateForOption(option, category);
+      const mandatory = assessMarketRelevance({
+        optionId: candidate.canonicalEntityId,
+        context,
+        objective,
+        evidence: [],
+      }).mandatoryGateResults.filter((gate) => gate.mandatory);
+      const base = { draftId, jobId, draftVersion: 1, option, candidate, context, objective, accessMode };
+      const proofs: RelevanceEvidence[] = mandatory.map(({ gate }, index) => ({
+        id: `${option.optionId}-proof-${index}`,
+        optionId: candidate.canonicalEntityId,
+        gate,
+        outcome: "PASS",
+        country: "Australia",
+        accessMode,
+        sourceUrl: "https://publisher.example/au",
+        exactClaim: `${option.comparisonValue} provides CRM services in Australia.`,
+        retrievedAt: new Date().toISOString(),
+        currentMarketSpecific: true,
+      }));
+      const sourceIdentity = draftGateIdentityForOption({
+        ...base,
+        gateType: "SOURCE_EVIDENCE",
+        conditionSpecificGates: mandatory.map(({ gate, mandatory: required }) => ({ gate, mandatory: required })),
+      });
+      const checkpointBase = {
+        comparisonId: null,
+        draftId,
+        jobId,
+        status: "PASSED",
+        preservePassed: false,
+        attempt: 1,
+        evidence: [] as unknown[],
+        pendingResult: null,
+        reason: null,
+        provenance: {},
+        freshUntil: new Date(Date.now() + 60 * 60_000),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        completedAt: new Date(),
+      };
+      checkpointRows.push({
+        ...checkpointBase,
+        id: `${jobId}:${option.optionId}:SOURCE_EVIDENCE`,
+        ...sourceIdentity,
+        result: { marketStatus: "VERIFIED_RELEVANT", evidence: proofs.map(({ id }) => ({ id })) },
+        evidence: proofs,
+      });
+      mandatory.forEach(({ gate, mandatory: required }, index) => {
+        const gateIdentity = draftGateIdentityForOption({
+          ...base,
+          gateType: gate,
+          conditionSpecificGates: {
+            gate,
+            mandatory: required,
+            accessMode,
+            deliveryNeed: context.deliveryNeed,
+            customerSegment: null,
+            region: null,
+            city: null,
+            postcode: null,
+            regulatoryContext: [],
+          },
+        });
+        checkpointRows.push({
+          ...checkpointBase,
+          id: `${jobId}:${option.optionId}:${gate}`,
+          ...gateIdentity,
+          result: { gateResult: { gate, status: "PASS", evidenceIds: [proofs[index]!.id] } },
+          evidence: [proofs[index]!],
+        });
+      });
+    }
+    await db.insert(relevanceGateCheckpointsTable).values(checkpointRows);
+    try {
+      const body = {
+        ...requestBody,
+        market: "AU",
+        draftId,
+        draftVersion: 1,
+        comparisonValues: options.map((option) => ({
+          rawText: option.originalText,
+          confirmedName: option.comparisonValue,
+        })),
+      };
+      const requestId = randomUUID();
+      const response = await post(randomUUID(), body, false, requestId);
+      assert.equal(response.status, 201, JSON.stringify(await response.clone().json()));
+      const responseBody = await response.json() as { draftId: string; draftVersion: number; requestId: string };
+      assert.equal(responseBody.draftId, draftId);
+      assert.equal(responseBody.draftVersion, 1);
+      assert.equal(responseBody.requestId, requestId);
+      assert.equal(executions, 1);
+      assert.equal((await db.select().from(usageEventsTable).where(eq(usageEventsTable.tenantId, tenantId))).length, 1);
+    } finally {
+      await db.delete(relevanceGateCheckpointsTable).where(eq(relevanceGateCheckpointsTable.draftId, draftId));
+      await db.delete(comparisonDraftEnrichmentJobsTable).where(eq(comparisonDraftEnrichmentJobsTable.draftId, draftId));
+      await db.delete(comparisonDraftsTable).where(eq(comparisonDraftsTable.id, draftId));
+    }
+  });
+});
 
 test("concurrent requests with one idempotency key execute and meter once", async () => {
   let releaseAnalysis!: () => void;
@@ -127,18 +429,68 @@ test("a completed request rejects a changed body and replays its response and qu
     assert.equal(first.status, 201);
     assert.equal(first.headers.get("x-quota-used"), "1");
     assert.equal(first.headers.get("x-quota-remaining"), "4");
+    const validatedContext = (firstBody as {
+      validatedContext?: { productAvailability?: string; marketContext?: string };
+    }).validatedContext;
+    assert.equal(validatedContext?.productAvailability, "Pending research");
+    assert.equal(typeof validatedContext?.marketContext, "string");
 
     const replay = await post(key);
     assert.equal(replay.status, 201);
-    assert.deepEqual(await replay.json(), firstBody);
+    const replayBody = await replay.json() as Record<string, unknown>;
+    const firstBodyWithReplayRequestId = { ...(firstBody as Record<string, unknown>), requestId: replayBody.requestId };
+    assert.deepEqual(replayBody, firstBodyWithReplayRequestId);
+    assert.notEqual(replayBody.requestId, (firstBody as Record<string, unknown>).requestId);
     assert.equal(replay.headers.get("x-quota-included"), "5");
     assert.equal(replay.headers.get("x-quota-used"), "1");
     assert.equal(replay.headers.get("x-quota-remaining"), "4");
 
     const changed = await post(key, { ...requestBody, prompt: `${requestBody.prompt} with integrations` });
-    assert.equal(changed.status, 409);
-    assert.equal((await changed.json() as { code: string }).code, "idempotency_key_reused");
+    assert.equal(changed.status, 400);
+    assert.equal((await changed.json() as { code: string }).code, "confirmed_draft_required");
     assert.equal(executions, 1);
+  });
+});
+
+test("context conflicts return CONTEXT_CONFLICT without starting commercial research", async () => {
+  let executions = 0;
+  await withCommercialServer(5, async () => {
+    executions += 1;
+    return analysis;
+  }, async ({ post }) => {
+    const response = await post(randomUUID(), {
+      prompt: "Compare Alpha CRM and Beta CRM for customers in Sydney, NSW, postcode 2155, India.",
+      vendors: ["Alpha CRM", "Beta CRM"],
+      criteria: ["Ease of use"],
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { code: string }).code, "confirmed_draft_required");
+    assert.equal(executions, 0, "Research must not start without a persisted confirmed draft.");
+  });
+});
+
+test("commercial intake rejects mixed option levels and unconfirmed cross-market banks before research", async () => {
+  let executions = 0;
+  await withCommercialServer(5, async () => {
+    executions += 1;
+    return analysis;
+  }, async ({ post }) => {
+    const mismatch = await post(randomUUID(), {
+      prompt: "Compare Tata Safari vs Mahindra for Indian buyers.",
+      market: "IN",
+      vendors: ["Tata Safari", "Mahindra"],
+    });
+    assert.equal(mismatch.status, 400);
+    assert.equal((await mismatch.json() as { code: string }).code, "confirmed_draft_required");
+
+    const crossMarket = await post(randomUUID(), {
+      prompt: "Compare ICICI Bank vs Westpac Bank for Australia.",
+      market: "AU",
+      vendors: ["ICICI Bank", "Westpac Bank"],
+    });
+    assert.equal(crossMarket.status, 400);
+    assert.equal((await crossMarket.json() as { code: string }).code, "confirmed_draft_required");
+    assert.equal(executions, 0, "No commercial research begins before comparison validation succeeds.");
   });
 });
 

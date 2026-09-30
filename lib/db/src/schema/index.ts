@@ -19,6 +19,8 @@
 
 export * from "./comparisons";
 export * from "./comparison-evidence";
+export * from "./comparison-quotes";
+export * from "./quote-object-deletions";
 export * from "./tenants";
 export * from "./memberships";
 export * from "./api-keys";
@@ -28,3 +30,9 @@ export * from "./usage";
 export * from "./audit";
 export * from "./visitor-sessions";
 export * from "./source-registry";
+export * from "./verification-checkouts";
+export * from "./preliminary-scorecards";
+export * from "./comparison-report-versions";
+export * from "./comparison-job-checkpoints";
+export * from "./comparison-drafts";
+export * from "./relevance-gate-checkpoints";

@@ -16,6 +16,8 @@
  */
 
 export interface ComparisonWeight {
+  /** Stable built-in criterion identifier. Optional only for older clients. */
+  criterionId?: string;
   criterion: string;
   /**
      * @minimum 0

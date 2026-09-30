@@ -13,7 +13,15 @@ import { authenticateApiKey as authenticateApiKeyDefault, type AuthenticatedApiK
 import { beginIdempotency, completeIdempotency, failIdempotency, requestHash, startIdempotencyHeartbeat } from "../services/idempotency";
 import { consumeRateLimit as consumeRateLimitDefault } from "../services/rateLimit";
 import { getUsage, getUsageForExecutor } from "../services/usage";
-import { detailFromRow, summaryFromRow, validateComparisonInput } from "./comparisons";
+import {
+  comparisonInputErrorCode,
+  detailFromRow,
+  reportCategoryFor,
+  summaryFromRow,
+  requireConfirmedDraftHandoff,
+  requireRequestId,
+  validateComparisonInput,
+} from "./comparisons";
 import { persistComparisonWithEvidence } from "../services/comparisonPersistence";
 
 type CommercialRequest = Request & { apiKey?: AuthenticatedApiKey };
@@ -100,25 +108,52 @@ router.get("/v1/comparisons", requireApiKey("comparisons:read", dependencies.aut
 });
 
 router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.authenticateApiKey), async (req: CommercialRequest, res): Promise<void> => {
-  if (!(await rateLimit(req, res, dependencies.consumeRateLimit))) return;
+  if (!requireRequestId(req, res)) return;
+  const handoffBody = req.body as { draftId?: unknown; draftVersion?: unknown; comparisonValues?: unknown } | null;
+  if (!handoffBody || typeof handoffBody.draftId !== "string"
+    || typeof handoffBody.draftVersion !== "number" || !Array.isArray(handoffBody.comparisonValues)) {
+    error(
+      res,
+      400,
+      "confirmed_draft_required",
+      "Prepare and confirm a comparison draft first. Send its draftId, draftVersion, explicit market, and confirmed comparisonValues with the report request.",
+    );
+    return;
+  }
   const idempotencyKey = req.header("Idempotency-Key");
   if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 255) {
-    error(res, 400, "idempotency_key_required", "Idempotency-Key must be 8 to 255 characters.");
+    error(res, 400, "idempotency_key_required", "We couldn't submit your comparison. Please refresh and try again.");
     return;
   }
   const key = req.apiKey!.tenantId;
+  const body = ExternalCreateComparisonBody.safeParse(req.body);
+  if (!body.success) {
+    error(res, 400, "invalid_comparison", body.error.message);
+    return;
+  }
+  const validated = await validateComparisonInput(body.data);
+  if ("error" in validated) {
+    error(res, 400, comparisonInputErrorCode(validated.error), validated.error ?? "Invalid comparison input.");
+    return;
+  }
+  if (!(await requireConfirmedDraftHandoff(req, res, validated, `tenant:${key}`))) return;
+  if (!(await rateLimit(req, res, dependencies.consumeRateLimit))) return;
+
   const begun = await beginIdempotency(key, idempotencyKey, requestHash(req.body));
   if (begun.state === "changed") {
-    error(res, 409, "idempotency_key_reused", "The Idempotency-Key was already used with a different request body.");
+    error(res, 409, "idempotency_key_reused", "This submission conflicts with an earlier one. Refresh your comparison before trying again.");
     return;
   }
   if (begun.state === "in_progress") {
-    error(res, 409, "request_in_progress", "Another request with this Idempotency-Key is in progress.");
+    error(res, 409, "request_in_progress", "Your comparison is already being submitted. Please wait for it to finish.");
     return;
   }
   if (begun.state === "replay") {
     Object.entries(begun.headers).forEach(([header, value]) => res.setHeader(header, value));
-    res.status(begun.status).json(begun.body);
+    res.status(begun.status).json({
+      ...(begun.body as Record<string, unknown>),
+      ...(res.locals.draftRequestCorrelation as { draftId: string; draftVersion: number; requestId: string }),
+    });
     return;
   }
   const ownershipToken = begun.ownershipToken!;
@@ -128,22 +163,23 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.a
     quotaExceeded(res, currentUsage);
     return;
   }
-  const body = ExternalCreateComparisonBody.safeParse(req.body);
-  const validated = body.success
-    ? await validateComparisonInput(body.data)
-    : { error: "Invalid comparison input." as const };
-  if ("error" in validated) {
-    await failIdempotency(key, idempotencyKey, ownershipToken);
-    error(res, 400, "invalid_comparison", validated.error ?? "Invalid comparison input.");
-    return;
-  }
   const { input, vendors, criteria } = validated;
   const urls = [...(input.urls ?? [])];
   const heartbeat = startIdempotencyHeartbeat(key, idempotencyKey, ownershipToken);
   let analysis: AnalysisPayload;
   try {
-    analysis = await dependencies.buildAnalysis({ ...input, vendors, criteria, urls });
+    analysis = await dependencies.buildAnalysis({
+      ...input,
+      prompt: validated.processingPrompt,
+      vendors,
+      criteria,
+      urls,
+    });
     if (heartbeat.hasLostOwnership()) throw new Error("Idempotency ownership was lost while processing.");
+    analysis = {
+      ...analysis,
+      category: reportCategoryFor(input.prompt, vendors, analysis.category),
+    };
   } catch (cause) {
     heartbeat.stop();
     await failIdempotency(key, idempotencyKey, ownershipToken);
@@ -167,11 +203,12 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.a
       const comparison = await persistComparisonWithEvidence(tx, {
         tenantId: key,
         userId: `api-key:${req.apiKey!.id}`,
-        prompt: input.prompt,
         vendors,
         urls,
         criteria,
         ...analysis,
+        prompt: input.prompt,
+        validatedContext: validated.validatedContext,
       });
       await tx.insert(usageEventsTable).values({
         tenantId: key,
@@ -206,7 +243,10 @@ router.post("/v1/comparisons", requireApiKey("comparisons:write", dependencies.a
   }
   heartbeat.stop();
   Object.entries(committed.responseHeaders).forEach(([header, value]) => res.setHeader(header, value));
-  res.status(201).json(committed.responseBody);
+  res.status(201).json({
+    ...(committed.responseBody as Record<string, unknown>),
+    ...(res.locals.draftRequestCorrelation as { draftId: string; draftVersion: number; requestId: string }),
+  });
 });
 
 router.get("/v1/comparisons/:id", requireApiKey("comparisons:read", dependencies.authenticateApiKey), async (req: CommercialRequest, res): Promise<void> => {

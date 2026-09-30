@@ -15,9 +15,15 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ComparisonIdentity } from './comparisonIdentity';
+import type { ComparisonSummaryResearchStatus } from './comparisonSummaryResearchStatus';
 import type { ComparisonSummaryStatus } from './comparisonSummaryStatus';
 
 export interface ComparisonSummary {
+  /**
+     * Number of cited scorecard claims without complete document provenance; a review does not change the original citations.
+     * @minimum 0
+     */
+  provenanceGapCount?: number;
   id: number;
   prompt: string;
   /** @maxItems 6 */
@@ -36,4 +42,6 @@ export interface ComparisonSummary {
   providerRoleTieBreakBonus?: number;
   createdAt: Date;
   status: ComparisonSummaryStatus;
+  /** Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out. */
+  researchStatus?: ComparisonSummaryResearchStatus;
 }

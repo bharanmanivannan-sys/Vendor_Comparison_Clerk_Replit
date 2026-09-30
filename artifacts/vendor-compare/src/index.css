@@ -108,6 +108,41 @@
 .dark [class~="border-[#d9d1bf]"],
 .dark [class~="border-[#ddd5c5]"],
 .dark [class~="border-[#e7e2d4]"] { border-color: #414b65; }
+/* ---- Dark contrast pass (WCAG AA). Values verified in dark-contrast.test.ts. ---- */
+/* Shell header uses an opacity modifier, which the exact-class maps above miss. */
+.dark [class~="bg-[#f2eee2]/90"] { background-color: rgb(23 29 46 / .92); }
+/* Dark navy surfaces (API panel, sidebar CTAs) must separate from the page. */
+.dark [class~="bg-[#202840]"] { background-color: #232c46; }
+.dark [class~="border-[#202840]"],
+.dark [class~="border-[#cfc7b6]"],
+.dark [class~="border-[#d2cab8]"],
+.dark [class~="border-[#e3ddcf]"] { border-color: #6b7794; }
+.dark [class~="bg-[#e7e2d4]"] { border-color: #4f5a78; }
+/* Accent text */
+.dark [class~="text-[#0f766e]"],
+.dark [class~="text-[#35665c]"] { color: #5fd4c0; }
+.dark [class~="hover:text-[#0f766e]"]:hover { color: #8ae6d6; }
+.dark [class~="hover:border-[#0f766e]"]:hover { border-color: #5fd4c0; }
+.dark [class~="text-[#b94d45]"],
+.dark [class~="text-[#9a3e38]"],
+.dark [class~="text-[#8d5650]"] { color: #f4a199; }
+.dark [class~="text-[#715d16]"],
+.dark [class~="text-[#5f4d1f]"] { color: #ecd27e; }
+.dark [class~="bg-[#fff8df]"] { background-color: #3a3522; }
+.dark [class~="bg-[#f7dfdc]"],
+.dark [class~="bg-[#f7e4df]"] { background-color: #422a2c; }
+/* Inputs */
+.dark [class~="placeholder:text-[#9a9a90]"]::placeholder,
+.dark [class~="placeholder:text-[#8d98ae]"]::placeholder { color: #a3adc2; }
+/* Semantic action surface: bright lime keeps dark ink, including children,
+   overriding the blanket text-[#202840] → cream mapping above. */
+.dark [class~="bg-[#d9ef66]"],
+.dark [class~="bg-[#d9ef66]"] *,
+.dark .action-lime,
+.dark .action-lime * { color: #202840; }
+.dark [class~="bg-[#d9ef66]"]:disabled { opacity: 1; background-color: #8a9651; }
+.dark :is(button, a):disabled { opacity: .62; }
+.dark .focus-ring:focus-visible { outline-color: #f5d74a; }
 .dark .theme-toggle { background-color: #d9ef66; color: #202840; border-color: #d9ef66; }
 .dark [data-testid="button-generate-analysis"],
 .dark [data-testid="button-research-comparison"] {

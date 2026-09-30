@@ -14,6 +14,413 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+export type ComparisonDraftInterpretInputMarket = typeof ComparisonDraftInterpretInputMarket[keyof typeof ComparisonDraftInterpretInputMarket];
+
+
+export const ComparisonDraftInterpretInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
+
+export type ComparisonDraftInterpretInputCurrency = typeof ComparisonDraftInterpretInputCurrency[keyof typeof ComparisonDraftInterpretInputCurrency];
+
+
+export const ComparisonDraftInterpretInputCurrency = {
+  INR: 'INR',
+  AUD: 'AUD',
+  USD: 'USD',
+  GBP: 'GBP',
+} as const;
+
+export interface ComparisonDraftInterpretInput {
+  /**
+     * @minLength 8
+     * @maxLength 4000
+     */
+  query: string;
+  market: ComparisonDraftInterpretInputMarket;
+  currency: ComparisonDraftInterpretInputCurrency;
+  /** Optional stable key for safely repeating the same draft request. A key is generated when omitted. */
+  idempotencyKey?: string;
+}
+
+export interface ComparisonDraftEnrichmentInput {
+  /** @minimum 1 */
+  draftVersion: number;
+}
+
+export type ComparisonDraftOptionEditInputOptionsItemEntityLevel = typeof ComparisonDraftOptionEditInputOptionsItemEntityLevel[keyof typeof ComparisonDraftOptionEditInputOptionsItemEntityLevel];
+
+
+export const ComparisonDraftOptionEditInputOptionsItemEntityLevel = {
+  PRODUCT: 'PRODUCT',
+  SERVICE: 'SERVICE',
+  BRAND: 'BRAND',
+} as const;
+
+export type ComparisonDraftOptionEditInputOptionsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  name: string;
+  entityLevel: ComparisonDraftOptionEditInputOptionsItemEntityLevel;
+};
+
+export type ComparisonDraftOptionEditInputMarket = typeof ComparisonDraftOptionEditInputMarket[keyof typeof ComparisonDraftOptionEditInputMarket];
+
+
+export const ComparisonDraftOptionEditInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
+
+export type ComparisonDraftOptionEditInputCurrency = typeof ComparisonDraftOptionEditInputCurrency[keyof typeof ComparisonDraftOptionEditInputCurrency];
+
+
+export const ComparisonDraftOptionEditInputCurrency = {
+  INR: 'INR',
+  AUD: 'AUD',
+  USD: 'USD',
+  GBP: 'GBP',
+} as const;
+
+export interface ComparisonDraftUrlEdit {
+  /**
+     * @minLength 1
+     * @maxLength 2048
+     */
+  url: string;
+  optionId?: string;
+}
+
+/**
+ * Save one or more local review edits. Omitted fields remain unchanged, except replacing options clears old URL rows. Options replace the complete option set with 2-6 unique names. Criteria allow at most 8 unique nonblank strings. Market and currency must be supplied together and match. URL rows are syntactically checked only; no network request occurs.
+ */
+export type ComparisonDraftOptionEditInput = (unknown & {
+  /** @minimum 1 */
+  draftVersion: number;
+  /**
+     * @minItems 2
+     * @maxItems 6
+     */
+  options?: ComparisonDraftOptionEditInputOptionsItem[];
+  /**
+     * @maxItems 8
+     * @items.minLength 1
+     * @items.maxLength 120
+     */
+  criteria?: string[];
+  market?: ComparisonDraftOptionEditInputMarket;
+  currency?: ComparisonDraftOptionEditInputCurrency;
+  /** @maxItems 20 */
+  urls?: ComparisonDraftUrlEdit[];
+  includeClosingProducts?: boolean;
+});
+
+export interface ComparisonDraftUrl {
+  urlId: string;
+  url: string;
+  requestedUrl?: string;
+  status: string;
+  optionId?: string;
+}
+
+export type ComparisonDraftOptionResolutionStatus = typeof ComparisonDraftOptionResolutionStatus[keyof typeof ComparisonDraftOptionResolutionStatus];
+
+
+export const ComparisonDraftOptionResolutionStatus = {
+  SUGGESTED: 'SUGGESTED',
+} as const;
+
+export type ComparisonDraftOptionEntityLevel = typeof ComparisonDraftOptionEntityLevel[keyof typeof ComparisonDraftOptionEntityLevel];
+
+
+export const ComparisonDraftOptionEntityLevel = {
+  PRODUCT: 'PRODUCT',
+  SERVICE: 'SERVICE',
+  BRAND: 'BRAND',
+} as const;
+
+export type ComparisonDraftOptionMarketVerificationStatus = typeof ComparisonDraftOptionMarketVerificationStatus[keyof typeof ComparisonDraftOptionMarketVerificationStatus];
+
+
+export const ComparisonDraftOptionMarketVerificationStatus = {
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export type ComparisonDraftOptionAvailabilityStatus = typeof ComparisonDraftOptionAvailabilityStatus[keyof typeof ComparisonDraftOptionAvailabilityStatus];
+
+
+export const ComparisonDraftOptionAvailabilityStatus = {
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export type ComparisonDraftOptionDemographicRelevanceStatus = typeof ComparisonDraftOptionDemographicRelevanceStatus[keyof typeof ComparisonDraftOptionDemographicRelevanceStatus];
+
+
+export const ComparisonDraftOptionDemographicRelevanceStatus = {
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export type ComparisonDraftOptionParticipationStatus = typeof ComparisonDraftOptionParticipationStatus[keyof typeof ComparisonDraftOptionParticipationStatus];
+
+
+export const ComparisonDraftOptionParticipationStatus = {
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export interface ComparisonDraftOption {
+  optionId: string;
+  originalText: string;
+  comparisonValue: string;
+  /** @nullable */
+  canonicalName: string | null;
+  resolutionStatus: ComparisonDraftOptionResolutionStatus;
+  entityLevel: ComparisonDraftOptionEntityLevel;
+  marketVerificationStatus: ComparisonDraftOptionMarketVerificationStatus;
+  availabilityStatus: ComparisonDraftOptionAvailabilityStatus;
+  demographicRelevanceStatus: ComparisonDraftOptionDemographicRelevanceStatus;
+  participationStatus: ComparisonDraftOptionParticipationStatus;
+}
+
+export interface ComparisonDraftWarning {
+  code: string;
+  message: string;
+}
+
+export type ComparisonDraftStatus = typeof ComparisonDraftStatus[keyof typeof ComparisonDraftStatus];
+
+
+export const ComparisonDraftStatus = {
+  READY_FOR_REVIEW: 'READY_FOR_REVIEW',
+  READY_FOR_REVIEW_WITH_FALLBACK: 'READY_FOR_REVIEW_WITH_FALLBACK',
+} as const;
+
+export type ComparisonDraftComparisonLevel = typeof ComparisonDraftComparisonLevel[keyof typeof ComparisonDraftComparisonLevel];
+
+
+export const ComparisonDraftComparisonLevel = {
+  PRODUCT: 'PRODUCT',
+  SERVICE: 'SERVICE',
+  BRAND: 'BRAND',
+  MIXED: 'MIXED',
+} as const;
+
+export type ComparisonDraftMarket = {
+  country: string;
+  currency: string;
+};
+
+export type ComparisonDraftEnrichmentStatus = typeof ComparisonDraftEnrichmentStatus[keyof typeof ComparisonDraftEnrichmentStatus];
+
+
+export const ComparisonDraftEnrichmentStatus = {
+  NOT_STARTED: 'NOT_STARTED',
+  QUEUED: 'QUEUED',
+  COMPLETE: 'COMPLETE',
+  PARTIAL: 'PARTIAL',
+  FAILED: 'FAILED',
+} as const;
+
+export type ComparisonDraftMarketSuggestions = { [key: string]: unknown };
+
+export interface ComparisonDraft {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
+  /** Server-provided value to retain when repeating this exact draft submission. */
+  idempotencyKey?: string;
+  version: number;
+  status: ComparisonDraftStatus;
+  originalQuery: string;
+  options: ComparisonDraftOption[];
+  comparisonLevel: ComparisonDraftComparisonLevel;
+  decisionObjective: string;
+  decisionDomain: string;
+  category: string;
+  market: ComparisonDraftMarket;
+  criteria: string[];
+  includeClosingProducts?: boolean;
+  enrichmentStatus: ComparisonDraftEnrichmentStatus;
+  marketSuggestions?: ComparisonDraftMarketSuggestions;
+  urls?: ComparisonDraftUrl[];
+  warnings?: ComparisonDraftWarning[];
+}
+
+export type ComparisonDraftSuggestionEntityLevel = typeof ComparisonDraftSuggestionEntityLevel[keyof typeof ComparisonDraftSuggestionEntityLevel];
+
+
+export const ComparisonDraftSuggestionEntityLevel = {
+  PRODUCT: 'PRODUCT',
+  SERVICE: 'SERVICE',
+  BRAND: 'BRAND',
+  PROVIDER: 'PROVIDER',
+  MIXED: 'MIXED',
+} as const;
+
+export type ComparisonDraftSuggestionMarketRelevance = typeof ComparisonDraftSuggestionMarketRelevance[keyof typeof ComparisonDraftSuggestionMarketRelevance];
+
+
+export const ComparisonDraftSuggestionMarketRelevance = {
+  HIGH: 'HIGH',
+  MODERATE: 'MODERATE',
+  LOW: 'LOW',
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export type ComparisonDraftSuggestionMarketVerificationStatus = typeof ComparisonDraftSuggestionMarketVerificationStatus[keyof typeof ComparisonDraftSuggestionMarketVerificationStatus];
+
+
+export const ComparisonDraftSuggestionMarketVerificationStatus = {
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export interface ComparisonDraftSuggestion {
+  canonicalEntityId: string;
+  displayName: string;
+  entityLevel: ComparisonDraftSuggestionEntityLevel;
+  category: string;
+  /** @nullable */
+  parentBrand: string | null;
+  contextFit: number;
+  marketRelevance: ComparisonDraftSuggestionMarketRelevance;
+  availabilityMode: string;
+  reason: string;
+  selected: boolean;
+  marketVerificationStatus: ComparisonDraftSuggestionMarketVerificationStatus;
+}
+
+export type ComparisonDraftSuggestionsStatus = typeof ComparisonDraftSuggestionsStatus[keyof typeof ComparisonDraftSuggestionsStatus];
+
+
+export const ComparisonDraftSuggestionsStatus = {
+  SUGGESTED_NOT_VERIFIED: 'SUGGESTED_NOT_VERIFIED',
+} as const;
+
+/**
+ * Suggestions echo draftId, draftVersion, requestId, and the requested optionId.
+ */
+export interface ComparisonDraftSuggestions {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
+  optionId: string;
+  suggestions: ComparisonDraftSuggestion[];
+  status: ComparisonDraftSuggestionsStatus;
+  message: string;
+}
+
+export type ComparisonDraftEnrichmentJobStatusProperty = typeof ComparisonDraftEnrichmentJobStatusProperty[keyof typeof ComparisonDraftEnrichmentJobStatusProperty];
+
+
+export const ComparisonDraftEnrichmentJobStatusProperty = {
+  queued: 'queued',
+} as const;
+
+/**
+ * Correlation tuple identifies the draft version and caller request that queued this asynchronous operation.
+ */
+export interface ComparisonDraftEnrichmentJob {
+  jobId: string;
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
+  status: ComparisonDraftEnrichmentJobStatusProperty;
+  pollUrl: string;
+}
+
+export type ComparisonDraftEnrichmentJobStatusStatus = typeof ComparisonDraftEnrichmentJobStatusStatus[keyof typeof ComparisonDraftEnrichmentJobStatusStatus];
+
+
+export const ComparisonDraftEnrichmentJobStatusStatus = {
+  queued: 'queued',
+  running: 'running',
+  complete: 'complete',
+  partial: 'partial',
+  failed: 'failed',
+  stale: 'stale',
+} as const;
+
+export type ComparisonDraftEnrichmentJobStatusResult = { [key: string]: unknown };
+
+/**
+ * Echoes the current polling request's requestId with the current draftId and draftVersion.
+ */
+export interface ComparisonDraftEnrichmentJobStatus {
+  jobId: string;
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
+  status: ComparisonDraftEnrichmentJobStatusStatus;
+  result?: ComparisonDraftEnrichmentJobStatusResult;
+  error?: string;
+  message?: string;
+}
+
+export interface ComparisonDraftUrlValidationInput {
+  /** @maxLength 2048 */
+  url: string;
+  optionId: string;
+  /** @minimum 1 */
+  draftVersion: number;
+}
+
+export type ComparisonDraftUrlValidationState = typeof ComparisonDraftUrlValidationState[keyof typeof ComparisonDraftUrlValidationState];
+
+
+export const ComparisonDraftUrlValidationState = {
+  accepted: 'accepted',
+  inaccessible: 'inaccessible',
+  stale: 'stale',
+  wrong_market: 'wrong_market',
+  unrelated: 'unrelated',
+} as const;
+
+/**
+ * Echoes draftId, draftVersion, requestId, the checked URL, and its required optionId. requestedUrl retains the supplied URL; url is the validated URL.
+ */
+export interface ComparisonDraftUrlValidation {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
+  urlId: string;
+  url: string;
+  optionId: string;
+  requestedUrl: string;
+  state: ComparisonDraftUrlValidationState;
+  reason: string;
+  replacementUrl?: string;
+  version: number;
+}
+
+/**
+ * Correlation tuple returned with draft-scoped operation responses.
+ */
+export interface DraftRequestCorrelation {
+  draftId: string;
+  /** @minimum 1 */
+  draftVersion: number;
+  requestId: string;
+}
+
+export type ComparisonDraftErrorErrorsItem = {
+  field: string;
+  code: string;
+  message: string;
+};
+
+export interface ComparisonDraftError {
+  code: string;
+  message: string;
+  /** Field-specific request validation details. Unknown fields are reported separately from value validation. */
+  errors?: ComparisonDraftErrorErrorsItem[];
+}
+
 export interface LegacyErrorResponse {
   error: string;
 }
@@ -110,6 +517,55 @@ export interface HealthStatus {
 }
 
 /**
+ * Generic comparison granularity, independent of the dynamically inferred category.
+ */
+export type ComparisonLevel = typeof ComparisonLevel[keyof typeof ComparisonLevel];
+
+
+export const ComparisonLevel = {
+  PRODUCT: 'PRODUCT',
+  SERVICE: 'SERVICE',
+  BRAND: 'BRAND',
+  PROVIDER: 'PROVIDER',
+  MIXED: 'MIXED',
+} as const;
+
+export interface ConfirmedComparisonValue {
+  /**
+     * Original extracted wording, preserved verbatim.
+     * @minLength 1
+     * @maxLength 120
+     */
+  rawText: string;
+  /**
+     * User-confirmed option name; research must not silently replace it.
+     * @minLength 1
+     * @maxLength 120
+     */
+  confirmedName: string;
+  /**
+     * Optional identity selected by the user from contextual suggestions.
+     * @maxLength 160
+     */
+  canonicalEntityId?: string;
+  entityLevel?: ComparisonLevel;
+}
+
+export interface ComparisonReview {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
+  comparisonType: string;
+  decisionDomain: string;
+  category: string;
+  /** @nullable */
+  customerLocation: string | null;
+  criteria: string[];
+  comparisonValues: ConfirmedComparisonValue[];
+  comparisonLevel?: ComparisonLevel;
+}
+
+/**
  * Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.
  */
 export type ComparisonInputMarket = typeof ComparisonInputMarket[keyof typeof ComparisonInputMarket];
@@ -122,14 +578,128 @@ export const ComparisonInputMarket = {
   GB: 'GB',
 } as const;
 
+export type DemographicContextBusinessOrConsumer = typeof DemographicContextBusinessOrConsumer[keyof typeof DemographicContextBusinessOrConsumer];
+
+
+export const DemographicContextBusinessOrConsumer = {
+  CONSUMER: 'CONSUMER',
+  SMALL_BUSINESS: 'SMALL_BUSINESS',
+  ENTERPRISE: 'ENTERPRISE',
+} as const;
+
+export type DemographicContextDeliveryNeed = typeof DemographicContextDeliveryNeed[keyof typeof DemographicContextDeliveryNeed];
+
+
+export const DemographicContextDeliveryNeed = {
+  LOCAL_STORE: 'LOCAL_STORE',
+  LOCAL_ONLINE: 'LOCAL_ONLINE',
+  CROSS_BORDER: 'CROSS_BORDER',
+  DIGITAL: 'DIGITAL',
+} as const;
+
+/**
+ * Optional decision-specific market and customer context. Omit attributes not relevant to the decision.
+ */
+export interface DemographicContext {
+  /** @maxLength 120 */
+  country: string;
+  /** @maxLength 120 */
+  region?: string;
+  /** @maxLength 120 */
+  stateOrRegion?: string;
+  /** @maxLength 120 */
+  city?: string;
+  /** @maxLength 120 */
+  postcode?: string;
+  /** @maxLength 120 */
+  customerSegment?: string;
+  /** @maxLength 120 */
+  ageGroup?: string;
+  businessOrConsumer?: DemographicContextBusinessOrConsumer;
+  /** @maxLength 120 */
+  useCase?: string;
+  deliveryNeed?: DemographicContextDeliveryNeed;
+  /** @maxLength 120 */
+  currency?: string;
+  /** @maxLength 120 */
+  language?: string;
+  /**
+     * @maxItems 12
+     * @items.maxLength 120
+     */
+  regulatoryContext?: string[];
+}
+
+export interface ComparisonSourceAssociation {
+  url: string;
+  /**
+     * Must exactly match one confirmed comparison value name.
+     * @minLength 1
+     * @maxLength 120
+     */
+  option: string;
+}
+
+/**
+ * Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.
+ */
 export interface ComparisonInput {
+  /** Required persisted review draft whose options the user confirmed. */
+  draftId: string;
+  /**
+     * Required draft version observed at confirmation; later enrichment-only versions may be compatible.
+     * @minimum 1
+     */
+  draftVersion: number;
   /**
      * @minLength 8
      * @maxLength 2000
      */
   prompt: string;
   /** Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt. */
-  market?: ComparisonInputMarket;
+  market: ComparisonInputMarket;
+  /**
+     * User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.
+     * @maxLength 80
+     */
+  validatedComparisonType?: string;
+  comparisonLevel?: ComparisonLevel;
+  /**
+     * Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.
+     * @minItems 2
+     * @maxItems 6
+     */
+  comparisonValues: ConfirmedComparisonValue[];
+  demographicContext?: DemographicContext;
+  /**
+     * Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.
+     * @maxItems 12
+     */
+  sourceAssociations?: ComparisonSourceAssociation[];
+  /**
+     * User-confirmed decision domain, checked against the option identities and selected type.
+     * @maxLength 100
+     */
+  validatedDecisionDomain?: string;
+  /**
+     * User-confirmed category, checked against the option identities and selected type.
+     * @maxLength 100
+     */
+  validatedCategory?: string;
+  /**
+     * Optional buyer/customer segment to apply to this decision.
+     * @maxLength 100
+     */
+  customerSegment?: string;
+  /**
+     * Customer origin city or postcode for a dealer decision; never a dealer address.
+     * @maxLength 120
+     */
+  customerLocation?: string;
+  /** Explicit user confirmation that options with known different primary markets are intentionally being compared across countries. */
+  crossMarketConfirmed?: boolean;
+  /** Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false. */
+  includeClosingProducts?: boolean;
   /**
      * Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.
      * @minimum 1
@@ -158,7 +728,74 @@ export interface ComparisonInput {
   criteria?: string[];
 }
 
+/**
+ * User-selected market context. Market relevance is NOT_ASSESSED unless verified evidence is available.
+ */
+export type ComparisonSuggestInputMarket = 'IN' | 'AU' | 'US' | 'GB' | {
+  /** @maxLength 120 */
+  country?: string;
+  /** @maxLength 120 */
+  stateOrRegion?: string;
+  /** @maxLength 120 */
+  city?: string;
+  /** @maxLength 120 */
+  postcode?: string;
+};
+
+export interface ComparisonSuggestInput {
+  /**
+     * @minLength 2
+     * @maxLength 120
+     */
+  typedText: string;
+  /** @maxLength 2000 */
+  fullQuery: string;
+  /**
+     * @maxItems 6
+     * @items.maxLength 120
+     */
+  otherOptions: string[];
+  /** @maxLength 500 */
+  decisionObjective: string;
+  /** User-selected market context. Market relevance is NOT_ASSESSED unless verified evidence is available. */
+  market?: ComparisonSuggestInputMarket;
+  customerContext?: DemographicContext;
+}
+
+export type ComparisonSuggestionMarketRelevance = typeof ComparisonSuggestionMarketRelevance[keyof typeof ComparisonSuggestionMarketRelevance];
+
+
+export const ComparisonSuggestionMarketRelevance = {
+  HIGH: 'HIGH',
+  MODERATE: 'MODERATE',
+  LOW: 'LOW',
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export interface ComparisonSuggestion {
+  canonicalEntityId: string;
+  displayName: string;
+  entityLevel: ComparisonLevel;
+  category: string;
+  /** @nullable */
+  parentBrand: string | null;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  contextFit: number;
+  marketRelevance: ComparisonSuggestionMarketRelevance;
+  availabilityMode: string;
+  reason: string;
+}
+
+export interface ComparisonSuggestResponse {
+  suggestions: ComparisonSuggestion[];
+}
+
 export interface ComparisonWeight {
+  /** Stable built-in criterion identifier. Optional only for older clients. */
+  criterionId?: string;
   criterion: string;
   /**
      * @minimum 0
@@ -167,7 +804,19 @@ export interface ComparisonWeight {
   weight: number;
 }
 
+/**
+ * Explicit acknowledgement that a related built-in factor measures something distinct.
+ */
+export type AdditionalComparisonWeightOverlapResolution = typeof AdditionalComparisonWeightOverlapResolution[keyof typeof AdditionalComparisonWeightOverlapResolution];
+
+
+export const AdditionalComparisonWeightOverlapResolution = {
+  KEEP_SEPARATE: 'KEEP_SEPARATE',
+} as const;
+
 export interface AdditionalComparisonWeight {
+  /** Stable generated custom criterion identifier. Optional only for older clients. */
+  criterionId?: string;
   /**
      * @minLength 1
      * @maxLength 100
@@ -183,17 +832,103 @@ export interface AdditionalComparisonWeight {
      * @maxItems 2
      */
   mappedCriteria: string[];
+  /** Explicit acknowledgement that a related built-in factor measures something distinct. */
+  overlapResolution?: AdditionalComparisonWeightOverlapResolution;
+  /** User's distinction between the custom and overlapping built-in factors. */
+  overlapReason?: string;
 }
 
 export interface RegenerateComparisonInput {
   /**
+     * Optional replacement list of user-supplied research URLs. Omitting it preserves the existing list. Changing the list does not rerun research.
+     * @maxItems 12
+     */
+  suppliedUrls?: string[];
+  /**
      * @minItems 9
-     * @maxItems 9
+     * @maxItems 10
      */
   weights: ComparisonWeight[];
   /** @maxItems 8 */
   additionalWeights?: AdditionalComparisonWeight[];
 }
+
+export type ComparisonWeightModelVersion = typeof ComparisonWeightModelVersion[keyof typeof ComparisonWeightModelVersion];
+
+
+export const ComparisonWeightModelVersion = {
+  NUMBER_1: 1,
+} as const;
+
+export type ComparisonWeightModelCriteriaItemCriterionType = typeof ComparisonWeightModelCriteriaItemCriterionType[keyof typeof ComparisonWeightModelCriteriaItemCriterionType];
+
+
+export const ComparisonWeightModelCriteriaItemCriterionType = {
+  BUILT_IN: 'BUILT_IN',
+  CUSTOM: 'CUSTOM',
+} as const;
+
+export type ComparisonWeightModelCriteriaItemValidationStatus = typeof ComparisonWeightModelCriteriaItemValidationStatus[keyof typeof ComparisonWeightModelCriteriaItemValidationStatus];
+
+
+export const ComparisonWeightModelCriteriaItemValidationStatus = {
+  VALIDATED: 'VALIDATED',
+} as const;
+
+export type ComparisonWeightModelCriteriaItemOverlapResolution = typeof ComparisonWeightModelCriteriaItemOverlapResolution[keyof typeof ComparisonWeightModelCriteriaItemOverlapResolution];
+
+
+export const ComparisonWeightModelCriteriaItemOverlapResolution = {
+  KEEP_SEPARATE: 'KEEP_SEPARATE',
+} as const;
+
+export type ComparisonWeightModelCriteriaItem = {
+  criterionId: string;
+  criterionLabel: string;
+  criterionType: ComparisonWeightModelCriteriaItemCriterionType;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  weight: number;
+  mappedLensId: string;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  mappingConfidence: number;
+  validationStatus: ComparisonWeightModelCriteriaItemValidationStatus;
+  overlapResolution?: ComparisonWeightModelCriteriaItemOverlapResolution;
+  overlapReason?: string;
+};
+
+/**
+ * Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.
+ */
+export interface ComparisonWeightModel {
+  version: ComparisonWeightModelVersion;
+  criteria: ComparisonWeightModelCriteriaItem[];
+  /**
+     * @minimum 1
+     * @maximum 100
+     */
+  totalWeight: number;
+  /**
+     * @minimum 0
+     * @maximum 99
+     */
+  unallocatedWeight: number;
+}
+
+export type ComparisonPromptInputMarket = typeof ComparisonPromptInputMarket[keyof typeof ComparisonPromptInputMarket];
+
+
+export const ComparisonPromptInputMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
 
 export interface ComparisonPromptInput {
   /**
@@ -201,8 +936,12 @@ export interface ComparisonPromptInput {
      * @maxLength 2000
      */
   prompt: string;
+  market?: ComparisonPromptInputMarket;
 }
 
+/**
+ * Explicit selected market bound to the confirmed draft.
+ */
 export type SourcePreflightInputMarket = typeof SourcePreflightInputMarket[keyof typeof SourcePreflightInputMarket];
 
 
@@ -214,17 +953,34 @@ export const SourcePreflightInputMarket = {
 } as const;
 
 export interface SourcePreflightInput {
+  draftId: string;
+  /** @minimum 1 */
+  draftVersion: number;
   /**
      * @minLength 8
      * @maxLength 4000
      */
   prompt: string;
+  /** Explicit selected market bound to the confirmed draft. */
   market: SourcePreflightInputMarket;
+  /**
+     * @minItems 2
+     * @maxItems 6
+     */
+  comparisonValues: ConfirmedComparisonValue[];
   /**
      * @minItems 1
      * @maxItems 12
      */
   urls: string[];
+  /**
+     * Optional user-confirmed option names for URL relevance checks only; source URLs never define identity.
+     * @minItems 2
+     * @maxItems 6
+     * @items.minLength 1
+     * @items.maxLength 120
+     */
+  vendors?: string[];
 }
 
 export type SourcePreflightResultState = typeof SourcePreflightResultState[keyof typeof SourcePreflightResultState];
@@ -246,14 +1002,111 @@ export interface SourcePreflightResult {
 }
 
 export interface SourcePreflightResponse {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
   sources: SourcePreflightResult[];
 }
+
+export type ComparisonOptionClassificationResolutionStatus = typeof ComparisonOptionClassificationResolutionStatus[keyof typeof ComparisonOptionClassificationResolutionStatus];
+
+
+export const ComparisonOptionClassificationResolutionStatus = {
+  RESOLVED: 'RESOLVED',
+  AMBIGUOUS: 'AMBIGUOUS',
+  CONFLICTING: 'CONFLICTING',
+  UNRESOLVED: 'UNRESOLVED',
+  USER_CONFIRMED: 'USER_CONFIRMED',
+} as const;
+
+export type ComparisonOptionClassificationType = typeof ComparisonOptionClassificationType[keyof typeof ComparisonOptionClassificationType];
+
+
+export const ComparisonOptionClassificationType = {
+  brand: 'brand',
+  product: 'product',
+  service: 'service',
+  platform: 'platform',
+  dealer: 'dealer',
+  bank: 'bank',
+  curriculum: 'curriculum',
+  vehicle: 'vehicle',
+  hotel: 'hotel',
+  healthcare_provider: 'healthcare_provider',
+  education: 'education',
+  unknown: 'unknown',
+} as const;
+
+/**
+ * Known primary country code. Omitted when the option's footprint is not established.
+ */
+export type ComparisonOptionClassificationPrimaryMarket = typeof ComparisonOptionClassificationPrimaryMarket[keyof typeof ComparisonOptionClassificationPrimaryMarket];
+
+
+export const ComparisonOptionClassificationPrimaryMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
+
+export interface ComparisonOptionClassification {
+  name: string;
+  /** Exact submitted option, never replaced by a research-generated label. */
+  originalText?: string;
+  canonicalEntityId?: string;
+  canonicalName?: string;
+  entityType?: string;
+  brand?: string;
+  productCategory?: string;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  classificationConfidence?: number;
+  resolutionStatus?: ComparisonOptionClassificationResolutionStatus;
+  alternativeCandidates?: string[];
+  type: ComparisonOptionClassificationType;
+  decisionDomain?: string;
+  /** Canonical decision domain when the option is recognized. */
+  customerSegment?: string;
+  /** Product subtype shown for context but not required to match within one decision domain. */
+  subcategory?: string;
+  /** Known primary country code. Omitted when the option's footprint is not established. */
+  primaryMarket?: ComparisonOptionClassificationPrimaryMarket;
+}
+
+/**
+ * Validated or inferred customer market code when known.
+ */
+export type ComparisonContextMarket = typeof ComparisonContextMarket[keyof typeof ComparisonContextMarket];
+
+
+export const ComparisonContextMarket = {
+  IN: 'IN',
+  AU: 'AU',
+  US: 'US',
+  GB: 'GB',
+} as const;
 
 export interface ComparisonContext {
   valid: boolean;
   segment: string;
   industry: string;
   message: string;
+  /** Deterministic comparison category derived from identified options, such as Vehicle Comparison or Curriculum Comparison. */
+  comparisonType?: string;
+  /** Shared recognized decision domain for the compared options. */
+  decisionDomain?: string;
+  optionClassifications?: ComparisonOptionClassification[];
+  /** True only when a known primary market differs between options or from the selected market. */
+  crossMarket?: boolean;
+  /** Validated or inferred customer market code when known. */
+  market?: ComparisonContextMarket;
+  /** Human-readable validated or inferred country when known. */
+  country?: string;
+  /** Explicit customer city, state, or postcode when known. */
+  customerLocation?: string;
 }
 
 export type ComparisonIntentDecisionType = typeof ComparisonIntentDecisionType[keyof typeof ComparisonIntentDecisionType];
@@ -323,12 +1176,12 @@ export interface ComparisonIdentity {
   originalQuery: string;
   category: string;
   /**
-     * @minItems 2
+     * @minItems 0
      * @maxItems 6
      */
   entities: ComparisonIdentityEntitiesItem[];
   /**
-     * @minimum 2
+     * @minimum 0
      * @maximum 6
      */
   entityCount: number;
@@ -340,12 +1193,15 @@ export interface ComparisonIdentity {
 /**
  * One-shot parse result. Entity boundaries are resolved before source retrieval.
  * The response preserves user order and exposes the qualifiers, decision criterion,
- * and freshness requirements that downstream research must honor.
+ * and freshness requirements that downstream research must honor. Incomplete
+ * requests return context.valid=false with a clarification, not a server error.
  */
 export interface ParsedComparison {
   prompt: string;
+  comparisonLevel?: ComparisonLevel;
+  comparisonValues?: ConfirmedComparisonValue[];
   /**
-     * @minItems 2
+     * @minItems 0
      * @maxItems 6
      */
   vendors: string[];
@@ -370,9 +1226,12 @@ export const ComparisonJobStage = {
   finding_official_sources: 'finding_official_sources',
   building_evidence: 'building_evidence',
   analysing_evidence: 'analysing_evidence',
+  verifying_market: 'verifying_market',
+  validating_market_eligibility: 'validating_market_eligibility',
   validating_comparison: 'validating_comparison',
   preparing_result: 'preparing_result',
   completed: 'completed',
+  partial_result: 'partial_result',
 } as const;
 
 export interface ComparisonJobProgress {
@@ -384,19 +1243,71 @@ export interface ComparisonJobProgress {
   subject: string;
 }
 
+export type ComparisonPreviewDecisionDecisionType = typeof ComparisonPreviewDecisionDecisionType[keyof typeof ComparisonPreviewDecisionDecisionType];
+
+
+export const ComparisonPreviewDecisionDecisionType = {
+  Product_Selection: 'Product Selection',
+  Service_Selection: 'Service Selection',
+  Vendor_Evaluation: 'Vendor Evaluation',
+  Dealership_Investment: 'Dealership Investment',
+  Franchise_Opportunity: 'Franchise Opportunity',
+  Market_Entry: 'Market Entry',
+  Technology_Platform_Selection: 'Technology Platform Selection',
+} as const;
+
+export type ComparisonPreviewDecisionPrioritiesItem = {
+  lens: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  weight: number;
+};
+
 /**
- * Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.
+ * An early assumption-led starting choice, not a verified finding. Research continues after this is returned.
+ */
+export interface ComparisonPreviewDecision {
+  winner: string;
+  decisionType: ComparisonPreviewDecisionDecisionType;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  coverage: number;
+  reason: string;
+  provisional: boolean;
+  priorities: ComparisonPreviewDecisionPrioritiesItem[];
+}
+
+/**
+ * Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.
  */
 export interface ComparisonJobAccepted {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
   jobId: string;
   status: ComparisonJobAcceptedStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
+  previewDecision?: ComparisonPreviewDecision;
   /**
-     * Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.
+     * Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;
+}
+
+export interface RetryableComparisonJob {
+  jobId: string;
+  failedAt: string;
+  request: ComparisonInput;
+}
+
+export interface RetryableComparisonJobs {
+  items: RetryableComparisonJob[];
 }
 
 export type ComparisonJobStateStatus = typeof ComparisonJobStateStatus[keyof typeof ComparisonJobStateStatus];
@@ -405,11 +1316,24 @@ export type ComparisonJobStateStatus = typeof ComparisonJobStateStatus[keyof typ
 export const ComparisonJobStateStatus = {
   processing: 'processing',
   complete: 'complete',
+  partial: 'partial',
   failed: 'failed',
 } as const;
 
 /**
- * Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.
+ * Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.
+ */
+export type ComparisonJobStateSaveStatus = typeof ComparisonJobStateSaveStatus[keyof typeof ComparisonJobStateSaveStatus];
+
+
+export const ComparisonJobStateSaveStatus = {
+  pending: 'pending',
+  saved: 'saved',
+  failed: 'failed',
+} as const;
+
+/**
+ * Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.
  */
 export type ComparisonJobStateErrorCode = typeof ComparisonJobStateErrorCode[keyof typeof ComparisonJobStateErrorCode];
 
@@ -418,6 +1342,7 @@ export const ComparisonJobStateErrorCode = {
   research_failed: 'research_failed',
   validation_failed: 'validation_failed',
   insufficient_quantitative_evidence: 'insufficient_quantitative_evidence',
+  latency_budget_exceeded: 'latency_budget_exceeded',
 } as const;
 
 export type ComparisonSummaryStatus = typeof ComparisonSummaryStatus[keyof typeof ComparisonSummaryStatus];
@@ -429,7 +1354,23 @@ export const ComparisonSummaryStatus = {
   failed: 'failed',
 } as const;
 
+/**
+ * Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
+ */
+export type ComparisonSummaryResearchStatus = typeof ComparisonSummaryResearchStatus[keyof typeof ComparisonSummaryResearchStatus];
+
+
+export const ComparisonSummaryResearchStatus = {
+  partial: 'partial',
+  complete: 'complete',
+} as const;
+
 export interface ComparisonSummary {
+  /**
+     * Number of cited scorecard claims without complete document provenance; a review does not change the original citations.
+     * @minimum 0
+     */
+  provenanceGapCount?: number;
   id: number;
   prompt: string;
   /** @maxItems 6 */
@@ -448,6 +1389,8 @@ export interface ComparisonSummary {
   providerRoleTieBreakBonus?: number;
   createdAt: string;
   status: ComparisonSummaryStatus;
+  /** Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out. */
+  researchStatus?: ComparisonSummaryResearchStatus;
 }
 
 export type ReportSourceStatus = typeof ReportSourceStatus[keyof typeof ReportSourceStatus];
@@ -563,11 +1506,402 @@ export interface ReportSource {
   registryDecision?: SourceRegistryDecision;
 }
 
+/**
+ * Participation status for the selected recommendation in its validated market and demographic context.
+ */
+export type ComparisonDecisionStatus = typeof ComparisonDecisionStatus[keyof typeof ComparisonDecisionStatus];
+
+
+export const ComparisonDecisionStatus = {
+  ELIGIBLE: 'ELIGIBLE',
+  CONDITIONALLY_ELIGIBLE: 'CONDITIONALLY_ELIGIBLE',
+  INELIGIBLE: 'INELIGIBLE',
+  CLARIFICATION_REQUIRED: 'CLARIFICATION_REQUIRED',
+} as const;
+
+export type MarketRelevanceAssessmentAvailabilityStatus = typeof MarketRelevanceAssessmentAvailabilityStatus[keyof typeof MarketRelevanceAssessmentAvailabilityStatus];
+
+
+export const MarketRelevanceAssessmentAvailabilityStatus = {
+  LOCALLY_AVAILABLE: 'LOCALLY_AVAILABLE',
+  ONLINE_LOCALLY_AVAILABLE: 'ONLINE_LOCALLY_AVAILABLE',
+  CROSS_BORDER_AVAILABLE: 'CROSS_BORDER_AVAILABLE',
+  DIGITALLY_AVAILABLE: 'DIGITALLY_AVAILABLE',
+  LIMITED_AVAILABILITY: 'LIMITED_AVAILABILITY',
+  NOT_AVAILABLE: 'NOT_AVAILABLE',
+  NOT_VERIFIED: 'NOT_VERIFIED',
+} as const;
+
+export type MarketRelevanceAssessmentDemographicRelevanceStatus = typeof MarketRelevanceAssessmentDemographicRelevanceStatus[keyof typeof MarketRelevanceAssessmentDemographicRelevanceStatus];
+
+
+export const MarketRelevanceAssessmentDemographicRelevanceStatus = {
+  HIGH: 'HIGH',
+  MODERATE: 'MODERATE',
+  LOW: 'LOW',
+  NOT_RELEVANT: 'NOT_RELEVANT',
+  NOT_ASSESSED: 'NOT_ASSESSED',
+} as const;
+
+export type MarketRelevanceAssessmentParticipationStatus = typeof MarketRelevanceAssessmentParticipationStatus[keyof typeof MarketRelevanceAssessmentParticipationStatus];
+
+
+export const MarketRelevanceAssessmentParticipationStatus = {
+  ELIGIBLE: 'ELIGIBLE',
+  CONDITIONALLY_ELIGIBLE: 'CONDITIONALLY_ELIGIBLE',
+  INELIGIBLE: 'INELIGIBLE',
+  CLARIFICATION_REQUIRED: 'CLARIFICATION_REQUIRED',
+} as const;
+
+export type MarketRelevanceAssessmentMandatoryGateResultsItemGate = typeof MarketRelevanceAssessmentMandatoryGateResultsItemGate[keyof typeof MarketRelevanceAssessmentMandatoryGateResultsItemGate];
+
+
+export const MarketRelevanceAssessmentMandatoryGateResultsItemGate = {
+  MARKET_AVAILABILITY: 'MARKET_AVAILABILITY',
+  PHYSICAL_STORE_REQUIRED: 'PHYSICAL_STORE_REQUIRED',
+  ROUTE_SERVICEABILITY: 'ROUTE_SERVICEABILITY',
+  ENTERPRISE_DATA_RESIDENCY: 'ENTERPRISE_DATA_RESIDENCY',
+  CUSTOMER_SEGMENT: 'CUSTOMER_SEGMENT',
+  REGULATORY_REQUIREMENT: 'REGULATORY_REQUIREMENT',
+  LOCAL_RETURNS_REQUIRED: 'LOCAL_RETURNS_REQUIRED',
+} as const;
+
+export type MarketRelevanceAssessmentMandatoryGateResultsItemStatus = typeof MarketRelevanceAssessmentMandatoryGateResultsItemStatus[keyof typeof MarketRelevanceAssessmentMandatoryGateResultsItemStatus];
+
+
+export const MarketRelevanceAssessmentMandatoryGateResultsItemStatus = {
+  PASS: 'PASS',
+  FAIL: 'FAIL',
+  CONDITIONAL: 'CONDITIONAL',
+  NOT_APPLICABLE: 'NOT_APPLICABLE',
+} as const;
+
+export type MarketRelevanceAssessmentEvidenceItemGate = typeof MarketRelevanceAssessmentEvidenceItemGate[keyof typeof MarketRelevanceAssessmentEvidenceItemGate];
+
+
+export const MarketRelevanceAssessmentEvidenceItemGate = {
+  MARKET_AVAILABILITY: 'MARKET_AVAILABILITY',
+  PHYSICAL_STORE_REQUIRED: 'PHYSICAL_STORE_REQUIRED',
+  ROUTE_SERVICEABILITY: 'ROUTE_SERVICEABILITY',
+  ENTERPRISE_DATA_RESIDENCY: 'ENTERPRISE_DATA_RESIDENCY',
+  CUSTOMER_SEGMENT: 'CUSTOMER_SEGMENT',
+  REGULATORY_REQUIREMENT: 'REGULATORY_REQUIREMENT',
+  LOCAL_RETURNS_REQUIRED: 'LOCAL_RETURNS_REQUIRED',
+} as const;
+
+export type MarketRelevanceAssessmentEvidenceItemOutcome = typeof MarketRelevanceAssessmentEvidenceItemOutcome[keyof typeof MarketRelevanceAssessmentEvidenceItemOutcome];
+
+
+export const MarketRelevanceAssessmentEvidenceItemOutcome = {
+  PASS: 'PASS',
+  FAIL: 'FAIL',
+} as const;
+
+export type MarketRelevanceAssessmentEvidenceItemAccessMode = typeof MarketRelevanceAssessmentEvidenceItemAccessMode[keyof typeof MarketRelevanceAssessmentEvidenceItemAccessMode];
+
+
+export const MarketRelevanceAssessmentEvidenceItemAccessMode = {
+  PHYSICAL_STORE: 'PHYSICAL_STORE',
+  LOCAL_ONLINE: 'LOCAL_ONLINE',
+  CROSS_BORDER: 'CROSS_BORDER',
+  DIGITAL: 'DIGITAL',
+} as const;
+
+export type MarketRelevanceAssessmentResearchStatus = typeof MarketRelevanceAssessmentResearchStatus[keyof typeof MarketRelevanceAssessmentResearchStatus];
+
+
+export const MarketRelevanceAssessmentResearchStatus = {
+  COMPLETE: 'COMPLETE',
+  PARTIAL_TIMEOUT: 'PARTIAL_TIMEOUT',
+} as const;
+
+export type MarketRelevanceAssessmentMandatoryGateResultsItem = {
+  gate: MarketRelevanceAssessmentMandatoryGateResultsItemGate;
+  status: MarketRelevanceAssessmentMandatoryGateResultsItemStatus;
+  mandatory: boolean;
+  reason: string;
+  evidenceIds: string[];
+};
+
+export type MarketRelevanceAssessmentEvidenceItem = {
+  id: string;
+  optionId: string;
+  gate: MarketRelevanceAssessmentEvidenceItemGate;
+  outcome: MarketRelevanceAssessmentEvidenceItemOutcome;
+  country: string;
+  location?: string;
+  accessMode?: MarketRelevanceAssessmentEvidenceItemAccessMode;
+  sourceUrl: string;
+  sourceTitle?: string;
+  publisher?: string;
+  exactClaim: string;
+  retrievedAt: string;
+  currentMarketSpecific: boolean;
+};
+
+/**
+ * Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.
+ */
+export interface MarketRelevanceAssessment {
+  optionId: string;
+  /** User-confirmed option display name associated with this assessment. */
+  optionName?: string;
+  market: DemographicContext;
+  availabilityStatus: MarketRelevanceAssessmentAvailabilityStatus;
+  demographicRelevanceStatus: MarketRelevanceAssessmentDemographicRelevanceStatus;
+  participationStatus: MarketRelevanceAssessmentParticipationStatus;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  relevanceScore?: number;
+  /** @nullable */
+  relevantForObjective: boolean | null;
+  /** @nullable */
+  localPhysicalPresence?: boolean | null;
+  /** @nullable */
+  localOnlinePresence?: boolean | null;
+  /** @nullable */
+  crossBorderAccess?: boolean | null;
+  /** @nullable */
+  digitalAccess?: boolean | null;
+  /** @nullable */
+  localPricingAvailable?: boolean | null;
+  /** @nullable */
+  localSupportAvailable?: boolean | null;
+  mandatoryGateResults: MarketRelevanceAssessmentMandatoryGateResultsItem[];
+  evidence: MarketRelevanceAssessmentEvidenceItem[];
+  assumptions: string[];
+  limitations: string[];
+  explanation: string;
+  assessedAt: string;
+  researchStatus?: MarketRelevanceAssessmentResearchStatus;
+}
+
+export type DecisionAdviceConfidenceBand = typeof DecisionAdviceConfidenceBand[keyof typeof DecisionAdviceConfidenceBand];
+
+
+export const DecisionAdviceConfidenceBand = {
+  Low: 'Low',
+  Moderate: 'Moderate',
+  High: 'High',
+} as const;
+
+export type DecisionAdviceConfidence = {
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  score: number;
+  band: DecisionAdviceConfidenceBand;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  dataCoverage: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  sourceConsistency: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  scoreSeparation: number;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  priorityClarity: number;
+  basis: string;
+};
+
+export type DecisionAdviceScenarioLeadersItem = {
+  lens: string;
+  leader: string;
+};
+
+/**
+ * Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.
+ */
+export interface DecisionAdvice {
+  decisionType: string;
+  winner: string;
+  runnerUp: string;
+  provisional: boolean;
+  confidence: DecisionAdviceConfidence;
+  whyItWon: string;
+  bestFor: string;
+  notRecommendedIf: string;
+  tradeoffs: string[];
+  scenarioLeaders: DecisionAdviceScenarioLeadersItem[];
+}
+
+export type ComparisonEvidenceReviewStatus = typeof ComparisonEvidenceReviewStatus[keyof typeof ComparisonEvidenceReviewStatus];
+
+
+export const ComparisonEvidenceReviewStatus = {
+  processing: 'processing',
+  complete: 'complete',
+  failed: 'failed',
+} as const;
+
+export type ComparisonEvidenceReviewChecksItemStatus = typeof ComparisonEvidenceReviewChecksItemStatus[keyof typeof ComparisonEvidenceReviewChecksItemStatus];
+
+
+export const ComparisonEvidenceReviewChecksItemStatus = {
+  verified: 'verified',
+  contradicted: 'contradicted',
+  unavailable: 'unavailable',
+} as const;
+
+export type ComparisonEvidenceReviewChecksItemAccessStatus = typeof ComparisonEvidenceReviewChecksItemAccessStatus[keyof typeof ComparisonEvidenceReviewChecksItemAccessStatus];
+
+
+export const ComparisonEvidenceReviewChecksItemAccessStatus = {
+  ALLOWED: 'ALLOWED',
+  LICENSED: 'LICENSED',
+  CUSTOMER_SUPPLIED: 'CUSTOMER_SUPPLIED',
+} as const;
+
+export type ComparisonEvidenceReviewAssumptionRegisterItemStatus = typeof ComparisonEvidenceReviewAssumptionRegisterItemStatus[keyof typeof ComparisonEvidenceReviewAssumptionRegisterItemStatus];
+
+
+export const ComparisonEvidenceReviewAssumptionRegisterItemStatus = {
+  unverified: 'unverified',
+  validated: 'validated',
+  contradicted: 'contradicted',
+} as const;
+
+export type ComparisonEvidenceReviewSourceRegisterItemAvailability = typeof ComparisonEvidenceReviewSourceRegisterItemAvailability[keyof typeof ComparisonEvidenceReviewSourceRegisterItemAvailability];
+
+
+export const ComparisonEvidenceReviewSourceRegisterItemAvailability = {
+  admitted: 'admitted',
+  restricted: 'restricted',
+  unavailable: 'unavailable',
+} as const;
+
+export type ComparisonEvidenceReviewSourceRegisterItemFreshness = typeof ComparisonEvidenceReviewSourceRegisterItemFreshness[keyof typeof ComparisonEvidenceReviewSourceRegisterItemFreshness];
+
+
+export const ComparisonEvidenceReviewSourceRegisterItemFreshness = {
+  known: 'known',
+  unknown: 'unknown',
+} as const;
+
+export type ComparisonEvidenceReviewCompetitiveValidationStatus = typeof ComparisonEvidenceReviewCompetitiveValidationStatus[keyof typeof ComparisonEvidenceReviewCompetitiveValidationStatus];
+
+
+export const ComparisonEvidenceReviewCompetitiveValidationStatus = {
+  not_assessed: 'not_assessed',
+  partial: 'partial',
+  contradiction_found: 'contradiction_found',
+} as const;
+
+export type ComparisonEvidenceReviewRiskAssessmentLevel = typeof ComparisonEvidenceReviewRiskAssessmentLevel[keyof typeof ComparisonEvidenceReviewRiskAssessmentLevel];
+
+
+export const ComparisonEvidenceReviewRiskAssessmentLevel = {
+  unknown: 'unknown',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+} as const;
+
+export type ComparisonEvidenceReviewChecksItem = {
+  vendor: string;
+  claim: string;
+  criterion?: string;
+  sourceUrl: string;
+  status: ComparisonEvidenceReviewChecksItemStatus;
+  quote?: string;
+  reason: string;
+  checkedAt?: string;
+  sourceId?: string;
+  documentSha256?: string;
+  sourceTextStart?: number;
+  sourceTextEnd?: number;
+  retrievedAt?: string;
+  accessStatus?: ComparisonEvidenceReviewChecksItemAccessStatus;
+  permissionCheckedAt?: string;
+};
+
+export type ComparisonEvidenceReviewAssumptionRegisterItem = {
+  assumption: string;
+  status: ComparisonEvidenceReviewAssumptionRegisterItemStatus;
+  reason: string;
+  sourceUrls: string[];
+};
+
+export type ComparisonEvidenceReviewSourceRegisterItem = {
+  url: string;
+  availability: ComparisonEvidenceReviewSourceRegisterItemAvailability;
+  freshness: ComparisonEvidenceReviewSourceRegisterItemFreshness;
+  publicationDate?: string;
+  ageDays?: number;
+  lastCheckedAt: string;
+  checkCount: number;
+  verifiedCount: number;
+  contradictedCount: number;
+  unavailableCount: number;
+};
+
+export type ComparisonEvidenceReviewCompetitiveValidation = {
+  status: ComparisonEvidenceReviewCompetitiveValidationStatus;
+  recommendation: string;
+  checkedCompetitors: string[];
+  summary: string;
+};
+
+export type ComparisonEvidenceReviewRiskAssessment = {
+  level: ComparisonEvidenceReviewRiskAssessmentLevel;
+  items: string[];
+  summary: string;
+};
+
+export type ComparisonEvidenceReviewAuditTrailItem = {
+  timestamp: string;
+  event: string;
+  detail: string;
+};
+
+export interface ComparisonEvidenceReview {
+  jobId: string;
+  status: ComparisonEvidenceReviewStatus;
+  startedAt: string;
+  completedAt?: string;
+  initialRecommendation: string;
+  reviewedRecommendation?: string;
+  reviewReason?: string;
+  error?: string;
+  checks: ComparisonEvidenceReviewChecksItem[];
+  /**
+     * Percentage of completed, available checks that were verified; null when no such checks are available.
+     * @nullable
+     */
+  verificationScore?: number | null;
+  /**
+     * Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.
+     * @nullable
+     */
+  evidenceCoverage?: number | null;
+  assumptionRegister?: ComparisonEvidenceReviewAssumptionRegisterItem[];
+  sourceRegister?: ComparisonEvidenceReviewSourceRegisterItem[];
+  competitiveValidation?: ComparisonEvidenceReviewCompetitiveValidation;
+  riskAssessment?: ComparisonEvidenceReviewRiskAssessment;
+  validationReport?: string;
+  governanceReport?: string;
+  auditTrail?: ComparisonEvidenceReviewAuditTrailItem[];
+}
+
 export type ConfirmedRecommendationStatus = typeof ConfirmedRecommendationStatus[keyof typeof ConfirmedRecommendationStatus];
 
 
 export const ConfirmedRecommendationStatus = {
   CONFIRMED: 'CONFIRMED',
+  PROVISIONAL: 'PROVISIONAL',
   NO_CONFIRMED_RECOMMENDATION: 'NO_CONFIRMED_RECOMMENDATION',
 } as const;
 
@@ -613,6 +1947,97 @@ export interface ComparedAlternative {
   scoreDifference: number | null;
   qualificationStatus: string;
   rationale: string;
+}
+
+/**
+ * Market/product eligibility outcome; this is independent of supporting evidence verification.
+ */
+export type MarketEligibilityStatus = typeof MarketEligibilityStatus[keyof typeof MarketEligibilityStatus];
+
+
+export const MarketEligibilityStatus = {
+  ELIGIBLE: 'ELIGIBLE',
+  LIMITED: 'LIMITED',
+  CLOSING: 'CLOSING',
+  INELIGIBLE: 'INELIGIBLE',
+  UNKNOWN: 'UNKNOWN',
+} as const;
+
+/**
+ * Verification state of evidence supporting the eligibility decision.
+ */
+export type MarketEligibilityEvidenceStatus = typeof MarketEligibilityEvidenceStatus[keyof typeof MarketEligibilityEvidenceStatus];
+
+
+export const MarketEligibilityEvidenceStatus = {
+  CONFIRMED: 'CONFIRMED',
+  VERIFIED: 'VERIFIED',
+  INCOMPLETE: 'INCOMPLETE',
+  MISSING: 'MISSING',
+  CONFLICTING: 'CONFLICTING',
+  TIMED_OUT: 'TIMED_OUT',
+} as const;
+
+/**
+ * Basis for the eligibility classification.
+ */
+export type MarketEligibilityBasis = typeof MarketEligibilityBasis[keyof typeof MarketEligibilityBasis];
+
+
+export const MarketEligibilityBasis = {
+  OFFICIAL_DOCUMENT: 'OFFICIAL_DOCUMENT',
+  KNOWN_OFFERING: 'KNOWN_OFFERING',
+  UNESTABLISHED: 'UNESTABLISHED',
+} as const;
+
+/**
+ * Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.
+ */
+export type MarketEligibilityNewApplicationAcceptance = typeof MarketEligibilityNewApplicationAcceptance[keyof typeof MarketEligibilityNewApplicationAcceptance];
+
+
+export const MarketEligibilityNewApplicationAcceptance = {
+  VERIFIED: 'VERIFIED',
+  UNVERIFIED: 'UNVERIFIED',
+} as const;
+
+/**
+ * Current new-customer acquisition state, separate from category/market participation.
+ */
+export type MarketEligibilityNewCustomerStatus = typeof MarketEligibilityNewCustomerStatus[keyof typeof MarketEligibilityNewCustomerStatus];
+
+
+export const MarketEligibilityNewCustomerStatus = {
+  OPEN: 'OPEN',
+  RESTRICTED: 'RESTRICTED',
+  CLOSING: 'CLOSING',
+  CLOSED: 'CLOSED',
+  UNKNOWN: 'UNKNOWN',
+} as const;
+
+/**
+ * Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.
+ */
+export interface MarketEligibility {
+  /** Market/product eligibility outcome; this is independent of supporting evidence verification. */
+  status: MarketEligibilityStatus;
+  /** Verification state of evidence supporting the eligibility decision. */
+  evidenceStatus?: MarketEligibilityEvidenceStatus;
+  /** Basis for the eligibility classification. */
+  basis?: MarketEligibilityBasis;
+  /** Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED. */
+  newApplicationAcceptance?: MarketEligibilityNewApplicationAcceptance;
+  /** Current new-customer acquisition state, separate from category/market participation. */
+  newCustomerStatus?: MarketEligibilityNewCustomerStatus;
+  market: string;
+  product: string;
+  customerSegment?: string;
+  subcategory?: string;
+  effectiveDate?: string;
+  reason: string;
+  checkedAt: string;
+  sourceUrl?: string;
+  exactClaim?: string;
 }
 
 /**
@@ -956,6 +2381,8 @@ export interface VendorScore {
   score: number;
   color: string;
   verdict: string;
+  marketEligibility?: MarketEligibility;
+  marketRelevance?: MarketRelevanceAssessment;
   /** Strategic market role of the product, service, or brand in this decision context. */
   providerRole?: VendorScoreProviderRole;
   /** Evidence-based explanation for the assigned strategic market role. */
@@ -998,6 +2425,79 @@ export interface AnalysisRow {
   dimension: string;
   values: AnalysisRowValues;
   winner: string;
+}
+
+export type ValidatedComparisonContextSourceAssociationsItemPreflightState = typeof ValidatedComparisonContextSourceAssociationsItemPreflightState[keyof typeof ValidatedComparisonContextSourceAssociationsItemPreflightState];
+
+
+export const ValidatedComparisonContextSourceAssociationsItemPreflightState = {
+  accepted: 'accepted',
+  inaccessible: 'inaccessible',
+  stale: 'stale',
+  wrong_market: 'wrong_market',
+  unrelated: 'unrelated',
+  NOT_CHECKED: 'NOT_CHECKED',
+} as const;
+
+export type ValidatedComparisonContextSourcePreflightResultsItemState = typeof ValidatedComparisonContextSourcePreflightResultsItemState[keyof typeof ValidatedComparisonContextSourcePreflightResultsItemState];
+
+
+export const ValidatedComparisonContextSourcePreflightResultsItemState = {
+  accepted: 'accepted',
+  inaccessible: 'inaccessible',
+  stale: 'stale',
+  wrong_market: 'wrong_market',
+  unrelated: 'unrelated',
+} as const;
+
+export type ValidatedComparisonContextSourceAssociationsItem = {
+  url: string;
+  option: string;
+  preflightState: ValidatedComparisonContextSourceAssociationsItemPreflightState;
+  preflightReason?: string;
+};
+
+export type ValidatedComparisonContextSourcePreflightResultsItem = {
+  url: string;
+  state: ValidatedComparisonContextSourcePreflightResultsItemState;
+  reason: string;
+  replacementUrl?: string;
+};
+
+/**
+ * Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.
+ */
+export interface ValidatedComparisonContext {
+  /** Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance. */
+  validatedUserPrompt?: string;
+  comparisonType?: string;
+  decisionDomain?: string;
+  customerSegment?: string;
+  optionClassifications?: ComparisonOptionClassification[];
+  crossMarket?: boolean;
+  comparisonLevel?: ComparisonLevel;
+  comparisonValues?: ConfirmedComparisonValue[];
+  demographicContext?: DemographicContext;
+  /** Validated option ownership with preflight outcome; rejected sources do not affect option eligibility. */
+  sourceAssociations?: ValidatedComparisonContextSourceAssociationsItem[];
+  /** URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable. */
+  sourcePreflightResults?: ValidatedComparisonContextSourcePreflightResultsItem[];
+  decisionType: string;
+  country: string;
+  /** @nullable */
+  state: string | null;
+  /** @nullable */
+  customerLocation: string | null;
+  currency: string;
+  productAvailability: string;
+  /** @nullable */
+  industry: string | null;
+  /** @nullable */
+  organisationSize: string | null;
+  /** @nullable */
+  dataResidency: string | null;
+  market: string;
+  marketContext: string;
 }
 
 export interface ProductEquivalencyItem {
@@ -1064,18 +2564,27 @@ export interface DecisionGovernanceItem {
 
 export type ComparisonSwot = {[key: string]: string[]};
 
-export type Comparison = ComparisonSummary & {
+export type Comparison = ComparisonSummary & ({
   urls: string[];
+  /** URLs explicitly supplied by the user, separate from discovered evidence sources. */
+  suppliedUrls?: string[];
   /** Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls. */
   sourceAvailability: ReportSource[];
+  /** Participation status for the selected recommendation in its validated market and demographic context. */
+  decisionStatus?: ComparisonDecisionStatus;
+  /** Per-option demographic and geographic relevance assessments. */
+  marketRelevance?: MarketRelevanceAssessment[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  decisionAdvice?: DecisionAdvice;
+  evidenceReview?: ComparisonEvidenceReview;
   confirmedRecommendation: ConfirmedRecommendation;
   /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
   alternatives: ComparedAlternative[];
   /** @maxItems 8 */
   weightAdjustments?: AdditionalComparisonWeight[];
+  weightModel?: ComparisonWeightModel | null;
   vendorScores: VendorScore[];
   pricing: AnalysisRow[];
   features: AnalysisRow[];
@@ -1085,6 +2594,7 @@ export type Comparison = ComparisonSummary & {
   nextSteps: string[];
   /** Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing. */
   contextAssumptions: string[];
+  validatedContext?: ValidatedComparisonContext;
   /** Like-for-like mapping of current and target products or services, including partial equivalence and uncovered scope. */
   productEquivalency: ProductEquivalencyItem[];
   /** Required capabilities that are absent, partial, changed, or unverified in the target arrangement. */
@@ -1095,7 +2605,7 @@ export type Comparison = ComparisonSummary & {
   migrationSequence: MigrationPhase[];
   /** Decision rights, evidence requirements, approvers, and approval gates. */
   decisionGovernance: DecisionGovernanceItem[];
-};
+});
 
 export type GuestComparisonStatus = typeof GuestComparisonStatus[keyof typeof GuestComparisonStatus];
 
@@ -1106,9 +2616,34 @@ export const GuestComparisonStatus = {
   failed: 'failed',
 } as const;
 
+/**
+ * Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.
+ */
+export type GuestComparisonResearchStatus = typeof GuestComparisonResearchStatus[keyof typeof GuestComparisonResearchStatus];
+
+
+export const GuestComparisonResearchStatus = {
+  partial: 'partial',
+  complete: 'complete',
+} as const;
+
+export type GuestComparisonDecisionStatus = typeof GuestComparisonDecisionStatus[keyof typeof GuestComparisonDecisionStatus];
+
+
+export const GuestComparisonDecisionStatus = {
+  ELIGIBLE: 'ELIGIBLE',
+  CONDITIONALLY_ELIGIBLE: 'CONDITIONALLY_ELIGIBLE',
+  INELIGIBLE: 'INELIGIBLE',
+  CLARIFICATION_REQUIRED: 'CLARIFICATION_REQUIRED',
+} as const;
+
 export type GuestComparisonSwot = {[key: string]: string[]};
 
 export interface GuestComparison {
+  suppliedUrls?: string[];
+  weightModel?: ComparisonWeightModel | null;
+  /** Present for a partially completed authenticated comparison only after its report has been persisted. */
+  id?: number;
   prompt: string;
   /** @maxItems 6 */
   vendors: string[];
@@ -1117,12 +2652,17 @@ export interface GuestComparison {
   recommendation: string;
   score: number;
   status: GuestComparisonStatus;
+  /** Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out. */
+  researchStatus?: GuestComparisonResearchStatus;
   createdAt: string;
   urls: string[];
   sourceAvailability: ReportSource[];
+  decisionStatus?: GuestComparisonDecisionStatus;
+  marketRelevance?: MarketRelevanceAssessment[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  decisionAdvice?: DecisionAdvice;
   confirmedRecommendation: ConfirmedRecommendation;
   /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
   alternatives: ComparedAlternative[];
@@ -1134,6 +2674,7 @@ export interface GuestComparison {
   insights: string[];
   nextSteps: string[];
   contextAssumptions: string[];
+  validatedContext?: ValidatedComparisonContext;
   productEquivalency: ProductEquivalencyItem[];
   functionalGaps: FunctionalGapItem[];
   serviceProductMap: ServiceProductMapItem[];
@@ -1142,27 +2683,140 @@ export interface GuestComparison {
 }
 
 /**
- * Pollable state for asynchronous comparison research.
+ * Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.
  */
 export interface ComparisonJobState {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
   status: ComparisonJobStateStatus;
   stage: ComparisonJobStage;
   progress: ComparisonJobProgress;
   /**
-     * Server-measured milliseconds since this job was created.
+     * Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.
      * @minimum 0
      */
   elapsedMs: number;
   /**
-     * Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.
+     * Hard deadline in seconds for reaching a terminal job state.
      * @minimum 1
      */
   targetCompletionSeconds: number;
+  /** Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds. */
   result?: Comparison | GuestComparison;
-  /** User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt. */
+  /** Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs. */
+  saveStatus?: ComparisonJobStateSaveStatus;
+  previewDecision?: ComparisonPreviewDecision;
+  /** User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report. */
   message?: string;
-  /** Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking. */
+  /** Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report. */
   errorCode?: ComparisonJobStateErrorCode;
+}
+
+export type ComparisonVerificationAccessAccess = typeof ComparisonVerificationAccessAccess[keyof typeof ComparisonVerificationAccessAccess];
+
+
+export const ComparisonVerificationAccessAccess = {
+  active: 'active',
+  payment_required: 'payment_required',
+  not_configured: 'not_configured',
+} as const;
+
+export interface ComparisonVerificationAccess {
+  access: ComparisonVerificationAccessAccess;
+  message?: string;
+}
+
+export interface ComparisonVerificationCheckout {
+  purchaseUrl: string;
+}
+
+export interface ComparisonReportVersion {
+  /** @minimum 1 */
+  version: number;
+  /** Time this immutable report snapshot was created. */
+  createdAt: string;
+  report: Comparison;
+}
+
+export interface ComparisonVersions {
+  /** Stable identity shared by the current comparison and every immutable report version. */
+  comparisonId: number;
+  versions: ComparisonReportVersion[];
+}
+
+export type ComparisonWithDraftCorrelation = Comparison & DraftRequestCorrelation;
+
+export type GuestComparisonWithDraftCorrelation = GuestComparison & DraftRequestCorrelation;
+
+export type BuyerQuoteCurrency = typeof BuyerQuoteCurrency[keyof typeof BuyerQuoteCurrency];
+
+
+export const BuyerQuoteCurrency = {
+  AUD: 'AUD',
+  USD: 'USD',
+  EUR: 'EUR',
+  GBP: 'GBP',
+} as const;
+
+export type BuyerQuoteTaxBasis = typeof BuyerQuoteTaxBasis[keyof typeof BuyerQuoteTaxBasis];
+
+
+export const BuyerQuoteTaxBasis = {
+  ex_gst: 'ex_gst',
+  inc_gst: 'inc_gst',
+} as const;
+
+/**
+ * Buyer-entered terms linked to a private written quote, not independently verified.
+ */
+export interface BuyerQuote {
+  vendor: string;
+  /** Calendar date YYYY-MM-DD */
+  documentDate: string;
+  /** Calendar date YYYY-MM-DD */
+  validUntil: string;
+  currency: BuyerQuoteCurrency;
+  termMonths: number;
+  licenseAnnual: string;
+  implementationOnce: string;
+  serviceAnnual: string;
+  audPerUnit: string;
+  /** Calendar date YYYY-MM-DD */
+  exchangeRateDate?: string;
+  exchangeRateSource?: string;
+  scope: string;
+  taxBasis: BuyerQuoteTaxBasis;
+  exclusions: string;
+  fileName: string;
+  fileSha256: string;
+  documentUrl: string;
+  totalAud: string;
+}
+
+export type BuyerQuoteAssessmentStatus = typeof BuyerQuoteAssessmentStatus[keyof typeof BuyerQuoteAssessmentStatus];
+
+
+export const BuyerQuoteAssessmentStatus = {
+  ready: 'ready',
+  incomplete: 'incomplete',
+} as const;
+
+export type BuyerQuoteAssessmentScores = {[key: string]: number};
+
+export interface BuyerQuoteAssessment {
+  status: BuyerQuoteAssessmentStatus;
+  flags: string[];
+  horizonMonths?: number;
+  /** @nullable */
+  winner: string | null;
+  rows: AnalysisRow[];
+  scores: BuyerQuoteAssessmentScores;
+}
+
+export interface BuyerQuoteBundle {
+  quotes: BuyerQuote[];
+  assessment: BuyerQuoteAssessment;
 }
 
 export interface DashboardSummary {
@@ -1194,7 +2848,7 @@ export type ForbiddenResponse = ErrorResponse;
 export type NotFoundResponse = ErrorResponse;
 
 /**
- * Idempotency key conflict
+ * Idempotency key or draft-version conflict
  */
 export type ConflictResponse = ErrorResponse;
 
@@ -1224,6 +2878,16 @@ export type BadGatewayResponse = ErrorResponse;
 export type IdempotencyKeyParameter = string;
 
 /**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+export type DraftRequestIdParameter = string;
+
+/**
+ * UUID echoed as requestId in every event payload. EventSource clients may instead supply the same UUID in the requestId query parameter; if both are present, they must match.
+ */
+export type EventStreamRequestIdParameter = string;
+
+/**
  * Exact tenant being managed; the Clerk user must be an owner or admin member.
  */
 export type TenantIdHeaderParameter = string;
@@ -1231,6 +2895,145 @@ export type TenantIdHeaderParameter = string;
 export type LimitParameter = number;
 
 export type CursorParameter = string;
+
+export type InterpretComparisonDraftHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type GetComparisonDraftHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type UpdateComparisonDraftOptionsHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+/**
+ * Unique key for this request. Reusing it with a changed body returns 409.
+ * @minLength 8
+ * @maxLength 255
+ */
+'Idempotency-Key': IdempotencyKeyParameter;
+};
+
+export type GetComparisonDraftOptionSuggestionsHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type StartComparisonDraftEnrichmentHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type GetComparisonDraftEnrichmentJobHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type ValidateComparisonDraftUrlHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type CreateComparisonHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type CreateGuestComparisonHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type ReviewComparisonContextHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type PreflightComparisonSourcesHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type ReviewGuestComparisonContextHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type PreflightGuestComparisonSourcesHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type CreateComparisonJobHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type GetComparisonJobHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type StreamComparisonJobEventsHeaders = {
+/**
+ * UUID echoed as requestId in every event payload. EventSource clients may instead supply the same UUID in the requestId query parameter; if both are present, they must match.
+ */
+'X-Request-Id'?: EventStreamRequestIdParameter;
+};
+
+export type CreateGuestComparisonJobHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type GetGuestComparisonJobHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
+};
+
+export type StreamGuestComparisonJobEventsHeaders = {
+/**
+ * UUID echoed as requestId in every event payload. EventSource clients may instead supply the same UUID in the requestId query parameter; if both are present, they must match.
+ */
+'X-Request-Id'?: EventStreamRequestIdParameter;
+};
 
 export type ExternalListComparisonsParams = {
 /**
@@ -1242,6 +3045,10 @@ cursor?: CursorParameter;
 };
 
 export type ExternalCreateComparisonHeaders = {
+/**
+ * Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.
+ */
+'X-Request-Id': DraftRequestIdParameter;
 /**
  * Unique key for this request; reusing it with a changed body returns 409.
  * @minLength 8

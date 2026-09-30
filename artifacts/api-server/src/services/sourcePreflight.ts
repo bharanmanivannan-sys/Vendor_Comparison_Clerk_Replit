@@ -138,12 +138,30 @@ export async function preflightSourceUrls(input: {
   market: string;
   urls: string[];
   vendors?: string[];
+  timeoutMs?: number;
 }): Promise<SourcePreflightResult[]> {
   return withPreflightCapacity(async () => {
-  const availability = await checkEvidenceUrls(input.urls, { permissionRegistry: publisherPermissionRegistry });
+  const startedAt = Date.now();
+  const perRedirectTimeoutMs = input.timeoutMs === undefined
+    ? undefined
+    : Math.max(250, Math.floor(input.timeoutMs / 4));
+  const availability = await checkEvidenceUrls(input.urls, {
+    permissionRegistry: publisherPermissionRegistry,
+    ...(perRedirectTimeoutMs !== undefined ? { timeoutMs: perRedirectTimeoutMs, maxRedirects: 3 } : {}),
+  });
+  const remainingMs = input.timeoutMs === undefined
+    ? undefined
+    : Math.max(250, input.timeoutMs - (Date.now() - startedAt));
   const documents = await retrieveEvidenceDocuments(
     availability.filter((result) => result.available).map((result) => result.finalUrl ?? result.url),
-    { permissionRegistry: publisherPermissionRegistry, concurrency: 2 },
+    {
+      permissionRegistry: publisherPermissionRegistry,
+      concurrency: 2,
+      ...(remainingMs !== undefined ? {
+        timeoutMs: Math.max(250, Math.floor(remainingMs / 2)),
+        batchTimeoutMs: remainingMs,
+      } : {}),
+    },
   );
   const documentsByUrl = new Map(documents.map((result) => [result.url, result]));
 

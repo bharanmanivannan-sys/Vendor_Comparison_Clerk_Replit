@@ -15,6 +15,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Explicit selected market bound to the confirmed draft.
+ */
 export type SourcePreflightInputMarket = typeof SourcePreflightInputMarket[keyof typeof SourcePreflightInputMarket];
 
 

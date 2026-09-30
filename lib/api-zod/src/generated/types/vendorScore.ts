@@ -14,8 +14,10 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { MarketEligibility } from './marketEligibility';
 import type { MarketHistory } from './marketHistory';
 import type { MarketPosition } from './marketPosition';
+import type { MarketRelevanceAssessment } from './marketRelevanceAssessment';
 import type { QualificationGate } from './qualificationGate';
 import type { VendorDimensionScore } from './vendorDimensionScore';
 import type { VendorScoreProviderRole } from './vendorScoreProviderRole';
@@ -28,6 +30,8 @@ export interface VendorScore {
   score: number;
   color: string;
   verdict: string;
+  marketEligibility?: MarketEligibility;
+  marketRelevance?: MarketRelevanceAssessment;
   /** Strategic market role of the product, service, or brand in this decision context. */
   providerRole?: VendorScoreProviderRole;
   /** Evidence-based explanation for the assigned strategic market role. */
