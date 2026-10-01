@@ -1,13 +1,14 @@
 import { classifyComparisonResult, isBudgetNoMatch, validatedServerProvisionalChoiceForUnverifiedEligibility } from './comparison-result';
 import { eligibilityBlocksRecommendation, suppressUnverifiedEligibilityWinner } from './market-eligibility';
 import { comparisonOutcomeGate } from './comparison-outcome-gates';
+import { hasUnresolvedDiscovery } from './unresolved-discovery';
 
 export interface DisplayedRecommendation {
   /** Option every report surface may name as the choice, or null. */
   option: string | null;
   /** True when the report must say no recommendation (header, card and tags). */
   withheld: boolean;
-  reason: 'STORED_WINNER_INELIGIBLE' | 'ELIGIBILITY_BLOCKED' | 'SUMMARY_WITHHELD' | null;
+  reason: 'STORED_WINNER_INELIGIBLE' | 'ELIGIBILITY_BLOCKED' | 'SUMMARY_WITHHELD' | 'UNRESOLVED_DISCOVERY' | null;
 }
 
 const INELIGIBLE = /^(?:INELIGIBLE|NOT_AVAILABLE|CLOSED|UNAVAILABLE)$/i;
@@ -20,6 +21,7 @@ const key = (value: unknown) => String(value ?? '').trim().toLowerCase();
  * Real scores are untouched; only the naming of a choice is decided here.
  */
 export function displayedRecommendation(comparison: any): DisplayedRecommendation {
+  if (hasUnresolvedDiscovery(comparison)) return { option: null, withheld: true, reason: 'UNRESOLVED_DISCOVERY' };
   if (!comparison || typeof comparison !== 'object') return { option: null, withheld: true, reason: 'SUMMARY_WITHHELD' };
   if (comparisonOutcomeGate(comparison)) return { option: null, withheld: true, reason: 'SUMMARY_WITHHELD' };
   if (isBudgetNoMatch(comparison)) return { option: null, withheld: true, reason: 'SUMMARY_WITHHELD' };

@@ -230,11 +230,15 @@ export function resolveEntityIdentity(input: EntityIdentityResolutionInput): Res
   const streamingContext = STREAMING_CONTEXT.test(query);
   const deliveryContext = DELIVERY_CONTEXT.test(query);
   const shoppingContext = /\b(?:shopping|e-?commerce|online\s+(?:retail|marketplaces?)|marketplaces?)\b/i.test(query);
+  const counterpartIsMarketplace = otherOptions.some((option) =>
+    /^(?:e bay|ebay)(?:\s+(?:shopping|marketplace))?$/.test(normalize(option)));
 
   // Explicit business identities outrank broad parent-brand ambiguity and
-  // contextual streaming cues. An eBay counterpart alone does not resolve Amazon.
+  // contextual streaming cues. An eBay peer establishes marketplace scope only
+  // when neither the query nor another peer explicitly asks for streaming.
   const explicitAmazonShopping = /^amazon\s+(?:shopping(?:\s+(?:services?|and delivery services?))?|e commerce|ecommerce|online\s+(?:shopping|retail|marketplace))$/i.test(normalized);
-  if (explicitAmazonShopping || normalized === "amazon" && shoppingContext && !streamingContext) {
+  if (explicitAmazonShopping || normalized === "amazon"
+    && (shoppingContext || counterpartIsMarketplace) && !streamingContext && !counterpartIsStreaming) {
     return {
       ...base,
       canonicalEntityId: "amazon-shopping",

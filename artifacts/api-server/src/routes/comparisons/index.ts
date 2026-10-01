@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { getAuth } from "@clerk/express";
+import { hasUncorrectedDraftPrompt } from "../../lib/comparisonDraftParser";
 import { and, desc, eq, gte, or, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import { researchCapacityAlerts } from "../../lib/researchCapacityAlerts";
@@ -41,6 +42,8 @@ import {
   buildAnalysis,
   buildDecisionModeAnalysis,
   createDecisionModeAnalysis,
+  assertConcreteDecisionOptions,
+  hasUnresolvedDecisionIdentity,
   buildResearchedDecisionModeAnalysis,
   buildComparisonIdentity,
   comparisonFailureCode,
@@ -589,10 +592,11 @@ export function comparisonResumeInputForJob(options: {
 function resumeReportFromUnitSnapshot(snapshot: unknown): unknown | undefined {
   if (!isRecord(snapshot) || snapshot.version !== COMPARISON_RESUME_SNAPSHOT_VERSION
     || (snapshot.kind !== "initial_analysis" && snapshot.kind !== "researched_analysis")) return undefined;
-  return snapshot.report;
+  return hasUnresolvedDecisionIdentity(snapshot) ? undefined : snapshot.report;
 }
 
 export function rawAnalysisFromUnitSnapshot(snapshot: unknown, expectedKind: "initial_analysis" | "researched_analysis", vendors: string[]): AnalysisPayload | undefined {
+  if (vendors.some(isObjectivePhraseVendor) || hasUnresolvedDecisionIdentity(snapshot)) return undefined;
   if (!isRecord(snapshot) || snapshot.version !== COMPARISON_RESUME_SNAPSHOT_VERSION
     || snapshot.kind !== expectedKind || snapshot.resumable !== true
     || !Array.isArray(snapshot.vendors)
@@ -911,7 +915,7 @@ function validatedResumeInput(value: unknown, row: typeof comparisonJobCheckpoin
       ].includes(String(entry.entityLevel)))
     )
     || !isRecord(value.validatedContext) || !Array.isArray(value.vendors)
-    || !value.vendors.every((item) => typeof item === "string")
+    || !value.vendors.every((item) => typeof item === "string" && !isObjectivePhraseVendor(item))
     || !Array.isArray(value.criteria) || !value.criteria.every((item) => typeof item === "string")
     || typeof value.subject !== "string"
     || (row.userId === null ? value.userId !== undefined : value.userId !== row.userId)
@@ -944,7 +948,7 @@ export function resumeInputWithSnapshotVendors(
   if (!isRecord(snapshot) || snapshot.version !== COMPARISON_RESUME_SNAPSHOT_VERSION
     || !Array.isArray(snapshot.vendors) || snapshot.vendors.length < 2
     || snapshot.vendors.length > MAX_COMPARISON_OPTIONS
-    || !snapshot.vendors.every((vendor) => typeof vendor === "string" && vendor.trim())
+    || !snapshot.vendors.every((vendor) => typeof vendor === "string" && vendor.trim() && !isObjectivePhraseVendor(vendor))
     || new Set(snapshot.vendors.map((vendor) => String(vendor).trim().toLocaleLowerCase())).size !== snapshot.vendors.length) {
     return undefined;
   }
@@ -956,6 +960,7 @@ export function resumeInputWithSnapshotVendors(
 }
 
 function fallbackReportForCheckpointResult(value: unknown): unknown {
+  if (hasUnresolvedDecisionIdentity(value)) return undefined;
   return resumeReportFromUnitSnapshot(value) ?? value;
 }
 
@@ -991,6 +996,8 @@ export function finalizedGuestReportFromResume(
   options: ComparisonResumeInput,
   analysis: AnalysisPayload,
 ): unknown {
+  assertConcreteDecisionOptions(options.vendors);
+  assertConcreteDecisionOptions(analysis.vendorScores.map(({ vendor }) => vendor));
   const finalAnalysis = withValidatedCategory(
     analysisWithCanonicalRecommendation(analysis, options.vendors),
     options.input.prompt,
@@ -1252,18 +1259,25 @@ function checkpointJobFromRow(row: typeof comparisonJobCheckpointsTable.$inferSe
     : row.status === "partial" && row.recoverySnapshot !== null
       ? row.recoverySnapshot
       : undefined;
+  const unsafe = hasUnresolvedDecisionIdentity(storedResult)
+    || (isRecord(row.progress) && Array.isArray(row.progress.entities)
+      && row.progress.entities.some((name) => typeof name === "string" && isObjectivePhraseVendor(name)));
   return {
     owner: row.owner,
     ...(row.draftId ? { draftId: row.draftId } : {}),
     ...(row.draftVersion !== null ? { draftVersion: row.draftVersion } : {}),
-    status: row.status as ComparisonJob["status"],
+    status: unsafe ? "failed" : row.status as ComparisonJob["status"],
     stage: row.stage as ComparisonJob["stage"],
     progress: row.progress,
-    ...(storedResult !== undefined ? { result: fallbackReportForCheckpointResult(storedResult) } : {}),
+    ...(!unsafe && storedResult !== undefined ? { result: fallbackReportForCheckpointResult(storedResult) } : {}),
     ...(row.saveStatus ? { saveStatus: row.saveStatus as ComparisonSaveStatus } : {}),
-    ...(row.previewDecision !== null ? { previewDecision: row.previewDecision as ComparisonJob["previewDecision"] } : {}),
+    ...(!unsafe && row.previewDecision !== null ? { previewDecision: row.previewDecision as ComparisonJob["previewDecision"] } : {}),
     ...(row.message ? { message: row.message } : {}),
     ...(row.errorCode ? { errorCode: row.errorCode as ComparisonJob["errorCode"] } : {}),
+    ...(unsafe ? {
+      errorCode: "validation_failed" as const,
+      message: "This older comparison contains unresolved competitor options. Retry setup and confirm concrete names; no placeholder rating can be published.",
+    } : {}),
     startedAt: row.startedAt.getTime(),
     ...(row.endedAt ? { endedAt: row.endedAt.getTime() } : {}),
     createdAt: row.createdAt.getTime(),
@@ -1369,6 +1383,12 @@ export function setComparisonJob(
       || !comparisonWorkerLeaseIsCurrent(expectedLeaseOwner, writer.leaseOwner)
       || (observedComparisonJobLeaseOwners.has(id)
         && !comparisonWorkerLeaseIsCurrent(expectedLeaseOwner, observedComparisonJobLeaseOwners.get(id))))) return false;
+  if (hasUnresolvedDecisionIdentity(job.result)
+    || (job.previewDecision?.winner && isObjectivePhraseVendor(job.previewDecision.winner))) {
+    job = { ...job, status: "failed", result: undefined, previewDecision: undefined,
+      errorCode: "validation_failed",
+      message: "Concrete competitor discovery must be reviewed before scoring. Retry setup or edit the draft options." };
+  }
   const previousJob = comparisonJobs.get(id);
   if (options.provisionalPartial
     && (job.status !== "partial" || job.saveStatus !== "pending"
@@ -2301,6 +2321,7 @@ export async function buildSynchronousDecisionModeReport(
     buildResearch?: (input: AnalysisInput, initial: AnalysisPayload) => Promise<AnalysisPayload>;
   } = {},
 ): Promise<{ analysis: AnalysisPayload; researchStatus: ResearchStatus }> {
+  assertConcreteDecisionOptions(input.vendors);
   const startedAt = Date.now();
   const deadlineAt = startedAt + Math.min(
     Math.max(1, options.deadlineMs ?? DECISION_MODE_DEADLINE_SECONDS * 1_000 - 500),
@@ -2733,6 +2754,9 @@ export function comparisonWorkaroundPrompt(prompt: string, vendors: string[]): s
 
 export function comparisonFailureMessage(error: unknown, prompt: string, vendors: string[]): string {
   const message = error instanceof Error ? error.message : "";
+  if (/OPTION_DISCOVERY_REQUIRED/.test(message)) {
+    return "Discover and confirm concrete competitor names before comparison. Retry setup or edit the options; no placeholder score or winner was produced.";
+  }
   // Terminal comparison blockage is distinct from the provider observation counted at the HTTP boundary.
   // Never include the request, provider error, or comparison identity in this event.
   if (/MODEL_SCORING_GEMINI_HTTP_429/.test(message))
@@ -3067,6 +3091,19 @@ export async function requireConfirmedDraftHandoff(
       sendError(res, 404, "confirmed_draft_not_found", "The comparison draft was not found for this account. Create or fetch a draft owned by this account before comparing.");
       return false;
     }
+    const savedNames = Array.isArray(draft.draft.options)
+      ? draft.draft.options.map((option) => isRecord(option) ? String(option.comparisonValue || option.originalText || "") : "")
+      : [];
+    if (savedNames.some(isObjectivePhraseVendor) || values.some(({ confirmedName }) => isObjectivePhraseVendor(confirmedName))) {
+      sendError(res, 409, "option_discovery_required",
+        "The draft still contains generic competitors. Retry setup to discover concrete names or edit the options before confirmation. No ratings have been produced.");
+      return false;
+    }
+    if (hasUncorrectedDraftPrompt(draft)) {
+      sendError(res, 409, "draft_prompt_refresh_required",
+        "The saved prompt needs deterministic correction before confirmation. Edit the draft or retry setup, then confirm its exact returned prompt and values.");
+      return false;
+    }
     if (draft.version !== validated.input.draftVersion) {
       sendError(
         res,
@@ -3223,6 +3260,7 @@ function startComparisonJob(options: {
   criteria: string[];
   subject: string;
 }): string {
+  assertConcreteDecisionOptions(options.vendors);
   pruneComparisonJobs();
   const id = options.resumeContext?.row.id ?? randomUUID();
   const startedAt = options.resumeContext?.row.startedAt.getTime() ?? Date.now();
@@ -3405,6 +3443,8 @@ function startComparisonJob(options: {
       });
     };
     const guestReportFor = (analysis: AnalysisPayload, researchStatus: ResearchStatus) => {
+      assertConcreteDecisionOptions(options.vendors);
+      assertConcreteDecisionOptions(analysis.vendorScores.map(({ vendor }) => vendor));
       const safeAnalysis = withValidatedCategory(
         analysisWithCanonicalRecommendation(analysis, options.vendors), options.input.prompt, options.vendors,
       );
@@ -4282,6 +4322,13 @@ function startComparisonJob(options: {
 }
 
 export function comparisonJobPayload(job: ComparisonJob, owner: string, requestId?: string) {
+  if (hasUnresolvedDecisionIdentity(job.result)
+    || job.progress?.entities?.some(isObjectivePhraseVendor)
+    || (job.previewDecision?.winner && isObjectivePhraseVendor(job.previewDecision.winner))) {
+    job = { ...job, status: "failed", result: undefined, previewDecision: undefined,
+      errorCode: "validation_failed",
+      message: "This comparison needs concrete competitor names. Retry setup or edit the draft; unresolved options cannot be scored." };
+  }
   const payload = {
     status: job.status,
     stage: job.stage,
@@ -6440,6 +6487,19 @@ async function sendComparisonReview(req: Request, res: Response, owner: string):
   }
   if (draft.version !== handoff.draftVersion) {
     sendError(res, 409, "stale_draft_version", "The draft changed during review. Fetch the current owned draft and rerun the review checks.");
+    return;
+  }
+  const draftNames = Array.isArray(draft.draft.options)
+    ? draft.draft.options.map((option) => isRecord(option) ? String(option.comparisonValue || option.originalText || "") : "")
+    : [];
+  if (draftNames.some(isObjectivePhraseVendor)) {
+    sendError(res, 409, "option_discovery_required",
+      "Retry setup to propose concrete competitors, or edit this draft before review. Generic competitor objectives cannot be confirmed.");
+    return;
+  }
+  if (hasUncorrectedDraftPrompt(draft)) {
+    sendError(res, 409, "draft_prompt_refresh_required",
+      "Edit the draft or retry setup before review. Its corrected prompt and confirmed values must match the saved contract.");
     return;
   }
   const reviewed = await validateComparisonInput(req.body);

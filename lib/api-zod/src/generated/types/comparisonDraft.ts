@@ -19,6 +19,7 @@ import type { ComparisonDraftEnrichmentStatus } from './comparisonDraftEnrichmen
 import type { ComparisonDraftMarket } from './comparisonDraftMarket';
 import type { ComparisonDraftMarketSuggestions } from './comparisonDraftMarketSuggestions';
 import type { ComparisonDraftOption } from './comparisonDraftOption';
+import type { ComparisonDraftOptionDiscovery } from './comparisonDraftOptionDiscovery';
 import type { ComparisonDraftStatus } from './comparisonDraftStatus';
 import type { ComparisonDraftUrl } from './comparisonDraftUrl';
 import type { ComparisonDraftWarning } from './comparisonDraftWarning';
@@ -32,7 +33,10 @@ export interface ComparisonDraft {
   version: number;
   status: ComparisonDraftStatus;
   originalQuery: string;
+  /** Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract. */
+  rawUserQuery?: string;
   options: ComparisonDraftOption[];
+  optionDiscovery?: ComparisonDraftOptionDiscovery;
   comparisonLevel: ComparisonDraftComparisonLevel;
   decisionObjective: string;
   decisionDomain: string;

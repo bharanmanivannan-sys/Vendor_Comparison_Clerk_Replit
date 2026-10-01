@@ -1,3 +1,5 @@
+import { discoveryOptionLabels, hasUnresolvedDiscovery, UNRESOLVED_DISCOVERY_EXPLANATION } from './unresolved-discovery';
+
 /** A rendering gate, not a replacement for the scoring or release-quality gates. */
 export type ReportState = 'RESEARCH_BACKED' | 'PARTIAL' | 'INSUFFICIENT_DATA';
 
@@ -24,6 +26,13 @@ const DIMENSIONS = [
 ] as const;
 
 export function classifyReportQuality(comparison: any, winnerUsable: boolean): ReportQuality {
+  if (hasUnresolvedDiscovery(comparison)) return {
+    state: 'INSUFFICIENT_DATA', reason: UNRESOLVED_DISCOVERY_EXPLANATION,
+    coverage: 0, differentiators: [], missingDimensions: ['Concrete competitor shortlist'],
+    optionCoverage: discoveryOptionLabels(comparison).map((option) => ({
+      option, evidence: 0, pricing: 0, features: 0, vendor: 0, integration: 0, support: 0,
+    })),
+  };
   const vendors: any[] = Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [];
   // Canonical scored options can be model/plan names even when the intake used broad brand labels.
   const names: string[] = vendors.length
@@ -76,6 +85,7 @@ export function classifyReportQuality(comparison: any, winnerUsable: boolean): R
 
 /** Score-model comparisons are labelled as such; the accompanying claim must be source linked. */
 export function evidenceBasedProsCons(comparison: any): Array<{ option: string; pros: string[]; cons: string[] }> {
+  if (hasUnresolvedDiscovery(comparison)) return [];
   const vendors: any[] = Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [];
   return vendors.map((vendor) => {
     const pros: string[] = [];

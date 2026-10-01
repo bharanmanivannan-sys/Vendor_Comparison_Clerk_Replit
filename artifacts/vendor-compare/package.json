@@ -8,7 +8,7 @@
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/dark-contrast.test.ts src/report-export.test.tsx src/weight-editor.browser.test.tsx src/interpretation-review.browser.test.tsx src/create-comparison.test.ts src/report-at-a-glance.test.tsx src/decision-outcome.test.ts"
+    "test": "tsx --test src/dark-contrast.test.ts src/report-export.test.tsx src/weight-editor.browser.test.tsx src/interpretation-review.browser.test.tsx src/create-comparison.test.ts src/report-at-a-glance.test.tsx src/decision-outcome.test.ts src/unresolved-discovery.browser.test.tsx"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",

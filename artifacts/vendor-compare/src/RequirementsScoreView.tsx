@@ -1,4 +1,6 @@
 import React from 'react';
+import { hasUnresolvedDiscovery } from './unresolved-discovery';
+import UnresolvedDiscoveryNotice from './UnresolvedDiscoveryNotice';
 
 const COLORS = ['#237e77', '#7760c5', '#3976ae', '#b07724', '#b54b78', '#497342'];
 
@@ -6,6 +8,7 @@ type Rating = { criterion: string; score: number; weight: number };
 type Option = { vendor: string; weightedScores?: Rating[] };
 
 export function requirementsChartData(vendors: Option[]) {
+  if (hasUnresolvedDiscovery({ vendorScores: vendors })) return { criteria: [], options: [] };
   const valid = (row: Rating) => row && typeof row.criterion === 'string' && row.criterion.trim()
     && Number.isFinite(row.score) && row.score >= 0 && row.score <= 100
     && Number.isFinite(row.weight) && row.weight > 0 && row.weight <= 100;
@@ -31,6 +34,7 @@ export function requirementsChartData(vendors: Option[]) {
 
 /** The caller excludes neutral fallback rows; this view never manufactures missing scores. */
 export default function RequirementsScoreView({ vendors }: { vendors: Option[] }) {
+  if (hasUnresolvedDiscovery({ vendorScores: vendors })) return <UnresolvedDiscoveryNotice />;
   const { criteria, options } = requirementsChartData(vendors);
   const point = (index: number, value: number) => {
     const angle = -Math.PI / 2 + index * 2 * Math.PI / criteria.length;

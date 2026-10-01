@@ -216,12 +216,15 @@ test("known unquoted conjunction-bearing entities remain atomic in review and ex
   }
 });
 
-test("bare Amazon needs clarification but explicitly edited shopping names keep their identity", () => {
+test("eBay establishes Amazon marketplace scope and explicit shopping names keep their identity", () => {
   for (const ebay of ["e-bay", "eBay"]) {
     const ambiguousQuery = `Compare ${ebay} vs Amazon`;
     const ambiguous = comparisonPreflightClassification(parsePrompt(ambiguousQuery).vendors, "AU", undefined, ambiguousQuery);
-    assert.equal(ambiguous.optionClassifications[1]?.resolutionStatus, "AMBIGUOUS");
-    assert.equal(ambiguous.optionClassifications[1]?.clarificationRequired, true);
+    assert.equal(ambiguous.optionClassifications[1]?.canonicalIdentity?.canonicalName, "Amazon shopping and delivery services");
+    assert.notEqual(ambiguous.optionClassifications[1]?.clarificationRequired, true);
+    const corrected = deterministicComparisonDraft({ ...market, query: ambiguousQuery });
+    assert.deepEqual(corrected.options.map(({ comparisonValue }) => comparisonValue), ["eBay", "Amazon shopping and delivery services"]);
+    assert.equal(corrected.comparisonLevel, "SERVICE");
     for (const amazon of ["Amazon shopping", "Amazon ecommerce", "Amazon e-commerce", "Amazon online marketplace"]) {
       const query = `Compare ${ebay} vs ${amazon}`;
       const draft = deterministicComparisonDraft({ ...market, query });

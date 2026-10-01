@@ -164,6 +164,18 @@ function requestIdFrom(init?: RequestInit): string | null {
   return new Headers(init?.headers).get('X-Request-Id');
 }
 
+async function loadActualDraftIdentityGate() {
+  // The real gate imports server SDK clients but does not call them. Load its
+  // server module outside the simulated browser; never opt credentials into it.
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')!;
+  Object.defineProperty(globalThis, 'window', { ...descriptor, value: undefined });
+  try {
+    return await import('../../api-server/src/services/draftGateReuse');
+  } finally {
+    Object.defineProperty(globalThis, 'window', descriptor);
+  }
+}
+
 test('draft response correlation fails closed for late drafts, versions, and requests', () => {
   const active = { draftId: 'draft-current', draftVersion: 7, requestId: 'request-current' };
   assert.equal(matchesDraftRequestCorrelation(active, active), true);
@@ -3207,7 +3219,7 @@ for (const parserMerges of [false, true]) test(`signed-in BYD/Tesla priority sur
   fireEvent.click(view.getByTestId('button-confirm-interpretation'));
   await waitFor(() => assert.ok(submitted));
   const { CreateComparisonBody } = await import('../../../lib/api-zod/src/generated/api');
-  const { draftMatchesConfirmedRequest } = await import('../../api-server/src/services/draftGateReuse');
+  const { draftMatchesConfirmedRequest } = await loadActualDraftIdentityGate();
   // The shared test fetch uses a non-UUID placeholder for draftId; replace
   // only that mock identifier when checking the production request schema.
   const contract = CreateComparisonBody.safeParse({
@@ -3890,6 +3902,8 @@ function installReviewFlowFetch(
       version += 1;
       return new Response(JSON.stringify({
         draftId, version, draftVersion: version, requestId, options: serverOptions, criteria,
+        originalQuery, market: { country: savedMarket, currency: savedMarket === 'US' ? 'USD' : 'AUD' },
+        category: savedCategory, decisionObjective: savedObjective,
         includeClosingProducts: body.includeClosingProducts ?? false, urls,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
@@ -4062,7 +4076,7 @@ test('exact Pepper Money vs Westpac query confirms without a priority or per-opt
 
 for (const guest of [false, true]) test(`one confirmation saves exact reviewed edits and hands off the returned draft (${guest ? 'guest' : 'signed-in'})`, async () => {
   const { CreateComparisonBody } = await import('../../../lib/api-zod/src/generated/api');
-  const { draftMatchesConfirmedRequest } = await import('../../api-server/src/services/draftGateReuse');
+  const { draftMatchesConfirmedRequest } = await loadActualDraftIdentityGate();
   const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
   const query = 'Compare Pepper Money vs Westpac for home loans';
   const flow = installReviewFlowFetch(calls, homeLoanInterpretation(query));
@@ -4124,10 +4138,11 @@ test('editing an option uses one confirmation and submits only the saved identit
 });
 
 for (const guest of [false, true]) test(`Amazon shopping review rejection unlocks editing and requires explicit reconfirmation (${guest ? 'guest' : 'signed-in'})`, async () => {
+  const { draftMatchesConfirmedRequest } = await loadActualDraftIdentityGate();
   const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
   const query = 'Compare e-bay vs Amazon for shopping and delivery in the US.';
   const parsed = validInterpretation();
-  installReviewFlowFetch(calls, { ...parsed, prompt: query, vendors: ['e-bay', 'Amazon'],
+  const flow = installReviewFlowFetch(calls, { ...parsed, prompt: query, vendors: ['e-bay', 'Amazon'],
     intent: { ...parsed.intent, options: ['e-bay', 'Amazon'] } });
   const mockFetch = globalThis.fetch;
   const reviews: any[] = [];
@@ -4156,7 +4171,7 @@ for (const guest of [false, true]) test(`Amazon shopping review rejection unlock
   assert.equal((view.getByTestId('button-confirm-interpretation') as HTMLButtonElement).disabled, false);
   assert.equal(view.getByTestId('button-confirm-interpretation').textContent, 'Confirm and compare');
   assert.equal((view.getByDisplayValue('Amazon shopping') as HTMLInputElement).value, 'Amazon shopping');
-  assert.equal(reviews[0].prompt, query.replace('Amazon', 'Amazon shopping'));
+  assert.equal(reviews[0].prompt, query, 'the unchanged saved prompt cannot be rewritten only on the client');
   assert.deepEqual(reviews[0].comparisonValues.map((item: any) => item.confirmedName), ['e-bay', 'Amazon shopping']);
 
   fireEvent.change(view.getByDisplayValue('Amazon shopping'), { target: { value: 'Amazon shopping delivery' } });
@@ -4164,7 +4179,7 @@ for (const guest of [false, true]) test(`Amazon shopping review rejection unlock
   assert.equal(submissions.length, 0, 'editing a rejected review must not trigger a follow-up submission');
   fireEvent.click(view.getByTestId('button-confirm-interpretation'));
   await waitFor(() => assert.equal(submissions.length, 1));
-  const expectedPrompt = query.replace('Amazon', 'Amazon shopping delivery');
+  const expectedPrompt = query;
   assert.equal(reviews.length, 2, 'no reinterpretation or clarification loop');
   assert.equal(reviews[1].prompt, expectedPrompt);
   assert.equal(submissions[0].prompt, expectedPrompt);
@@ -4172,6 +4187,8 @@ for (const guest of [false, true]) test(`Amazon shopping review rejection unlock
   assert.deepEqual(submissions[0].vendors, ['e-bay', 'Amazon shopping delivery']);
   assert.deepEqual(submissions[0].comparisonValues.map((item: any) => item.confirmedName), submissions[0].vendors);
   assert.deepEqual(submissions[0].comparisonValues.map((item: any) => item.rawText), submissions[0].vendors);
+  assert.equal(draftMatchesConfirmedRequest(flow.savedDraftSnapshot(), submissions[0]), true,
+    'an older PATCH retaining originalQuery still receives its exact persisted brief, not a client-only rewrite');
   assert.equal(calls.filter((call) => call.url.endsWith('/comparison-drafts/interpret')).length, 1);
   assert.deepEqual(calls.filter((call) => call.method === 'PATCH').map((call) => call.body.options[1].name),
     ['Amazon shopping', 'Amazon shopping delivery']);
@@ -4240,6 +4257,165 @@ test('explicit draft-save validation rejection leaves exact option wording edita
   await waitFor(() => assert.equal(submissions, 1));
   assert.ok(keys[0]);
   assert.notEqual(keys[0], keys[1]);
+});
+
+for (const guest of [false, true]) test(`canonical saved shopping draft is identical in modal, PATCH handoff, preflight and job; definitive rejection overrides stale loading (${guest ? 'guest' : 'signed-in'})`, async () => {
+  const { draftMatchesConfirmedRequest } = await loadActualDraftIdentityGate();
+  const { CreateComparisonBody } = await import('../../../lib/api-zod/src/generated/api');
+  const typedQuery = 'Compare e-bay vs Amazon shopping delievery in US.';
+  const canonicalQuery = 'Compare eBay and Amazon shopping and delivery services in the US.';
+  const draftId = 'a495f960-1480-4cc5-b8e5-c78352e9c31f';
+  let version = 1;
+  let options: any[] = [
+    { optionId: 'raw-ebay', originalText: 'e-bay', comparisonValue: 'eBay', entityLevel: 'SERVICE',
+      canonicalEntityId: 'old-ebay', resolutionStatus: 'RESOLVED_BY_ALIAS', userConfirmed: false },
+    { optionId: 'raw-amazon', originalText: 'Amazon shopping delievery', comparisonValue: 'Amazon shopping and delivery services',
+      entityLevel: 'SERVICE', canonicalEntityId: 'old-amazon', resolutionStatus: 'RESOLVED_BY_ALIAS', userConfirmed: false },
+  ];
+  const criteria = ['Delivery', 'Product quality'];
+  const sourceUrl = 'https://www.amazon.com/';
+  let urls: any[] = [];
+  const calls: Array<{ url: string; body: any }> = [];
+  const responseDraft = (init?: RequestInit) => ({
+    draftId, version, draftVersion: version, requestId: requestIdFrom(init), status: 'READY_FOR_REVIEW',
+    originalQuery: canonicalQuery, options, criteria, market: { country: 'US', currency: 'USD' },
+    comparisonLevel: 'SERVICE', decisionObjective: 'Choose an online marketplace',
+    decisionDomain: 'Shopping', category: 'Online marketplaces', enrichmentStatus: 'NOT_STARTED', urls,
+  });
+  const storedDraft = () => ({ version, originalQuery: canonicalQuery, market: 'US', draft: responseDraft() });
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ url, body });
+    if (url.endsWith('/comparison-drafts/interpret')) {
+      assert.equal(body.query, typedQuery.replace('delievery', 'delivery'), 'spelling is corrected before NLP/modal');
+      return new Response(JSON.stringify(responseDraft(init)), { status: 201, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (init?.method === 'PATCH' && url.endsWith(`/comparison-drafts/${draftId}`)) {
+      assert.equal(body.draftVersion, version);
+      assert.deepEqual(body.options.map((option: any) => option.name), options.map((option) => option.comparisonValue));
+      version++;
+      // Real PATCH behavior: replaces option IDs and rawText, clearing an old
+      // canonical ID even when the confirmed label itself has not changed.
+      options = body.options.map((option: any, index: number) => ({
+        optionId: `saved-${index}`, originalText: option.name, comparisonValue: option.name,
+        canonicalName: null, canonicalEntityId: null, entityLevel: option.entityLevel,
+        resolutionStatus: 'SUGGESTED', userConfirmed: true, confirmedIdentityVersion: version,
+      }));
+      urls = (body.urls || []).map((row: any, index: number) => ({
+        ...row, urlId: `url-${index}`, requestedUrl: row.url, status: 'LOCAL_DRAFT',
+      }));
+      return new Response(JSON.stringify(responseDraft(init)), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.endsWith('/comparisons/review')) {
+      assert.equal(draftMatchesConfirmedRequest(storedDraft(), body), true, 'review obeys the actual saved-draft identity gate');
+      return new Response(JSON.stringify({ draftId, draftVersion: version, requestId: requestIdFrom(init),
+        criteria: body.criteria, comparisonType: 'service', decisionDomain: 'Shopping', category: 'Online marketplaces', customerLocation: null }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.endsWith('/comparisons/source-preflight')) {
+      assert.equal(draftMatchesConfirmedRequest(storedDraft(), body), true, 'preflight uses the same saved prompt, version, rawText and identities');
+      return new Response(JSON.stringify({ draftId, draftVersion: version, requestId: requestIdFrom(init),
+        sources: body.urls.map((url: string) => ({ url, state: 'ACCEPTED', reason: 'Official supplied source' })) }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    assert.ok(url.endsWith('/comparison-jobs'), url);
+    assert.equal(CreateComparisonBody.safeParse(body).success, true);
+    assert.equal(draftMatchesConfirmedRequest(storedDraft(), body), true, 'real backend gate accepts the serialized job payload');
+    assert.equal(body.prompt, canonicalQuery);
+    assert.deepEqual(body.comparisonValues.map((value: any) => value.rawText), options.map((option) => option.originalText));
+    assert.ok(body.comparisonValues.every((value: any) => value.canonicalEntityId === undefined), 'cleared canonical IDs are not resurrected');
+    // Deliberately reject admission to exercise stale parent-state recovery.
+    return new Response(JSON.stringify({ code: 'draft_request_mismatch',
+      message: 'The draft does not match the confirmed prompt, market, version, demographics, or option identities.' }),
+    { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  function StaleLoadingHarness() {
+    const [pending, setPending] = React.useState(false);
+    const [error, setError] = React.useState<unknown>();
+    const [jobState, setJobState] = React.useState<any>();
+    return <ComparisonComposer guest={guest} pending={pending} error={error} jobState={jobState} onSubmit={(data) => {
+      setPending(true);
+      setJobState({ draftId, draftVersion: version, status: 'processing', stage: 'verifying_market',
+        progress: { entities: data.vendors, subject: 'Shopping' } });
+      void runComparisonJob(guest, data, () => {}).catch((error) => {
+        setError(error); // Parent intentionally leaves loading + old progress latched.
+      });
+    }} />;
+  }
+  const view = render(<StaleLoadingHarness />);
+  fireEvent.change(view.getByTestId(guest ? 'input-guest-prompt' : 'input-portal-prompt'), { target: { value: typedQuery } });
+  fireEvent.change(view.getByTestId(guest ? 'select-guest-market' : 'select-portal-market'), { target: { value: 'US' } });
+  fireEvent.change(view.getByTestId('input-optional-urls'), { target: { value: sourceUrl } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('interpretation-review')));
+  assert.equal(view.queryByTestId('prompt-typo-review'), null, 'the modal confirms corrected values, not another spelling question');
+  assert.equal((view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value, canonicalQuery);
+  assert.equal((view.getByDisplayValue('eBay') as HTMLInputElement).value, 'eBay');
+  assert.equal((view.getByDisplayValue('Amazon shopping and delivery services') as HTMLInputElement).value, options[1].comparisonValue);
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.match(view.getByTestId('interpretation-review').textContent || '', /draft does not match/i));
+  await waitFor(() => assert.equal(view.getByTestId('button-confirm-interpretation').textContent, 'Confirm and compare'));
+  assert.equal((view.getByTestId('button-confirm-interpretation') as HTMLButtonElement).disabled, false);
+  assert.equal((view.getByTestId('review-edit-lock') as HTMLFieldSetElement).disabled, false);
+  assert.equal(view.queryByTestId('market-verification-status'), null);
+  assert.equal((view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value, canonicalQuery);
+  assert.equal(calls.filter((call) => call.url.endsWith('/comparison-jobs')).length, 1, 'rejection never auto-retries');
+  assert.equal(calls.filter((call) => call.url.endsWith('/comparison-drafts/interpret')).length, 1);
+  assert.equal(browserWindow.sessionStorage.getItem(`comparison-request-${guest ? 'guest' : 'user'}`), null);
+  assert.equal(draftMatchesConfirmedRequest(storedDraft(), {
+    ...calls.find((call) => call.url.endsWith('/comparison-jobs'))!.body, prompt: typedQuery,
+  }), false, 'the old raw prompt would reproduce the actual mismatch');
+  const submitted = calls.find((call) => call.url.endsWith('/comparison-jobs'))!.body;
+  assert.equal(draftMatchesConfirmedRequest(storedDraft(), {
+    ...submitted, comparisonValues: [{ ...submitted.comparisonValues[0], canonicalEntityId: 'old-ebay' }, submitted.comparisonValues[1]],
+  }), false, 'inheriting a cleared canonical ID would reproduce the actual mismatch too');
+  assert.equal(draftMatchesConfirmedRequest(storedDraft(), {
+    ...submitted, comparisonValues: [{ ...submitted.comparisonValues[0], rawText: 'e-bay' }, submitted.comparisonValues[1]],
+  }), false, 'using pre-PATCH rawText rather than normalized saved rawText is rejected');
+});
+
+test('a server-normalized PATCH label is reviewed as the saved identity, never treated as a lost save or silently submitted', async () => {
+  const { draftMatchesConfirmedRequest } = await loadActualDraftIdentityGate();
+  const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+  const query = 'Compare eBay vs Amazon for shopping delivery in the US.';
+  const canonicalQuery = 'Compare eBay and Amazon shopping and delivery services in the US.';
+  const parsed = validInterpretation();
+  installReviewFlowFetch(calls, { ...parsed, prompt: query, vendors: ['eBay', 'Amazon'],
+    intent: { ...parsed.intent, options: ['eBay', 'Amazon'] } });
+  const mockFetch = globalThis.fetch;
+  let saved: any;
+  globalThis.fetch = (async (input, init) => {
+    const response = await mockFetch(input, init);
+    if (init?.method !== 'PATCH') return response;
+    saved = await response.json();
+    saved.originalQuery = canonicalQuery;
+    saved.options[1] = { ...saved.options[1], originalText: 'Amazon shopping',
+      comparisonValue: 'Amazon shopping and delivery services', canonicalName: 'Amazon shopping and delivery services',
+      canonicalEntityId: null };
+    return new Response(JSON.stringify(saved), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const submissions: any[] = [];
+  const view = render(<ComparisonComposer pending={false} onSubmit={(data) => submissions.push(data)} />);
+  fireEvent.change(view.getByTestId('input-portal-prompt'), { target: { value: query } });
+  fireEvent.change(view.getByTestId('select-portal-market'), { target: { value: 'US' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('interpretation-review')));
+  fireEvent.change(view.getByDisplayValue('Amazon'), { target: { value: 'Amazon shopping' } });
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.ok(view.queryByDisplayValue('Amazon shopping and delivery services')));
+  await waitFor(() => assert.equal((view.getByTestId('button-confirm-interpretation') as HTMLButtonElement).disabled, false));
+  assert.equal(submissions.length, 0, 'normalization needs confirmation of the corrected saved label');
+  assert.equal(view.queryByTestId('button-reload-option-draft'), null, 'correlation and normalization prove a completed save');
+  assert.equal((view.getByTestId('review-edit-lock') as HTMLFieldSetElement).disabled, false);
+  assert.equal((view.getByTestId('input-phrased-comparison') as HTMLTextAreaElement).value, canonicalQuery);
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.equal(submissions.length, 1));
+  assert.equal(draftMatchesConfirmedRequest({
+    version: saved.version, originalQuery: saved.originalQuery, market: 'US', draft: saved,
+  }, submissions[0]), true);
+  assert.equal(calls.filter((call) => call.method === 'PATCH').length, 1);
+  assert.equal(calls.filter((call) => call.url.endsWith('/comparison-drafts/interpret')).length, 1);
 });
 
 test('an authored eighth criterion is saved verbatim without a mandatory priority or ninth default', async () => {

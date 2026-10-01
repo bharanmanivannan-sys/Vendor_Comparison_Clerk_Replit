@@ -9,6 +9,9 @@ import {
   advancedInterpretationNeeded,
   createOpenAIAdvancedDraftParser,
   deterministicComparisonDraft,
+  correctedDraftOptionName,
+  correctedDraftComparisonQuery,
+  hasUncorrectedDraftPrompt,
   interpretDraftWithFallback,
 } from "../lib/comparisonDraftParser";
 import { normalizeComparisonQuery } from "../lib/comparisonQueryInput";
@@ -40,6 +43,8 @@ import {
   draftOptionIdentityVersion as optionIdentityVersion,
 } from "../services/draftGateIdentity";
 import { isSafeUserInput } from "../lib/security";
+import { assertConcreteDecisionOptions } from "../lib/analysis";
+import { DraftOptionDiscoveryError, resolveDraftOptionDiscovery, type DraftDiscoveryProvider } from "../lib/draftOptionDiscovery";
 
 const router: IRouter = Router();
 const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -793,6 +798,20 @@ router.post("/comparison-drafts/interpret", async (req: Request, res: Response):
       res.status(409).json({ code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST", message: "This request does not match the saved draft. Check your drafts before starting another." });
       return;
     }
+    const existingOptions = Array.isArray(existing[0].draft.options)
+      ? existing[0].draft.options as Array<Record<string, unknown>> : [];
+    try {
+      assertConcreteDecisionOptions(existingOptions.map((option) => String(option.comparisonValue || option.originalText || "")));
+      if (hasUncorrectedDraftPrompt(existing[0])) {
+        throw new Error("Saved prompt needs a deterministic correction.");
+      }
+    } catch {
+      res.status(409).json({
+        code: "option_discovery_required",
+        message: "This older draft needs concrete options or a corrected prompt. Retry setup with a new request or edit its options before confirming.",
+      });
+      return;
+    }
     res.status(200).json({
       ...existing[0].draft,
       draftId: existing[0].id,
@@ -821,7 +840,8 @@ router.post("/comparison-drafts/interpret", async (req: Request, res: Response):
         fallbackMessage: "Advanced interpretation is unavailable. Review the options extracted by the basic parser before continuing.",
       });
     } else {
-      // Setup remains free of search/retrieval research; only local parsing and (when needed) bounded option extraction run here.
+      // Explicit comparisons need only parsing; open-ended ones then receive
+      // a bounded label shortlist, never a full analysis or evidence review.
       interpretation = await interpretDraftWithFallback(
         interpretationInput,
         advancedParser,
@@ -830,13 +850,27 @@ router.post("/comparison-drafts/interpret", async (req: Request, res: Response):
         setupController.signal,
       );
     }
+    const parsedOptions = interpretation.options;
+    interpretation = await resolveDraftOptionDiscovery(interpretation, {
+      signal: setupController.signal,
+      timeoutMs: Math.min(7_000, Math.max(1, hardDeadlineAt - Date.now() - comparisonDraftConfig.draftPersistTimeoutMs)),
+      discover: (res.app.locals as { draftOptionDiscovery?: DraftDiscoveryProvider }).draftOptionDiscovery,
+    });
+    interpretation = {
+      ...interpretation,
+      rawUserQuery: String(req.body.query),
+      originalQuery: correctedDraftComparisonQuery(input.query, parsedOptions, interpretation.options),
+    };
   } catch (error) {
     if (hardLimitExceeded()) {
       respondHardLimit();
       return;
     }
     if (req.aborted || res.destroyed) return;
-    res.status(422).json({ code: "interpretation_failed", message: error instanceof Error ? error.message : "Name at least two comparison options." });
+    res.status(error instanceof DraftOptionDiscoveryError ? 503 : 422).json({
+      code: error instanceof DraftOptionDiscoveryError ? error.code : "interpretation_failed",
+      message: error instanceof Error ? error.message : "Name at least two comparison options.",
+    });
     return;
   }
   if (hardLimitExceeded()) {
@@ -859,7 +893,7 @@ router.post("/comparison-drafts/interpret", async (req: Request, res: Response):
         userId: identity.userId,
         version: 1,
         status: interpretation.status,
-        originalQuery: input.query,
+        originalQuery: interpretation.originalQuery,
         market: input.market,
         currency: input.currency,
         idempotencyKey: idempotencyKeyHash,
@@ -901,6 +935,19 @@ router.post("/comparison-drafts/interpret", async (req: Request, res: Response):
       )),
     Math.min(comparisonDraftConfig.draftPersistTimeoutMs, remainingHardLimitMs));
     if (retry[0]?.requestHash === fingerprint) {
+      const retryOptions = Array.isArray(retry[0].draft.options) ? retry[0].draft.options as Array<Record<string, unknown>> : [];
+      try {
+        assertConcreteDecisionOptions(retryOptions.map((option) => String(option.comparisonValue || option.originalText || "")));
+        if (hasUncorrectedDraftPrompt(retry[0])) {
+          throw new Error("Saved prompt needs a deterministic correction.");
+        }
+      } catch {
+        res.status(409).json({
+          code: "option_discovery_required",
+          message: "This saved draft still contains generic competitors. Retry setup or edit the option names before confirming.",
+        });
+        return;
+      }
       res.status(200).json({
         ...retry[0].draft,
         draftId: retry[0].id,
@@ -923,6 +970,20 @@ router.get("/comparison-drafts/:id", async (req: Request, res: Response): Promis
   if (draft) {
     const expectedVersion = req.query.draftVersion;
     if (expectedVersion !== undefined && !requireExpectedDraftVersion(Number(expectedVersion), draft.version, res)) return;
+    const savedOptions = Array.isArray(draft.draft.options) ? draft.draft.options as Array<Record<string, unknown>> : [];
+    let needsPromptRefresh = hasUncorrectedDraftPrompt(draft);
+    try {
+      assertConcreteDecisionOptions(savedOptions.map((option) => String(option.comparisonValue || option.originalText || "")));
+    } catch {
+      needsPromptRefresh = true;
+    }
+    if (needsPromptRefresh) {
+      res.status(409).json({
+        code: "draft_prompt_refresh_required",
+        message: "The saved prompt contract needs refreshing. Edit the draft or retry setup before confirming.",
+      });
+      return;
+    }
     res.json({
       ...publicDraftData(draft.draft),
       draftId: draft.id,
@@ -1057,6 +1118,7 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
     | { kind: "updated" | "replay"; draftId: string; draftVersion: number; draft: Record<string, unknown> }
     | { kind: "stale"; draftVersion: number }
     | { kind: "conflict" }
+    | { kind: "prompt_refresh" }
     | { kind: "invalid_urls" }
     | { kind: "not_found" };
   let result: UpdateResult | undefined;
@@ -1081,6 +1143,10 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
         result = { kind: "stale", draftVersion: latest.version };
         return;
       }
+      if (hasUncorrectedDraftPrompt(latest)) {
+        result = { kind: "prompt_refresh" };
+        return;
+      }
       result = {
         kind: "replay",
         draftId: latest.id,
@@ -1097,22 +1163,25 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
     const existingDraft = publicDraftData(latest.draft);
     const category = String(latest.draft.category ?? "");
     const currentOptions = Array.isArray(latest.draft.options) ? latest.draft.options as Array<Record<string, unknown>> : [];
-    const nextOptions = options ? options.map(({ name, entityLevel }) => ({
-      optionId: randomUUID(),
-      originalText: name,
-      comparisonValue: name,
-      canonicalName: null,
-      canonicalEntityId: null,
-      entityLevel,
-      category,
-      resolutionStatus: "SUGGESTED",
-      userConfirmed: true,
-      confirmedIdentityVersion: updatedVersion,
-      marketVerificationStatus: "NOT_ASSESSED",
-      availabilityStatus: "NOT_ASSESSED",
-      demographicRelevanceStatus: "NOT_ASSESSED",
-      participationStatus: "NOT_ASSESSED",
-    })) : currentOptions;
+    const nextOptions = options ? options.map(({ name, entityLevel }) => {
+      const corrected = correctedDraftOptionName(name, latest.originalQuery, options.map(({ name: optionName }) => optionName));
+      return {
+        optionId: randomUUID(),
+        originalText: name,
+        comparisonValue: corrected,
+        canonicalName: corrected !== name ? corrected : null,
+        canonicalEntityId: null,
+        entityLevel,
+        category,
+        resolutionStatus: "SUGGESTED",
+        userConfirmed: true,
+        confirmedIdentityVersion: updatedVersion,
+        marketVerificationStatus: "NOT_ASSESSED",
+        availabilityStatus: "NOT_ASSESSED",
+        demographicRelevanceStatus: "NOT_ASSESSED",
+        participationStatus: "NOT_ASSESSED",
+      };
+    }) : currentOptions;
     const nextMarket = marketProvided
       ? { country: body.market as string, currency: body.currency as string }
       : latest.draft.market;
@@ -1137,7 +1206,7 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
       return;
     }
     const validUrlsToSave = urlsToSave as DraftUrlEdit[] | undefined;
-    const resetOptions = !options && marketChanged ? nextOptions.map((option) => ({
+    const resetOptions: Array<Record<string, unknown>> = !options && marketChanged ? nextOptions.map((option) => ({
       ...option,
       confirmedIdentityVersion: updatedVersion,
       marketVerificationStatus: "NOT_ASSESSED",
@@ -1151,6 +1220,8 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
       : latest.draft.comparisonLevel;
     const updatedDraft: Record<string, unknown> = {
       ...existingDraft,
+      rawUserQuery: existingDraft.rawUserQuery ?? existingDraft.originalQuery ?? latest.originalQuery,
+      originalQuery: correctedDraftComparisonQuery(latest.originalQuery, currentOptions, resetOptions),
       options: resetOptions,
       comparisonLevel,
       market: nextMarket,
@@ -1181,6 +1252,11 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
     };
     if (identityChanged) {
       delete updatedDraft.marketSuggestions;
+      delete updatedDraft.optionDiscovery;
+      if (Array.isArray(updatedDraft.warnings)) {
+        updatedDraft.warnings = updatedDraft.warnings.filter((warning) =>
+          !isJsonObject(warning) || warning.code !== "COMPETITORS_PROPOSED_NOT_VERIFIED");
+      }
       await tx.update(comparisonDraftEnrichmentJobsTable).set({
         status: "stale",
         endedAt: new Date(),
@@ -1192,6 +1268,7 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
     }
     await tx.update(comparisonDraftsTable).set({
       version: updatedVersion,
+      originalQuery: String(updatedDraft.originalQuery),
       draft: updatedDraft,
       updatedAt: new Date(),
       ...(marketProvided ? { market: body.market as string, currency: body.currency as string } : {}),
@@ -1213,6 +1290,13 @@ router.patch("/comparison-drafts/:id", async (req: Request, res: Response): Prom
   }
   if (result.kind === "conflict") {
     res.status(409).json({ code: "idempotency_key_reused", message: "These changes conflict with a previous save. Refresh your comparison and try again." });
+    return;
+  }
+  if (result.kind === "prompt_refresh") {
+    res.status(409).json({
+      code: "draft_prompt_refresh_required",
+      message: "The saved prompt contract needs refreshing. Retry the draft edit with the current version before confirming.",
+    });
     return;
   }
   if (result.kind === "invalid_urls") {

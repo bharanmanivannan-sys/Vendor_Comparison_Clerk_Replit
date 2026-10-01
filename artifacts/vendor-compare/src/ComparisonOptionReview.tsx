@@ -72,7 +72,7 @@ export function matchesOptionDraftCorrelation(
 }
 export const optionsFromParse = (
   vendors: string[],
-   values?: Array<{ rawText?: string; suggestedCanonicalName?: string; entityLevel?: string; optionId?: string }>,
+   values?: Array<{ rawText?: string; suggestedCanonicalName?: string; canonicalEntityId?: string; entityLevel?: string; optionId?: string }>,
   previous: ConfirmedOption[] = [],
 ): ConfirmedOption[] => vendors.map((value, index) => {
   const old = previous[index];
@@ -83,6 +83,7 @@ export const optionsFromParse = (
     value,
     confirmed: false,
     serverOptionId: values?.[index]?.optionId || old?.serverOptionId,
+    ...(values?.[index]?.canonicalEntityId ? { canonicalEntityId: values[index].canonicalEntityId } : {}),
     entityLevel: values?.[index]?.entityLevel,
   };
 });

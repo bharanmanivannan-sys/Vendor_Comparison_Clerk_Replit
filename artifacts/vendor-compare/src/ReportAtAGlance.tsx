@@ -4,6 +4,8 @@ void React;
 import { ChevronDown } from 'lucide-react';
 import { classifyComparisonResult } from './comparison-result';
 import { displayedRecommendation } from './displayed-recommendation';
+import { hasUnresolvedDiscovery } from './unresolved-discovery';
+import UnresolvedDiscoveryNotice from './UnresolvedDiscoveryNotice';
 
 /**
  * The option the report may label as its choice, or null. An explicit `null`
@@ -53,6 +55,7 @@ function Meter({ label, value, tone }: { label: string; value: number; tone: str
  * estimated here; absent values are drawn as missing.
  */
 export default function ReportAtAGlance({ comparison, winner }: { comparison: any; winner?: string | null }) {
+  if (hasUnresolvedDiscovery(comparison)) return <UnresolvedDiscoveryNotice />;
   const result = classifyComparisonResult(comparison);
   const factors = classifyReportFactorStatus(comparison);
   const ranked = [...result.optionScores].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));

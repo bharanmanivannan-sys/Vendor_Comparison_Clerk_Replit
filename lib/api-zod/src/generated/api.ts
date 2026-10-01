@@ -37,6 +37,11 @@ export const InterpretComparisonDraftBody = zod.object({
   "idempotencyKey": zod.string().uuid().optional().describe('Optional stable key for safely repeating the same draft request. A key is generated when omitted.')
 })
 
+export const interpretComparisonDraftResponseOptionDiscoveryTargetCountMin = 2;
+export const interpretComparisonDraftResponseOptionDiscoveryTargetCountMax = 6;
+
+
+
 export const InterpretComparisonDraftResponse = zod.object({
   "draftId": zod.string().uuid(),
   "draftVersion": zod.number().int(),
@@ -45,6 +50,7 @@ export const InterpretComparisonDraftResponse = zod.object({
   "version": zod.number().int(),
   "status": zod.enum(['READY_FOR_REVIEW', 'READY_FOR_REVIEW_WITH_FALLBACK']),
   "originalQuery": zod.string(),
+  "rawUserQuery": zod.string().optional().describe('Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract.'),
   "options": zod.array(zod.object({
   "optionId": zod.string().uuid(),
   "originalText": zod.string(),
@@ -57,6 +63,17 @@ export const InterpretComparisonDraftResponse = zod.object({
   "demographicRelevanceStatus": zod.enum(['NOT_ASSESSED']),
   "participationStatus": zod.enum(['NOT_ASSESSED'])
 })),
+  "optionDiscovery": zod.object({
+  "status": zod.enum(['REQUIRED', 'PROPOSED']),
+  "anchorOptionId": zod.string().uuid(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "targetCount": zod.number().int().min(interpretComparisonDraftResponseOptionDiscoveryTargetCountMin).max(interpretComparisonDraftResponseOptionDiscoveryTargetCountMax),
+  "objectives": zod.array(zod.string()),
+  "provenance": zod.object({
+  "provider": zod.string(),
+  "model": zod.string()
+}).optional()
+}).optional().describe('Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.'),
   "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'MIXED']),
   "decisionObjective": zod.string(),
   "decisionDomain": zod.string(),
@@ -95,6 +112,11 @@ export const GetComparisonDraftHeader = zod.object({
   "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
 })
 
+export const getComparisonDraftResponseOptionDiscoveryTargetCountMin = 2;
+export const getComparisonDraftResponseOptionDiscoveryTargetCountMax = 6;
+
+
+
 export const GetComparisonDraftResponse = zod.object({
   "draftId": zod.string().uuid(),
   "draftVersion": zod.number().int(),
@@ -103,6 +125,7 @@ export const GetComparisonDraftResponse = zod.object({
   "version": zod.number().int(),
   "status": zod.enum(['READY_FOR_REVIEW', 'READY_FOR_REVIEW_WITH_FALLBACK']),
   "originalQuery": zod.string(),
+  "rawUserQuery": zod.string().optional().describe('Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract.'),
   "options": zod.array(zod.object({
   "optionId": zod.string().uuid(),
   "originalText": zod.string(),
@@ -115,6 +138,17 @@ export const GetComparisonDraftResponse = zod.object({
   "demographicRelevanceStatus": zod.enum(['NOT_ASSESSED']),
   "participationStatus": zod.enum(['NOT_ASSESSED'])
 })),
+  "optionDiscovery": zod.object({
+  "status": zod.enum(['REQUIRED', 'PROPOSED']),
+  "anchorOptionId": zod.string().uuid(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "targetCount": zod.number().int().min(getComparisonDraftResponseOptionDiscoveryTargetCountMin).max(getComparisonDraftResponseOptionDiscoveryTargetCountMax),
+  "objectives": zod.array(zod.string()),
+  "provenance": zod.object({
+  "provider": zod.string(),
+  "model": zod.string()
+}).optional()
+}).optional().describe('Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.'),
   "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'MIXED']),
   "decisionObjective": zod.string(),
   "decisionDomain": zod.string(),
@@ -338,6 +372,11 @@ export const UpdateComparisonDraftOptionsBody = zod.union([zod.object({
   "includeClosingProducts": zod.boolean().optional()
 })).describe('Save one or more local review edits. Omitted fields remain unchanged, except replacing options clears old URL rows. Options replace the complete option set with 2-6 unique names. Criteria allow at most 8 unique nonblank strings. Market and currency must be supplied together and match. URL rows are syntactically checked only; no network request occurs.')
 
+export const updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMin = 2;
+export const updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMax = 6;
+
+
+
 export const UpdateComparisonDraftOptionsResponse = zod.object({
   "draftId": zod.string().uuid(),
   "draftVersion": zod.number().int(),
@@ -346,6 +385,7 @@ export const UpdateComparisonDraftOptionsResponse = zod.object({
   "version": zod.number().int(),
   "status": zod.enum(['READY_FOR_REVIEW', 'READY_FOR_REVIEW_WITH_FALLBACK']),
   "originalQuery": zod.string(),
+  "rawUserQuery": zod.string().optional().describe('Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract.'),
   "options": zod.array(zod.object({
   "optionId": zod.string().uuid(),
   "originalText": zod.string(),
@@ -358,6 +398,17 @@ export const UpdateComparisonDraftOptionsResponse = zod.object({
   "demographicRelevanceStatus": zod.enum(['NOT_ASSESSED']),
   "participationStatus": zod.enum(['NOT_ASSESSED'])
 })),
+  "optionDiscovery": zod.object({
+  "status": zod.enum(['REQUIRED', 'PROPOSED']),
+  "anchorOptionId": zod.string().uuid(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "targetCount": zod.number().int().min(updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMin).max(updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMax),
+  "objectives": zod.array(zod.string()),
+  "provenance": zod.object({
+  "provider": zod.string(),
+  "model": zod.string()
+}).optional()
+}).optional().describe('Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.'),
   "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'MIXED']),
   "decisionObjective": zod.string(),
   "decisionDomain": zod.string(),

@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
-import { aspectCriterionSuffix, parsePrompt } from "./analysis";
+import { aspectCriterionSuffix, discoveryTargetCount, isObjectivePhraseVendor, parsePrompt } from "./analysis";
+import { resolveEntityIdentity } from "./entityIdentity";
 import {
   authoritativeComparisonPrompt, COMPARISON_CLAUSE_END, explicitComparisonChains,
-  hasSmartphoneContext, isCompetitorObjective, isComparisonMetadataInstruction, splitExplicitComparisonOptions,
+  hasSmartphoneContext, isCompetitorObjective, isComparisonMetadataInstruction, normalizeComparisonSubjectContext, splitExplicitComparisonOptions,
 } from "./comparisonPromptGrammar";
 
 export type DraftOption = {
@@ -22,6 +23,7 @@ export type DraftOption = {
 export type DraftInterpretation = {
   status: "READY_FOR_REVIEW" | "READY_FOR_REVIEW_WITH_FALLBACK";
   originalQuery: string;
+  rawUserQuery?: string;
   options: DraftOption[];
   comparisonLevel: "PRODUCT" | "SERVICE" | "BRAND" | "MIXED";
   decisionObjective: string;
@@ -31,6 +33,14 @@ export type DraftInterpretation = {
   criteria: string[];
   enrichmentStatus: "NOT_STARTED";
   warnings?: Array<{ code: string; message: string }>;
+  optionDiscovery?: {
+    status: "REQUIRED" | "PROPOSED";
+    anchorOptionId: string;
+    entityLevel: DraftOption["entityLevel"];
+    targetCount: number;
+    objectives: string[];
+    provenance?: { provider: string; model: string };
+  };
 };
 
 const MAX_CRITERIA = 8;
@@ -164,7 +174,10 @@ function contextFor(query: string, names: string[]): {
   const optionKinds = names.map((name) => {
     const normalized = name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     if (isJewellery) return "BRAND";
-    if (isShopping) return normalized === "amazon" && !explicitShoppingContext ? "BRAND" : "SERVICE";
+    if (isShopping) {
+      const identity = resolveEntityIdentity({ rawOption: name, otherOptions: names.filter((other) => other !== name), userQuery: query });
+      return identity.entityType === "service" ? "SERVICE" : "BRAND";
+    }
     if (isDealership) return "SERVICE";
     // The parent company is not the streaming service. Keep an unqualified
     // Amazon mention at brand level so the user can choose Prime Video.
@@ -174,6 +187,8 @@ function contextFor(query: string, names: string[]): {
       return /\b(?:model\s*[a-z0-9]+|seal|safari|xuv\s*\d+|model\s*[a-z0-9]+)\b/i.test(normalized)
         ? "PRODUCT" : "BRAND";
     }
+    // Smartphone scope outranks incidental "service/support" criteria.
+    if (isSmartphone) return /\b(?:iphone|pixel|galaxy)\b/i.test(normalized) ? "PRODUCT" : "BRAND";
     if (isStreaming || isParcelDelivery || isHomeLoan || isDealership
       || isSoftware || isGenericService) return "SERVICE";
     if (isBanking) return "BRAND";
@@ -307,21 +322,29 @@ function draftFromOptionNames(
   const comparisonLevel = optionKinds.every((kind) => kind === optionKinds[0])
     ? optionKinds[0]!
     : "MIXED";
-  return {
-    status: input.fallback ? "READY_FOR_REVIEW_WITH_FALLBACK" : "READY_FOR_REVIEW",
-    originalQuery: input.query,
-    options: names.map((name, index) => ({
+  const options: DraftOption[] = names.map((name, index) => {
+    // Only established marketplace identities are auto-corrected. No broad
+    // fuzzy matching, and no inferred phone model or unrelated parent service.
+    const corrected = correctedDraftOptionName(name, sourceQuery, names);
+    return {
       optionId: randomUUID(),
       originalText: name,
-      comparisonValue: name,
-      canonicalName: null,
+      comparisonValue: corrected,
+      canonicalName: corrected !== name ? corrected : null,
       resolutionStatus: "SUGGESTED",
       entityLevel: optionKinds[index]!,
       marketVerificationStatus: "NOT_ASSESSED",
       availabilityStatus: "NOT_ASSESSED",
       demographicRelevanceStatus: "NOT_ASSESSED",
       participationStatus: "NOT_ASSESSED",
-    })),
+    };
+  });
+  const anchors = options.filter(({ comparisonValue }) => !isObjectivePhraseVendor(comparisonValue));
+  const objectives = names.filter(isObjectivePhraseVendor);
+  return {
+    status: input.fallback ? "READY_FOR_REVIEW_WITH_FALLBACK" : "READY_FOR_REVIEW",
+    originalQuery: input.query,
+    options,
     comparisonLevel,
     decisionObjective: decisionObjective(sourceQuery),
     decisionDomain: domain,
@@ -329,6 +352,16 @@ function draftFromOptionNames(
     market: { country: input.market, currency: input.currency },
     criteria: criteriaFor(sourceQuery, category),
     enrichmentStatus: "NOT_STARTED",
+    ...(anchors.length === 1 && objectives.length ? {
+      optionDiscovery: {
+        status: "REQUIRED" as const,
+        anchorOptionId: anchors[0]!.optionId,
+        entityLevel: anchors[0]!.entityLevel,
+        targetCount: category === "Smartphones" && anchors[0]!.entityLevel === "BRAND"
+          ? Math.min(4, discoveryTargetCount(names, sourceQuery)) : discoveryTargetCount(names, sourceQuery),
+        objectives,
+      },
+    } : {}),
     ...(input.fallback ? {
       warnings: [{
         code: input.fallbackCode ?? "ADVANCED_INTERPRETATION_TIMEOUT",
@@ -337,6 +370,103 @@ function draftFromOptionNames(
       }],
     } : {}),
   };
+}
+
+export function correctedDraftOptionName(name: string, query: string, names: string[]): string {
+  const identity = resolveEntityIdentity({ rawOption: name, otherOptions: names.filter((other) => other !== name), userQuery: query });
+  return ["ebay-shopping", "amazon-shopping"].includes(identity.canonicalEntityId)
+    && ["RESOLVED", "RESOLVED_BY_ALIAS"].includes(identity.resolutionStatus)
+    ? identity.canonicalName : name;
+}
+
+/** Correct only parsed option spans and an established category typo. Context,
+ * criteria, priorities and the separate raw audit request are never rewritten. */
+export function correctedDraftComparisonQuery(
+  query: string,
+  previousOptions: Array<{ originalText?: unknown; comparisonValue?: unknown }>,
+  nextOptions: Array<{ comparisonValue?: unknown }>,
+): string {
+  const nextNames = nextOptions.map(({ comparisonValue }) => String(comparisonValue ?? ""));
+  const source = authoritativeComparisonPrompt(query);
+  const parsedNames = optionsInPrompt(source);
+  // Legacy edited/discovered drafts may still contain the pre-edit prose.
+  // Use its deterministic parsed spans, never rediscover or change saved names.
+  const sourceOptions = parsedNames.length >= 2
+    ? parsedNames.map((name) => ({ originalText: name, comparisonValue: name }))
+    : previousOptions;
+  if (sourceOptions.length === nextOptions.length && sourceOptions.every((option, index) =>
+    option.originalText === nextNames[index] && option.comparisonValue === nextNames[index])) {
+    return normalizeComparisonSubjectContext(query);
+  }
+  const sourceOffset = query.indexOf(source);
+  const descriptivePrefix = /^(?:(?:models?|vehicles?|cars?|smartphones?|products?|services?)\s+from|between)\s+/i;
+  const namesInClause = (clause: string) => splitExplicitComparisonOptions(
+    clause.replace(descriptivePrefix, "").replace(/\s+(?:alongside|as well as)\s+/gi, " and "),
+  );
+  const candidates = [
+    ...source.matchAll(new RegExp(String.raw`\b(?:choose|include|use|shortlist)\s+(.+?)${COMPARISON_CLAUSE_END}`, "giu")),
+    ...source.matchAll(new RegExp(String.raw`\b(?:compare|comparison\s+between)\s+(.+?)${COMPARISON_CLAUSE_END}`, "giu")),
+    ...source.matchAll(new RegExp(String.raw`\b(?:weigh(?:ing)?|consider(?:ing)?|evaluat(?:e|ing)|choos(?:e|ing)|decid(?:e|ing))\s+(.+?)${COMPARISON_CLAUSE_END}`, "giu")),
+    ...source.matchAll(new RegExp(String.raw`^\s*(.+?)${COMPARISON_CLAUSE_END}`, "giu")),
+  ];
+  const matching = candidates.find((match) => {
+    const names = namesInClause(match[1]!);
+    return names.length === sourceOptions.length && names.every((name, index) => {
+      const previous = sourceOptions[index]!;
+      return [previous.originalText, previous.comparisonValue].some((old) => typeof old === "string"
+        && (name.toLocaleLowerCase() === old.toLocaleLowerCase()
+          || (isObjectivePhraseVendor(name) && isObjectivePhraseVendor(old))));
+    });
+  });
+  if (matching) {
+    const clause = matching[1]!;
+    const start = sourceOffset + matching.index! + matching[0].lastIndexOf(clause);
+    const sourceNames = namesInClause(clause);
+    let correctedClause: string;
+    if (sourceNames.length !== nextNames.length) {
+      correctedClause = (clause.match(descriptivePrefix)?.[0] ?? "") + nextNames.join(" and ");
+    } else {
+      let cursor = 0;
+      const spans = sourceNames.map((name, index) => {
+        const offset = clause.indexOf(name, cursor);
+        if (offset < 0) throw new Error("Cannot safely correct the comparison option spans. Retry setup with explicit names.");
+        cursor = offset + name.length;
+        return { start: offset, end: cursor, name: nextNames[index]! };
+      });
+      correctedClause = spans.reverse().reduce((text, span) =>
+        text.slice(0, span.start) + span.name + text.slice(span.end), clause);
+    }
+    return normalizeComparisonSubjectContext(query.slice(0, start) + correctedClause + query.slice(start + clause.length));
+  }
+  if (sourceOptions.length !== nextOptions.length) {
+    throw new Error("Cannot safely replace the competitor objective in this request. Retry setup with an explicit comparison clause.");
+  }
+  // Nonstandard but explicit syntax can still use exact, bounded name spans.
+  let corrected = source;
+  let cursor = 0;
+  const spans = sourceOptions.map((option, index) => {
+    const names = [option.comparisonValue, option.originalText].filter((name): name is string => typeof name === "string");
+    const name = names.find((value) => source.indexOf(value, cursor) >= 0);
+    if (!name) throw new Error("Cannot safely correct the comparison option spans. Retry setup with explicit names.");
+    const start = source.indexOf(name, cursor);
+    cursor = start + name.length;
+    return { start, end: cursor, name: nextNames[index]! };
+  });
+  corrected = spans.reverse().reduce((text, span) =>
+    text.slice(0, span.start) + span.name + text.slice(span.end), corrected);
+  return normalizeComparisonSubjectContext(query.slice(0, sourceOffset) + corrected + query.slice(sourceOffset + source.length));
+}
+
+export function hasUncorrectedDraftPrompt(row: { originalQuery: string; draft: Record<string, unknown> }): boolean {
+  if (row.draft.originalQuery !== row.originalQuery || !Array.isArray(row.draft.options)
+    || row.draft.options.length < 2
+    || row.draft.options.some((option) => !option || typeof option !== "object" || Array.isArray(option))) return true;
+  const options = row.draft.options as Array<Record<string, unknown>>;
+  try {
+    return correctedDraftComparisonQuery(row.originalQuery, options, options) !== row.originalQuery;
+  } catch {
+    return true;
+  }
 }
 
 export type AbortAwareAdvancedParser = {
@@ -450,6 +580,7 @@ export function advancedInterpretationNeeded(query: string): boolean {
   // A named anchor plus a generic objective has a deterministic discovery
   // contract; the model's verbatim two-named-option schema cannot represent it.
   return !hasExplicitNamedPair(query)
+    && !optionsInPrompt(query).some(isObjectivePhraseVendor)
     && !explicitComparisonChains(query).some(({ names }) =>
       names.length === 2 && !isCompetitorObjective(names[0]!) && isCompetitorObjective(names[1]!));
 }

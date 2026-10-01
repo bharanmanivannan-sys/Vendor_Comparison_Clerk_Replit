@@ -58,13 +58,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ComparisonDraftError"
         "409":
-          description: Idempotency key reused with a different request
+          description: Idempotency conflict or an older draft still needing concrete option discovery
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ComparisonDraftError"
         "503":
-          description: Persistence unavailable
+          description: Persistence or bounded competitor discovery unavailable; retry setup or edit concrete options
           content:
             application/json:
               schema:
@@ -1888,6 +1888,24 @@ components:
         code: { type: string }
         message: { type: string }
       required: [code, message]
+    ComparisonDraftOptionDiscovery:
+      type: object
+      description: Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.
+      properties:
+        status: { type: string, enum: [REQUIRED, PROPOSED] }
+        anchorOptionId: { type: string, format: uuid }
+        entityLevel: { type: string, enum: [PRODUCT, SERVICE, BRAND] }
+        targetCount: { type: integer, minimum: 2, maximum: 6 }
+        objectives:
+          type: array
+          items: { type: string }
+        provenance:
+          type: object
+          properties:
+            provider: { type: string }
+            model: { type: string }
+          required: [provider, model]
+      required: [status, anchorOptionId, entityLevel, targetCount, objectives]
     ComparisonDraft:
       type: object
       properties:
@@ -1901,9 +1919,14 @@ components:
         version: { type: integer }
         status: { type: string, enum: [READY_FOR_REVIEW, READY_FOR_REVIEW_WITH_FALLBACK] }
         originalQuery: { type: string }
+        rawUserQuery:
+          type: string
+          description: Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract.
         options:
           type: array
           items: { $ref: "#/components/schemas/ComparisonDraftOption" }
+        optionDiscovery:
+          $ref: "#/components/schemas/ComparisonDraftOptionDiscovery"
         comparisonLevel: { type: string, enum: [PRODUCT, SERVICE, BRAND, MIXED] }
         decisionObjective: { type: string }
         decisionDomain: { type: string }

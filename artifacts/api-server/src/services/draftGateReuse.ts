@@ -10,6 +10,7 @@ import {
   type RelevanceGateCheckpoint,
 } from "@workspace/db";
 import { getOrCreateVisitorSessionId } from "./visitorSessions";
+import { isObjectivePhraseVendor } from "../lib/analysis";
 import { assessMarketRelevance, type RelevanceEvidence } from "../lib/marketRelevance";
 import {
   contextForDraft,
@@ -105,7 +106,9 @@ export function draftMatchesConfirmedRequest(
     const option = value as Record<string, unknown>;
     const confirmed = input.comparisonValues![index];
     const candidate = draftCandidateForOption(option, String(saved.category ?? ""));
-    return confirmed.rawText === option.originalText
+    return !isObjectivePhraseVendor(confirmed.confirmedName)
+      && !isObjectivePhraseVendor(String(option.comparisonValue || option.originalText || ""))
+      && confirmed.rawText === option.originalText
       && confirmed.confirmedName === String(option.comparisonValue || option.originalText)
       && (!confirmed.canonicalEntityId || confirmed.canonicalEntityId === candidate.canonicalEntityId);
   });

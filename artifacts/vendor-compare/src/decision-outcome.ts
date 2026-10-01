@@ -2,6 +2,7 @@ import { classifyComparisonResult, isBudgetNoMatch } from './comparison-result';
 import { displayedRecommendation } from './displayed-recommendation';
 import { eligibilityBlocksRecommendation, scoreableMarketOptionNames } from './market-eligibility';
 import { comparisonOutcomeGate, isUnverifiedMarketDecisionMode, type DecisionOutcomeCode } from './comparison-outcome-gates';
+import { hasUnresolvedDiscovery, UNRESOLVED_DISCOVERY_NEXT_ACTION, UNRESOLVED_DISCOVERY_TITLE } from './unresolved-discovery';
 
 export type DecisionOutcome = {
   code: DecisionOutcomeCode;
@@ -12,6 +13,10 @@ export type DecisionOutcome = {
 
 /** Customer-facing disposition, never a new score or a client-elected winner. */
 export function decisionOutcome(comparison: any): DecisionOutcome {
+  if (hasUnresolvedDiscovery(comparison)) return {
+    code: 'CLARIFICATION_REQUIRED', outcome: `${UNRESOLVED_DISCOVERY_TITLE} — no recommendation.`,
+    nextAction: UNRESOLVED_DISCOVERY_NEXT_ACTION,
+  };
   const gate = comparisonOutcomeGate(comparison);
   if (gate === 'NOT_COMPARABLE') return {
     code: gate, outcome: 'These options are not comparable.',

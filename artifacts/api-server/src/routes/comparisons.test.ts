@@ -4758,7 +4758,7 @@ test("smartphone brand prompts agree between parse review and execution without 
   assert.ok("error" in conflict);
 });
 
-test("shopping clarification resolves an explicit edited Amazon identity but not the bare parent", async () => {
+test("shopping interpretation resolves Amazon from its marketplace peer and explicit edited identity", async () => {
   const offlineParse: typeof parsePromptWithIntent = (prompt, _extractor, options) =>
     parsePromptWithIntent(prompt, async () => null, options);
   const offlineDomain = async (vendors: string[], prompt: string, selectedMarket?: "IN" | "AU" | "US" | "GB") =>
@@ -4769,8 +4769,7 @@ test("shopping clarification resolves an explicit edited Amazon identity but not
       prompt: original, market: "AU", draftId: randomUUID(), draftVersion: 1,
       comparisonValues: [ebay, "Amazon"].map((name) => ({ rawText: name, confirmedName: name, entityLevel: "SERVICE" })),
     }, offlineParse, offlineDomain);
-    assert.ok("error" in unresolved);
-    if ("error" in unresolved) assert.match(String(unresolved.error), /^CLARIFICATION_REQUIRED:/);
+    assert.ok(!("error" in unresolved), "error" in unresolved ? String(unresolved.error) : undefined);
     for (const amazon of ["Amazon shopping", "Amazon ecommerce", "Amazon shopping and delivery services"]) {
       const editedPrompt = `Compare ${ebay} vs ${amazon}`;
       const review = comparisonParseResult(await offlineParse(editedPrompt, undefined, { market: "AU" }), editedPrompt, "AU");

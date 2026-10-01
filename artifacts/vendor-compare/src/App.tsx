@@ -65,6 +65,11 @@ import {
 } from './weight-model';
 import RecommendationContinuityPanel from './RecommendationContinuityPanel';
 import ReportAtAGlance, { ReportDisclosure, glanceWinner } from './ReportAtAGlance';
+import UnresolvedDiscoveryNotice from './UnresolvedDiscoveryNotice';
+import {
+  discoveryOptionLabels, hasUnresolvedDiscovery, unresolvedDiscoveryExportContext,
+  UNRESOLVED_DISCOVERY_EXPLANATION, UNRESOLVED_DISCOVERY_NEXT_ACTION, UNRESOLVED_DISCOVERY_TITLE,
+} from './unresolved-discovery';
 import RequirementsScoreView, { requirementsChartData } from './RequirementsScoreView';
 import { appendExpandedAnalysis } from './expanded-pdf';
 import { displayedRecommendation } from './displayed-recommendation';
@@ -386,7 +391,7 @@ export async function buildComparisonPdf(comparison: any, format: 'summary' | 'e
     return y - lines.length * lineHeight;
   };
   const finishExport = async () => {
-    if (format === 'expanded') appendExpandedAnalysis({
+    if (format === 'expanded' && !hasUnresolvedDiscovery(comparison)) appendExpandedAnalysis({
       pdf, accessibility, regular, bold, comparison,
       chart: requirementsChartData(scoreChartVendors(comparison.vendorScores || [])),
       frameworks: (() => {
@@ -440,6 +445,36 @@ export async function buildComparisonPdf(comparison: any, format: 'summary' | 'e
     accessibility.artifact(page, () => page.drawText(subtitle, { x: margin, y: pageSize[1] - 74, size: 8, font: regular, color: rgb(0.78, 0.82, 0.88) }));
     return pageSize[1] - 108;
   };
+  if (hasUnresolvedDiscovery(comparison)) {
+    let page = pdf.addPage(pageSize);
+    let y = addHeader(page, UNRESOLVED_DISCOVERY_TITLE, 'Shortlist unresolved - scores and ranking withheld');
+    const contextSection = (title: string, text: unknown) => {
+      const lines = wrap(text, 9, contentWidth);
+      if (y < 90) {
+        page = pdf.addPage(pageSize);
+        y = addHeader(page, 'Original comparison context', 'Shortlist unresolved');
+      }
+      accessibility.heading(page, 2, () => page.drawText(title, { x: margin, y, size: 10, font: bold, color: teal }));
+      y -= 18;
+      for (const line of lines) {
+        if (y < 45) {
+          page = pdf.addPage(pageSize);
+          y = addHeader(page, 'Original comparison context continued', 'Shortlist unresolved');
+        }
+        y = drawLines(page, line, margin, y, { size: 9, lineHeight: 13 });
+      }
+      y -= 15;
+    };
+    contextSection('Why the ranking is withheld', UNRESOLVED_DISCOVERY_EXPLANATION);
+    contextSection('Original request', comparison.prompt || comparison.comparisonIdentity?.originalQuery || validatedPromptTitle(comparison));
+    contextSection('Saved option labels - unranked, not a resolved shortlist', discoveryOptionLabels(comparison).join(' | '));
+    contextSection('Market and requirements', [
+      comparison.market || comparison.country || comparison.validatedContext?.market || comparison.validatedContext?.country,
+      ...(Array.isArray(comparison.criteria) ? comparison.criteria : []),
+    ].filter(Boolean).join(' | ') || 'No market or requirements were stored.');
+    contextSection('Next action', UNRESOLVED_DISCOVERY_NEXT_ACTION);
+    return finishExport();
+  }
   const drawValidatedContext = (page: any, startY: number) => {
     const context = comparison.validatedContext;
     if (!context) return startY;
@@ -1625,6 +1660,7 @@ export function evidenceBackedLensWinner(comparison: any): {
   pricingWins: number;
   featureWins: number;
 } | null {
+  if (hasUnresolvedDiscovery(comparison)) return null;
   const vendors = (comparison.vendorScores || [])
     .map((vendor: any) => String(vendor.vendor || '').trim())
     .filter(Boolean);
@@ -1675,6 +1711,10 @@ export function pricingFeatureLensModel(
   comparison: any,
   weights: { pricing: number; features: number } = { pricing: 65, features: 35 },
 ) {
+  if (hasUnresolvedDiscovery(comparison)) return {
+    priceRequested: isPriceCriterionProvided(comparison), pricingRows: 0, featureRows: 0,
+    rows: [], winner: null, tied: [],
+  };
   const vendors = (comparison.vendorScores || [])
     .map((vendor: any) => String(vendor.vendor || '').trim())
     .filter(Boolean);
@@ -1869,6 +1909,8 @@ function renderDecisionText(value: unknown): ReactNode {
 }
 
 export function buildComparisonEvidenceDataset(comparison: any) {
+  const discoveryUnresolved = hasUnresolvedDiscovery(comparison);
+  if (discoveryUnresolved) comparison = unresolvedDiscoveryExportContext(comparison);
   comparison = reconcileReportScores(comparison);
   const comparisonResult = classifyComparisonResult(comparison);
   if (hasMarketEligibilityAssessment(comparison) && comparisonResult.recommendedOptionId) {
@@ -1899,7 +1941,8 @@ export function buildComparisonEvidenceDataset(comparison: any) {
   return {
     datasetVersion: '1.0',
     exportedAt: new Date().toISOString(),
-    description: hasRecommendationContinuityContract(comparison)
+    description: discoveryUnresolved ? UNRESOLVED_DISCOVERY_EXPLANATION
+      : hasRecommendationContinuityContract(comparison)
       && classifyComparisonResult(comparison).resultState === 'MODELLED_PARTIAL'
       ? 'Preliminary decision and available evidence. NOTE: Modelled decision score; not a verified product fact. Source validation is incomplete.'
       : 'DecisionIntel comparison report and available source-linked evidence for review.',
@@ -1907,7 +1950,7 @@ export function buildComparisonEvidenceDataset(comparison: any) {
     marketEligibility: eligibilitySummaryForExport(comparison),
     eligibilityRecommendationBlocked: eligibilityBlocksRecommendation(comparison),
     comparisonResult,
-    rankedOptions: (comparisonResult.optionScores || [])
+    rankedOptions: (discoveryUnresolved ? [] : comparisonResult.optionScores || [])
       .slice()
       .sort((left: any, right: any) => (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER)),
     reportVersion: Number(comparison.reportVersion) || 1,
@@ -2356,6 +2399,9 @@ export function providerRolePresentation(vendor: any): { label: string; rational
  */
 export function reconcileReportScores<T extends Record<string, any>>(report: T): T {
   if (!report || typeof report !== 'object') return report;
+  // Keep the original context intact for repair; never rename an unresolved
+  // option or reconcile its saved score into a meaningful recommendation.
+  if (hasUnresolvedDiscovery(report)) return report;
   // Preserve the server's explicit hard-budget failure and its closest-option
   // reasoning. Never repair it into a scored winner from the option rows.
   if (isBudgetNoMatch(report)) return report;
@@ -2500,6 +2546,7 @@ function vendorVerdictPresentation(vendor: any): string {
 }
 
 export function evidenceSafeExecutiveSummary(comparison: any): string {
+  if (hasUnresolvedDiscovery(comparison)) return UNRESOLVED_DISCOVERY_EXPLANATION;
   if (!isBudgetNoMatch(comparison) && eligibilityBlocksRecommendation(comparison)) {
     const displayed = displayedRecommendation(comparison);
     if (displayed.option) {
@@ -2601,6 +2648,7 @@ export function provisionalLensDecisionUsable(comparison: any): boolean {
 }
 
 export function isProvisionalChoice(comparison: any): boolean {
+  if (hasUnresolvedDiscovery(comparison)) return false;
   const rows: any[] = Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [];
   return String(comparison?.recommendationReason ?? '').startsWith('Provisional choice —')
     && comparison?.score === 0
@@ -2695,6 +2743,7 @@ export function comparedSetAlternatives(comparison: any): Array<{
   qualificationStatus: string;
   rationale: string;
 }> {
+  if (hasUnresolvedDiscovery(comparison)) return [];
   comparison = reconcileReportScores(comparison);
   const vendors = Array.isArray(comparison?.vendors)
     ? comparison.vendors.map((vendor: unknown) => String(vendor).trim()).filter(Boolean)
@@ -2749,6 +2798,7 @@ export function comparedSetAlternatives(comparison: any): Array<{
 }
 
 export function DecisionRecommendationCard({ comparison, hideEligibility = false }: { comparison: any; hideEligibility?: boolean }) {
+  if (hasUnresolvedDiscovery(comparison)) return <UnresolvedDiscoveryNotice />;
   const displayed = displayedRecommendation(comparison);
   const unverifiedEligibilityCandidate = displayed.withheld ? null : validatedServerProvisionalChoiceForUnverifiedEligibility(comparison);
   comparison = reconcileReportScores(unverifiedEligibilityCandidate
@@ -2974,6 +3024,7 @@ export function formatReportScore(value: unknown): string | null {
 }
 
 export function DecisionFirstReportPanel({ comparison, part = 'all', compactInitialResult = false }: { comparison: any; part?: 'all' | 'lenses' | 'details'; compactInitialResult?: boolean }) {
+  if (hasUnresolvedDiscovery(comparison)) return <UnresolvedDiscoveryNotice />;
   const result = classifyComparisonResult(comparison);
   if (!result.recommendedOptionId || result.resultState === 'INSUFFICIENT_TO_SCORE') {
     const hasWeightModel = reportWeightModelSummary(comparison) || reportWeightModelValidationError(comparison);
@@ -3153,6 +3204,7 @@ export function scoreChartVendors(vendorScores: any[]) {
 }
 
 export function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
+  if (hasUnresolvedDiscovery({ vendorScores })) return <UnresolvedDiscoveryNotice />;
   const vendors = vendorScores.filter((vendor) => typeof vendor?.vendor === 'string');
   const valid = (row: any) => row && !isFallbackNeutralCriterion(row)
     && typeof row.score === 'number' && Number.isFinite(row.score) && row.score >= 0 && row.score <= 100
@@ -3386,6 +3438,7 @@ function UserCriteriaDashboard({ criteria = [], vendorScores = [] }: { criteria?
 }
 
 export function ExecutiveDecisionBrief({ comparison, compact = false }: { comparison: any; compact?: boolean }) {
+  if (hasUnresolvedDiscovery(comparison)) return <UnresolvedDiscoveryNotice />;
   comparison = reconcileReportScores(comparison);
   const result = classifyComparisonResult(comparison);
   const policyRankedChoice = hasMarketEligibilityAssessment(comparison)
@@ -3926,6 +3979,7 @@ export function reweightGuestComparison(
   additionalWeights: AdditionalWeight[],
   rawAllocatedWeights: Record<string, number> = weights,
 ) {
+  if (hasUnresolvedDiscovery(comparison)) throw new Error(UNRESOLVED_DISCOVERY_NEXT_ACTION);
   const priorDecision = classifyComparisonResult(comparison);
   const priorContract = comparison?.confirmedRecommendation;
   const priorTieCandidate = String(priorDecision.recommendedOptionId || '').trim();
@@ -4337,6 +4391,11 @@ function builtInWeightsFromModel(model: ReportWeightModel): Record<string, numbe
 }
 
 export function WeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest: boolean; onUpdated: (comparison: any) => void }) {
+  if (hasUnresolvedDiscovery(comparison)) return <UnresolvedDiscoveryNotice />;
+  return <ResolvedWeightEditor comparison={comparison} guest={guest} onUpdated={onUpdated} />;
+}
+
+function ResolvedWeightEditor({ comparison, guest, onUpdated }: { comparison: any; guest: boolean; onUpdated: (comparison: any) => void }) {
   const [savedModel, setSavedModel] = useState<ReportWeightModel>(() => initialWeightModelForReport(comparison));
   const [weights, setWeights] = useState<Record<string, number>>(() => builtInWeightsFromModel(savedModel));
   const [additionalWeights, setAdditionalWeights] = useState<AdditionalWeight[]>(() => additionalWeightsFromModel(savedModel));
@@ -5497,6 +5556,7 @@ function reportVersionChange(previous: any, current: any): string {
 }
 
 function reportVersionRankSummary(report: any): string {
+  if (hasUnresolvedDiscovery(report)) return 'Ranking withheld — competitor shortlist unresolved';
   const result = classifyComparisonResult(report);
   return (result.optionScores || [])
     .slice()
@@ -5506,6 +5566,7 @@ function reportVersionRankSummary(report: any): string {
 }
 
 function reportVersionWinnerLabel(report: any): string {
+  if (hasUnresolvedDiscovery(report)) return 'No recommendation — competitor shortlist unresolved';
   if (isBudgetNoMatch(report)) return 'No budget match · no affordable recommendation';
   const displayed = displayedRecommendation(report);
   if (eligibilityBlocksRecommendation(report)) {
@@ -5590,7 +5651,7 @@ function HistoryReportVersions({ id }: { id: number }) {
 
 function ComparisonRow({ item, index, onDelete }: { item: any; index: number; onDelete?: (id: number) => void }) {
   const [, setLocation] = useLocation();
-  const eligibilityBlocked = eligibilityBlocksRecommendation(item);
+  const eligibilityBlocked = hasUnresolvedDiscovery(item) || eligibilityBlocksRecommendation(item);
   const safeItem = suppressUnverifiedEligibilityWinner(item);
   return <div className="group flex items-center gap-4 border-b border-[#e5dece] p-4 last:border-0 sm:p-5" data-testid={`row-comparison-${item.id}`}>
     <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#e7e2d4] text-xs font-bold text-[#0f766e]">{String(index + 1).padStart(2, '0')}</div>
@@ -6037,7 +6098,9 @@ export function compareAgain(comparison: any, mode: ComparisonTemplate['mode'] |
       ? savedPriorityLenses.filter((item: any) => Number(item.weight) > 0).map((item: any) => `${item.criterion} (${item.weight}%)`)
       : criteria;
   const template: ComparisonTemplate = {
-    prompt: validatedPromptTitle(comparison),
+    prompt: hasUnresolvedDiscovery(comparison)
+      ? String(comparison.prompt || comparison.comparisonIdentity?.originalQuery || validatedPromptTitle(comparison))
+      : validatedPromptTitle(comparison),
     mode,
     suppliedUrls: Array.isArray(comparison?.suppliedUrls) ? comparison.suppliedUrls : [],
     vendors: Array.isArray(comparison?.vendors) ? comparison.vendors : [],
@@ -6135,24 +6198,6 @@ function reviewPersistenceSignature(
     urls,
     includeClosingProducts,
   });
-}
-
-function requestWithEditedOptionNames(prompt: string, options: ConfirmedOption[]): string | undefined {
-  let updated = prompt;
-  let replaced = false;
-  for (const option of options) {
-    const original = option.originalText.trim();
-    const next = option.value.trim();
-    if (!original || !next || original.toLocaleLowerCase() === next.toLocaleLowerCase()) continue;
-    const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const matches = [...updated.matchAll(new RegExp(`(^|[^\\p{L}\\p{N}])(${escaped})(?=$|[^\\p{L}\\p{N}])`, 'giu'))];
-    // Never rewrite an ambiguous or absent name in the user's own request.
-    if (matches.length !== 1) return undefined;
-    updated = updated.replace(new RegExp(`(^|[^\\p{L}\\p{N}])(${escaped})(?=$|[^\\p{L}\\p{N}])`, 'iu'),
-      (_match, prefix: string) => `${prefix}${next}`);
-    replaced = true;
-  }
-  return replaced && updated.length <= 2000 ? updated : undefined;
 }
 
 // Market verification is a bounded first stage and can take longer than the
@@ -6277,6 +6322,8 @@ function comparisonDraftToParsed(draft: ComparisonDraftInterpretation): ParsedCo
     comparisonValues: draft.options.map((option) => ({
       optionId: option.optionId,
       rawText: option.originalText,
+      confirmedName: option.comparisonValue || option.originalText,
+      canonicalEntityId: (option as typeof option & { canonicalEntityId?: string | null }).canonicalEntityId || undefined,
       suggestedCanonicalName: option.canonicalName || undefined,
       entityLevel: option.entityLevel,
       resolutionStatus: option.resolutionStatus,
@@ -6801,11 +6848,15 @@ export function RoutedComparisonComposer({
   );
 }
 
-export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest = false, pending, error, jobState, onReset, onSubmit }: { initialPrompt?: string; initialTemplate?: ComparisonTemplate | null; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onReset?: () => void; onSubmit: (data: ComparisonRequest) => void }) {
+export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest = false, pending: parentPending, error, jobState: parentJobState, onReset, onSubmit }: { initialPrompt?: string; initialTemplate?: ComparisonTemplate | null; guest?: boolean; pending: boolean; error?: unknown; jobState?: ComparisonJobState; onReset?: () => void; onSubmit: (data: ComparisonRequest) => void }) {
+  // A definitive admission rejection overrides stale parent loading/progress.
+  // It never launches a retry: the customer must edit or explicitly reconfirm.
+  const definitiveStartRejection = isDefinitiveComparisonRejection(error);
+  const pending = parentPending && !definitiveStartRejection;
+  const jobState = definitiveStartRejection ? undefined : parentJobState;
   const [prompt, setPrompt] = useState(initialPrompt);
   const partialResultRef = useRef<HTMLElement | null>(null);
   const partialResultWasRevealed = useRef(false);
-  const [typoReview, setTypoReview] = useState<PromptTypoReview | null>(null);
   const [interpretation, setInterpretation] = useState<ParsedComparison | null>(null);
   const [criterionDrafts, setCriterionDrafts] = useState<string[]>([]);
   const [newCriterion, setNewCriterion] = useState('');
@@ -6982,7 +7033,6 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
     setReplacedSuggestedPriority(false);
     setPriorityClarificationError('');
     setInterpretationPending(false);
-    setTypoReview(null);
     setDismissedResearchError(true);
     templateApplied.current = true;
   };
@@ -7207,18 +7257,17 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         setUseCase(parsedMetadata.demographicContext?.useCase || '');
         setReviewValidation(undefined);
       }
-       // A clarification response must keep the user's wording intact. Do not
-       // replace an ambiguous request with an interpretation before they review it.
-       const nextPhrasedPrompt = !finalReviewedParse.context.valid && /^CLARIFICATION_REQUIRED:/i.test(finalReviewedParse.context.message)
-         ? sourceComparisonPrompt(requestedPrompt)
-          : phraseComparisonPrompt(sourcePrompt);
+      // NLP corrections belong to the persisted server draft, not a second
+      // client paraphrase. Display and submit the exact same saved prompt.
+      const nextPhrasedPrompt = draft.originalQuery;
+      setPrompt(nextPhrasedPrompt);
         setInterpretation({ ...finalReviewedParse, criteria: criteriaForReview, vendors: extractedVendors,
          intent: { ...finalReviewedParse.intent, options: extractedVendors } });
         templateApplied.current = true;
        setOptionsRequireReparse(false);
        setCrossMarketAcknowledged(false);
-      setInterpretationPrompt(requestedPrompt);
-       setInterpretationSourcePrompt(sourcePrompt);
+      setInterpretationPrompt(nextPhrasedPrompt);
+      setInterpretationSourcePrompt(nextPhrasedPrompt);
       setPhrasedPrompt(nextPhrasedPrompt);
       setPhrasedPromptBaseline(nextPhrasedPrompt);
       interpretationIdempotency.current = null;
@@ -7272,11 +7321,9 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
     if (pending || trimmedPrompt.length < 8 || trimmedPrompt.length > 2000 || !market || baasValidationError) return;
     if (!validateInitialSourceUrls(sourceText)) return;
     const review = reviewPromptTypos(trimmedPrompt);
-    if (review) {
-      setTypoReview(review);
-      return;
-    }
-    void requestInterpretation(trimmedPrompt);
+    const correctedPrompt = review?.revised || trimmedPrompt;
+    if (review) setPrompt(correctedPrompt);
+    void requestInterpretation(correctedPrompt);
   };
 
   const clarifyPriority = (answer: string) => {
@@ -7294,23 +7341,6 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
     // Preserve the actual edited review criteria, not the earlier interpretation's
     // criteria: the draft parser may combine or replace the eighth default.
     void requestInterpretation(clarifiedPrompt, interpretationSourcePrompt, interpretation, criterionDrafts);
-  };
-
-  const acceptTypoCorrection = () => {
-    if (!typoReview) return;
-    const revised = typoReview.revised;
-    setPrompt(revised);
-    setTypoReview(null);
-    void requestInterpretation(revised);
-  };
-
-  const editTypoCorrection = () => {
-    if (!typoReview) return;
-    setPrompt(typoReview.revised);
-    setTypoReview(null);
-    window.setTimeout(() => {
-      document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus();
-    }, 0);
   };
 
   const researchStages: Array<{ stage: ComparisonJobState['stage']; label: string }> = [
@@ -7361,9 +7391,6 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
     && persistedOptionsSignature
     && currentOptionsSignature !== persistedOptionsSignature,
   );
-  const updatedRequestForEditedOptions = optionsNeedPersistence
-    ? requestWithEditedOptionNames(interpretationSourcePrompt, confirmedOptions)
-    : undefined;
   const localUrlRows = sourceRows.length
     ? sourceRows.map((row) => {
       const option = confirmedOptions.find((item) => item.id === row.optionId);
@@ -7799,12 +7826,15 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
       const nextVersion = saved.draftVersion || saved.version;
       const returnedIds = saved.options.map((option) => option.optionId);
       const returnedNames = saved.options.map((option) => (option.comparisonValue || option.originalText).trim());
+      const serverCorrectedNames = returnedNames.some((name, index) => name !== optionsToPersist[index]?.value.trim());
        if (!matchesDraftRequestCorrelation(saved, { draftId, draftVersion: nextVersion, requestId })
         || !Number.isInteger(nextVersion) || nextVersion !== draftVersion + 1
         || saved.version !== nextVersion || saved.options.length !== optionsToPersist.length
         || new Set(returnedIds).size !== saved.options.length || returnedIds.some((id) => !id)
         || new Set(returnedNames.map((name) => name.toLocaleLowerCase())).size !== returnedNames.length
-         || returnedNames.some((name, index) => name !== optionsToPersist[index]?.value.trim())
+         || returnedNames.some((name, index) => name !== optionsToPersist[index]?.value.trim()
+           && !(saved.options[index].originalText === optionsToPersist[index]?.value.trim()
+             && saved.options[index].canonicalName === name))
          || !Array.isArray(saved.criteria)
          || JSON.stringify(saved.criteria) !== JSON.stringify(draftCriteria)
          || (Array.isArray(saved.urls) && JSON.stringify(saved.urls.map((row) => row.url))
@@ -7812,12 +7842,15 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         || optionsNeedPersistence && saved.options.some((option) => !['PRODUCT', 'SERVICE', 'BRAND'].includes(option.entityLevel))) {
          throw new Error('The saved comparison differs from the values you reviewed. Reload the draft before continuing.');
       }
+      const savedBrief = typeof saved.originalQuery === 'string' && saved.originalQuery.trim()
+        ? saved.originalQuery : interpretationSourcePrompt;
       const nextOptions: ConfirmedOption[] = saved.options.map((serverOption, index) => {
         const prior = optionsToPersist[index];
         const serverOptionWithIdentity = serverOption as typeof serverOption & { canonicalEntityId?: string };
         const value = serverOption.comparisonValue || serverOption.originalText;
-        const canonicalEntityId = serverOptionWithIdentity.canonicalEntityId
-          || (prior?.value.trim() === value.trim() ? prior.canonicalEntityId : undefined);
+        // The PATCH can clear/rebind canonical identity without changing its
+        // label. Never resurrect an ID from the previous persisted version.
+        const canonicalEntityId = serverOptionWithIdentity.canonicalEntityId || undefined;
         const suggestion = canonicalEntityId && prior?.suggestion?.canonicalEntityId === canonicalEntityId
           ? prior.suggestion : undefined;
         return {
@@ -7868,19 +7901,12 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         persistedUrlRows,
         nextClosingProducts,
       ));
-      if (updatedRequestForEditedOptions) {
-        // Saving changes the server's raw option text. Carry the rewritten brief
-        // forward now, before that old-to-new mapping disappears, so review and
-        // submission cannot reinterpret a stale "Amazon" over confirmed shopping.
-        const nextBrief = updatedRequestForEditedOptions;
-        setPrompt(nextBrief);
-        setInterpretationSourcePrompt(nextBrief);
-        setInterpretationPrompt(nextBrief);
-        if (phrasedPrompt.trim() === phrasedPromptBaseline) {
-          const nextPhrasedPrompt = phraseComparisonPrompt(nextBrief);
-          setPhrasedPrompt(nextPhrasedPrompt);
-          setPhrasedPromptBaseline(nextPhrasedPrompt);
-        }
+      setPrompt(savedBrief);
+      setInterpretationSourcePrompt(savedBrief);
+      setInterpretationPrompt(savedBrief);
+      if (phrasedPrompt.trim() === phrasedPromptBaseline) {
+        setPhrasedPrompt(savedBrief);
+        setPhrasedPromptBaseline(savedBrief);
       }
       setInterpretation((current) => {
         if (!current || (current as ParsedComparison & { draftId?: string }).draftId !== draftId) return current;
@@ -7894,7 +7920,7 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         }));
         return {
           ...current,
-          ...(updatedRequestForEditedOptions ? { prompt: updatedRequestForEditedOptions } : {}),
+          prompt: savedBrief,
           vendors: names,
           intent: { ...current.intent, options: names },
           comparisonValues: patchedValues,
@@ -7908,9 +7934,18 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         } as ParsedComparison;
       });
       if (optionsNeedPersistence) setOptionsRequireReparse(true);
+      if (serverCorrectedNames) {
+        // A saved correction is safe to display, not an exact confirmation of
+        // the earlier label. Ask for a new click over the authoritative values.
+        setConfirmationRequested(false);
+        handoffStarted.current = false;
+        setOptionsRequireReparse(true);
+      }
       setReviewValidation(undefined);
       setOptionPersistenceStatus('verified');
-      setOptionPersistenceMessage('Your comparison changes are saved.');
+      setOptionPersistenceMessage(serverCorrectedNames
+        ? 'Your wording was corrected in the saved draft. Confirm these corrected options to compare.'
+        : 'Your comparison changes are saved.');
       setOptionPatchUncertain(false);
       setUncertainPatchRequiresOptions(false);
       return true;
@@ -8077,21 +8112,6 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
           }}
           data-testid={guest ? 'input-guest-prompt' : 'input-portal-prompt'}
         />
-
-        {typoReview && (
-          <div className={`mt-4 rounded-xl border p-4 ${guest ? 'border-[#d9ef66] bg-[#29334e]' : 'border-[#d3a83d] bg-[#fff8df]'}`} role="alert" data-testid="prompt-typo-review">
-            <p className={`text-xs font-bold ${guest ? 'text-[#d9ef66]' : 'text-[#7a5712]'}`}>Typo found. Please confirm the revised prompt before building the decision.</p>
-            <p className={`mt-2 text-[10px] uppercase tracking-[.12em] ${guest ? 'text-[#a8b0c2]' : 'text-[#8a7956]'}`}>{typoReview.corrections.join(' · ')}</p>
-            <div className={`mt-3 rounded-lg border px-3 py-3 text-sm leading-6 ${guest ? 'border-[#49536e] bg-[#202840] text-[#f8f4e8]' : 'border-[#e4d49c] bg-white text-[#202840]'}`} data-testid="text-revised-prompt">
-              {typoReview.revised}
-            </div>
-            <p className={`mt-3 text-xs ${guest ? 'text-[#c9cfdb]' : 'text-[#687083]'}`}>Do you want to continue with this revised prompt?</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button type="button" onClick={acceptTypoCorrection} className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white" data-testid="button-accept-typo-correction">Yes, continue</button>
-              <button type="button" onClick={editTypoCorrection} className={`focus-ring rounded-lg border px-4 py-2 text-xs font-bold ${guest ? 'border-[#66728e] text-[#f8f4e8]' : 'border-[#b9ae91] text-[#39435a]'}`} data-testid="button-edit-typo-correction">No, edit prompt</button>
-            </div>
-          </div>
-        )}
 
         <AlertDialog open={Boolean(interpretation && interpretationSourcePrompt === prompt.trim() && !reviewJobAccepted)}>
           {interpretation && interpretationSourcePrompt === prompt.trim() && !reviewJobAccepted && <AlertDialogContent
@@ -8534,12 +8554,14 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
               Decision report · partial research
             </p>
             <h3 id="partial-decision-heading" className="display mt-2 text-2xl font-bold tracking-[-.04em]">
-              {livePartialClassification?.recommendedOptionId
+              {hasUnresolvedDiscovery(jobState.result) ? UNRESOLVED_DISCOVERY_TITLE
+                : livePartialClassification?.recommendedOptionId
                 ? `Recommended option · modelled: ${livePartialClassification!.recommendedOptionId}`
                 : 'Decision data is incomplete'}
             </h3>
             <p className={`mt-2 max-w-2xl text-sm leading-6 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-              {jobState.message || 'The research reached its 20-second limit. This is the best available partial result; its modelled scores are not verified facts.'}
+              {hasUnresolvedDiscovery(jobState.result) ? UNRESOLVED_DISCOVERY_EXPLANATION
+                : jobState.message || 'The research reached its 20-second limit. This is the best available partial result; its modelled scores are not verified facts.'}
             </p>
           </div>
           {livePartialScoreable
@@ -8549,8 +8571,10 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
             <div>
               <h4 className="text-xs font-bold">Suggested next action</h4>
               <p className={`mt-1 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-                {jobState.result.nextSteps?.[0] || 'Review the assumptions and missing details, then retry with a narrower brief if you need more context.'}
+                {hasUnresolvedDiscovery(jobState.result) ? UNRESOLVED_DISCOVERY_NEXT_ACTION
+                  : jobState.result.nextSteps?.[0] || 'Review the assumptions and missing details, then retry with a narrower brief if you need more context.'}
               </p>
+              {hasUnresolvedDiscovery(jobState.result) && <div className="mt-3"><CompareAgainActions comparison={jobState.result} guest={guest} /></div>}
               {jobState.result.id && (
                 <Link href={`/comparisons/${jobState.result.id}`} className={`focus-ring mt-3 inline-flex items-center gap-2 text-xs font-bold underline ${guest ? 'text-[#d9ef66]' : 'text-[#0f766e]'}`} data-testid="link-open-partial-report">
                   Open saved report <ArrowRight size={14} />
@@ -8938,6 +8962,25 @@ export function ReportStrategicAnalysis({ comparison }: { comparison: any }) {
   </ReportDisclosure>;
 }
 
+export function UnresolvedDiscoveryReport({ comparison, guest = false, children }: {
+  comparison: any; guest?: boolean; children?: ReactNode;
+}) {
+  return <main className="mx-auto max-w-4xl px-5 py-10 lg:px-10 lg:py-14" data-testid="report-unresolved-discovery">
+    <Link href={guest ? '/guest' : '/user-portal'} className="focus-ring text-xs font-bold text-[#0f766e]" data-testid="link-unresolved-report-back">Back to {guest ? 'guest mode' : 'workspace'}</Link>
+    <h1 className="display mt-8 text-3xl font-bold tracking-[-.04em] text-[#202840]">{UNRESOLVED_DISCOVERY_TITLE}</h1>
+    <UnresolvedDiscoveryNotice />
+    <section className="mt-6 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 text-[#202840]" data-testid="unresolved-original-context">
+      <h2 className="text-sm font-bold">Original comparison context</h2>
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-6" data-testid="text-unresolved-original-request">{comparison.prompt || comparison.comparisonIdentity?.originalQuery || validatedPromptTitle(comparison)}</p>
+      <p className="mt-3 text-xs leading-5">Saved option labels (unranked, not a resolved shortlist): {discoveryOptionLabels(comparison).join(' · ')}</p>
+      <p className="mt-2 text-xs leading-5">Market: {comparison.market || comparison.country || comparison.validatedContext?.market || comparison.validatedContext?.country || 'Not stored'}</p>
+      <p className="mt-2 text-xs leading-5">Requirements: {(comparison.criteria || []).join(' · ') || 'Not stored'}</p>
+      <div className="mt-5"><CompareAgainActions comparison={comparison} guest={guest} /></div>
+    </section>
+    {children}
+  </main>;
+}
+
 function AnalysisPage() {
   const [location, setLocation] = useLocation();
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
@@ -9027,6 +9070,16 @@ function AnalysisPage() {
       setJsonStatus('failed');
     }
   };
+  if (hasUnresolvedDiscovery(comparison)) return <AppShell guest={guest}>
+    <UnresolvedDiscoveryReport comparison={comparison} guest={guest}>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <button type="button" onClick={() => exportPdf()} disabled={pdfStatus === 'exporting'} className="focus-ring rounded-xl bg-[#202840] px-5 py-3 text-xs font-bold text-[#f8f4e8]" data-testid="button-download-unresolved-pdf">{pdfStatus === 'exporting' ? 'Preparing report…' : 'Download context summary'}</button>
+        <button type="button" onClick={() => exportPdf('expanded')} disabled={pdfStatus === 'exporting'} className="focus-ring rounded-xl border border-[#202840] px-5 py-3 text-xs font-bold text-[#202840]" data-testid="button-download-unresolved-expanded-pdf">Download expanded context</button>
+        <button type="button" onClick={exportJson} disabled={jsonStatus === 'exporting'} className="focus-ring rounded-xl border border-[#202840] px-5 py-3 text-xs font-bold text-[#202840]" data-testid="button-download-unresolved-json">Download context JSON</button>
+      </div>
+      {(pdfStatus === 'failed' || jsonStatus === 'failed') && <p className="mt-4 text-xs font-bold text-[#9a3e38]" role="alert">The export could not be generated. Please retry.</p>}
+    </UnresolvedDiscoveryReport>
+  </AppShell>;
   const evidenceRecords = (comparison.vendorScores || []).flatMap((vendor: any) => (
     (vendor.weightedScores || []).flatMap((criterion: any) => criterion.evidence || [])
   ));
@@ -9394,6 +9447,7 @@ function DecisionArchitecturePage() {
   if (!guest && (isError || !data)) return <AppShell><ErrorPanel onRetry={() => refetch()} /></AppShell>;
   const comparison = reconcileReportScores(guest ? guestComparison : data);
   if (!comparison) return <AppShell guest={guest}><ErrorPanel /></AppShell>;
+  if (hasUnresolvedDiscovery(comparison)) return <AppShell guest={guest}><UnresolvedDiscoveryReport comparison={comparison} guest={guest} /></AppShell>;
   return <AppShell guest={guest}><main className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? '/guest/result' : `/comparisons/${id}`} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline"><ArrowLeft size={14} /> Back to comparison</Link><div className="mt-8"><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#b94d45]">{isVehiclePurchaseReport(comparison) ? 'Buyer decision' : 'Decision architecture'}</p><h1 className="display mt-3 max-w-4xl text-4xl font-bold tracking-[-.055em] text-[#202840] sm:text-5xl">{isVehiclePurchaseReport(comparison) ? 'Choose only when the buying conditions are verified.' : 'Equivalency, gaps, migration, and governance.'}</h1><p className="mt-4 max-w-3xl text-sm leading-6 text-[#687083]">{isVehiclePurchaseReport(comparison) ? 'Use the same current variant and ownership assumptions for every option. A narrow feature lead is not proof of the best purchase.' : `A structured transition view for ${comparison.recommendation}. Validate assumptions and evidence with accountable stakeholders before contract or cutover approval.`}</p></div><div className="mt-10"><DecisionArchitectureContent comparison={comparison} /></div></main></AppShell>;
 }
 

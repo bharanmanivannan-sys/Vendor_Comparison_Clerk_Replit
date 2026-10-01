@@ -7,7 +7,7 @@ import {
   db,
   type InsertComparison,
 } from "@workspace/db";
-import { normalizeEvidenceRecords } from "../lib/analysis";
+import { assertConcreteDecisionOptions, normalizeEvidenceRecords } from "../lib/analysis";
 
 type Executor = { insert: (table: unknown) => any; update?: (table: unknown) => any };
 
@@ -81,6 +81,8 @@ export async function persistComparisonWithEvidence(
   values: InsertComparison,
   onPersisted?: ComparisonPersistedCallback,
 ) {
+  assertConcreteDecisionOptions(values.vendors);
+  assertConcreteDecisionOptions((values.vendorScores ?? []).map(({ vendor }) => vendor));
   const [comparison] = await executor.insert(comparisonsTable).values(values).returning();
   if (!comparison) throw new Error("Comparison insert returned no row.");
   return persistInsertedComparisonWithEvidence(executor, comparison, values, onPersisted);
@@ -112,6 +114,8 @@ export function persistComparisonAtomically(
   onPersisted?: ComparisonPersistedCallback,
   options?: { jobId?: string; leaseOwner?: string },
 ) {
+  assertConcreteDecisionOptions(values.vendors);
+  assertConcreteDecisionOptions((values.vendorScores ?? []).map(({ vendor }) => vendor));
   if (options?.jobId !== undefined) {
     if (!options.jobId) throw new Error("Comparison job ID must not be empty.");
     const jobId = options.jobId;

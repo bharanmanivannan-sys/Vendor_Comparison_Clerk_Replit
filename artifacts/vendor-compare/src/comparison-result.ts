@@ -1,5 +1,6 @@
 import { classifyReportFactorStatus, isNeutralFallback } from './report-factor-status';
 import { classifyReportQuality } from './report-quality';
+import { discoveryOptionLabels, hasUnresolvedDiscovery, UNRESOLVED_DISCOVERY_EXPLANATION } from './unresolved-discovery';
 import { comparisonOutcomeGate, isUnverifiedMarketDecisionMode } from './comparison-outcome-gates';
 import { BUILT_IN_BY_ID, validateReportWeightModel } from './weight-model';
 import {
@@ -178,6 +179,7 @@ export type UnverifiedEligibilityChoice = {
 export function validatedServerProvisionalChoiceForUnverifiedEligibility(
   comparison: any,
 ): UnverifiedEligibilityChoice | null {
+  if (hasUnresolvedDiscovery(comparison)) return null;
   if (!eligibilityBlocksRecommendation(comparison)) return null;
   const choice = serverProvisionalRecommendationForUnverifiedEligibility(comparison);
   if (!choice) return null;
@@ -254,6 +256,18 @@ export function validatedServerProvisionalChoiceForUnverifiedEligibility(
  * scored leader and all compared options must have at least one shared lens.
  */
 export function classifyComparisonResult(comparison: any): ComparisonResult {
+  if (hasUnresolvedDiscovery(comparison)) return {
+    resultState: 'INSUFFICIENT_TO_SCORE', decisionClass: 'DECISION_INPUT_ERROR',
+    recommendedOptionId: null, recommendationType: 'NONE',
+    optionScores: discoveryOptionLabels(comparison).map((optionId) => ({
+      optionId, modelledScore: null, researchBackedScore: null, rank: null,
+    })),
+    confidence: null, confidenceBand: null, modelledCoverage: 0, researchCoverage: 0,
+    researchStatus: 'INCOMPLETE', decidingLens: null, decidingReason: UNRESOLVED_DISCOVERY_EXPLANATION,
+    closestAlternative: null, tradeOffs: [], missingEvidence: ['Concrete competitor shortlist'],
+    roundedTieBreak: null, technicalTieBreak: false, deterministicTieBreak: false,
+    unverifiedEligibilityChoiceKind: null,
+  };
   const eligibilityBlocked = eligibilityBlocksRecommendation(comparison);
   const serverChoiceWithUnverifiedEligibility = eligibilityBlocked
     ? validatedServerProvisionalChoiceForUnverifiedEligibility(comparison) : null;

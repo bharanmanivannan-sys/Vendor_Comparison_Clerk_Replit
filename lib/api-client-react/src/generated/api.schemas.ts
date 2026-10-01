@@ -193,6 +193,44 @@ export interface ComparisonDraftWarning {
   message: string;
 }
 
+export type ComparisonDraftOptionDiscoveryStatus = typeof ComparisonDraftOptionDiscoveryStatus[keyof typeof ComparisonDraftOptionDiscoveryStatus];
+
+
+export const ComparisonDraftOptionDiscoveryStatus = {
+  REQUIRED: 'REQUIRED',
+  PROPOSED: 'PROPOSED',
+} as const;
+
+export type ComparisonDraftOptionDiscoveryEntityLevel = typeof ComparisonDraftOptionDiscoveryEntityLevel[keyof typeof ComparisonDraftOptionDiscoveryEntityLevel];
+
+
+export const ComparisonDraftOptionDiscoveryEntityLevel = {
+  PRODUCT: 'PRODUCT',
+  SERVICE: 'SERVICE',
+  BRAND: 'BRAND',
+} as const;
+
+export type ComparisonDraftOptionDiscoveryProvenance = {
+  provider: string;
+  model: string;
+};
+
+/**
+ * Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.
+ */
+export interface ComparisonDraftOptionDiscovery {
+  status: ComparisonDraftOptionDiscoveryStatus;
+  anchorOptionId: string;
+  entityLevel: ComparisonDraftOptionDiscoveryEntityLevel;
+  /**
+     * @minimum 2
+     * @maximum 6
+     */
+  targetCount: number;
+  objectives: string[];
+  provenance?: ComparisonDraftOptionDiscoveryProvenance;
+}
+
 export type ComparisonDraftStatus = typeof ComparisonDraftStatus[keyof typeof ComparisonDraftStatus];
 
 
@@ -238,7 +276,10 @@ export interface ComparisonDraft {
   version: number;
   status: ComparisonDraftStatus;
   originalQuery: string;
+  /** Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract. */
+  rawUserQuery?: string;
   options: ComparisonDraftOption[];
+  optionDiscovery?: ComparisonDraftOptionDiscovery;
   comparisonLevel: ComparisonDraftComparisonLevel;
   decisionObjective: string;
   decisionDomain: string;
