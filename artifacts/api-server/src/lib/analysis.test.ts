@@ -1,16 +1,62 @@
 import test from "node:test";
+import { CreateGuestComparisonResponse, ParseComparisonPromptResponse, ParseGuestComparisonPromptResponse } from "@workspace/api-zod";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { canonicalEntityId, canonicalScoringPrompt, resolveEntityIdentity } from "./entityIdentity";
+import { classifyComparisonOption, comparisonPreflightClassification, KNOWN_VEHICLE_MODEL_OFFERINGS } from "./comparisonClassification";
+import { validateContextAndMarket } from "./contextMarketValidation";
+import { discoverSearchApiSources, searchDuckDuckGoLight } from "./searchApi";
+import { FirecrawlDiscoveryError } from "./firecrawlSearch";
+import { migrateLegacyDecisionState } from "./legacyDecisionAdapter";
+import {
+  isTransientResearchError,
+  readResearchResilienceConfig,
+  researchRetryDelayMs,
+} from "./researchResilience";
 import {
   additionalWeightRelevanceError,
+  applyConditionalModelledWinnerCaveat,
+  determineMarketEligibility,
+  isMarketEligibilityScoreable,
+  rankEligibleModelledScores,
+  marketEligibilityCustomerSegment,
+  marketEligibilityEvidenceConfirmed,
+  marketEligibilityProduct,
+  marketEligibilitySubcategory,
   applyScopedVehicleMarketPositions,
+  applyDecisionStrategy,
+  applyCompactQuickIndicativeDecision,
   addElectricVehicleMatrixEvidence,
   addVerifiedElectricVehicleMatrixMetrics,
+  addVerifiedVehicleDocumentMetrics,
+  addXuv700VariantAvailabilityContext,
+  applyIndicativeScenarioDecision,
+  indicativeLensWeights,
+  applyIndicativeDxpLenses,
+  applyQuickIndicativeScores,
+  isEnterpriseSoftwareComparison,
+  isQuickCommerceComparisonContext,
+  shouldUseCompactQuickIndicativeResearch,
+  addIndicativeVehiclePriceRow,
+  addAustralianEvSourceContext,
+  addVerifiedQualitativeDocumentClaims,
   addVerifiedElectricVehicleOfficialSpecs,
   addVerifiedBaasOfferEvidence,
   addVerifiedAiModelEvidence,
   addVerifiedHomeLoanRateEvidence,
   addVerifiedQuickCommerceDeliveryEvidence,
   applyEvidenceBackedLensWinner,
+  applyScoringPrecedence,
+  applyVendorModelDecision,
+  applyProvisionalChoice,
+  applyAdvisoryPriorityPreference,
+  applyVehiclePriorityEvidenceDecision,
+  vehiclePriorityEvidenceDecision,
+  australianPriorityEvPairing,
+  preserveMandatoryFailures,
+  applyBestAlternativeRecommendation,
+  assertHasProvenanceCompleteScorableEvidence,
   applyDeterministicQuantitativeScores,
   applyProviderRoleTieBreak,
   applySoftwareCapabilityMatrixDecision,
@@ -19,21 +65,51 @@ import {
   assertCanonicalComparisonConsistency,
   assertSufficientComparisonEvidence,
   type AnalysisPayload,
+  buildAnalysis,
+  createDecisionModeAnalysis,
+  buildResearchedDecisionModeAnalysis,
+  compactEnterpriseResearchShape,
+  compactElectricVehicleResearchShape,
+  quickIndicativeResearchShape,
+  parseElectricVehicleResearchOrSeed,
+  parseQuickCommerceResearchOrSeed,
+  parseRawWeightAllocations,
+  manufacturerLevelElectricVehicleScopeGap,
+  isCompactEnterpriseResearch,
+  requestsExtendedElectricVehicleResearch,
+  retrievedSoftwareSourceObservations,
+  buildDeterministicIndiaDieselVehicleContract,
+  vehicleEvidenceGapBrief,
+  cacheCompletedAnalysis,
   buildComparisonIdentity,
   buildValidatedEvidenceDataset,
   calculateVendorScoreExtension,
   capabilityLedSoftwarePriorityProfile,
   canonicalVendorScoreRows,
+  ensureVehicleEvidenceScoreRows,
   collectCitedHttpUrls,
+  collectExplicitWebSearchSources,
   WEIGHTED_CRITERIA,
   dedupeReferenceUrls,
+  deterministicIndiaDieselPortfolioSelection,
+  deterministicIndiaDieselEvidenceUrls,
+  selectBalancedIndiaDieselBrandSources,
+  addIndiaDieselBrandSourceContext,
+  suppressVehicleModelEvidenceForBrandComparison,
+  isIndiaDieselBrandEvidenceRoute,
   deterministicOpenEndedEvFallback,
+  discoverGeneralSoftwareFallbackUrls,
+  discoverIndependentVehicleFallbackUrls,
   discoveryTargetCount,
   electricVehicleFinalQualityIssues,
+  evidenceAdmissionUrls,
   evidenceSufficiency,
   enforceBaasTotalCostAssumptions,
   enforceIndianMgBaasFact,
   explicitDecisionPriorityProfile,
+  explicitUserWeightsFromPrompt,
+  controllingDecisionLens,
+  ensureDeterministicIndiaDieselEvidenceUrls,
   ensureIndiaSafariOutsideAlternatives,
   ensureVehicleOutsideAlternatives,
   filterSourcesForMarket,
@@ -44,6 +120,7 @@ import {
   hasRequiredDiscoveryLensCoverage,
   hasHomeLoanResearchCoverage,
   inferResearchMarket,
+  isDeterministicIndiaDieselComparison,
   isAiModelComparisonContext,
   isVehicleComparisonContext,
   isDealershipComparisonRequest,
@@ -51,9 +128,24 @@ import {
   isSafetyFirstVehicleQuery,
   isObjectivePhraseVendor,
   missingCreditCardSourceVendors,
+  missingExactModelVerifiedMetricVendors,
   missingElectricVehicleSourceVendors,
+  markEvidenceLimitedHomeLoanResult,
+  parseHomeLoanResearchContract,
+  buildHomeLoanAnalysisFromContract,
+  GOVERNED_ENTERPRISE_SOFTWARE_REGISTRY,
+  governedSoftwareRegistryEntries,
+  validateGovernedSoftwareRegistryDocuments,
+  applyGovernedSoftwareCapabilityEvidence,
+  roundAnalysisResponseIntegers,
+  mergeRetrievedEvidenceDocuments,
+  applyDedicatedHomeLoanQualifications,
+  applyGovernedSoftwareQualifications,
+  applyGovernedSoftwarePresentationContext,
+  reconcileSpecialPathPresentation,
   mergeElectricVehicleResearch,
   normalizeDecisionGovernance,
+  normalizeAnalysis,
   normalizeCurrentModelSelectionName,
   normalizeEvidenceRecords,
   normalizeLensWinner,
@@ -61,6 +153,8 @@ import {
   normalizeMarketPosition,
   normalizeMarketPositionEvidence,
   normalizeProviderRole,
+  retainDocumentBackedCompetitiveFrameworks,
+  retainDocumentBackedVrio,
   normalizeTextField,
   normalizeVrioStatus,
   officialAustralianEvMarketPositionFallbacks,
@@ -69,6 +163,8 @@ import {
   officialHomeLoanSourcesFor,
   parseJsonObject,
   parsePrompt,
+  requestsVehiclePortfolioSelection,
+  australianThreeBrandEvCarChoice,
   parsePromptWithIntent,
   preserveProvisionalLensWinner,
   preferredIndiaEvModelSelection,
@@ -78,28 +174,155 @@ import {
   reconcileRecommendationDecision,
   reconcileFinalRecommendationNarrative,
   reconcileRecommendationWithNarrative,
+  recoverCitedOpenEndedCompetitors,
   rankEvidenceSources,
   refineComparisonPrompt,
   resolveComparisonVendors,
   requestsFiveYearHomeLoanTrend,
   requestsCurrentModelSelection,
+  requestsBestAlternative,
+  requiresGeneralSoftwareSourceFallback,
   scoreDifferenceBand,
+  selectScoringPrecedence,
   sanitizeOutsideAlternativeInsights,
+  groundOutsideAlternativeInsights,
   vehicleIndependentEvidenceInstructions,
   vehicleMarketPositionInstructions,
   selectRecommendationLabel,
   selectOpenEndedElectricVehicleShortlist,
+  validatedQualitativeLensDecision,
   sourceMatchesResearchMarket,
   uniqueHighestDeterministicWeightedVendor,
+  uniqueHighestScoreVendor,
   userSuppliedSourceInstructions,
   UNVERIFIABLE_WINNER_NOTE,
   validateFinalEvidenceUrls,
+  validateQualitativeEvidenceAgainstDocuments,
   validateQuantitativeEvidenceAgainstDocuments,
   validateComparisonContext,
 } from "./analysis";
-import type { RetrievedEvidenceDocument } from "./security";
+import {
+  assessMarketRelevance,
+  type DemographicContext,
+  type RelevanceEvidence,
+  type RelevanceGate,
+} from "./marketRelevance";
+
+const legacyNoWinnerLabel = ["No definitive", "winner"].join(" ");
+
+test("legacy decision adapter reads historical labels without changing audit payloads or inventing scores", () => {
+  const historicalLabel = legacyNoWinnerLabel;
+  const report = { recommendation: historicalLabel, score: null, audit: { originalDecision: historicalLabel } };
+  const before = structuredClone(report);
+
+  const migrated = migrateLegacyDecisionState(report);
+
+  assert.equal(migrated.state, "INSUFFICIENT_EVIDENCE");
+  assert.equal(migrated.rawLegacyValue, historicalLabel);
+  assert.equal(migrated.recognized, true);
+  assert.deepEqual(report, before);
+  assert.equal("score" in migrated, false);
+  assert.equal("winner" in migrated, false);
+});
+
+test("deterministic score recovery cannot bypass an unresolved mandatory gate", () => {
+  const rows = [
+    { vendor: "Alpha", score: 95, qualificationGates: [{ gate: "Market availability", mandatory: true, status: "UNKNOWN" }] },
+    { vendor: "Beta", score: 80, qualificationGates: [{ gate: "Market availability", mandatory: true, status: "PASS" }] },
+  ];
+  assert.deepEqual(uniqueHighestScoreVendor(rows), { vendor: "Beta", score: 80 });
+  rows[1]!.qualificationGates[0]!.status = "UNKNOWN";
+  assert.equal(uniqueHighestScoreVendor(rows), null);
+});
+
+test("current analysis producers contain no historical no-winner wording", () => {
+  const source = readFileSync("src/lib/analysis.ts", "utf8");
+  const legacyLabelPattern = new RegExp(
+    `${["No definitive", "winner"].join("\\s+")}`,
+    "i",
+  );
+  assert.doesNotMatch(source, legacyLabelPattern);
+
+  const currentReport = createDecisionModeAnalysis({
+    prompt: "Compare Alpha and Beta for business software in Australia.",
+    market: "AU",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Value"],
+    urls: [],
+  }, { lenses: [] });
+  currentReport.executiveSummary = `${legacyNoWinnerLabel} is available.`;
+  currentReport.nextSteps = [`Review the ${legacyNoWinnerLabel} result.`];
+  roundAnalysisResponseIntegers(currentReport);
+  assert.doesNotMatch(JSON.stringify(currentReport), legacyLabelPattern);
+});
+
+function eligibleDecisionQuoteSpanId(
+  source: {
+    quoteSpans?: Array<{ spanId: string; eligibleOptions: string[]; priorityLenses: string[] }>;
+  },
+  option: string,
+  lens: string,
+): string {
+  const span = source.quoteSpans?.find(({ eligibleOptions, priorityLenses }) => (
+    eligibleOptions.includes(option) && priorityLenses.includes(lens)
+  ));
+  assert.ok(span, `Expected a retrieved quote span for ${option} / ${lens}.`);
+  return span.spanId;
+}
+
+test("decision strategy gives a platform pilot, migration sequence, commercial gate and switch rule", () => {
+  const report = {
+    category: "CRM",
+    recommendation: "Atlas CRM",
+    vendorScores: [{ vendor: "Atlas CRM", score: 72 }, { vendor: "Beacon CRM", score: 68 }],
+    nextSteps: ["Review the shortlist."],
+  } as unknown as AnalysisPayload;
+  applyDecisionStrategy(report, "Compare CRM platforms for a regional sales team", ["offline sales workflow"]);
+  const strategy = report.nextSteps.filter((step) => step.startsWith("Decision strategy — "));
+  assert.equal(strategy.length, 5);
+  assert.match(strategy[0]!, /offline sales workflow.*Atlas CRM pilot.*IT\/security/);
+  assert.match(strategy[1]!, /Beacon CRM.*integration work.*contract cost/);
+  assert.match(strategy[2]!, /pilot dataset.*migration dependencies.*rollback checkpoint/);
+  assert.match(strategy[3]!, /Business product owner.*Procurement and finance/);
+  assert.match(strategy[4]!, /Reconsider Beacon CRM if Atlas CRM fails/);
+  applyDecisionStrategy(report, "Compare CRM platforms", ["offline sales workflow"]);
+  assert.equal(report.nextSteps.filter((step) => step.startsWith("Decision strategy — ")).length, 5);
+  assert.equal(report.nextSteps[0], "Review the shortlist.");
+});
+
+test("decision strategy keeps an evidence-limited car choice conditional and does not invent a winner", () => {
+  const report = {
+    category: "Electric vehicles",
+    recommendation: "No qualified option",
+    vendorScores: [{ vendor: "Kia EV5", score: 0 }, { vendor: "Tesla Model Y", score: 0 }],
+    nextSteps: [],
+  } as unknown as AnalysisPayload;
+  applyDecisionStrategy(report, "Compare electric SUVs in Australia", ["family safety"]);
+  assert.match(report.nextSteps[0]!, /each shortlisted vehicle.*family safety/);
+  assert.match(report.nextSteps[4]!, /Do not choose a vehicle until one passes/);
+  assert.doesNotMatch(report.nextSteps.join(" "), /Reconsider Tesla Model Y if Kia EV5/);
+});
+
+test("decision strategy checks purchase variants and personalized financial terms separately", () => {
+  const purchase = {
+    category: "Consumer electronics",
+    recommendation: "Camera A",
+    vendorScores: [{ vendor: "Camera A", score: 80 }, { vendor: "Camera B", score: 70 }],
+    nextSteps: [],
+  } as unknown as AnalysisPayload;
+  applyDecisionStrategy(purchase, "Choose a camera", ["low-light photography"]);
+  assert.match(purchase.nextSteps[0]!, /exact Camera A product, edition or plan.*written quote/);
+  assert.match(purchase.nextSteps[1]!, /ownership or support/);
+  const finance = { ...purchase, category: "Home loans", recommendation: "Bank A",
+    vendorScores: [{ vendor: "Bank A", score: 80 }, { vendor: "Bank B", score: 70 }], nextSteps: [] };
+  applyDecisionStrategy(finance as unknown as AnalysisPayload, "Compare home loans", ["offset account"]);
+  assert.match(finance.nextSteps[0]!, /eligibility.*personalized written offer/);
+  assert.match(finance.nextSteps[4]!, /Reconsider Bank B if Bank A fails eligibility/);
+});
+import { normalizeRetrievedText, type RetrievedEvidenceDocument } from "./security";
 import { flattenComparisonEvidence } from "../services/comparisonPersistence";
 import { isSafeUserInput } from "./security";
+import { CreateComparisonBody } from "@workspace/api-zod";
 
 const extracted = (value: object) => async () => value;
 const intent = (value: object) => ({
@@ -110,12 +333,725 @@ const intent = (value: object) => ({
   ...value,
 });
 
+test("uses bounded evidence-bearing scaffolding for the five-option DXP pack", () => {
+  const vendors = ["Adobe Experience Manager", "Sitecore", "Contentful", "Optimizely", "Acquia"];
+  assert.equal(isCompactEnterpriseResearch(
+    "Compare Adobe Experience Manager vs Sitecore vs Contentful vs Optimizely vs Acquia for Digital experience platforms",
+    vendors,
+  ), true);
+  assert.equal(isCompactEnterpriseResearch("Compare five home loans", vendors), false);
+  const shape = compactEnterpriseResearchShape(vendors) as Record<string, any>;
+  assert.deepEqual(shape.vendorScores.map((row: any) => row.vendor), vendors);
+  assert.equal(shape.recommendation, "INSUFFICIENT_EVIDENCE");
+  assert.equal(shape.score, 0);
+  assert.ok(!("swot" in shape));
+  assert.ok(!("marketHistory" in shape));
+  assert.ok(shape.vendorScores.every((row: any) => row.weightedScores.length === WEIGHTED_CRITERIA.length));
+  assert.deepEqual(shape.sources, []);
+});
+
+test("links indicative software observations only to retrieved exact-vendor page text", () => {
+  const observations = retrievedSoftwareSourceObservations(
+    ["Contentful", "Sitecore"],
+    [{
+      url: "https://example.com/contentful",
+      finalUrl: "https://example.com/contentful",
+      contentType: "text/html",
+      text: "Contentful offers content management workflows and APIs for enterprise publishing across channels.",
+      sha256: "a".repeat(64),
+      retrievedAt: "2026-09-24T00:00:00.000Z",
+      truncated: false,
+    }],
+  );
+  assert.equal(observations.length, 1);
+  assert.match(observations[0], /Contentful offers content management workflows/);
+  assert.match(observations[0], /Source: https:\/\/example.com\/contentful/);
+  assert.ok(!observations.some((item) => item.includes("Sitecore")));
+});
+
+test("generic enterprise lenses keep estimates separate and admit only official exact-product excerpts", () => {
+  assert.equal(isEnterpriseSoftwareComparison("Compare enterprise CRM platforms", ["Salesforce Sales Cloud", "Other CRM"]), true);
+  const report = {
+    vendorScores: [{ vendor: "Salesforce Sales Cloud" }, { vendor: "Other CRM" }],
+    pricing: [], features: [],
+  } as unknown as AnalysisPayload;
+  const document = (finalUrl: string, text: string): RetrievedEvidenceDocument => ({
+    url: finalUrl, finalUrl, contentType: "text/html", text, sha256: "b".repeat(64),
+    retrievedAt: "2026-09-24T00:00:00.000Z", truncated: false,
+  });
+  applyIndicativeDxpLenses(report, ["Commercial value", "Sales workflow"], [
+    { vendor: "Salesforce Sales Cloud", ratings: [71, 82] },
+    { vendor: "Other CRM", ratings: [69, 80] },
+  ], [
+    document("https://comparison.example/crm", "Salesforce Sales Cloud is 30% cheaper than Other CRM."),
+    document("https://www.salesforce.com/sales/cloud/", "Salesforce Sales Cloud provides sales workflow and CRM capabilities. Salesforce Sales Cloud Professional plan costs USD 75 per user per month."),
+  ]);
+  assert.match(report.features[1]!.values["Salesforce Sales Cloud"]!, /Source: https:\/\/www\.salesforce\.com/);
+  assert.match(report.pricing[1]!.values["Salesforce Sales Cloud"]!, /Written comparable quote needed/);
+  assert.equal(report.pricing[1]!.winner, "Not established");
+  assert.match(report.pricing[1]!.values["Other CRM"]!, /Written comparable quote needed/);
+});
+
+test("quick CRM comparisons use a small criteria-only research contract for four exact options", () => {
+  const prompt = "Compare Microsoft Dynamics 365 vs Salesforce vs Oracle CX vs SAP Sales Cloud for CRM";
+  const vendors = [
+    "Microsoft Dynamics 365",
+    "Salesforce",
+    "Oracle CX",
+    "SAP Sales Cloud",
+  ];
+  assert.deepEqual(parsePrompt(prompt).vendors, vendors);
+  assert.equal(isEnterpriseSoftwareComparison(prompt, vendors), true);
+
+  const shape = quickIndicativeResearchShape(vendors, ["Core capabilities", "Pricing and total cost"], "CRM");
+  assert.equal(shape.category, "CRM");
+  assert.deepEqual(shape.vendorScores.map((vendor) => vendor.vendor), vendors);
+  assert.deepEqual(shape.vendorScores[0]!.weightedScores.map((row) => row.criterion), [
+    "Core capabilities",
+    "Pricing and total cost",
+  ]);
+  assert.ok(shape.vendorScores.every((vendor) => vendor.weightedScores.length === 2));
+  assert.deepEqual(shape.pricing.map((row) => row.dimension), ["Pricing and total cost"]);
+  assert.deepEqual(shape.features.map((row) => row.dimension), ["Core capabilities"]);
+  assert.deepEqual(Object.keys(shape.pricing[0]!.values), vendors);
+  assert.deepEqual(Object.keys(shape.features[0]!.values), vendors);
+  assert.deepEqual(shape.sources, []);
+  assert.equal("marketHistory" in shape.vendorScores[0]!, false);
+  assert.equal("swot" in shape, false);
+
+  assert.deepEqual(
+    quickIndicativeResearchShape(vendors, []).vendorScores[0]!.weightedScores.map((row) => row.criterion),
+    [
+      "Meets stated needs",
+      "Capabilities and integrations",
+        "Customer experience / NPS",
+      "Security and compliance",
+      "Price and total cost",
+      "Implementation and support",
+    ],
+  );
+
+  const quickCommercePrompt = "Compare Zepto quick commerce products against Blinkit in India";
+  const quickCommerceVendors = ["Zepto", "Blinkit"];
+  assert.equal(isQuickCommerceComparisonContext("IN", quickCommercePrompt, quickCommerceVendors), true);
+  assert.equal(isQuickCommerceComparisonContext("AU", quickCommercePrompt, quickCommerceVendors), false);
+  assert.equal(shouldUseCompactQuickIndicativeResearch(
+    true,
+    quickCommercePrompt,
+    quickCommerceVendors,
+    "IN",
+  ), true);
+  assert.equal(shouldUseCompactQuickIndicativeResearch(
+    false,
+    quickCommercePrompt,
+    quickCommerceVendors,
+    "IN",
+  ), false);
+});
+
+test("malformed quick-commerce output falls back to the exact requested criteria", () => {
+  const vendors = ["Zepto", "Blinkit"];
+  const criteria = [
+    "variety of product range",
+    "price",
+    "time to delivery",
+    "quality",
+  ];
+  const recovered = parseQuickCommerceResearchOrSeed(
+    '{"vendorScores":[',
+    vendors,
+    criteria,
+  );
+
+  assert.equal(recovered.usedFallback, true);
+  assert.match(recovered.reason ?? "", /incomplete structured result/i);
+  assert.deepEqual(recovered.parsed.vendorScores?.map((vendor) => vendor.vendor), vendors);
+  assert.deepEqual(
+    recovered.parsed.vendorScores?.[0]?.weightedScores?.map((row) => row.criterion),
+    criteria,
+  );
+  assert.deepEqual(recovered.parsed.sources, []);
+});
+
+test("quick CRM normalization preserves the user's exact criteria", () => {
+  const vendors = ["Microsoft Dynamics 365", "Salesforce", "Oracle CX", "SAP Sales Cloud"];
+  const fallback = vehicleEvidenceGapBrief({
+    prompt: `Compare ${vendors.join(", ")} for CRM.`,
+    vendors,
+    criteria: [],
+    urls: [],
+  });
+  const normalized = normalizeAnalysis(
+    {},
+    fallback,
+    vendors,
+    false,
+    [],
+    [],
+    ["Meets the stated sales workflow", "Pricing and total cost", "Security and data residency"],
+  );
+
+  for (const vendor of normalized.vendorScores) {
+    assert.deepEqual(vendor.weightedScores?.map((row) => row.criterion), [
+      "Meets the stated sales workflow",
+      "Pricing and total cost",
+      "Security and data residency",
+    ]);
+  }
+});
+
+test("normalization drops unlabeled comparison rows and defaults source availability", () => {
+  const vendors = ["BYD", "Tesla"];
+  const fallback = vehicleEvidenceGapBrief({
+    prompt: "Compare BYD and Tesla in Australia in EV car.",
+    vendors,
+    criteria: [],
+    urls: [],
+  });
+  const normalized = normalizeAnalysis(
+    {
+      features: [
+        {
+          dimension: "Battery capacity and range",
+          values: { BYD: "Evidence unavailable", Tesla: "Evidence unavailable" },
+          winner: "Tie",
+        },
+        {
+          values: { BYD: "Unlabelled model output", Tesla: "Unlabelled model output" },
+          winner: "Tie",
+        },
+      ],
+    } as Parameters<typeof normalizeAnalysis>[0],
+    fallback,
+    vendors,
+  );
+
+  assert.deepEqual(normalized.features.map(({ dimension }) => dimension), [
+    "Battery capacity and range",
+  ]);
+  assert.deepEqual(normalized.sourceAvailability, []);
+});
+
+test("official CRM pricing uses a bounded multiline plan window and preserves scope caveats", () => {
+  const report = {
+    vendorScores: [{ vendor: "Salesforce Sales Cloud" }, { vendor: "Other CRM" }],
+    pricing: [], features: [],
+  } as unknown as AnalysisPayload;
+  const document = (finalUrl: string, text: string, retrievedAt = "2026-09-24T00:00:00.000Z"): RetrievedEvidenceDocument => ({
+    url: finalUrl, finalUrl, contentType: "text/html", text, sha256: "c".repeat(64),
+    retrievedAt, truncated: false,
+  });
+  applyIndicativeDxpLenses(report, ["Commercial value"], [
+    { vendor: "Salesforce Sales Cloud", ratings: [71] },
+    { vendor: "Other CRM", ratings: [69] },
+  ], [
+    document("https://www.salesforce.com/au/sales/pricing/", [
+      "Salesforce Sales Cloud pricing",
+      "Core",
+      "For sales teams",
+      "AU$",
+      "273",
+      "AUD/User/Month",
+      "(Billed annually)",
+    ].join("\n")),
+  ]);
+  const value = report.pricing.at(-1)!.values["Salesforce Sales Cloud"]!;
+  assert.match(value, /Core/);
+  assert.match(value, /AU\$273/);
+  assert.match(value, /not like-for-like/);
+  assert.match(value, /Official published/);
+  assert.match(value, /Source: https:\/\/www\.salesforce\.com\/au\/sales\/pricing\//);
+});
+
+test("official CRM pricing rejects cross-vendor, ambiguous, and stale snippets", () => {
+  const makeReport = (text: string, url = "https://www.salesforce.com/au/sales/pricing/") => {
+    const report = {
+      vendorScores: [{ vendor: "Salesforce Sales Cloud" }, { vendor: "Other CRM" }],
+      pricing: [], features: [],
+    } as unknown as AnalysisPayload;
+    const document: RetrievedEvidenceDocument = {
+      url, finalUrl: url, contentType: "text/html", text, sha256: "d".repeat(64),
+      retrievedAt: "2026-09-24T00:00:00.000Z", truncated: false,
+    };
+    applyIndicativeDxpLenses(report, ["Commercial value"], [
+      { vendor: "Salesforce Sales Cloud", ratings: [71] },
+      { vendor: "Other CRM", ratings: [69] },
+    ], [document]);
+    return report.pricing.at(-1)!.values["Salesforce Sales Cloud"]!;
+  };
+  assert.match(makeReport("Salesforce Sales Cloud pricing\nProfessional\nAU$ 165 per user per month", "https://review.example/pricing"), /Written comparable quote needed/);
+  const multipleOffers = makeReport([
+    "Salesforce Sales Cloud pricing", "Professional", "AU$", "165", "AUD/User/Month", "(Billed annually)",
+    "Enterprise", "AU$", "330", "AUD/User/Month", "(Billed annually)",
+  ].join("\n"));
+  assert.match(multipleOffers, /Professional/);
+  assert.match(multipleOffers, /Enterprise/);
+  assert.match(multipleOffers, /not like-for-like/);
+  assert.match(makeReport("Salesforce Sales Cloud pricing\nProfessional (archived)\nAU$ 75 per user per month"), /Written comparable quote needed/);
+  assert.match(makeReport("Salesforce Starter Suite pricing\nStarter Suite\nAU$ 25 per user per month"), /Written comparable quote needed/);
+});
+
+test("does not turn one vehicle metric into a purchase-ready recommendation while availability is unknown", () => {
+  const hash = "a".repeat(64);
+  const evidence = (vendor: string, metricKey: string, value: number, score: number) => ({
+    sourceId: `docsha256:${hash}`,
+    documentSha256: hash,
+    sourceTextStart: 13053,
+    sourceTextEnd: 13092,
+    evidenceKind: "quantitative",
+    normalizationMethod: "direct_comparable_metric",
+    metricSubject: vendor,
+    metricKey,
+    metricBasis: `${metricKey}:paired_table`,
+    rawMetricValue: value,
+    rawMetricUnit: metricKey === "price" ? "inr_lakh" : "hp",
+    normalizationDirection: metricKey === "price" ? "lower_is_better" : "higher_is_better",
+    normalizedScore: score,
+    supportDirection: "supports",
+    exactClaim: metricKey === "price" ? "Mahindra ₹20.89 lakh; Tata ₹20.79 lakh" : "Mahindra 185 hp; Tata 170 hp",
+  });
+  const prompt = "Compare Mahindra xuv 700 and Tata Safari diesel AT for automobile in India. Evaluate Performance and Safety features. Recommend the best safety outcome.";
+  const analysis = {
+    category: "Automobile | SUV | Diesel | Automatic | India",
+    vendors: ["Mahindra xuv 700", "Tata Safari diesel AT"],
+    vendorScores: [
+      {
+        vendor: "Mahindra xuv 700",
+        score: 50,
+        qualificationStatus: "INSUFFICIENT_EVIDENCE",
+        qualificationGates: [
+          { gate: "Exact entity/variant identity", status: "PASS", mandatory: true, rationale: "", evidenceSourceIds: [`docsha256:${hash}`] },
+          { gate: "Market availability", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+          { gate: "Applicable local regulatory compliance", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+        ],
+        weightedScores: [{
+          criterion: "Meets Needs / Features", weight: 35, score: 50,
+          evidence: [evidence("Mahindra xuv 700", "engine_power", 185, 70), evidence("Mahindra xuv 700", "price", 20.89, 50)],
+        }],
+      },
+      {
+        vendor: "Tata Safari diesel AT",
+        score: 50,
+        qualificationStatus: "INSUFFICIENT_EVIDENCE",
+        qualificationGates: [
+          { gate: "Exact entity/variant identity", status: "PASS", mandatory: true, rationale: "", evidenceSourceIds: [`docsha256:${hash}`] },
+          { gate: "Market availability", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+          { gate: "Applicable local regulatory compliance", status: "UNKNOWN", mandatory: true, rationale: "", evidenceSourceIds: [] },
+        ],
+        weightedScores: [{
+          criterion: "Meets Needs / Features", weight: 35, score: 50,
+          evidence: [evidence("Tata Safari diesel AT", "engine_power", 170, 60), evidence("Tata Safari diesel AT", "price", 20.79, 55)],
+        }],
+      },
+    ],
+    pricing: [{ dimension: "Product price", values: { "Mahindra xuv 700": "₹20.89 lakh", "Tata Safari diesel AT": "₹20.79 lakh" }, winner: "Not established" }],
+    features: [{ dimension: "Performance", values: { "Mahindra xuv 700": "185 hp", "Tata Safari diesel AT": "170 hp" }, winner: "Not established" }],
+    recommendation: "No qualified option",
+    score: 0,
+    executiveSummary: "No option was established.",
+    recommendationReason: "Insufficient evidence.",
+    insights: [],
+  } as unknown as AnalysisPayload;
+
+  applyVendorModelDecision(analysis, { prompt, category: analysis.category, market: "India IN" });
+  assert.equal(analysis.recommendation, "No qualified option");
+  assert.equal(analysis.score, 0);
+  assert.match(analysis.executiveSummary, /Mahindra xuv 700 leads only the verified performance comparison/i);
+  assert.match(analysis.executiveSummary, /written on-road quotes/i);
+  assert.match(analysis.recommendationReason, /Neither vehicle is purchase-ready/i);
+  assert.ok(analysis.vendorScores.every((vendor) => vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+
+  const software = { ...analysis, category: "Enterprise software", recommendation: "No qualified option" } as unknown as AnalysisPayload;
+  applyVendorModelDecision(software, { prompt: "Compare two software platforms", category: software.category });
+  assert.equal(software.recommendation, "No qualified option");
+});
+
 test("includes NPS in the 100-point weighted decision model", () => {
   assert.deepEqual(
     WEIGHTED_CRITERIA.find((entry) => entry.criterion === "Customer Advocacy / NPS"),
     { criterion: "Customer Advocacy / NPS", weight: 10 },
   );
   assert.equal(WEIGHTED_CRITERIA.reduce((total, entry) => total + entry.weight, 0), 100);
+});
+
+test("admits governed independent exact-model vehicle metrics when official pages are unavailable", () => {
+  const sourceUrl = "https://independent-auto.example/2026/xuv-7xo-vs-safari";
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text: [
+      "Published 2026-04-17",
+      "Mahindra XUV 7XO engine power is 185 hp in the tested diesel automatic.",
+      "Tata Safari engine power is 170 hp in the tested diesel automatic.",
+      "Mahindra XUV 7XO peak engine torque is 450 Nm in the tested diesel automatic.",
+      "Tata Safari peak engine torque is 350 Nm in the tested diesel automatic.",
+      "Mahindra XUV 7XO 0-100 km/h acceleration time is 9.97 seconds.",
+      "Tata Safari 0-100 km/h acceleration time is 12.09 seconds.",
+    ].join("\n"),
+    sha256: "a".repeat(64),
+    retrievedAt: "2026-04-17T10:00:00.000Z",
+    truncated: false,
+  };
+  const parsed = {
+    vendorScores: ["Mahindra XUV 7XO", "Tata Safari"].map((vendor, index) => ({
+      vendor,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        evidence: [{
+          sourceUrl,
+          sourceDate: "2026-04-17",
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: index === 0 ? 185 : 170,
+          rawMetricUnit: "hp",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    })),
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 2);
+  for (const vendor of parsed.vendorScores) {
+    const evidence = vendor.weightedScores[0].evidence[0] as Record<string, any>;
+    assert.equal(evidence.normalizationMethod, "retrieved_document_metric");
+    assert.equal(evidence.sourceDate, "2026-04-17");
+    assert.equal(evidence.documentSha256, "a".repeat(64));
+    assert.ok(evidence.sourceTextEnd > evidence.sourceTextStart);
+  }
+});
+
+test("matches qualified diesel-automatic models across representative heading and table text while preserving PS", () => {
+  const sourceUrl = "https://publisher.example/xuv700-safari-diesel-comparison";
+  const text = normalizeRetrievedText(`
+    <article>
+      <h1>Mahindra XUV700 vs Tata Safari diesel automatic comparison</h1>
+      <section>
+        <h2>Mahindra XUV700</h2>
+        <p>Tested powertrain: diesel automatic</p>
+        <table>
+          <thead><tr><th>Specification</th><th>Measured value</th></tr></thead>
+          <tbody>
+            <tr><th>Power</th><td>185 PS</td></tr>
+            <tr><th>Peak torque</th><td>450 Nm</td></tr>
+          </tbody>
+        </table>
+      </section>
+      <section>
+        <h2>Tata Safari</h2>
+        <p>Tested powertrain: diesel automatic</p>
+        <table>
+          <tbody>
+            <tr><th>Power</th><td>170 PS</td></tr>
+            <tr><th>Peak torque</th><td>350 Nm</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </article>
+  `, "text/html");
+  const analysis = {
+    features: [{
+      dimension: "Engine power and torque performance",
+      values: {
+        "Mahindra XUV700 diesel automatic": "185 PS; 450 Nm",
+        "Tata Safari diesel automatic": "170 PS; 350 Nm",
+      },
+    }],
+    pricing: [],
+    vendorScores: ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"].map((vendor) => ({
+      vendor,
+      weightedScores: [],
+    })),
+  } as unknown as AnalysisPayload;
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text,
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-04-17T00:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(addVerifiedElectricVehicleMatrixMetrics(analysis, [document]), 8);
+  const evidence = analysis.vendorScores.flatMap((vendor) => (
+    vendor.weightedScores?.flatMap((criterion) => criterion.evidence ?? []) ?? []
+  ));
+  assert.ok(evidence.some((row) => row.metricKey === "engine_power" && row.rawMetricUnit === "ps"));
+  assert.ok(evidence.every((row) => row.metricSubject === "Mahindra XUV700 diesel automatic"
+    || row.metricSubject === "Tata Safari diesel automatic"));
+});
+
+test("rejects a petrol table section for a diesel-qualified model", () => {
+  const sourceUrl = "https://publisher.example/xuv700-powertrains";
+  const text = normalizeRetrievedText(`
+    <article>
+      <h2>Mahindra XUV700</h2>
+      <p>Petrol automatic</p>
+      <table><tr><th>Power</th><td>200 PS</td></tr></table>
+      <h2>Mahindra XUV700</h2>
+      <p>Diesel automatic</p>
+      <table><tr><th>Power</th><td>185 PS</td></tr></table>
+    </article>
+  `, "text/html");
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700 diesel automatic",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{
+          sourceUrl,
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: 200,
+          rawMetricUnit: "PS",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    }],
+  };
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text,
+    sha256: "f".repeat(64),
+    retrievedAt: "2026-04-17T00:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+});
+
+test("runs at most one bounded citation-only fallback search when exact-model metrics are missing", async () => {
+  let searches = 0;
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    { vendorScores: [{ vendor: "Mahindra XUV 7XO", weightedScores: [] }] },
+    ["Mahindra XUV 7XO"],
+    async (missing) => {
+      searches += 1;
+      assert.deepEqual(missing, ["Mahindra XUV 7XO"]);
+      return {
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "A prose URL https://not-a-citation.example must not be admitted.",
+            annotations: [
+              { type: "url_citation", url: "https://publisher.example/xuv-7xo-test" },
+              { type: "url_citation", url: "https://publisher.example/xuv-7xo-test" },
+            ],
+          }],
+        }],
+      };
+    },
+  );
+  assert.equal(searches, 1);
+  assert.deepEqual(urls, ["https://publisher.example/xuv-7xo-test"]);
+});
+
+test("searches for a missing vehicle price lens even after an exact feature metric was verified", async () => {
+  const name = "Tata Safari diesel";
+  let searches = 0;
+  const urls = await discoverIndependentVehicleFallbackUrls({
+    vendorScores: [{
+      vendor: name,
+      weightedScores: [{
+        evidence: [{
+          metricSubject: name,
+          metricKey: "engine_power",
+          normalizationMethod: "retrieved_document_metric",
+          documentSha256: "a".repeat(64),
+          sourceTextStart: 0,
+          sourceTextEnd: 20,
+          sourceUrl: "https://tata.com/safari-specifications",
+        }],
+      }],
+    }],
+  }, [name], async () => {
+    searches += 1;
+    return { output: [{ type: "message", content: [{
+      type: "output_text", text: "", annotations: [{ type: "url_citation", url: "https://tata.com/safari-prices" }],
+    }] }] };
+  }, 8, true);
+  assert.equal(searches, 1);
+  assert.deepEqual(urls, ["https://tata.com/safari-prices"]);
+});
+
+test("searches each evidence-missing vehicle model separately and combines cited pages", async () => {
+  const searched: string[][] = [];
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    {
+      vendorScores: [
+        { vendor: "Mahindra XUV 7XO", weightedScores: [] },
+        { vendor: "Tata Safari", weightedScores: [] },
+      ],
+    },
+    ["Mahindra XUV 7XO", "Tata Safari"],
+    async (missing) => {
+      searched.push(missing);
+      const slug = missing[0] === "Mahindra XUV 7XO" ? "xuv-7xo" : "safari";
+      return {
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "Exact-model specification source.",
+            annotations: [{
+              type: "url_citation",
+              url: `https://official.example/${slug}/specifications`,
+            }],
+          }],
+        }],
+      };
+    },
+  );
+
+  assert.deepEqual(searched, [["Mahindra XUV 7XO"], ["Tata Safari"]]);
+  assert.deepEqual(urls, [
+    "https://official.example/xuv-7xo/specifications",
+    "https://official.example/safari/specifications",
+  ]);
+});
+
+test("skips independent fallback search when every exact model already has span-backed metrics", async () => {
+  let searches = 0;
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV 7XO",
+      weightedScores: [{
+        evidence: [{
+          normalizationMethod: "retrieved_document_metric",
+          documentSha256: "d".repeat(64),
+          sourceTextStart: 10,
+          sourceTextEnd: 40,
+          metricSubject: "Mahindra XUV 7XO",
+          sourceUrl: "https://auto.mahindra.com/xuv-7xo",
+        }],
+      }],
+    }],
+  };
+  assert.deepEqual(missingExactModelVerifiedMetricVendors(parsed, ["Mahindra XUV 7XO"]), []);
+  const urls = await discoverIndependentVehicleFallbackUrls(
+    parsed,
+    ["Mahindra XUV 7XO"],
+    async () => {
+      searches += 1;
+      return [];
+    },
+  );
+  assert.equal(searches, 0);
+  assert.deepEqual(urls, []);
+});
+
+test("does not map XUV 7XO evidence to XUV700", () => {
+  const sourceUrl = "https://independent-auto.example/2026/xuv-7xo-test";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        evidence: [{
+          sourceUrl,
+          exactClaim: "candidate",
+          metricKey: "engine_power",
+          rawMetricValue: 185,
+          rawMetricUnit: "hp",
+          evidenceKind: "quantitative",
+          confidence: 90,
+        }],
+      }],
+    }],
+  };
+  const document: RetrievedEvidenceDocument = {
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text: "Mahindra XUV 7XO engine power is 185 hp in the tested diesel automatic.",
+    sha256: "b".repeat(64),
+    retrievedAt: "2026-04-17T10:00:00.000Z",
+    truncated: false,
+  };
+
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, [document]), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+});
+
+test("does not let an official-only EV gate reject two dated independent exact-model sources", () => {
+  const vendors = ["Alpha EV One", "Beta EV Two"];
+  const evidenceFor = (vendor: string, sourceUrl: string) => ({
+    sourceUrl,
+    sourceDate: "2026-04-17",
+    retrievalDate: "2026-04-18",
+    exactClaim: `${vendor} exact-model metric`,
+    metricKey: "engine_power",
+    metricSubject: vendor,
+    metricBasis: "electric_automatic_powertrain_output",
+    rawMetricValue: 100,
+    rawMetricUnit: "kw",
+    normalizationDirection: "higher_is_better" as const,
+    documentSha256: "c".repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 40,
+    evidenceKind: "quantitative" as const,
+    supportDirection: "context" as const,
+    confidence: 90,
+    normalizedScore: 50,
+    criterionWeight: 25,
+    weightedContribution: 12.5,
+    normalizationMethod: "retrieved_document_metric",
+  });
+  const analysis = {
+    pricing: [],
+    features: [],
+    recommendation: "No exact winner",
+    recommendationReason: "Evidence remains limited.",
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 50,
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        weight: 25,
+        score: 50,
+        rationale: "Two dated independent sources.",
+        evidence: [
+          evidenceFor(vendor, `https://review-one.example/${vendor.replaceAll(" ", "-")}`),
+          evidenceFor(vendor, `https://review-two.example/${vendor.replaceAll(" ", "-")}`),
+        ],
+      }],
+    })),
+  } as unknown as AnalysisPayload;
+
+  const issues = electricVehicleFinalQualityIssues(analysis, vendors, [], [
+    ...vendors.flatMap((vendor) => [
+      `https://review-one.example/${vendor.replaceAll(" ", "-")}`,
+      `https://review-two.example/${vendor.replaceAll(" ", "-")}`,
+    ]),
+  ]);
+  assert.ok(!issues.some((issue) => /official product sources/i.test(issue)));
+});
+
+test("long-horizon maintenance and comfort priorities produce different weights without horizon claims", () => {
+  const maintenance = explicitDecisionPriorityProfile(
+    "Compare these SUVs for 20 years; prioritize maintenance and service costs.",
+  );
+  const comfort = explicitDecisionPriorityProfile(
+    "Compare these SUVs for 5 years; prioritize ride comfort and cabin comfort.",
+  );
+  assert.ok(maintenance);
+  assert.ok(comfort);
+  const weight = (profile: NonNullable<typeof maintenance>, criterion: string) => (
+    profile.weights.find((entry) => entry.criterion === criterion)?.weight ?? 0
+  );
+  assert.ok(weight(maintenance, "Quality & Reliability") > weight(comfort!, "Quality & Reliability"));
+  assert.ok(weight(comfort!, "Meets Needs / Features") > weight(maintenance, "Meets Needs / Features"));
+  assert.doesNotMatch(maintenance.label, /20/);
+  assert.doesNotMatch(comfort!.label, /5/);
 });
 
 function qualificationEvidence(
@@ -126,6 +1062,9 @@ function qualificationEvidence(
 ) {
   return {
     sourceId: `docsha256:${hashCharacter.repeat(64)}`,
+    documentSha256: hashCharacter.repeat(64),
+    sourceTextStart: 0,
+    sourceTextEnd: 64,
     sourceUrl: `https://official.example/${vendor.toLowerCase().replaceAll(" ", "-")}`,
     exactClaim: `${vendor} is available in Australia; verified product metric`,
     metricKey: "capability_score",
@@ -347,6 +1286,37 @@ test("recovers a unique evidence-backed winner when rounded totals appear tied",
   );
 });
 
+test("uses weighted score precision before the stable option-name tie-break", () => {
+  const criterion = "Meets Needs / Features";
+  const evidence = {
+    normalizationMethod: "direct_comparable_metric",
+  };
+  const rows = ["Zulu", "Alpha"].map((vendor, index) => ({
+    vendor,
+    score: 50,
+    weightedScores: WEIGHTED_CRITERIA.map(({ criterion: name, weight }) => ({
+      criterion: name,
+      weight,
+      score: name === criterion && index === 0 ? 50.01 : 50,
+      evidence: name === criterion ? [evidence] : [],
+    })),
+  })) as unknown as AnalysisPayload["vendorScores"];
+
+  assert.deepEqual(
+    uniqueHighestDeterministicWeightedVendor({ vendorScores: rows }),
+    { vendor: "Zulu", score: 50 },
+  );
+
+  const tiedRows = rows.map((row) => ({
+    ...row,
+    weightedScores: row.weightedScores?.map((item) => ({ ...item, score: 50 })),
+  })).reverse();
+  assert.deepEqual(
+    uniqueHighestDeterministicWeightedVendor({ vendorScores: tiedRows }),
+    { vendor: "Alpha", score: 50 },
+  );
+});
+
 test("recognizes an explicit vehicle-safety priority without matching incidental safety text", () => {
   assert.equal(
     isSafetyFirstVehicleQuery("Compare TATA Nexon vs Mahindra XUV 3XO. Which is better to drive safely in India?"),
@@ -392,8 +1362,144 @@ test("uses every named non-price criterion without treating long ownership as a 
   assert.match(profile.label, /maintenance/i);
   assert.notEqual(profile.label, "price and feature lenses");
   assert.equal(profile.weights.reduce((total, entry) => total + entry.weight, 0), 100);
-  assert.ok((profile.weights.find(({ criterion }) => criterion === "Quality & Reliability")?.weight ?? 0) >= 20);
+  assert.ok((profile.weights.find(({ criterion }) => criterion === "Quality & Reliability")?.weight ?? 0) >= 15);
+  assert.ok((profile.weights.find(({ criterion }) => criterion === "Safety & Security")?.weight ?? 0) > 0);
   assert.ok((profile.weights.find(({ criterion }) => criterion === "Regulatory Compliance")?.weight ?? 0) > 3);
+});
+
+test("stops exact diesel entities at a punctuation-adjacent contraction boundary", () => {
+  const portfolioPrompt = "Compare Mahindra diesel vs Tata diesel vehicle .I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+  const modelPrompt = "Compare Mahindra XUV 700  diesel vs Tata Safari diesel vehicle .I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+
+  assert.deepEqual(parsePrompt(portfolioPrompt).vendors, ["Mahindra", "Tata"]);
+  assert.deepEqual(parsePrompt(modelPrompt).vendors, ["Mahindra XUV700 diesel", "Tata Safari diesel"]);
+  assert.ok(parsePrompt(portfolioPrompt).criteria.some((criterion) => /reliability/i.test(criterion)));
+  assert.doesNotMatch(parsePrompt(modelPrompt).vendors.join(" "), /planning|retain|20 years/i);
+});
+
+test("preserves mixed vehicle specificity when intent extraction returns only manufacturers", async () => {
+  const prompt = "Compare Mahindra vs Tata Safari diesel AT. I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance.";
+  assert.deepEqual(parsePrompt(prompt).vendors, ["Mahindra", "Tata Safari diesel AT"]);
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    async () => ({
+      options: ["Mahindra", "Tata"],
+      subject: "SUV vehicle",
+      decisionType: "comparison",
+      category: "automotive",
+      useCase: "long-term ownership",
+      qualifiers: ["20 years", "performance", "reliability", "safety features", "maintenance"],
+      decisionCriterion: "best safety outcome",
+      freshness: "current",
+      confidence: 0.9,
+      clarification: "",
+    }),
+  );
+
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata Safari diesel AT"]);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /manufacturer.*specific model/i);
+});
+
+test("preserves the exact mixed-specificity AI prompt and its validation correction at low confidence", async () => {
+  const prompt = "Compare Mahindra vs Tata Safari diesel AI. I am planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+  const deterministic = parsePrompt(prompt);
+  assert.deepEqual(deterministic.vendors, ["Mahindra", "Tata Safari diesel AI"]);
+  assert.equal(deterministic.context.valid, false);
+  assert.match(deterministic.context.message, /Mahindra is a manufacturer.*Tata Safari diesel AI is a specific model/i);
+
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra", "Tata"],
+      category: "Automotive",
+      useCase: "Long-term ownership",
+      confidence: 0.42,
+      clarification: "What outcome or use case should decide between these options?",
+    })),
+    { market: "IN" },
+  );
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata Safari diesel AI"]);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /Mahindra is a manufacturer.*Tata Safari diesel AI is a specific model/i);
+  assert.doesNotMatch(parsed.context.message, /what outcome or use case/i);
+});
+
+test("keeps the first exact vehicle pair when a later compare sentence lists only criteria", async () => {
+  const prompt = "Compare Mahindra XUV700 diesel automatic versus Tata Safari diesel automatic in India. Compare performance, reliability, safety features and maintenance for 20-year ownership.";
+  assert.deepEqual(
+    parsePrompt(prompt).vendors,
+    ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"],
+  );
+
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra", "Tata"],
+      category: "Automotive",
+      useCase: "20-year ownership",
+      confidence: 0.95,
+      clarification: "",
+    })),
+    { market: "IN" },
+  );
+  assert.deepEqual(
+    parsed.vendors,
+    ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"],
+  );
+  assert.equal(parsed.context.valid, true);
+});
+
+test("treats an edited review request as authoritative over stale generated metadata", async () => {
+  const prompt = [
+    "Compare Mahindra xuv 700 and Tata Safari diesel AT in India.",
+    "Evaluate performance, reliability, safety features and maintenance.",
+    "Original request: Compare Mahindra vs Tata Safari diesel AT in India.",
+    "Original request: Compare Mahindra vs Tata Safari diesel AT in India.",
+  ].join(" ");
+
+  const deterministic = parsePrompt(prompt);
+  assert.equal(
+    deterministic.prompt,
+    "Compare Mahindra xuv 700 and Tata Safari diesel AT in India. Evaluate performance, reliability, safety features and maintenance.",
+  );
+  assert.deepEqual(deterministic.vendors, ["Mahindra XUV700", "Tata Safari diesel AT"]);
+
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["Mahindra", "Tata Safari diesel AT"],
+    category: "Automotive",
+    useCase: "Long-term ownership",
+    confidence: 0.95,
+  })), { market: "IN" });
+  assert.deepEqual(parsed.vendors, ["Mahindra XUV700", "Tata Safari diesel AT"]);
+  assert.deepEqual(parsed.comparisonIdentity.entities.map((entity) => entity.name), [
+    "Mahindra XUV700",
+    "Tata Safari diesel AT",
+  ]);
+  assert.equal(parsed.context.valid, true);
+  assert.doesNotMatch(parsed.prompt, /Original request:/i);
+});
+
+test("keeps corrected and multi-model vehicle option chains out of later criteria sentences", () => {
+  const corrected = parsePrompt(
+    "Compare Mahindra XUV700 diesel AT vs Tata Safari diesel AT. Compare the vehicle on performance, reliability, safety features and maintenance.",
+  );
+  assert.deepEqual(corrected.vendors, ["Mahindra XUV700 diesel AT", "Tata Safari diesel AT"]);
+  assert.equal(corrected.context.valid, true);
+
+  const multiModel = parsePrompt(
+    "Compare Mahindra XUV700 vs Tata Safari vs MG Hector for family vehicles. Compare the vehicles on performance, safety and maintenance.",
+  );
+  assert.deepEqual(multiModel.vendors, ["Mahindra XUV700", "Tata Safari", "MG Hector"]);
+  assert.equal(multiModel.context.valid, true);
+});
+
+test("does not use model words in later criteria to reject a broad vehicle-class comparison", () => {
+  const parsed = parsePrompt(
+    "Compare Mahindra vs Tata for SUVs in India. Compare the vehicles on performance, Safari-like comfort, safety and maintenance.",
+  );
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata"]);
+  assert.equal(parsed.context.valid, true);
 });
 
 test("keeps a valid long-horizon vehicle comparison when research reports incomplete criterion evidence", () => {
@@ -633,7 +1739,7 @@ test("preserves a pricing and feature lens winner when other parameters are insu
   assert.match(analysis.recommendationReason, /\*\*Note: .*AI can sometimes provide incorrect results\.\*\*/);
 });
 
-test("preserves only a provisional lens leader after every option fails evidence qualification", () => {
+test("does not restore a provisional score or winner after every option fails evidence qualification", () => {
   const analysis = {
     recommendation: "No qualified option",
     score: 0,
@@ -659,12 +1765,11 @@ test("preserves only a provisional lens leader after every option fails evidence
     })),
   } as unknown as AnalysisPayload;
 
-  assert.equal(preserveProvisionalLensWinner(analysis), true);
-  assert.equal(analysis.recommendation, "GPT 5.6 Luna fast");
-  assert.equal(analysis.score, 50);
-  assert.match(analysis.executiveSummary, /^Provisional lens winner — GPT 5\.6 Luna fast/);
-  assert.match(analysis.recommendationReason, /not a qualified overall recommendation/i);
-  assert.match(analysis.recommendationReason, /missing comparable evidence, not equal performance/i);
+  assert.equal(preserveProvisionalLensWinner(analysis), false);
+  assert.equal(analysis.recommendation, "No qualified option");
+  assert.equal(analysis.score, 0);
+  assert.deepEqual(analysis.vendorScores.map((vendor) => vendor.score), [50, 50, 50, 50]);
+  assert.doesNotMatch(analysis.executiveSummary, /^Provisional lens winner —/);
   assert.ok(analysis.vendorScores.every((vendor) => (
     (vendor as any).qualificationStatus === "INSUFFICIENT_EVIDENCE"
   )));
@@ -1229,9 +2334,10 @@ test("extracts comparable quick-commerce delivery coverage from a named methodol
     vendorScores: ["Zepto", "Blinkit"].map((vendor) => ({
       vendor,
       weightedScores: [{
-        criterion: "Meets Needs / Features",
-        weight: 25,
-        score: 50,
+        criterion: "time to delivery",
+        weight: 1,
+        score: 0,
+        rationale: "",
         evidence: [],
       }],
     })),
@@ -1246,8 +2352,10 @@ test("extracts comparable quick-commerce delivery coverage from a named methodol
     truncated: false,
   }];
 
-  assert.equal(addVerifiedQuickCommerceDeliveryEvidence(parsed, documents), 2);
+  assert.equal(addVerifiedQuickCommerceDeliveryEvidence(parsed, documents, ["time to delivery"]), 2);
   const rows = parsed.vendorScores.map((vendor) => vendor.weightedScores[0].evidence[0] as Record<string, unknown>);
+  assert.deepEqual(parsed.vendorScores.map((vendor) => vendor.weightedScores[0].score), [76, 21]);
+  assert.ok(parsed.vendorScores.every((vendor) => /Bengaluru serviceable grid points/.test(vendor.weightedScores[0].rationale)));
   assert.deepEqual(rows.map((row) => row.rawMetricValue), [76, 21]);
   assert.ok(rows.every((row) => row.metricKey === "delivery_within_target_rate"));
   assert.ok(rows.every((row) => row.documentSha256 === "c".repeat(64)));
@@ -1600,13 +2708,22 @@ test("extracts comparable investor variable rates from official split tables wit
     ].join("\n"), "d"),
   ];
 
-  assert.equal(addVerifiedHomeLoanRateEvidence(parsed, documents), 4);
-  const evidence = parsed.vendorScores.map(
-    (vendor) => vendor.weightedScores[0].evidence[0],
+  assert.equal(addVerifiedHomeLoanRateEvidence(parsed, documents), 8);
+  const evidence = parsed.vendorScores.flatMap(
+    (vendor) => vendor.weightedScores[0].evidence,
   ) as Array<Record<string, unknown>>;
-  assert.deepEqual(evidence.map((row) => row.rawMetricValue), [6.14, 7.99, 6.96, 6.54]);
-  assert.ok(evidence.every((row) => row.metricBasis === "variable_interest_rate:percent:advertised_investor_principal_interest"));
+  assert.deepEqual(
+    evidence.filter((row) => row.metricKey === "investor_variable_rate").map((row) => row.rawMetricValue),
+    [6.14, 7.99, 6.96, 6.54],
+  );
+  assert.deepEqual(
+    evidence.filter((row) => row.metricKey === "comparison_rate").map((row) => row.rawMetricValue),
+    [6.15, 7.99, 6.96, 6.92],
+  );
+  assert.ok(evidence.every((row) => String(row.sourceId).startsWith("docsha256:")));
+  assert.ok(evidence.every((row) => row.normalizationMethod === "retrieved_document_metric"));
   assert.equal(applyDeterministicQuantitativeScores(parsed as unknown as AnalysisPayload), 20);
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(parsed as unknown as AnalysisPayload));
 });
 
 test("does not cross-attribute a shared-brand metric between Model 3 and Model Y", () => {
@@ -2351,6 +3468,27 @@ test("preserves exact EV model score rows during canonical matching", () => {
   );
 });
 
+test("restores selected vehicle rows before extracting evidence from repaired research", () => {
+  const parsed: Record<string, unknown> = { vendorScores: [] };
+  const fallbackRows = [
+    { vendor: "Mahindra XUV700", weightedScores: [{ criterion: "Meets Needs / Features", evidence: [] }] },
+    { vendor: "Tata Safari", weightedScores: [{ criterion: "Meets Needs / Features", evidence: [] }] },
+  ];
+
+  assert.equal(
+    ensureVehicleEvidenceScoreRows(parsed, fallbackRows, ["Mahindra XUV700", "Tata Safari"]),
+    2,
+  );
+  assert.deepEqual(
+    (parsed.vendorScores as Array<{ vendor: string }>).map(({ vendor }) => vendor),
+    ["Mahindra XUV700", "Tata Safari"],
+  );
+  assert.equal(
+    ensureVehicleEvidenceScoreRows(parsed, fallbackRows, ["Mahindra XUV700", "Tata Safari"]),
+    0,
+  );
+});
+
 test("seeds exact official India sources for discovered MG and Mahindra EV models", () => {
   const sources = officialMarketSourcesFor(
     "Compare official safety ratings, pricing, features, range, charging, warranty, and value for money",
@@ -2412,6 +3550,49 @@ test("does not admit model-invented home-loan URLs as web-search evidence", () =
   }];
 
   assert.deepEqual(collectCitedHttpUrls(responseOutput), [citedAnzUrl]);
+});
+
+test("collects only explicit Responses message citations and web-search tool sources", () => {
+  const annotationUrl = "https://publisher.example/annotated";
+  const toolSourceUrl = "https://publisher.example/tool-source";
+  const proseUrl = "https://publisher.example/prose-only";
+  const malformedUrl = "https://publisher.example/malformed-nested";
+  const response = {
+    output: [{
+      type: "message",
+      content: [{
+        type: "output_text",
+        text: JSON.stringify({ sourceUrl: proseUrl }),
+        annotations: [{ type: "url_citation", url: annotationUrl }],
+      }],
+      metadata: {
+        nested: {
+          type: "web_search_call",
+          action: { sources: [{ type: "url", url: malformedUrl }] },
+        },
+      },
+    }, {
+      type: "web_search_call",
+      action: {
+        type: "search",
+        sources: [{ type: "url", url: toolSourceUrl }],
+      },
+    }, {
+      type: "web_search_call",
+      action: {
+        sources: [{ type: "url_citation", url: "https://publisher.example/wrong-source-type" }],
+      },
+    }],
+  };
+
+  assert.deepEqual(collectExplicitWebSearchSources(response), {
+    urls: [annotationUrl, toolSourceUrl],
+    messageAnnotationCount: 1,
+    toolSourceCount: 1,
+  });
+  assert.deepEqual(collectCitedHttpUrls(response), [annotationUrl, toolSourceUrl]);
+  assert.equal(collectCitedHttpUrls(response).includes(proseUrl), false);
+  assert.equal(collectCitedHttpUrls(response).includes(malformedUrl), false);
 });
 
 test("removes an unapproved banking URL from normalized market evidence", () => {
@@ -2745,6 +3926,807 @@ test("accepts a named bank's business credit cards against an open competitor se
   assert.equal(parsed.context.segment, "Credit cards");
 });
 
+test("treats one concrete software name as an anchor with internal competitor discovery", () => {
+  for (const prompt of ["Salesforce CRM", "Adobe", "Siebel CRM", "Compare Adobe Experience Manager"]) {
+    const parsed = parsePrompt(prompt);
+    assert.equal(parsed.prompt, prompt);
+    assert.equal(parsed.vendors.length, 2);
+    assert.equal(parsed.vendors[1], "its competitors");
+  }
+  assert.equal(discoveryTargetCount(["Adobe", "its competitors"]), 4);
+});
+
+test("parses the exact four-bank investment home-loan prompt without discovery", () => {
+  const prompt = "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank for Investment Home Loans in Consumer Home loan segment. Loan amount 1.3M. Which is strongest contender offering best interest rates to the customer. Australia.";
+  const parsed = parsePrompt(prompt);
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Commonwealth Bank"]);
+  assert.ok(parsed.criteria.includes("Variable rate, discounts and comparison rate"));
+});
+
+test("keeps a verified current-rate home-loan result conditional without serial completion requirements", () => {
+  const partial = {
+    pricing: [{
+      dimension: "Current variable rate and comparison rate",
+      values: { Westpac: "6.1%", ANZ: "6.2%" },
+      winner: "Westpac",
+    }],
+    insights: [],
+  } as unknown as Partial<AnalysisPayload>;
+  markEvidenceLimitedHomeLoanResult(partial, ["Westpac", "ANZ"]);
+  assert.match(partial.insights?.[0] ?? "", /Evidence-limited home-loan decision/);
+  assert.match(partial.insights?.[0] ?? "", /fixed-rate terms/);
+});
+
+test("parses fenced home-loan research with trailing prose but rejects an incomplete object", () => {
+  const json = JSON.stringify({
+    banks: [{
+      bank: "Westpac",
+      productName: "Flexi First Option Investment Loan",
+      advertisedVariableRate: 6.24,
+      comparisonRate: 6.25,
+      rateBasis: "Investor principal and interest, up to 70% LVR",
+      annualFee: 0,
+      offset: "Not verified",
+      redraw: "Available",
+      sourceUrl: "https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates",
+      exactClaim: "Investor principal and interest up to 70% LVR: 6.24% p.a.; comparison rate 6.25% p.a.",
+      asOf: "2026-09-23",
+    }],
+    sources: ["https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates"],
+  });
+  const parsed = parseHomeLoanResearchContract(`\`\`\`json\n${json}\n\`\`\`\nDone.`, ["Westpac"]);
+  assert.equal(parsed.banks[0]?.comparisonRate, 6.25);
+  assert.throws(
+    () => parseHomeLoanResearchContract('{"banks":[{"bank":"Westpac"', ["Westpac"]),
+  );
+});
+
+test("deterministically builds the four-bank rate matrix without a model-authored framework", () => {
+  const vendors = ["Westpac", "ANZ", "NAB", "Commonwealth Bank"];
+  const sourceFor = (bank: string) => `https://example.com/${bank.toLowerCase().replace(/\s+/g, "-")}`;
+  const contract = {
+    banks: vendors.map((bank, index) => ({
+      bank,
+      productName: `${bank} Investor Variable`,
+      advertisedVariableRate: 6.1 + index * 0.1,
+      comparisonRate: 6.2 + index * 0.1,
+      rateBasis: "Investor principal and interest, up to 70% LVR",
+      annualFee: index === 0 ? 0 : null,
+      offset: "Not verified",
+      redraw: "Available",
+      sourceUrl: sourceFor(bank),
+      exactClaim: `Investor principal and interest up to 70% LVR: ${6.1 + index * 0.1}% p.a.`,
+      asOf: "2026-09-23",
+    })),
+    sources: vendors.map(sourceFor),
+  };
+  const result = buildHomeLoanAnalysisFromContract({
+    prompt: "Compare investment home loans from Westpac, ANZ, NAB and Commonwealth Bank",
+    market: "AU",
+    vendors,
+    urls: contract.sources,
+    criteria: ["interest rates", "fees", "offset"],
+  }, contract, contract.sources);
+  assert.equal(result.recommendation, "Westpac");
+  assert.deepEqual(result.pricing.map((row) => row.dimension), [
+    "Advertised variable rate",
+    "Comparison rate",
+    "Annual fee",
+  ]);
+  assert.deepEqual(result.features.map((row) => row.dimension), [
+    "Exact investor product and rate conditions",
+    "Offset account",
+    "Redraw",
+  ]);
+  assert.equal(result.vendorScores.length, 4);
+  assert.match(result.executiveSummary, /conditional rate-led result/i);
+  assert.equal(result.pricing.some((row) => /purchase cost|warranty/i.test(row.dimension)), false);
+});
+
+test("home-loan legacy narrative fixture is replaced by the evidence-backed conditional winner", () => {
+  const vendors = ["Westpac", "ANZ", "NAB", "Commonwealth Bank"];
+  const sourceUrl = "https://www.westpac.com.au/personal-banking/home-loans/all-interest-rates/";
+  const result = buildHomeLoanAnalysisFromContract({
+    prompt: "Compare investment home loans from Westpac, ANZ, NAB and Commonwealth Bank",
+    market: "AU",
+    vendors,
+    urls: [sourceUrl],
+    criteria: ["interest rates"],
+  }, {
+    banks: [{
+      bank: "Westpac",
+      productName: "Flexi First Option Investment Property Loan",
+      advertisedVariableRate: 6.14,
+      comparisonRate: 6.15,
+      rateBasis: "Investor principal and interest, up to 70% LVR",
+      annualFee: null,
+      offset: "Not verified",
+      redraw: "Not verified",
+      sourceUrl,
+      exactClaim: "Variable rate 6.14% p.a.; comparison rate 6.15% p.a.",
+      asOf: "2026-09-23",
+    }],
+    sources: [sourceUrl],
+  }, [sourceUrl]);
+  const text = [
+    "Rates for new investment loans",
+    "Rates for LVRs up to 70%",
+    "Variable rate investment home loans (Principal & Interest repayments)",
+    "Flexi First Option Investment Property Loan",
+    "Variable rate | Comparison rate* | Online Offer |",
+    "6.14% p.a. | 6.15% p.a. |",
+    "Variable rate investment home loans (Interest Only repayments)",
+  ].join("\n");
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: sourceUrl,
+    finalUrl: sourceUrl,
+    contentType: "text/html",
+    text,
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(addVerifiedHomeLoanRateEvidence(result as unknown as Record<string, unknown>, documents), 2);
+  applyDeterministicQuantitativeScores(result);
+  addVerifiedHomeLoanRateEvidence(result as unknown as Record<string, unknown>, documents);
+  applyDedicatedHomeLoanQualifications(result, "Compare investment home loans by current rates");
+  result.executiveSummary = `${legacyNoWinnerLabel} is available.`;
+  result.nextSteps = [`Review the ${legacyNoWinnerLabel} result.`];
+  reconcileSpecialPathPresentation(result, "home_loan");
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(result));
+  assert.equal(result.recommendation, "Westpac");
+  assert.match(result.executiveSummary, /Westpac.*conditional.*evidence-limited.*6\.15%/i);
+  assert.doesNotMatch(
+    `${result.executiveSummary} ${result.nextSteps.join(" ")}`,
+    new RegExp(legacyNoWinnerLabel, "i"),
+  );
+  assert.equal(result.vendorScores[0]?.qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+  assert.deepEqual(
+    result.vendorScores[0]?.qualificationGates?.slice(0, 2).map((gate) => gate.status),
+    ["PASS", "PASS"],
+  );
+  assert.equal(result.vendorScores[1]?.qualificationStatus, "INSUFFICIENT_EVIDENCE");
+  assert.match(result.vendorScores[1]?.verdict ?? "", /No valid current rate row/);
+  roundAnalysisResponseIntegers(result);
+  assert.doesNotThrow(() => CreateGuestComparisonResponse.parse({
+    prompt: "Compare investment home loans from Westpac, ANZ, NAB and Commonwealth Bank",
+    vendors,
+    comparisonIdentity: {
+      originalQuery: "Compare investment home loans from Westpac, ANZ, NAB and Commonwealth Bank",
+      category: result.category,
+      entities: vendors.map((name, index) => ({ id: `entity-${index + 1}`, name })),
+      entityCount: vendors.length,
+      comparisonType: "multi_entity",
+      displayName: vendors.join(" vs "),
+      headline: `${vendors.join(" vs ")} comparison`,
+    },
+    urls: [sourceUrl],
+    sourceAvailability: [{
+      url: sourceUrl,
+      status: "reachable",
+      reason: "Retrieved official lender document.",
+    }],
+    criteria: ["interest rates"],
+    createdAt: new Date("2026-09-23T00:00:00.000Z"),
+    ...result,
+    confirmedRecommendation: {
+      status: "CONFIRMED",
+      option: "Westpac",
+      score: 100,
+      basis: "QUALIFIED_WITH_CONDITIONS",
+      rationale: result.recommendationReason,
+    },
+    alternatives: vendors.slice(1).map((option, index) => ({
+      option,
+      rank: index + 1,
+      score: null,
+      scoreDifference: null,
+      qualificationStatus: "INSUFFICIENT_EVIDENCE",
+      rationale: "No accepted comparable current rate span.",
+    })),
+  }));
+});
+
+test("legacy home-loan recommendation fixture regenerates from same-basis official rates", () => {
+  const basis = "investor; variable; principal and interest; lvr up to 70";
+  const makeVendor = (vendor: string, rate?: number, hash = "a") => ({
+    vendor,
+    score: 50,
+    verdict: "",
+    weightedScores: [{
+      criterion: "Value for Money",
+      weight: 20,
+      score: 50,
+      rationale: "",
+      evidence: rate === undefined ? [] : [{
+        sourceId: `docsha256:${hash.repeat(64)}`,
+        sourceUrl: `https://${vendor.toLowerCase()}.example/rates`,
+        retrievalDate: "2026-09-23",
+        exactClaim: `${vendor} comparison rate ${rate}% p.a.`,
+        metricKey: "comparison_rate",
+        metricSubject: vendor,
+        metricBasis: basis,
+        rawMetricValue: rate,
+        rawMetricUnit: "percent_per_annum",
+        normalizationDirection: "lower_is_better",
+        documentSha256: hash.repeat(64),
+        sourceTextStart: 0,
+        sourceTextEnd: 20,
+        evidenceKind: "percentage" as const,
+        supportDirection: "supports" as const,
+        confidence: 95,
+        normalizedScore: 50,
+        criterionWeight: 20,
+        weightedContribution: 10,
+        normalizationMethod: "retrieved_document_metric",
+      }],
+    }],
+  });
+  const analysis = {
+    recommendation: legacyNoWinnerLabel,
+    score: 50,
+    recommendationReason: "",
+    executiveSummary: "",
+    vendorScores: [
+      makeVendor("Westpac", 6.15, "a"),
+      makeVendor("ANZ", 6.45, "b"),
+      makeVendor("NAB"),
+    ],
+  } as unknown as AnalysisPayload;
+  applyDedicatedHomeLoanQualifications(analysis, "Compare investor home loan rates");
+  assert.equal(analysis.recommendation, "Westpac");
+  assert.equal(analysis.score, 100);
+  assert.equal(analysis.vendorScores[0]?.score, 100);
+  assert.equal(analysis.vendorScores[0]?.modelScore, 100);
+  assert.equal(analysis.vendorScores[1]?.score, 95);
+  assert.equal(analysis.vendorScores[1]?.modelScore, 95);
+  assert.equal(analysis.vendorScores[2]?.score, 0);
+  assert.equal(analysis.vendorScores[2]?.modelScore, undefined);
+});
+
+test("reuses a completed canonical comparison within the 15-second budget", async () => {
+  const prompt = "Compare CacheAlpha vs CacheBeta for business software";
+  const firstVendors = ["CacheAlpha", "CacheBeta"];
+  const seedInput = {
+    prompt,
+    market: "AU",
+    vendors: firstVendors,
+    urls: [],
+    criteria: ["Value for money"],
+  } as const;
+  cacheCompletedAnalysis(
+    { ...seedInput, vendors: [...seedInput.vendors], urls: [], criteria: [...seedInput.criteria] },
+    { category: "Business software" } as AnalysisPayload,
+  );
+  let cachedEntities: string[] = [];
+  const startedAt = Date.now();
+  await buildAnalysis({
+    prompt,
+    market: "AU",
+    vendors: ["CacheBeta", "CacheAlpha"],
+    urls: [],
+    criteria: ["Value for money"],
+    deadlineAt: Date.now() + 1_000,
+    onEntitiesDiscovered: (entities) => { cachedEntities = entities; },
+  });
+  assert.ok(Date.now() - startedAt < 1_000);
+  assert.deepEqual(cachedEntities, firstVendors);
+});
+
+test("fails explicitly when no shared analysis budget remains", async () => {
+  await assert.rejects(
+    buildAnalysis({
+      prompt: "Compare DeadlineAlpha vs DeadlineBeta for business software",
+      market: "AU",
+      vendors: ["DeadlineAlpha", "DeadlineBeta"],
+      urls: [],
+      criteria: ["Value for money"],
+      deadlineAt: Date.now() - 1,
+    }),
+    /latency_budget_exceeded/,
+  );
+});
+
+test("preserves broad diesel manufacturer comparisons and only selects models when requested", () => {
+  const broad = "Compare Mahindra and Tata Motors for diesel vehicles in India";
+  const brands = parsePrompt(broad).vendors;
+  assert.deepEqual(brands.map((brand) => brand.toLowerCase()), ["mahindra", "tata motors"]);
+  assert.equal(deterministicIndiaDieselPortfolioSelection(broad, brands, "IN"), null);
+  assert.equal(validateComparisonContext(broad, brands, "IN").valid, true);
+  const explicit = "Compare Mahindra vs Tata diesel vehicles in India. Select the best-matching current model from each manufacturer.";
+  assert.deepEqual(deterministicIndiaDieselPortfolioSelection(explicit, ["Mahindra", "Tata"], "IN"), [
+    "Mahindra XUV700 diesel", "Tata Safari diesel",
+  ]);
+});
+
+test("card-management alternative discovery preserves the incumbent, not scheme names", async () => {
+  const prompt = "Find a better card management system than legacy V+ with seamless customer data integration and Visa and Mastercard scheme support";
+  const parsed = await parsePromptWithIntent(prompt, async () => ({
+    options: ["V+", "Visa", "Mastercard"],
+    subject: "Card management systems",
+    decisionType: "choice",
+    category: "Card management systems",
+    useCase: "customer data integration",
+    qualifiers: [],
+    decisionCriterion: "best fit",
+    freshness: "current",
+    confidence: 0.9,
+    clarification: "",
+  }), { market: "AU" });
+  assert.deepEqual(parsed.vendors, ["V+", "other card-management systems"]);
+  assert.equal(requestsBestAlternative(prompt), true);
+  assert.equal(parsed.context.valid, true);
+  assert.equal(parsed.comparisonIdentity.entityCount, 2);
+  assert.equal(ParseComparisonPromptResponse.safeParse(parsed).success, true);
+  assert.equal(ParseGuestComparisonPromptResponse.safeParse(parsed).success, true);
+});
+
+test("incomplete comparison returns a parseable clarification rather than a schema error", async () => {
+  const parsed = await parsePromptWithIntent("What about customer support tools?", async () => null, { market: "AU" });
+  assert.equal(parsed.context.valid, false);
+  assert.equal(ParseComparisonPromptResponse.safeParse(parsed).success, true);
+  assert.equal(ParseGuestComparisonPromptResponse.safeParse(parsed).success, true);
+});
+
+test("uses the compact diesel vehicle contract instead of parsing malformed product-research JSON", () => {
+  const malformedModelResponse = '{"vendorScores":[{"vendor":"Mahindra XUV700 diesel"';
+  assert.throws(() => parseJsonObject(malformedModelResponse));
+  const prompt = "Compare Mahindra XUV 700  diesel vs Tata Safari diesel vehicle .I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+  const vendors = parsePrompt(prompt).vendors;
+  assert.equal(isDeterministicIndiaDieselComparison(prompt, vendors, "IN"), true);
+
+  const contract = buildDeterministicIndiaDieselVehicleContract({
+    prompt,
+    market: "IN",
+    vendors,
+    urls: [
+      "https://auto.mahindra.com/on/demandware.static/-/Sites-amc-Library/default/dw92486f5b/X700/brochure/XUV700_BROCHURE_27_06_2024.pdf",
+      "https://www.tata.com/newsroom/business/new-tata-safari",
+    ],
+    criteria: ["Performance", "Quality and reliability", "Safety features", "Maintenance and servicing"],
+  });
+
+  assert.deepEqual(contract.vendorScores.map((vendor) => vendor.vendor), vendors);
+  assert.deepEqual(contract.features.map((row) => row.dimension), [
+    "Performance — engine power and torque",
+    "Safety — NCAP rating and documented safety features",
+    "Reliability for the 20-year decision horizon",
+    "Maintenance, service and warranty",
+  ]);
+  assert.match(contract.insights.join(" "), /decision horizon.*neutral and conditional/i);
+  assert.doesNotMatch(JSON.stringify(contract), /malformed|research_failed/i);
+});
+
+test("does not mistake discontinued XUV700 five-seat variants for the whole model", () => {
+  const prompt = "Compare Mahindra XUV700 diesel automatic vs Tata Safari diesel automatic in India";
+  const vendors = ["Mahindra XUV700 diesel automatic", "Tata Safari diesel automatic"];
+  const pageUrl = "https://www.zigwheels.com/compare-cars/mahindra-xuv700-vs-tata-safari";
+  assert.ok(deterministicIndiaDieselEvidenceUrls(prompt, vendors, "IN").includes(pageUrl));
+  const report = vehicleEvidenceGapBrief({ prompt, vendors, criteria: ["Value", "Performance"], urls: [] });
+  const document = {
+    url: pageUrl, finalUrl: pageUrl, text: [
+      "Mahindra XUV700 DISCONTINUED MX 7Str Diesel 14.13 Lakh AX7 Diesel AT 22.97 Lakh",
+      "Tata Safari current variants Diesel AT",
+      "Ex-showroom price (base) | Mahindra XUV700 | Rs. 26.18 Lakh | Tata Safari | Rs. 13.40 Lakh",
+      "Engine | Mahindra XUV700 Not Available | Tata Safari 1498 cc",
+    ].join("\n"),
+    contentType: "text/html", sha256: "c".repeat(64),
+    retrievedAt: "2026-09-24T00:00:00Z", truncated: false,
+  } as RetrievedEvidenceDocument;
+  assert.equal(addVerifiedVehicleDocumentMetrics(report as unknown as Record<string, unknown>, [document]), 0);
+  const autocarUrl = "https://www.autocarindia.com/car-news/mahindra-xuv700-5-seater-variants-discontinued-435274";
+  assert.ok(deterministicIndiaDieselEvidenceUrls(prompt, vendors, "IN").includes(autocarUrl));
+  const correction = {
+    ...document,
+    url: autocarUrl,
+    finalUrl: autocarUrl,
+    text: "Mahindra XUV700 5-seater variants discontinued. The XUV700 is only available in 6- and 7-seater layouts. The base petrol manual starts at Rs 14.49 lakh.",
+  };
+  addXuv700VariantAvailabilityContext(report, [document, correction]);
+  assert.match(report.insights.join(" "), /only the XUV700's 5-seat variants were discontinued/);
+  assert.doesNotMatch(report.insights.join(" "), /marks Mahindra XUV700 as discontinued/);
+  assert.match(report.nextSteps[0] ?? "", /6- or 7-seat XUV700 and Safari diesel automatic/);
+  assert.equal(report.recommendation, "No qualified option");
+  assert.equal(report.score, 0);
+  const withoutRetrievedPage = vehicleEvidenceGapBrief({ prompt, vendors, criteria: [], urls: [] });
+  addXuv700VariantAvailabilityContext(withoutRetrievedPage, [document]);
+  assert.doesNotMatch(withoutRetrievedPage.insights.join(" "), /discontinued/i);
+});
+
+test("gives a named assumption-led decision with reproducible weighted arithmetic but no verified score", async () => {
+  const vendors = ["Mahindra XUV700", "Tata Safari"];
+  const prompt = "Compare Mahindra XUV700 and Tata Safari diesel automatic in India for performance and maintenance";
+  const makeReport = () => vehicleEvidenceGapBrief({
+    prompt, vendors, criteria: ["Performance", "Maintenance"], urls: [],
+  });
+  const mockAi = (ratings: number[][]) => ({
+    chat: { completions: { create: async () => ({ choices: [{ message: { content: JSON.stringify({
+      options: vendors.map((vendor, index) => ({
+        vendor, ratings: ratings[index], reason: `${vendor} has a potential fit; verify maintenance.`,
+      })),
+    }) } }] }) } },
+  }) as unknown as NonNullable<Parameters<typeof applyIndicativeScenarioDecision>[4]>;
+  const report = makeReport();
+  await applyIndicativeScenarioDecision(report, prompt, ["Performance", "Maintenance"], [], mockAi([[80, 60], [70, 65]]));
+  assert.equal(report.recommendation, "Mahindra XUV700");
+  assert.equal(report.score, 0);
+  assert.match(report.recommendationReason, /^Provisional choice — Mahindra XUV700/);
+  assert.match(report.insights[0], /Mahindra XUV700: 70\/100; Tata Safari: 68\/100/);
+  assert.match(report.insights[0], /assumption-led, not verified/);
+  const tied = makeReport();
+  await applyIndicativeScenarioDecision(tied, prompt, ["Performance", "Maintenance"], [], mockAi([[70, 70], [70, 70]]));
+  assert.equal(tied.recommendation, "Mahindra XUV700");
+  assert.match(tied.recommendationReason, /identical estimated ratings/);
+  assert.match(tied.recommendationReason, /deterministic low-confidence tie-break/i);
+  const weightedTie = makeReport();
+  await applyIndicativeScenarioDecision(weightedTie, prompt, ["Performance", "Maintenance"], [], mockAi([[80, 60], [60, 80]]));
+  assert.equal(weightedTie.recommendation, "Mahindra XUV700");
+  assert.match(weightedTie.recommendationReason, /criterion order breaks the tie/i);
+  const failed = makeReport();
+  failed.vendorScores[0]!.qualificationStatus = "NOT_QUALIFIED";
+  await applyIndicativeScenarioDecision(failed, prompt, ["Performance", "Maintenance"], [], mockAi([[80, 60], [70, 65]]));
+  assert.equal(failed.recommendation, "No qualified option");
+});
+
+test("uses complete stated percentages for an assumption-led family EV decision", async () => {
+  const prompt = "Compare Tesla and BYD for a family on a budget: budget 45%, family suitability 35%, range 20%.";
+  const criteria = ["Budget fit", "Family suitability", "Range and charging"];
+  assert.deepEqual(indicativeLensWeights(prompt, criteria), [45, 35, 20]);
+  assert.deepEqual(indicativeLensWeights("Compare Tesla and BYD for a family on a budget", criteria), [40, 40, 20]);
+  assert.deepEqual(indicativeLensWeights(
+    "Compare Alpha and Beta: reliability 70%, cost 30%",
+    ["Reliability", "Ownership cost"],
+  ), [70, 30]);
+  const report = vehicleEvidenceGapBrief({ prompt, vendors: ["Tesla", "BYD"], criteria, urls: [] });
+  const ai = {
+    chat: { completions: { create: async () => ({ choices: [{ message: { content: JSON.stringify({
+      options: [
+        { vendor: "Tesla", ratings: [65, 80, 95] },
+        { vendor: "BYD", ratings: [85, 85, 75] },
+      ],
+    }) } }] }) } },
+  } as unknown as NonNullable<Parameters<typeof applyIndicativeScenarioDecision>[4]>;
+  await applyIndicativeScenarioDecision(report, prompt, criteria, [], ai);
+  assert.equal(report.recommendation, "BYD");
+  assert.deepEqual(report.vendorScores[0]?.weightedScores?.map((row) => row.weight), [45, 35, 20]);
+  assert.equal(report.score, 0);
+  assert.match(report.recommendationReason, /decision estimates rather than verified product measurements/);
+});
+
+test("keeps family vehicle priorities and dealership investment criteria distinct at intake", () => {
+  const vehicle = parsePrompt("Compare Tesla and BYD for a family on a budget");
+  assert.ok(vehicle.criteria.some((criterion) => /Family suitability/.test(criterion)));
+  assert.ok(vehicle.criteria.some((criterion) => /Budget fit/.test(criterion)));
+  const dealership = parsePrompt("Compare Tata and Mahindra for a dealership investment in Bhilai");
+  assert.ok(dealership.criteria.includes("Local buyer demand and demographics"));
+  assert.ok(dealership.criteria.includes("Investment return and downside risk"));
+  assert.ok(!dealership.criteria.includes("Safety features"));
+});
+
+test("ranks EV manufacturer comparisons provisionally and shows criterion lenses", async () => {
+  const prompt = "Compare BYD and Tesla in Australia in EV car.";
+  const vendors = ["BYD", "Tesla"];
+  const criteria = parsePrompt(prompt).criteria;
+  assert.deepEqual(criteria, [
+    "Price and total ownership cost",
+    "Range and charging",
+    "Safety and warranty",
+    "Local model availability and practical fit",
+  ]);
+
+  const report = vehicleEvidenceGapBrief({ prompt, vendors, criteria, urls: [] });
+  assert.equal(report.recommendation, "No qualified option");
+  assert.equal(report.score, 0);
+  assert.ok(report.vendorScores.every((vendor) => vendor.weightedScores?.length === 0));
+  assert.match(report.recommendationReason, /current electric models/i);
+  assert.match(report.executiveSummary, /electric-vehicle portfolio/i);
+  assert.doesNotMatch(report.executiveSummary, /diesel/i);
+
+  let modelCalls = 0;
+  const mockAi = {
+    chat: {
+      completions: {
+        create: async () => {
+          modelCalls += 1;
+          return { choices: [{ message: { content: JSON.stringify({
+            options: [
+              { vendor: "BYD", ratings: [86, 82, 78, 84] },
+              { vendor: "Tesla", ratings: [76, 88, 82, 80] },
+            ],
+          }) } }] };
+        },
+      },
+    },
+  } as unknown as NonNullable<Parameters<typeof applyIndicativeScenarioDecision>[4]>;
+  await applyIndicativeScenarioDecision(report, prompt, criteria, [], mockAi);
+  assert.equal(modelCalls, 1);
+  assert.equal(report.recommendation, "BYD");
+  assert.equal(report.score, 0);
+  assert.ok(report.insights.some((insight) => insight.startsWith("Indicative fit scorecard")));
+  assert.equal(report.pricing.length, 1);
+  assert.equal(report.features.length, 3);
+  assert.ok(report.vendorScores.every((vendor) => vendor.weightedScores?.length === 4));
+  assert.match(report.recommendationReason, /deterministic winner/i);
+  applyDecisionStrategy(report, prompt, criteria);
+  assert.ok(report.nextSteps?.some((step) => step.startsWith("Decision strategy —")));
+});
+
+test("manufacturer EV scope helper remains available for explicit scope-gap reports", () => {
+  const prompt = "Compare BYD and Tesla in Australia in EV car.";
+  const vendors = ["BYD", "Tesla"];
+  const criteria = parsePrompt(prompt).criteria;
+  const unsafe = vehicleEvidenceGapBrief({ prompt, vendors, criteria, urls: [] });
+  unsafe.recommendation = "Tesla";
+  unsafe.score = 54;
+  unsafe.executiveSummary = "Tesla Model 3 is ahead of BYD Atto 3 on charging.";
+  unsafe.pricing = [{
+    dimension: "Price",
+    values: { BYD: "Atto 3 price", Tesla: "Model 3 price" },
+    winner: "Tesla",
+  }];
+  unsafe.features = [{
+    dimension: "Range and charging",
+    values: { BYD: "Atto 3 range", Tesla: "Model 3 charging" },
+    winner: "Tesla",
+  }];
+
+  const safe = manufacturerLevelElectricVehicleScopeGap({
+    prompt, vendors, criteria, urls: ["https://example.com/byd", "https://example.com/tesla"],
+  }, unsafe.sourceAvailability);
+  assert.equal(safe.recommendation, "No qualified option");
+  assert.equal(safe.score, 0);
+  assert.deepEqual(safe.features, []);
+  assert.doesNotMatch(JSON.stringify(safe), /Atto 3|Model 3|Tesla is ahead/i);
+  assert.ok(safe.nextSteps?.every((step) => !step.startsWith("Decision strategy —")));
+
+});
+
+test("separates DXP feature and value estimates from quoted product evidence and unavailable prices", async () => {
+  const vendors = ["Adobe Experience Manager", "Sitecore", "Contentful", "Optimizely", "Acquia"];
+  const report = {
+    category: "Digital experience platforms",
+    recommendation: "No qualified option",
+    recommendationReason: "",
+    score: 0,
+    vendorScores: vendors.map((vendor) => ({ vendor, score: 0, qualificationStatus: "INSUFFICIENT_EVIDENCE" })),
+    insights: [],
+    nextSteps: [],
+    pricing: [],
+    features: [],
+  } as unknown as AnalysisPayload;
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://www.contentful.com/platform/",
+    finalUrl: "https://www.contentful.com/platform/",
+    contentType: "text/html",
+    text: "Contentful offers content management workflows and APIs for enterprise publishing across channels.",
+    sha256: "b".repeat(64),
+    retrievedAt: "2026-09-24T00:00:00.000Z",
+    truncated: false,
+  }];
+  const scores = [[72, 74, 62], [69, 67, 58], [79, 80, 78], [76, 73, 71], [70, 69, 64]];
+  const ai = {
+    chat: { completions: { create: async () => ({ choices: [{ message: { content: JSON.stringify({
+      options: vendors.map((vendor, index) => ({ vendor, ratings: scores[index] })),
+    }) } }] }) } },
+  } as unknown as NonNullable<Parameters<typeof applyIndicativeScenarioDecision>[4]>;
+  await applyIndicativeScenarioDecision(
+    report,
+    `Compare ${vendors.join(" vs ")} for digital experience platforms in Australia`,
+    ["Customer outcomes", "Ease of use", "Value for money"],
+    documents,
+    ai,
+  );
+  assert.equal(report.recommendation, "Contentful");
+  assert.equal(report.score, 0);
+  assert.ok(report.vendorScores.every((vendor) => vendor.score === 0));
+  assert.match(report.pricing[0]!.dimension, /Estimated Value for money fit \(not an actual price\)/);
+  assert.match(report.pricing[0]!.values.Contentful, /78\/100 assumption-led/);
+  assert.equal(report.pricing[0]!.winner, "Not established");
+   assert.equal(report.pricing[1]!.values.Contentful, "Written comparable quote needed; no verified price established.");
+  assert.match(report.features[0]!.values.Contentful, /79\/100 assumption-led/);
+   assert.match(report.features.at(-1)!.values.Contentful, /Contentful offers content management workflows.*Source: https:\/\/www\.contentful\.com\/platform/);
+  assert.equal(report.features.at(-1)!.values.Sitecore, "No exact-product feature excerpt retrieved.");
+});
+
+test("keeps retrieved diesel vehicle metrics without claiming an overall winner from incomplete buying evidence", () => {
+  const prompt = "Compare Mahindra XUV 700 diesel vs Tata Safari diesel vehicle. I'm planning to retain the car for 20 years. Compare the vehicle on performance, reliability, safety features and maintenance";
+  const vendors = ["Mahindra XUV700 diesel", "Tata Safari diesel"];
+  const contract = buildDeterministicIndiaDieselVehicleContract({
+    prompt,
+    market: "IN",
+    vendors,
+    urls: deterministicIndiaDieselEvidenceUrls(prompt, vendors, "IN"),
+    criteria: ["Performance", "Quality and reliability", "Safety features", "Maintenance and servicing"],
+  });
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: "https://auto.mahindra.com/on/demandware.static/-/Sites-amc-Library/default/dw92486f5b/X700/brochure/XUV700_BROCHURE_27_06_2024.pdf",
+      finalUrl: "https://auto.mahindra.com/on/demandware.static/-/Sites-amc-Library/default/dw92486f5b/X700/brochure/XUV700_BROCHURE_27_06_2024.pdf",
+      contentType: "application/pdf",
+      text: [
+        "The Mahindra XU V 70 0 is engineered for performance.",
+        "TECHNICAL SPECIFICATIONS",
+        "ENGINE PETROL DIESEL",
+        "Type Turbo Petrol with Direct Injection (TGDi) Turbo Diesel with CRDe",
+        "Max. Power 147kW @5000 r/min 114kW @3750 r/min 136kW @3500 r/min",
+        "420 Nm @ 1600-2800 r/min (MT)",
+        "Max Torque",
+        "380 Nm @ 1750-3000 r/min 360 Nm @ 1500-2800 r/min",
+        "450 Nm @ 1750-2800 r/min (AT)",
+      ].join("\n"),
+      sha256: "a".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: "https://www.tata.com/newsroom/business/new-tata-safari",
+      finalUrl: "https://www.tata.com/newsroom/business/new-tata-safari",
+      contentType: "text/html",
+      text: [
+        "The New Tata Safari",
+        "Tata Motors Ltd discontinued the original Tata Safari after nearly two decades of service and a few makeovers and updates. The brand obviously resonates with customers, so it is no surprise that the automotive giant reintroduced it.",
+        "The new Tata Safari is based on the Harrier but in an extended avatar, with some additional styling cues and a third row for passengers. In the new version, the third row seats are front facing — making them more comfortable, practical and safer.",
+        "The design",
+        "The front design is similar to the Harrier’s with a judicious use of chrome for a more ‘premium feel’. The length and a stepped roof — instead of a sloping one — were necessary to give a raised seating to the passengers in the rear, for a clearer view through the front windscreen. This also meant there is enough headroom for third-row passengers. There are a lot of differences at the rear when compared to the Harrier. One can’t miss the fact that the rear hatch is straighter and the bumpers look leaner. The tail lamps are also larger than the ones on its smaller sibling. The alloy wheels look identical though. Maybe Tata Motors could have changed that.",
+        "In terms of size, the new Tata Safari is substantially longer than its older version but not as tall. Reason being that there is no need for it. Unlike the older Tata Safari, the third-row bench sits lower and access to it is through the middle doors and not the rear hatch. Two types of seating arrangements are being made available. You get proper captain seats for the middle row in the six-seater and a three-seat bench in the seven-seater version. The second-row folds flat and tumbles over in the seven-seater for accessing the third row, while in the six-seater you can simply walk through the space between the captain seats.",
+        "The powertrain is similar to the Harrier’s. So, the FIAT-sourced 2.0-litre diesel engine is the only one on offer. Tata Motors isn’t strapping a petrol yet, thanks to a steady demand and practicality for an oil burner in this segment. This is available with either a 6-speed automatic or 6-speed manual gearbox. Power figures are also identical — 170ps and 350Nm of torque. This is a proven unit but has noticeable diesel clatter noise, not vibrations; but with enough grunt at the low end to take the SUV (sports utility vehicle) flying past others.",
+      ].join("\n"),
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: "https://www.mahindra.com/print/pdf/node/3646",
+      finalUrl: "https://www.mahindra.com/print/pdf/node/3646",
+      contentType: "application/pdf",
+      text: "Mahindra XUV700 achieved a Global NCAP adult occupant score of 16.03 out of 17.00 and a child safety score of 41.66 out of 49.00.",
+      sha256: "c".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+  const addedMetrics = addVerifiedVehicleDocumentMetrics(contract as unknown as Record<string, unknown>, documents);
+  assert.ok(addedMetrics >= 4, JSON.stringify(contract.vendorScores.map((vendor) => ({
+    vendor: vendor.vendor,
+    metrics: vendor.weightedScores?.flatMap((criterion) => criterion.evidence ?? []).map((evidence) => ({
+      key: evidence.metricKey,
+      value: evidence.rawMetricValue,
+      unit: evidence.rawMetricUnit,
+    })),
+  }))));
+  const engineMetricsByVendor = Object.fromEntries(contract.vendorScores.map((vendor) => [
+    vendor.vendor,
+    vendor.weightedScores?.flatMap((criterion) => criterion.evidence ?? [])
+      .filter((evidence) => evidence.metricKey === "engine_power" || evidence.metricKey === "engine_torque")
+      .map((evidence) => `${evidence.metricKey}:${evidence.rawMetricValue}:${evidence.rawMetricUnit}`),
+  ]));
+  assert.deepEqual(engineMetricsByVendor, {
+    "Mahindra XUV700 diesel": ["engine_power:136:kw", "engine_torque:450:nm"],
+    "Tata Safari diesel": ["engine_power:170:ps", "engine_torque:350:nm"],
+  });
+  assert.ok(validateQuantitativeEvidenceAgainstDocuments(
+    contract as unknown as Record<string, unknown>,
+    documents,
+  ) >= 4);
+  const scoreVerifiedUrls = documents.flatMap((document) => [document.url, document.finalUrl]);
+  const allowedEvidenceUrls = evidenceAdmissionUrls([], documents);
+  assert.deepEqual(allowedEvidenceUrls, dedupeReferenceUrls(scoreVerifiedUrls));
+  const normalized = normalizeAnalysis(
+    contract,
+    contract,
+    vendors,
+    false,
+    allowedEvidenceUrls,
+    scoreVerifiedUrls,
+  );
+  const safariPower = contract.vendorScores.find((vendor) => vendor.vendor === "Tata Safari diesel")
+    ?.weightedScores?.flatMap((criterion) => criterion.evidence ?? [])
+    .find((evidence) => evidence.metricKey === "engine_power");
+  assert.equal(safariPower?.rawMetricValue, 170);
+  assert.equal(safariPower?.rawMetricUnit, "ps");
+  assert.equal(safariPower?.normalizationMethod, "retrieved_document_metric");
+  const profile = explicitDecisionPriorityProfile(prompt, normalized.vendorScores[0]?.weightedScores?.map((row) => row.criterion));
+  const deterministicWeight = applyDeterministicQuantitativeScores(normalized, profile?.weights ?? WEIGHTED_CRITERIA);
+  assert.ok(deterministicWeight > 0);
+  const scoredSafariPower = normalized.vendorScores.find((vendor) => vendor.vendor === "Tata Safari diesel")
+    ?.weightedScores?.flatMap((criterion) => criterion.evidence ?? [])
+    .find((evidence) => evidence.metricKey === "engine_power");
+  assert.ok(Number.isFinite(scoredSafariPower?.normalizedScore));
+  const normalizedMetrics = normalized.vendorScores.map((vendor) => ({
+    vendor: vendor.vendor,
+    metrics: vendor.weightedScores?.flatMap((criterion) => criterion.evidence ?? [])
+      .filter((evidence) => evidence.metricKey)
+      .map((evidence) => ({
+        key: evidence.metricKey,
+        unit: evidence.rawMetricUnit,
+        basis: evidence.metricBasis,
+        method: evidence.normalizationMethod,
+        sourceId: evidence.sourceId,
+        start: evidence.sourceTextStart,
+        end: evidence.sourceTextEnd,
+      })),
+  }));
+  assert.doesNotThrow(
+    () => assertHasProvenanceCompleteScorableEvidence(normalized),
+    JSON.stringify(normalizedMetrics),
+  );
+  applyVendorModelDecision(normalized, { prompt, category: normalized.category, market: "India IN" });
+
+  assert.equal(normalized.recommendation, "No qualified option");
+  assert.equal(normalized.score, 0);
+  assert.match(normalized.executiveSummary, /Decision on hold/i);
+  assert.match(normalized.recommendationReason, /Neither vehicle is purchase-ready/i);
+  assert.ok(normalized.vendorScores.every((vendor) => vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+});
+
+test("scores production diesel power evidence reported as hp versus PS on a common kW basis", () => {
+  const prompt = "Compare Mahindra XUV700 diesel vs Tata Safari diesel in India on performance";
+  const vendors = ["Mahindra XUV700 diesel", "Tata Safari diesel"];
+  const analysis = buildDeterministicIndiaDieselVehicleContract({
+    prompt,
+    market: "IN",
+    vendors,
+    urls: [],
+    criteria: ["Performance"],
+  });
+  const powerEvidence = [
+    {
+      vendor: vendors[0],
+      value: 185,
+      unit: "hp",
+      basis: "engine_power:hp:diesel_automatic_powertrain_output",
+    },
+    {
+      vendor: vendors[1],
+      value: 170,
+      unit: "ps",
+      basis: "engine_power:ps:diesel_automatic_powertrain_output",
+    },
+  ];
+  for (const item of powerEvidence) {
+    const vendor = analysis.vendorScores.find((row) => row.vendor === item.vendor)!;
+    const criterion = vendor.weightedScores!.find((row) => row.criterion === "Meets Needs / Features")!;
+    criterion.evidence = [{
+      sourceUrl: `https://publisher.example/${encodeURIComponent(item.vendor)}`,
+      sourceTitle: `${item.vendor} specifications`,
+      exactClaim: `${item.value} ${item.unit}`,
+      metricKey: "engine_power",
+      rawMetricValue: item.value,
+      rawMetricUnit: item.unit,
+      normalizationDirection: "higher_is_better",
+      metricSubject: item.vendor,
+      metricBasis: item.basis,
+      documentSha256: "a".repeat(64),
+      sourceTextStart: 0,
+      sourceTextEnd: 10,
+      evidenceKind: "quantitative",
+      supportDirection: "context",
+      confidence: 90,
+      normalizedScore: 50,
+      criterionWeight: criterion.weight,
+      weightedContribution: 0,
+      normalizationMethod: "retrieved_document_metric",
+    }];
+  }
+
+  const deterministicWeight = applyDeterministicQuantitativeScores(analysis);
+  assert.equal(deterministicWeight, 25);
+  assert.equal(
+    analysis.vendorScores.find((vendor) => vendor.vendor === "Mahindra XUV700 diesel")
+      ?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score,
+    100,
+  );
+  assert.equal(
+    analysis.vendorScores.find((vendor) => vendor.vendor === "Tata Safari diesel")
+      ?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score,
+    30,
+  );
+  assert.ok(analysis.vendorScores.every((vendor) => (
+    vendor.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")
+      ?.evidence?.some((entry) => entry.normalizationMethod === "direct_comparable_metric")
+  )));
+});
+
 test("accepts an unresolved named provider for business credit cards", () => {
   const parsed = parsePrompt(
     "Compare Westpac vs Cape vs NAB vs ANZ for Business Credit Cards",
@@ -2768,6 +4750,22 @@ test("rejects an automotive marketplace and a bank for banking products", () => 
   assert.match(parsed.context.message, /not in the same product or service segment|banking segment/i);
 });
 
+test("TS-08 keeps Toyota and Westpac distinct for Australian banking while allowing a car-loan brief", () => {
+  const prompt = "Compare Toyota vs Westpac on banking and finance products in Australia.";
+  const parsed = parsePrompt(prompt);
+  assert.deepEqual(parsed.vendors, ["Toyota", "Westpac"]);
+  const banking = validateComparisonContext(prompt, parsed.vendors, "AU");
+  assert.equal(banking.segment, "Banking products");
+  assert.equal(banking.valid, false);
+  assert.match(banking.message, /Toyota Finance Australia.*vehicle finance.*Westpac.*authorised deposit-taking institution/i);
+  const loans = validateComparisonContext(
+    "Compare Toyota Finance and Westpac for car loans in Australia.",
+    ["Toyota Finance", "Westpac"],
+    "AU",
+  );
+  assert.equal(loans.valid, true);
+});
+
 test("rejects Westpac products in India before research", () => {
   const context = validateComparisonContext(
     "Compare Westpac and ANZ banking products in India.",
@@ -2776,6 +4774,140 @@ test("rejects Westpac products in India before research", () => {
   );
   assert.equal(context.valid, false);
   assert.match(context.message, /Westpac does not offer.*India/i);
+});
+
+test("rejects a prompt country that conflicts with the selected research market", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata for automobiles in India. Use case: long-term ownership for 20 years.",
+    ["Mahindra", "Tata"],
+    "AU",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /prompt asks for India/i);
+  assert.match(context.message, /selected research market is Australia/i);
+});
+
+test("rejects a generated brief that contains both the selected and a conflicting market", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra and Tata for vehicles in India. Apply these constraints: Australia.",
+    ["Mahindra", "Tata"],
+    "IN",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /prompt asks for Australia/i);
+  assert.match(context.message, /selected research market is India/i);
+});
+
+test("accepts manufacturer-only automobile comparisons for governed portfolio discovery", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata for automobiles. Use case: long-term ownership for 20 years.",
+    ["Mahindra", "Tata"],
+    "IN",
+  );
+
+  assert.equal(context.valid, true);
+});
+
+test("parses the five supported broad-brand and model-family comparison examples", () => {
+  const cases = [
+    {
+      prompt: "Tata Safari vs Mahindra XUV",
+      vendors: ["Tata Safari", "Mahindra XUV"],
+      objective: "Mahindra XUV",
+    },
+    { prompt: "Tata vs Mahindra", vendors: ["Tata", "Mahindra"] },
+    {
+      prompt: "Tata Diesel vehicles vs Mahindra Diesel vehicles",
+      vendors: ["Tata", "Mahindra"],
+      segment: "Vehicles",
+    },
+    { prompt: "Gucci vs Prada", vendors: ["Gucci", "Prada"] },
+    {
+      prompt: "Titan watches vs other watch brands in India",
+      vendors: ["Titan watches", "other watch brands"],
+      objective: "other watch brands",
+    },
+  ];
+
+  for (const example of cases) {
+    const parsed = parsePrompt(example.prompt);
+    assert.deepEqual(parsed.vendors, example.vendors, example.prompt);
+    assert.equal(parsed.context.valid, true, `${example.prompt}: ${parsed.context.message}`);
+    if (example.prompt === "Tata vs Mahindra" || /Diesel/.test(example.prompt)) {
+      assert.equal(parsed.context.segment, "Vehicles");
+      assert.equal(parsed.context.industry, "Consumer automotive");
+    }
+    if (example.objective) assert.equal(isObjectivePhraseVendor(example.objective), true);
+  }
+});
+
+test("intent parsing accepts all five supported examples without requiring exact models", async () => {
+  const cases = [
+    ["Tata Safari vs Mahindra XUV", ["Tata Safari", "Mahindra XUV"]],
+    ["Tata vs Mahindra", ["Tata", "Mahindra"]],
+    ["Tata Diesel vehicles vs Mahindra Diesel vehicles", ["Tata", "Mahindra"]],
+    ["Gucci vs Prada", ["Gucci", "Prada"]],
+    ["Titan watches vs other watch brands in India", ["Titan watches", "other watch brands"]],
+  ] as const;
+
+  for (const [prompt, options] of cases) {
+    const parsed = await parsePromptWithIntent(prompt, async () => ({
+      ...intent({
+        options: [...options],
+        decisionType: "comparison",
+        category: /Tata|Mahindra/.test(prompt) ? "Vehicles" : /Titan/.test(prompt) ? "Watches" : "Luxury brands",
+        useCase: "Purchase decision",
+        confidence: 0.95,
+        clarification: "",
+      }),
+    }) as never, { market: /India/.test(prompt) || /Tata|Mahindra/.test(prompt) ? "IN" : "US" });
+    assert.deepEqual(parsed.vendors, [...options], prompt);
+    assert.equal(parsed.context.valid, true, `${prompt}: ${parsed.context.message}`);
+    assert.equal(parsed.intent.clarification, "");
+  }
+});
+
+test("low-specificity intent extraction cannot erase the automotive or diesel scope", async () => {
+  for (const prompt of [
+    "Tata vs Mahindra",
+    "Tata Diesel vehicles vs Mahindra Diesel vehicles",
+  ]) {
+    const parsed = await parsePromptWithIntent(prompt, async () => ({
+      ...intent({
+        options: ["Tata", "Mahindra"],
+        decisionType: "comparison",
+        category: "Product or service comparison",
+        useCase: "",
+        confidence: 0.55,
+        clarification: "Which exact models?",
+      }),
+    }) as never, { market: "IN" });
+
+    assert.deepEqual(parsed.vendors, ["Tata", "Mahindra"]);
+    assert.equal(parsed.context.valid, true);
+    assert.equal(parsed.context.segment, "Vehicles");
+    assert.equal(parsed.context.industry, "Consumer automotive");
+    assert.equal(parsed.intent.clarification, "");
+    if (/Diesel/.test(prompt)) {
+      const brief = refineComparisonPrompt(prompt, parsed.vendors, parsed.criteria, parsed.context, "IN");
+      assert.match(brief, /preserve the requested diesel powertrain/i);
+      assert.match(brief, /only current diesel vehicles/i);
+    }
+  }
+});
+
+test("blocks mixed manufacturer and model specificity for vehicle decisions", () => {
+  const context = validateComparisonContext(
+    "Compare Mahindra vs Tata Safari diesel automatic for long-term ownership in India.",
+    ["Mahindra", "Tata Safari diesel automatic"],
+    "IN",
+  );
+
+  assert.equal(context.valid, false);
+  assert.match(context.message, /Mahindra is a manufacturer/i);
+  assert.match(context.message, /Tata Safari diesel automatic is a specific model/i);
 });
 
 test("allows a shared service criterion across different brand segments", () => {
@@ -2935,6 +5067,114 @@ test("does not append model-inferred factors when the user explicitly names comp
     "Delivery time and reliability",
     "Product quality",
   ]);
+});
+
+test("normalizes criteria-heavy parser output to the create-comparison contract", async () => {
+  const prompt = "Compare Mahindra XUV700 and Tata Safari in India based on performance, safety, features, reliability, maintenance, resale value, warranty, budget, security, ease of use, customer outcomes and long-term sustainability.";
+  const parsed = await parsePromptWithIntent(
+    prompt,
+    extracted(intent({
+      options: ["Mahindra XUV700", "Tata Safari"],
+      subject: "Current family SUVs with privacy, integration and implementation requirements",
+      category: "Automotive technology",
+      useCase: "Customer support and market positioning",
+      confidence: 0.95,
+      clarification: "",
+    })),
+  );
+
+  assert.equal(parsed.criteria.length, 8);
+  assert.deepEqual(parsed.criteria, parsePrompt(prompt).criteria);
+  assert.ok(parsed.criteria.every((criterion) => criterion.length <= 100));
+  assert.equal(CreateComparisonBody.safeParse({
+    prompt: parsed.prompt,
+    vendors: parsed.vendors,
+    urls: parsed.urls,
+    criteria: parsed.criteria,
+  }).success, true);
+});
+
+test("rejects a seventh explicit option without truncating the option chain", () => {
+  const parsed = parsePrompt(
+    "Compare Westpac vs ANZ vs NAB vs Commonwealth Bank vs Macquarie vs Bankwest vs ING for home loans",
+  );
+
+  assert.equal(parsed.vendors.length, 7);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /two and 6 distinct options/i);
+});
+
+test("intent extraction cannot silently truncate seven explicit options", async () => {
+  const prompt = "Compare Westpac, ANZ, NAB, Commonwealth Bank, Macquarie, Bankwest and ING for home loans";
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest", "ING"],
+    decisionType: "comparison",
+    confidence: 0.95,
+  })));
+  assert.equal(parsed.vendors.length, 7);
+  assert.equal(parsed.context.valid, false);
+  assert.match(parsed.context.message, /two and 6 distinct options/i);
+});
+
+test("model-only extracted overshoot retains seven options instead of trimming to six", async () => {
+  const prompt = "Which home loan is best? Westpac; ANZ; NAB; Commonwealth Bank; Macquarie; Bankwest; ING";
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest", "ING"],
+    decisionType: "comparison",
+    confidence: 0.95,
+  })));
+  assert.equal(parsed.vendors.length, 7);
+  assert.equal(parsed.context.valid, false);
+});
+
+test("model-only six options remain supported", async () => {
+  const prompt = "Which home loan is best? Westpac; ANZ; NAB; Commonwealth Bank; Macquarie; Bankwest";
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["Westpac", "ANZ", "NAB", "Commonwealth Bank", "Macquarie", "Bankwest"],
+    decisionType: "comparison",
+    confidence: 0.95,
+  })));
+  assert.equal(parsed.vendors.length, 6);
+  assert.equal(parsed.context.valid, true);
+});
+
+test("single anchor discovery respects explicit competitor counts and rejects overflow", () => {
+  const six = parsePrompt("Compare Adobe Experience Manager against five competitors");
+  const seven = parsePrompt("Compare Adobe Experience Manager against six competitors");
+  assert.equal(discoveryTargetCount(six.vendors, six.prompt), 6);
+  assert.equal(six.context.valid, true);
+  assert.equal(discoveryTargetCount(seven.vendors, seven.prompt), 7);
+  assert.equal(seven.context.valid, false);
+  assert.match(seven.context.message, /two and 6 distinct options/i);
+});
+
+test("submitted option arrays reject seven rather than silently score six", () => {
+  const names = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta"];
+  const input = { prompt: "Compare these providers", vendors: names, criteria: [], urls: [] };
+  assert.throws(() => createDecisionModeAnalysis(input, null), /two and 6 distinct options/i);
+  assert.equal(createDecisionModeAnalysis({ ...input, vendors: names.slice(0, 6) }, null).vendorScores.length, 6);
+});
+
+test("numeric model versions stay distinct from duplicate aliases and objectives", async () => {
+  const prompt = "Compare Mahindra BE 6, Tesla Model 3, Tata Nexon EV, Hyundai Ioniq 5, Kia EV6 and MG ZS EV for India";
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["Mahindra BE6", "Mahindra BE 6", "Tesla Model 3", "Tata Nexon EV", "Hyundai Ioniq 5", "Kia EV6", "MG ZS EV", "best value"],
+    confidence: 0.95,
+  })));
+  assert.equal(parsed.vendors.length, 6);
+  assert.equal(parsed.context.valid, true);
+  assert.ok(parsed.vendors.includes("Mahindra BE 6"));
+  assert.ok(parsed.vendors.includes("Tesla Model 3"));
+});
+
+test("model-only option identity deduplicates configured aliases but not numeric model versions", async () => {
+  const prompt = "Which should I choose? WBC; Westpac; ANZ; NAB; Acme 3; Acme 4; Contoso 2";
+  const parsed = await parsePromptWithIntent(prompt, extracted(intent({
+    options: ["WBC", "Westpac", "ANZ", "NAB", "Acme 3", "Acme 4", "Contoso 2", "best value"],
+    decisionType: "comparison",
+    confidence: 0.95,
+  })));
+  assert.deepEqual(parsed.vendors, ["Westpac", "ANZ", "NAB", "Acme 3", "Acme 4", "Contoso 2"]);
 });
 
 test("preserves all six providers in a supported comparison", async () => {
@@ -3257,7 +5497,7 @@ test("keeps every canonical EV entity across supported comparison separators", a
     "Electric vehicles",
     ["Mahindra", "Tata", "MG"],
   );
-  assert.equal(identity.headline, "Compare Mahindra vs Tata vs MG for EV vehicles");
+  assert.equal(identity.headline, "Compare Mahindra vs Tata vs MG for Electric vehicles");
   assert.equal(identity.entityCount, 3);
   assert.equal(identity.comparisonType, "multi_entity");
 });
@@ -3300,10 +5540,10 @@ test("rejects an end-to-end analysis result that reduces the canonical three-ent
     }),
     /canonical comparison entities/,
   );
-  assert.equal(parsed.comparisonIdentity.headline, "Compare Mahindra vs Tata vs MG for EV vehicles");
+  assert.equal(parsed.comparisonIdentity.headline, "Compare Mahindra vs Tata vs MG for Electric vehicles");
 });
 
-test("accepts canonical matrix ties without treating the tie label as a new entity", () => {
+test("canonical tie validation accepts a legacy decision-label fixture without treating it as an entity", () => {
   const vendors = ["MG", "Mahindra"];
   const result = {
     vendorScores: vendors.map((vendor) => ({ vendor })),
@@ -3323,12 +5563,12 @@ test("accepts canonical matrix ties without treating the tie label as a new enti
       recommendation: "No qualified option",
     }),
   );
-  assert.doesNotThrow(
-    () => assertCanonicalComparisonConsistency(vendors, {
-      ...result,
-      recommendation: "No definitive winner",
-    }),
-  );
+  const legacyState = migrateLegacyDecisionState({ recommendation: legacyNoWinnerLabel });
+  assert.equal(legacyState.state, "INSUFFICIENT_EVIDENCE");
+  assert.doesNotThrow(() => assertCanonicalComparisonConsistency(vendors, {
+    ...result,
+    recommendation: legacyState.state,
+  }));
   assert.doesNotThrow(
     () => assertCanonicalComparisonConsistency(vendors, {
       ...result,
@@ -3864,6 +6104,1154 @@ test("treats generic AEM competitor wording as discovery objectives", () => {
   );
 });
 
+test("parses the full AEM anchor and apostrophe variants as competitor discovery", () => {
+  for (const possessive of ["its", "it's", "it’s"]) {
+    const prompt = `Compare Adobe experience manager against ${possessive} competitors which is the best alternatives for AEM?`;
+    const parsed = parsePrompt(prompt);
+    assert.deepEqual(parsed.vendors, ["Adobe experience manager", `${possessive} competitors`]);
+    assert.equal(parsed.vendors.some(isObjectivePhraseVendor), true);
+    assert.equal(discoveryTargetCount(parsed.vendors), 4);
+    assert.equal(requestsBestAlternative(prompt), true);
+  }
+});
+
+test("keeps the full AEM anchor and removes expanded and acronym duplicates from discovery", () => {
+  assert.deepEqual(
+    preserveConcreteDiscoveryOptions(
+      ["Adobe Experience Manager", "its competitors"],
+      [
+        "AEM",
+        "Adobe Experience Manager",
+        "Sitecore XM Cloud",
+        "sitecore xm cloud",
+        "Optimizely One",
+        "Acquia DXP",
+      ],
+      4,
+    ),
+    ["Adobe Experience Manager", "Sitecore XM Cloud", "Optimizely One", "Acquia DXP"],
+  );
+});
+
+test("governed software registry stores candidates and taxonomy but no winner constants", () => {
+  const entries = governedSoftwareRegistryEntries("Adobe Experience Manager");
+  assert.ok(entries.length >= 4);
+  assert.ok(entries.length - 1 <= 5);
+  assert.equal(entries[0]?.name, "Adobe Experience Manager Sites");
+  assert.doesNotMatch(JSON.stringify(GOVERNED_ENTERPRISE_SOFTWARE_REGISTRY), /\"(?:winner|recommendation|score)\"\s*:/i);
+});
+
+test("governed registry rejects missing, wrong-url, and category-mismatched documents", () => {
+  const entries = governedSoftwareRegistryEntries("Adobe Experience Manager").slice(0, 2);
+  const documents: RetrievedEvidenceDocument[] = [{
+    url: "https://wrong.example/xm-cloud",
+    finalUrl: "https://wrong.example/xm-cloud",
+    contentType: "text/html",
+    text: "Sitecore XM Cloud digital experience content management system",
+    sha256: "a".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }, {
+    url: entries[0]!.officialUrl,
+    finalUrl: entries[0]!.officialUrl,
+    contentType: "text/html",
+    text: "Adobe Experience Manager Sites accounting software",
+    sha256: "b".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.deepEqual(validateGovernedSoftwareRegistryDocuments(entries, documents), []);
+});
+
+test("governed registry accepts a canonical same-publisher product redirect", () => {
+  const entry = governedSoftwareRegistryEntries("Adobe Experience Manager")[1]!;
+  const document: RetrievedEvidenceDocument = {
+    url: entry.officialUrl,
+    finalUrl: "https://www.sitecore.com/products/content-management/xm-cloud",
+    contentType: "text/html",
+    text: "Sitecore XM Cloud is a cloud content management CMS and digital experience product.",
+    sha256: "c".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  };
+  const validated = validateGovernedSoftwareRegistryDocuments([entry], [document]);
+  assert.equal(validated.length, 1);
+  assert.equal(validated[0]?.document.finalUrl, document.finalUrl);
+});
+
+test("AEM winner replaces a legacy narrative fixture using exact capability spans", () => {
+  const vendors = [
+    "Adobe Experience Manager",
+    "Sitecore XM Cloud",
+    "Optimizely Content Management System",
+    "Progress Sitefinity",
+  ];
+  const entries = governedSoftwareRegistryEntries("Adobe Experience Manager").slice(0, 4);
+  const textByName: Record<string, string> = {
+    "Adobe Experience Manager Sites": "Adobe Experience Manager Sites is a digital experience content management product with content authoring and cloud security.",
+    "Sitecore XM Cloud": "Sitecore XM Cloud is a digital experience content management CMS with content authoring, headless GraphQL APIs, personalization, commerce integrations, cloud security, multilingual workflow.",
+    "Optimizely Content Management System": "Optimizely Content Management System is a CMS for digital experience with content authoring and personalization.",
+    "Progress Sitefinity": "Progress Sitefinity is a content management CMS and digital experience platform with headless APIs, cloud security, and multilingual workflow.",
+  };
+  const documents = entries.map((entry, index): RetrievedEvidenceDocument => ({
+    url: entry.officialUrl,
+    finalUrl: entry.officialUrl,
+    contentType: "text/html",
+    text: textByName[entry.name]!,
+    sha256: String(index + 1).repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }));
+  const analysis = {
+    recommendation: "Adobe Experience Manager",
+    score: 0,
+    recommendationReason: "",
+    executiveSummary: "",
+    features: [],
+    pricing: [],
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      score: 0,
+      verdict: "",
+      weightedScores: [{
+        criterion: "Commercial Value",
+        weight: 25,
+        score: 0,
+        rationale: "",
+        evidence: [],
+      }],
+    })),
+  } as unknown as AnalysisPayload;
+  assert.equal(applyGovernedSoftwareCapabilityEvidence(
+    analysis,
+    "Adobe Experience Manager",
+    mergeRetrievedEvidenceDocuments(documents, []),
+  ), true);
+  applyGovernedSoftwareQualifications(analysis, "Adobe Experience Manager");
+  analysis.category = "Insurance";
+  analysis.executiveSummary = `${legacyNoWinnerLabel} in Insurance.`;
+  analysis.insights = ["Sitecore has a 50/100 criterion score; the criterion score is the neutral midpoint."];
+  analysis.nextSteps = [`Review Insurance policy options, 33/100 from comparable verified metrics, and the ${legacyNoWinnerLabel} result.`];
+  analysis.vendorScores[1]!.verdict = "Sitecore XM Cloud scored 33/100 from comparable verified metrics.";
+  applyGovernedSoftwarePresentationContext(analysis, "Adobe Experience Manager");
+  reconcileSpecialPathPresentation(analysis, "governed_software");
+  assert.equal(analysis.recommendation, "Sitecore XM Cloud");
+  assert.notEqual(analysis.recommendation, "Adobe Experience Manager");
+  assert.equal(analysis.category, "DXP/WCM enterprise software");
+  assert.match(analysis.executiveSummary, /Sitecore XM Cloud.*DXP\/WCM enterprise software/i);
+  assert.doesNotMatch(`${analysis.executiveSummary} ${analysis.nextSteps.join(" ")}`, /Insurance/i);
+  assert.doesNotMatch(`${analysis.executiveSummary} ${analysis.nextSteps.join(" ")}`, new RegExp(legacyNoWinnerLabel, "i"));
+  const governedNarrative = JSON.stringify({
+    verdicts: analysis.vendorScores.map((vendor) => ({
+      verdict: vendor.verdict,
+      providerRoleRationale: vendor.providerRoleRationale,
+      criterionRationales: vendor.weightedScores?.map((criterion) => criterion.rationale),
+      strengths: vendor.strengths,
+      gaps: vendor.gaps,
+      conditions: vendor.conditions,
+      limitations: vendor.limitations,
+    })),
+    insights: analysis.insights,
+    nextSteps: analysis.nextSteps,
+    swot: analysis.swot,
+    opportunities: analysis.opportunities,
+    contextAssumptions: analysis.contextAssumptions,
+    productEquivalency: analysis.productEquivalency,
+    functionalGaps: analysis.functionalGaps,
+    serviceProductMap: analysis.serviceProductMap,
+    migrationSequence: analysis.migrationSequence,
+    decisionGovernance: analysis.decisionGovernance,
+  });
+  assert.doesNotMatch(governedNarrative, /\b\d{1,3}\/100\b|comparable verified metrics|criterion score is (?:the )?neutral midpoint/i);
+  assert.match(analysis.vendorScores[1]!.verdict, /6 of 6 governed capability dimensions.*unsupported dimensions remain unscored/i);
+  assert.ok(analysis.vendorScores.every((vendor) => vendor.marketPosition?.market === "Global DXP/WCM enterprise software"));
+  assert.equal(analysis.vendorScores[1]?.qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+  assert.deepEqual(
+    analysis.vendorScores[1]?.qualificationGates?.slice(0, 2).map((gate) => gate.status),
+    ["PASS", "CONDITIONAL"],
+  );
+  const sitecoreCriterion = analysis.vendorScores[1]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features");
+  const sitecoreEvidence = sitecoreCriterion?.evidence ?? [];
+  assert.ok(sitecoreEvidence.length >= 5);
+  assert.ok(sitecoreEvidence.every((evidence) => evidence.sourceId === `docsha256:${"2".repeat(64)}`));
+  assert.ok(sitecoreEvidence.every((evidence) => (
+    evidence.evidenceKind === "quantitative"
+    && evidence.normalizationMethod === "retrieved_document_metric"
+  )));
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(
+    analysis,
+    ["Adobe Experience Manager"],
+  ));
+  const fullBase = buildHomeLoanAnalysisFromContract({
+    prompt: "Compare Adobe Experience Manager with governed DXP/WCM alternatives",
+    market: "US",
+    vendors,
+    urls: documents.map((document) => document.finalUrl),
+    criteria: ["capability coverage"],
+  }, { banks: [], sources: documents.map((document) => document.finalUrl) }, documents.map((document) => document.finalUrl));
+  const fullAnalysis = {
+    ...fullBase,
+    category: analysis.category,
+    recommendation: analysis.recommendation,
+    score: analysis.score,
+    executiveSummary: analysis.executiveSummary,
+    recommendationReason: analysis.recommendationReason,
+    features: analysis.features,
+    insights: analysis.insights ?? fullBase.insights,
+    nextSteps: analysis.nextSteps ?? fullBase.nextSteps,
+    opportunities: analysis.opportunities ?? fullBase.opportunities,
+    contextAssumptions: analysis.contextAssumptions ?? fullBase.contextAssumptions,
+    productEquivalency: analysis.productEquivalency ?? fullBase.productEquivalency,
+    functionalGaps: analysis.functionalGaps ?? fullBase.functionalGaps,
+    serviceProductMap: analysis.serviceProductMap ?? fullBase.serviceProductMap,
+    migrationSequence: analysis.migrationSequence ?? fullBase.migrationSequence,
+    decisionGovernance: analysis.decisionGovernance ?? fullBase.decisionGovernance,
+    swot: analysis.swot ?? fullBase.swot,
+    vendorScores: analysis.vendorScores.map((vendor, index) => ({
+      ...fullBase.vendorScores[index],
+      ...vendor,
+    })),
+  };
+  roundAnalysisResponseIntegers(fullAnalysis);
+  const fullGuestPayload = {
+    prompt: "Compare Adobe Experience Manager with governed DXP/WCM alternatives",
+    vendors,
+    comparisonIdentity: {
+      originalQuery: "Compare Adobe Experience Manager with governed DXP/WCM alternatives",
+      category: fullAnalysis.category,
+      entities: vendors.map((name, index) => ({ id: `entity-${index + 1}`, name })),
+      entityCount: vendors.length,
+      comparisonType: "multi_entity",
+      displayName: vendors.join(" vs "),
+      headline: "Governed DXP/WCM alternatives",
+    },
+    urls: documents.map((document) => document.finalUrl),
+    sourceAvailability: documents.map((document) => ({
+      url: document.finalUrl,
+      status: "reachable",
+      reason: "Validated official product document.",
+    })),
+    criteria: ["capability coverage"],
+    createdAt: new Date("2026-09-23T00:00:00.000Z"),
+    ...fullAnalysis,
+    confirmedRecommendation: {
+      status: "CONFIRMED",
+      option: "Sitecore XM Cloud",
+      score: fullAnalysis.score,
+      basis: "QUALIFIED_WITH_CONDITIONS",
+      rationale: fullAnalysis.recommendationReason,
+    },
+    alternatives: ["Optimizely Content Management System", "Progress Sitefinity"].map((option, index) => {
+      const row = fullAnalysis.vendorScores.find((vendor) => vendor.vendor === option)!;
+      return {
+        option,
+        rank: index + 1,
+        score: row.modelScore ?? row.score,
+        scoreDifference: Math.max(0, fullAnalysis.score - (row.modelScore ?? row.score)),
+        qualificationStatus: row.qualificationStatus ?? "QUALIFIED_WITH_CONDITIONS",
+        rationale: row.verdict,
+      };
+    }),
+  };
+  assert.doesNotThrow(() => CreateGuestComparisonResponse.parse(fullGuestPayload));
+  assert.doesNotMatch(
+    JSON.stringify(fullGuestPayload),
+    /\b\d{1,3}\/100\b|comparable verified metrics|criterion score is (?:the )?neutral midpoint/i,
+  );
+});
+
+test("rounds bank scoring fields for the guest-response evidence schema", () => {
+  const analysis = {
+    score: 99.6,
+    vendorScores: [{
+      vendor: "Westpac",
+      score: 97.7,
+      weightedScores: [{
+        criterion: "Value for Money",
+        weight: 19.6,
+        score: 88.8,
+        evidence: [{
+          retrievalDate: "2026-09-23",
+          exactClaim: "Investor variable rate is 6.14% p.a.",
+          evidenceKind: "percentage",
+          supportDirection: "supports",
+          confidence: 94.7,
+          normalizedScore: 98.42,
+          criterionWeight: 19.6,
+          weightedContribution: 19.684,
+          normalizationMethod: "retrieved_document_metric",
+        }],
+      }],
+    }],
+  } as unknown as AnalysisPayload;
+  roundAnalysisResponseIntegers(analysis);
+  const evidenceSchema = CreateGuestComparisonResponse._def.left.shape.vendorScores.element.shape
+    .weightedScores.unwrap().element.shape.evidence.unwrap().element;
+  assert.doesNotThrow(() => evidenceSchema.parse(analysis.vendorScores[0]!.weightedScores![0]!.evidence![0]));
+  assert.equal(analysis.vendorScores[0]?.weightedScores?.[0]?.evidence?.[0]?.normalizedScore, 98);
+  assert.equal(analysis.vendorScores[0]?.weightedScores?.[0]?.evidence?.[0]?.confidence, 95);
+});
+
+test("recovers exact AEM competitors only from cited retrieved category evidence", async () => {
+  const prompt = "Compare Adobe experience manager against its competitors which is the best alternatives for AEM?";
+  const requested = parsePrompt(prompt).vendors;
+  let searches = 0;
+  const urlOne = "https://alt-one.example/product";
+  const urlTwo = "https://alt-two.example/product";
+  const anchorUrl = "https://anchor.example/product";
+  const proseOnlyUrl = "https://prose-only.example/product";
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe experience manager",
+    prompt,
+    market: "United States US",
+    requested,
+    initialVendors: ["Adobe experience manager", "its competitors"],
+    targetCount: 4,
+    search: async () => {
+      searches += 1;
+      return {
+        outputText: JSON.stringify({
+          category: "Digital experience platform",
+          anchor: {
+            name: "Adobe experience manager",
+            category: "Digital experience platform",
+            citationUrl: anchorUrl,
+          },
+          alternatives: [
+            { name: "AltOne", category: "Digital experience platform", citationUrl: urlOne },
+            { name: "AltTwo", category: "Digital experience platform", citationUrl: urlTwo },
+            { name: "Hallucinated Prose Product", category: "Digital experience platform", citationUrl: proseOnlyUrl },
+            { name: "other competitors", category: "Digital experience platform", citationUrl: urlOne },
+          ],
+        }),
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: `A prose-only URL ${proseOnlyUrl}`,
+            annotations: [anchorUrl, urlOne, urlTwo].map((url) => ({ type: "url_citation", url })),
+          }],
+        }],
+      };
+    },
+    retrieve: async (urls) => urls.map((url, index) => {
+      const product = url === anchorUrl
+        ? "Adobe experience manager"
+        : ["AltOne", "AltTwo"][index - 1];
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          canonicalUrl: url,
+          contentType: "text/html",
+          text: `${product} is a current digital experience platform for enterprise content.`,
+          sha256: String(index + 1).repeat(64),
+          retrievedAt: "2026-09-23T00:00:00.000Z",
+          truncated: false,
+          retrievalMethod: "direct_http",
+          parserVersion: "security-html-v1",
+        },
+      };
+    }),
+  });
+
+  assert.equal(searches, 1);
+  assert.deepEqual(recovered?.vendors, [
+    "Adobe experience manager",
+    "AltOne",
+    "AltTwo",
+  ]);
+  assert.deepEqual(recovered?.urls, [anchorUrl, urlOne, urlTwo]);
+  assert.equal(recovered?.vendors.some(isObjectivePhraseVendor), false);
+  assert.ok(!recovered?.vendors.includes("Hallucinated Prose Product"));
+});
+
+test("continues source-less discovery with concrete unverified names only", async () => {
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe Experience Manager",
+    prompt: "Compare Adobe Experience Manager against its competitors",
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 4,
+    search: async () => ({
+      outputText: JSON.stringify({
+        category: "Digital experience platform",
+        market: "United States US",
+        alternatives: [
+          { name: "AEM" },
+          { name: "Adobe AEM" },
+          { name: "Digital experience platform" },
+          { name: "its competitors" },
+          { name: "AltOne" },
+          { name: "AltTwo" },
+        ],
+      }),
+      output: [{
+        type: "message",
+        content: [{
+          type: "output_text",
+          text: "Structured discovery returned without citation annotations.",
+          annotations: [],
+        }],
+      }],
+    }),
+    retrieve: async () => {
+      assert.fail("source-less discovery labels must not trigger discovery evidence retrieval");
+    },
+  });
+
+  assert.deepEqual(recovered?.vendors, ["Adobe Experience Manager", "AltOne", "AltTwo"]);
+  assert.deepEqual(recovered?.urls, []);
+  assert.ok(recovered?.selectionRoles.every((role) => role.discoveryStatus === "unverified_candidate"));
+  assert.ok(recovered?.selectionRoles.every((role) => role.officialUrl === ""));
+
+  const analysis = {
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "",
+    score: 90,
+    executiveSummary: "",
+    vendorScores: recovered!.vendors.map((vendor) => ({
+      vendor,
+      score: vendor === "AltOne" ? 99 : 90,
+      modelScore: vendor === "AltOne" ? 99 : 90,
+      qualificationStatus: "INSUFFICIENT_EVIDENCE",
+      weightedScores: [],
+    })),
+  } as unknown as AnalysisPayload;
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+  assert.notEqual(analysis.recommendation, "AltOne");
+  assert.notEqual(analysis.recommendation, "AltTwo");
+});
+
+test("later exact retrieved provenance can qualify a source-less discovery label", () => {
+  const withoutDocuments = calculateVendorScoreExtension({
+    vendor: "AltOne",
+    weightedScores: [],
+  }, {
+    prompt: "Compare digital experience platforms",
+    market: "US",
+    unverifiedDiscoveryVendors: ["AltOne"],
+  });
+  const withExactDocumentEvidence = calculateVendorScoreExtension({
+    vendor: "AltOne",
+    weightedScores: [{
+      criterion: "Requirements Fit",
+      evidence: [{
+        ...qualificationEvidence("AltOne", 82),
+        exactClaim: "AltOne is a digital experience platform available in the United States.",
+        metricSubject: "AltOne",
+      }],
+    }],
+  }, {
+    prompt: "Compare digital experience platforms",
+    market: "US",
+    unverifiedDiscoveryVendors: ["AltOne"],
+  });
+  const withWrongCategoryEvidence = calculateVendorScoreExtension({
+    vendor: "AltOne",
+    weightedScores: [{
+      criterion: "Requirements Fit",
+      evidence: [{
+        ...qualificationEvidence("AltOne", 82),
+        exactClaim: "AltOne is a payroll service available in the United States.",
+        metricSubject: "AltOne",
+      }],
+    }],
+  }, {
+    prompt: "Compare digital experience platforms",
+    market: "US",
+    unverifiedDiscoveryVendors: ["AltOne"],
+  });
+
+  assert.equal(withoutDocuments.qualificationStatus, "INSUFFICIENT_EVIDENCE");
+  assert.equal(withWrongCategoryEvidence.qualificationStatus, "INSUFFICIENT_EVIDENCE");
+  assert.equal(withExactDocumentEvidence.qualificationStatus, "QUALIFIED");
+});
+
+test("fails source-less fallback when it returns no concrete alternative names", async () => {
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe Experience Manager",
+    prompt: "Compare Adobe Experience Manager against its competitors",
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 4,
+    search: async () => ({
+      outputText: JSON.stringify({
+        category: "Digital experience platform",
+        market: "United States US",
+        alternatives: [{ name: "AEM" }, { name: "competitors" }, { name: "CMS" }],
+      }),
+      output: [],
+    }),
+    retrieve: async () => [],
+  });
+
+  assert.equal(recovered, null);
+});
+
+test("rejects cited competitor names when retrieved text does not confirm the exact product category", async () => {
+  const url = "https://alt-one.example/product";
+  const anchorUrl = "https://anchor.example/product";
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    anchor: "Adobe Experience Manager",
+    prompt: "Compare Adobe Experience Manager with its competitors",
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 2,
+    search: async () => ({
+      outputText: JSON.stringify({
+        category: "Digital experience platform",
+        anchor: {
+          name: "Adobe Experience Manager",
+          category: "Digital experience platform",
+          citationUrl: anchorUrl,
+        },
+        alternatives: [{ name: "AltOne", category: "Digital experience platform", citationUrl: url }],
+      }),
+      output: [{
+        type: "web_search_call",
+        action: { sources: [anchorUrl, url].map((sourceUrl) => ({ type: "url", url: sourceUrl })) },
+      }],
+    }),
+    retrieve: async (urls) => urls.map((retrievedUrl) => ({
+      url: retrievedUrl,
+      document: {
+        url: retrievedUrl,
+        finalUrl: retrievedUrl,
+        canonicalUrl: retrievedUrl,
+        contentType: "text/html",
+        text: retrievedUrl === anchorUrl
+          ? "Adobe Experience Manager is a digital experience platform."
+          : "AltOne is a payroll processing service.",
+        sha256: "a".repeat(64),
+        retrievedAt: "2026-09-23T00:00:00.000Z",
+        truncated: false,
+        retrievalMethod: "direct_http",
+        parserVersion: "security-html-v1",
+      },
+    })),
+  });
+
+  assert.equal(recovered, null);
+});
+
+test("uses a cited evidence graph when official product pages omit the category wording", async () => {
+  const prompt = "Compare Adobe Experience Manager against its competitors and find the best alternatives for AEM";
+  const comparisonUrl = "https://analyst.example/aem-alternatives";
+  const officialOne = "https://altone.example/product";
+  const officialTwo = "https://alttwo.example/product";
+  const search = async (includeComparison: boolean) => ({
+    outputText: JSON.stringify({
+      category: "Digital experience platform",
+      alternatives: includeComparison
+        ? []
+        : [
+            { name: "AltOne", officialUrl: officialOne },
+            { name: "AltTwo", officialUrl: officialTwo },
+          ],
+    }),
+    output: [{
+      type: "web_search_call",
+      action: {
+        sources: [officialOne, officialTwo, ...(includeComparison ? [comparisonUrl] : [])]
+          .map((url) => ({ type: "url", url })),
+      },
+    }],
+  });
+  const retrieve = async (urls: string[]) => urls.map((url, index) => ({
+    url,
+    document: {
+      url,
+      finalUrl: url,
+      canonicalUrl: url,
+      contentType: "text/html",
+      text: url === comparisonUrl
+        ? "# AEM alternatives for web content management systems\n- AltOne\n- AltTwo"
+        : url === officialOne ? "# AltOne\nComposable publishing tools." : "# AltTwo\nEnterprise authoring tools.",
+      sha256: String(index + 1).repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+      retrievalMethod: "direct_http" as const,
+      parserVersion: "security-html-v1",
+    },
+  }));
+  const base = {
+    anchor: "Adobe Experience Manager",
+    prompt,
+    market: "United States US",
+    requested: ["Adobe Experience Manager", "its competitors"],
+    initialVendors: ["Adobe Experience Manager"],
+    targetCount: 4,
+    retrieve,
+  };
+
+  assert.equal(await recoverCitedOpenEndedCompetitors({
+    ...base,
+    search: () => search(false),
+  }), null, "official pages alone do not establish the shared category");
+
+  const recovered = await recoverCitedOpenEndedCompetitors({
+    ...base,
+    search: () => search(true),
+  });
+  assert.deepEqual(recovered?.vendors, ["Adobe Experience Manager", "AltOne", "AltTwo"]);
+  assert.deepEqual(recovered?.urls, [comparisonUrl, officialOne, officialTwo]);
+});
+
+test("does not accept one alternative or an unrelated comparison category", async () => {
+  const prompt = "Compare Adobe Experience Manager against its competitors";
+  const officialUrl = "https://altone.example/product";
+  const comparisonUrl = "https://analyst.example/comparison";
+  const recover = (comparisonText: string, alternatives: Array<Record<string, string>>) => (
+    recoverCitedOpenEndedCompetitors({
+      anchor: "Adobe Experience Manager",
+      prompt,
+      market: "United States US",
+      requested: ["Adobe Experience Manager", "its competitors"],
+      initialVendors: ["Adobe Experience Manager"],
+      targetCount: 4,
+      search: async () => ({
+        outputText: JSON.stringify({ category: "Digital experience platform", alternatives }),
+        output: [{
+          type: "web_search_call",
+          action: {
+            sources: [officialUrl, comparisonUrl].map((url) => ({ type: "url", url })),
+          },
+        }],
+      }),
+      retrieve: async (urls) => urls.map((url, index) => ({
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          canonicalUrl: url,
+          contentType: "text/html",
+          text: url === officialUrl ? "# AltOne\nPublishing tools." : comparisonText,
+          sha256: String(index + 1).repeat(64),
+          retrievedAt: "2026-09-23T00:00:00.000Z",
+          truncated: false,
+          retrievalMethod: "direct_http",
+          parserVersion: "security-html-v1",
+        },
+      })),
+    })
+  );
+
+  assert.equal(await recover(
+    "# AEM alternatives for CMS\n- AltOne",
+    [{ name: "AltOne", officialUrl }],
+  ), null, "plural competitor requests require two verified alternatives");
+  assert.equal(await recover(
+    "# AEM and AltOne payroll processing comparison\n- AltOne",
+    [{ name: "AltOne", officialUrl }],
+  ), null, "an unrelated category cannot establish comparability");
+});
+
+test("selects the strongest qualified competitor for a best-alternative request", () => {
+  const analysis = {
+    executiveSummary: "Adobe Experience Manager is the best overall option.",
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "Adobe Experience Manager leads overall.",
+    score: 91,
+    vendorScores: [
+      { vendor: "Adobe Experience Manager", score: 91, modelScore: 91, qualificationStatus: "QUALIFIED" },
+      { vendor: "Sitecore XM Cloud", score: 84, modelScore: 84, qualificationStatus: "QUALIFIED" },
+      { vendor: "Optimizely One", score: 82, modelScore: 82, qualificationStatus: "QUALIFIED_WITH_CONDITIONS" },
+      { vendor: "Acquia DXP", score: 95, modelScore: 95, qualificationStatus: "INSUFFICIENT_EVIDENCE" },
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+
+  assert.equal(analysis.recommendation, "Sitecore XM Cloud");
+  assert.equal(analysis.score, 84);
+  assert.match(analysis.recommendationReason, /best-qualified alternative to Adobe Experience Manager/i);
+  assert.doesNotMatch(analysis.recommendationReason, /Acquia DXP is the best/i);
+});
+
+test("rejects completion when every option has zero provenance-complete scorable evidence", () => {
+  const analysis = {
+    vendorScores: [
+      {
+        vendor: "Alpha",
+        score: 50,
+        weightedScores: [{
+          criterion: "Price",
+          evidence: [{ evidenceKind: "unverified", normalizedScore: 90 }],
+        }],
+      },
+      {
+        vendor: "Beta",
+        score: 50,
+        weightedScores: [{
+          criterion: "Features",
+          evidence: [{
+            evidenceKind: "quantitative",
+            normalizedScore: 80,
+            normalizationMethod: "direct_numeric",
+            sourceUrl: "https://example.com/beta",
+          }],
+        }],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.throws(
+    () => assertHasProvenanceCompleteScorableEvidence(analysis),
+    /Insufficient quantitative evidence/i,
+  );
+});
+
+test("accepts a feature-only decision only when qualitative row support is provenance-complete and uniquely decisive", () => {
+  const qualitativeFeatureEvidence = (vendor: string, claim: string, hashCharacter: string) => ({
+    sourceId: `docsha256:${hashCharacter.repeat(64)}`,
+    documentSha256: hashCharacter.repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 10 + claim.length,
+    sourceUrl: `https://official.example/${vendor.toLowerCase().replaceAll(" ", "-")}`,
+    exactClaim: claim,
+    metricSubject: vendor,
+    metricKey: "managed_service_capability",
+    metricBasis: "current official service capability",
+    evidenceKind: "qualitative",
+    supportDirection: "supports",
+    confidence: 90,
+    normalizationMethod: "qualitative_explicit",
+  });
+  const analysis = {
+    recommendation: "AEM",
+    recommendationReason: "Provisional lens winner — AEM leads the provenance-backed feature comparison.",
+    score: 80,
+    pricing: [],
+    features: [
+      {
+        dimension: "Managed service coverage",
+        values: { AEM: "Broad", Sitecore: "Limited" },
+        winner: "AEM",
+      },
+      {
+        dimension: "Implementation support",
+        values: { AEM: "Included", Sitecore: "Partner-led" },
+        winner: "AEM",
+      },
+    ],
+    vendorScores: [
+      {
+        vendor: "AEM",
+        score: 80,
+        qualificationStatus: "QUALIFIED_WITH_CONDITIONS",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [
+            qualitativeFeatureEvidence("AEM", "AEM provides managed service coverage.", "a"),
+            qualitativeFeatureEvidence("AEM", "AEM includes implementation support.", "b"),
+          ],
+        }],
+      },
+      {
+        vendor: "Sitecore",
+        score: 78,
+        qualificationStatus: "QUALIFIED",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{ evidenceKind: "unverified", exactClaim: "Sitecore may offer similar services." }],
+        }],
+      },
+    ],
+  } as unknown as AnalysisPayload;
+
+  assert.equal(validatedQualitativeLensDecision(analysis)?.winner, "AEM");
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(analysis));
+  assert.match(analysis.recommendationReason, /^Provisional lens winner —/);
+
+  const unverified = structuredClone(analysis);
+  for (const vendor of unverified.vendorScores) {
+    for (const criterion of vendor.weightedScores ?? []) {
+      for (const evidence of criterion.evidence ?? []) delete (evidence as { sourceId?: string }).sourceId;
+    }
+  }
+  assert.equal(validatedQualitativeLensDecision(unverified), null);
+  assert.throws(
+    () => assertHasProvenanceCompleteScorableEvidence(unverified),
+    /Insufficient quantitative evidence/i,
+  );
+});
+
+test("admits a feature-only best alternative through retrieved-document validation and normalization", () => {
+  const contentstackUrl = "https://www.contentstack.com/product";
+  const bynderUrl = "https://www.bynder.com/product";
+  const contentstackClaim = "Contentstack provides visual editing workflows for enterprise content teams.";
+  const bynderClaim = "Bynder provides digital asset library governance for brand teams.";
+  const documents: RetrievedEvidenceDocument[] = [
+    {
+      url: contentstackUrl,
+      finalUrl: contentstackUrl,
+      contentType: "text/html",
+      text: contentstackClaim,
+      sha256: "c".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+    {
+      url: bynderUrl,
+      finalUrl: bynderUrl,
+      contentType: "text/html",
+      text: bynderClaim,
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+  ];
+  const parsed = {
+    vendorScores: [
+      {
+        vendor: "Contentstack",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{
+            sourceUrl: contentstackUrl,
+            exactClaim: contentstackClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizationMethod: "qualitative_explicit",
+          }],
+        }],
+      },
+      {
+        vendor: "Bynder",
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          evidence: [{
+            sourceUrl: bynderUrl,
+            exactClaim: bynderClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+            normalizationMethod: "qualitative_explicit",
+          }],
+        }],
+      },
+    ],
+  };
+
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, documents), 2);
+  const vendorScores = parsed.vendorScores.map((vendor) => ({
+    vendor: vendor.vendor,
+    score: 50,
+    weightedScores: [{
+      criterion: "Meets Needs / Features",
+      weight: 25,
+      score: 50,
+      rationale: "Verified feature evidence.",
+      evidence: normalizeEvidenceRecords(
+        vendor.weightedScores[0].evidence,
+        "Meets Needs / Features",
+        25,
+        [contentstackUrl, bynderUrl],
+        [contentstackUrl, bynderUrl],
+      ),
+    }],
+  }));
+  const analysis = {
+    executiveSummary: "The feature comparison is complete.",
+    recommendation: "Adobe Experience Manager",
+    recommendationReason: "Compare the supported service features.",
+    score: 50,
+    pricing: [],
+    features: [
+      {
+        dimension: "Visual editing workflows",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Visual editing workflows",
+          Bynder: "Not established",
+        },
+        winner: "Contentstack",
+      },
+      {
+        dimension: "Enterprise content workflows",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Enterprise content teams",
+          Bynder: "Not established",
+        },
+        winner: "Contentstack",
+      },
+      {
+        dimension: "Digital asset governance",
+        values: {
+          "Adobe Experience Manager": "Anchor",
+          Contentstack: "Not established",
+          Bynder: "Digital asset library governance",
+        },
+        winner: "Bynder",
+      },
+    ],
+    vendorScores: [
+      { vendor: "Adobe Experience Manager", score: 50, weightedScores: [] },
+      ...vendorScores,
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyVendorScoreModel(analysis, {
+    prompt: "Compare Adobe Experience Manager and recommend the best alternative DXP.",
+    category: "Digital experience platforms",
+    market: "United States US",
+    globalServiceMarketAvailability: true,
+  });
+  applyBestAlternativeRecommendation(analysis, "Adobe Experience Manager");
+
+  assert.equal(analysis.vendorScores[1].qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+  assert.equal(analysis.recommendation, "Contentstack");
+  assert.match(analysis.recommendationReason, /provenance-validated competitor feature lens/i);
+  assert.doesNotThrow(() => assertHasProvenanceCompleteScorableEvidence(
+    analysis,
+    ["Adobe Experience Manager"],
+  ));
+});
+
+test("SearchAPI DuckDuckGo Light discovers only organic HTTPS page URLs, never snippets or ads", async () => {
+  const fakeFetch: typeof fetch = async (url, init) => {
+    const request = new URL(String(url));
+    assert.equal(request.origin, "https://www.searchapi.io");
+    assert.equal(request.searchParams.get("engine"), "duckduckgo_light");
+    assert.equal(request.searchParams.get("locale"), "au-en");
+    assert.equal(request.searchParams.get("q"), "Dynamics 365 Australia");
+    assert.equal(request.searchParams.has("api_key"), false);
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer test-key");
+    return new Response(JSON.stringify({
+      organic_results: [
+        { link: "https://learn.microsoft.com/en-au/dynamics365/", snippet: "Unverified price claim" },
+        { link: "http://unsafe.example/product", snippet: "Ignore this" },
+        { link: "https://learn.microsoft.com/en-au/dynamics365/" },
+        { link: "javascript:alert(1)" },
+      ],
+      ads: [{ link: "https://ads.example/" }],
+      knowledge_graph: { source: { link: "https://summary.example/" } },
+    }), { status: 200 });
+  };
+  assert.deepEqual(await searchDuckDuckGoLight("Dynamics 365 Australia", "AU", "test-key", fakeFetch), [
+    "https://learn.microsoft.com/en-au/dynamics365/",
+  ]);
+  await assert.rejects(() => searchDuckDuckGoLight("q", "AU", "test-key",
+    (async () => new Response("Unauthorized", { status: 401 })) as typeof fetch), /HTTP 401/);
+});
+
+test("SearchAPI discovery balances exact options and survives one failed query", async () => {
+  const queries: string[] = [];
+  const criteria = [
+    "Meets stated needs",
+    "Capabilities and integrations",
+    "Customer experience / NPS",
+    "Security and compliance",
+    "Price and total cost",
+    "Implementation and support",
+  ];
+  const urls = await discoverSearchApiSources(
+    ["Microsoft Dynamics 365", "Salesforce", "Oracle CX"], "CRM", "AU", "Australia",
+    criteria, "test-key",
+    async (query) => {
+      queries.push(query);
+      if (query.includes("Salesforce")) throw new Error("temporary search error");
+      const name = query.includes("Oracle") ? "oracle" : "microsoft";
+      return [`https://${name}.example/1`, `https://${name}.example/2`];
+    },
+  );
+  assert.equal(queries.length, 3);
+  assert.ok(queries.every((query) => (
+    query.includes("Australia")
+    && query.length <= 360
+    && criteria.every((criterion) => query.includes(criterion))
+  )));
+  assert.deepEqual(urls, [
+    "https://microsoft.example/1", "https://oracle.example/1",
+    "https://microsoft.example/2", "https://oracle.example/2",
+  ]);
+  await assert.rejects(() => discoverSearchApiSources(
+    ["Microsoft Dynamics 365", "Salesforce"], "CRM", "AU", "Australia", [], "test-key",
+    async () => { throw new Error("credentials unavailable"); },
+  ), /failed for every compared option/);
+});
+
+test("forces cited source acquisition when single-anchor software research starts with zero URLs", async () => {
+  const citedUrl = "https://official.example/contentstack/features";
+  const proseOnlyUrl = "https://invented.example/not-a-tool-citation";
+  const initialUrls: string[] = [];
+  assert.equal(requiresGeneralSoftwareSourceFallback(
+    "Compare Adobe Experience Manager against its competitors. Which is the best alternative for AEM?",
+    "Product or service comparison",
+    "Adobe Experience Manager",
+    initialUrls,
+  ), true);
+  assert.equal(requiresGeneralSoftwareSourceFallback(
+    "Compare Adobe Experience Manager vs Sitecore vs Contentful vs Optimizely vs Acquia for digital experience platforms",
+    "Digital experience platforms",
+    undefined,
+    [],
+  ), true);
+  assert.equal(requiresGeneralSoftwareSourceFallback(
+    "Compare Microsoft Dynamics 365 vs Salesforce vs Oracle CX vs SAP Sales Cloud for CRM",
+    "CRM",
+    undefined,
+    ["https://example.com/a", "https://example.com/b", "https://example.com/c", "https://example.com/d", "https://example.com/e"],
+  ), true);
+  assert.equal(requiresGeneralSoftwareSourceFallback(
+    "Compare Microsoft Dynamics 365 vs Salesforce for CRM",
+    "CRM",
+    undefined,
+    Array.from({ length: 8 }, (_, index) => `https://example.com/${index}`),
+  ), false);
+  let searchCalls = 0;
+  const admitted = await discoverGeneralSoftwareFallbackUrls(
+    ["Adobe Experience Manager", "Contentstack"],
+    async () => {
+      searchCalls += 1;
+      return [{
+        type: "message",
+        content: [{
+          type: "output_text",
+          text: `Ignore this prose URL: ${proseOnlyUrl}`,
+          annotations: [{ type: "url_citation", url: citedUrl }],
+        }],
+      }];
+    },
+  );
+  initialUrls.push(...admitted);
+
+  assert.equal(searchCalls, 1);
+  assert.deepEqual(initialUrls, [citedUrl]);
+  assert.equal(initialUrls.includes(proseOnlyUrl), false);
+
+  const exactClaim = "Contentstack provides visual editing workflows for enterprise content teams.";
+  const quantitativeClaim = "Contentstack monthly fee is USD 99 per month.";
+  const transportDocuments = new Map<string, RetrievedEvidenceDocument>([[
+    citedUrl,
+    {
+      url: citedUrl,
+      finalUrl: citedUrl,
+      contentType: "text/html",
+      text: `${quantitativeClaim}\n${exactClaim}`,
+      sha256: "e".repeat(64),
+      retrievedAt: "2026-09-23T00:00:00.000Z",
+      truncated: false,
+    },
+  ]]);
+  const retrieved = initialUrls.flatMap((url) => transportDocuments.get(url) ?? []);
+  const parsed = {
+    vendorScores: [{
+      vendor: "Contentstack",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [
+          {
+            sourceUrl: citedUrl,
+            exactClaim,
+            evidenceKind: "qualitative",
+            supportDirection: "supports",
+            confidence: 90,
+          },
+          {
+            sourceUrl: citedUrl,
+            exactClaim: quantitativeClaim,
+            metricKey: "monthly_fee",
+            rawMetricValue: 99,
+            rawMetricUnit: "USD",
+            evidenceKind: "quantitative",
+            supportDirection: "supports",
+            confidence: 90,
+          },
+        ],
+      }],
+    }],
+  };
+
+  assert.equal(retrieved.length, 1);
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, retrieved), 1);
+  assert.equal(validateQuantitativeEvidenceAgainstDocuments(parsed, retrieved), 1);
+  const evidence = normalizeEvidenceRecords(
+    parsed.vendorScores[0].weightedScores[0].evidence,
+    "Meets Needs / Features",
+    25,
+    initialUrls,
+    initialUrls,
+  );
+  const qualification = calculateVendorScoreExtension({
+    vendor: "Contentstack",
+    weightedScores: [{ criterion: "Meets Needs / Features", evidence }],
+  }, {
+    market: "United States US",
+    globalServiceMarketAvailability: true,
+  });
+
+  assert.equal(evidence[0]?.sourceId, `docsha256:${"e".repeat(64)}`);
+  assert.equal(evidence[1]?.normalizationMethod, "retrieved_document_metric");
+  assert.equal(qualification.qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+});
+
+test("vehicle value and seven-year ownership do not become card fees or five-year costs", () => {
+  const prompt = "Compare Mahindra XUV700 vs Tata Safari diesel automatic in India for a seven-year ownership period across on-road price, fuel and servicing cost, performance and value for money.";
+  const criteria = parsePrompt(prompt).criteria;
+  assert.ok(criteria.includes("Value for money"));
+  assert.ok(criteria.includes("Ownership cost"));
+  assert.ok(criteria.includes("Performance"));
+  assert.ok(!criteria.includes("Annual fee and total card cost"));
+  assert.ok(!criteria.includes("Five-year ownership cost"));
+});
+
+test("does not attach a sibling product's qualitative claim to another compared option", () => {
+  const url = "https://www.example.com/content-products";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Contentful",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{
+          sourceUrl: url,
+          exactClaim: "Contentstack provides visual editing workflows for enterprise content teams.",
+          evidenceKind: "qualitative",
+          supportDirection: "supports",
+        }],
+      }],
+    }],
+  };
+  const documents: RetrievedEvidenceDocument[] = [{
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text: "Contentstack provides visual editing workflows for enterprise content teams.",
+    sha256: "d".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+
+  assert.equal(validateQualitativeEvidenceAgainstDocuments(parsed, documents), 0);
+  assert.equal(parsed.vendorScores[0].weightedScores[0].evidence[0].evidenceKind, "unverified");
+  assert.equal("documentSha256" in parsed.vendorScores[0].weightedScores[0].evidence[0], false);
+});
+
+test("selects a sole eligible best alternative without treating its own score as a tie gap", () => {
+  const analysis = {
+    executiveSummary: "Anchor leads overall.",
+    recommendation: "Anchor",
+    recommendationReason: "Anchor leads overall.",
+    score: 92,
+    vendorScores: [
+      { vendor: "Anchor", score: 92, modelScore: 92, qualificationStatus: "QUALIFIED" },
+      { vendor: "Only Alternative", score: 0, modelScore: 0, qualificationStatus: "QUALIFIED_WITH_CONDITIONS" },
+    ],
+  } as unknown as AnalysisPayload;
+
+  applyBestAlternativeRecommendation(analysis, "Anchor");
+
+  assert.equal(analysis.recommendation, "Only Alternative");
+  assert.doesNotMatch(analysis.recommendationReason, /practical tie/i);
+});
+
 test("treats a domain brand plus other ecommerce sites as competitor discovery", () => {
   const parsed = parsePrompt(
     "Compare Cardekho.com with other e-commerce sites. Which one is a strong contender for cardekho.com?",
@@ -4289,6 +7677,53 @@ test("keeps at most three alternatives and excludes names overlapping compared v
   ]);
 });
 
+test("rejects alias duplicates among outside alternatives", () => {
+  const insights = sanitizeOutsideAlternativeInsights([
+    "Alternative outside comparison — Acme Atlas: First candidate.",
+    "Alternative outside comparison — Acme Atlas edition: Same product.",
+    "Alternative outside comparison — Nova Orbit: Different candidate.",
+  ], ["Existing One", "Existing Two"]);
+  assert.equal(insights.length, 2);
+  assert.match(insights[1]!, /Nova Orbit/);
+});
+
+test("grounds non-vehicle alternatives in permitted local product pages and explicit requirements", () => {
+  const documents = [
+    { url: "https://acme.com.au/products/atlas", finalUrl: "https://acme.com.au/products/atlas", text: "Acme Atlas is an enterprise product with SOC2 compliance." },
+    { url: "https://nova.com.au/products/orbit", finalUrl: "https://nova.com.au/products/orbit", text: "Nova Orbit is an enterprise product with SOC2 compliance." },
+    { url: "https://rogue.com/us/products/stray", finalUrl: "https://rogue.com/us/products/stray", text: "Rogue Stray has SOC2 compliance in the US." },
+  ] as any;
+  const insights = [
+    "Alternative outside comparison — Existing One Plus: Already compared. https://existing.com.au/plus",
+    "Alternative outside comparison — Acme Atlas: Claimed to be best. https://acme.com.au/products/atlas",
+    "Alternative outside comparison — Acme Atlas edition: Duplicate. https://acme.com.au/products/atlas",
+    "Alternative outside comparison — Rogue Stray: Wrong country. https://rogue.com/us/products/stray",
+    "Alternative outside comparison — Nova Orbit: Valid. https://nova.com.au/products/orbit",
+  ];
+  const grounded = groundOutsideAlternativeInsights(insights, ["Existing One", "Existing Two"], documents, "AU", ["Required SOC2"]);
+  assert.equal(grounded.length, 2);
+  assert.match(grounded[0]!, /Acme Atlas: Fit:.*Trade-off:.*Required SOC2/);
+  assert.match(grounded[1]!, /Nova Orbit: Fit:.*Trade-off:/);
+  assert.doesNotMatch(grounded.join(" "), /Claimed to be best|Rogue Stray|Acme Atlas edition/);
+  assert.deepEqual(groundOutsideAlternativeInsights(insights, ["Existing One"], documents, "IN", ["Required SOC2"]), []);
+  assert.deepEqual(groundOutsideAlternativeInsights(insights, ["Existing One"], documents, "AU", ["Required ISO27001"]), []);
+});
+
+test("shows one supported outside vehicle when no second option qualifies", () => {
+  const report = { insights: ["Preserve the buyer's risk note."] };
+  ensureVehicleOutsideAlternatives(
+    report,
+    ["Tesla Model Y", "Ford Mustang Mach-E", "Hyundai IONIQ 5"],
+    "US",
+    "Compare these electric SUVs in the United States.",
+  );
+  const candidates = report.insights.filter((insight) => insight.startsWith("Alternative outside comparison —"));
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0]!, /Kia EV9: Fit:.*Trade-off:/);
+  assert.match(report.insights.join(" "), /Only one.*no second model was invented/);
+  assert.ok(report.insights.includes("Preserve the buyer's risk note."));
+});
+
 test("requires diverse expert or survey evidence when official vehicle sources are not comparable", () => {
   const instructions = vehicleIndependentEvidenceInstructions(true);
 
@@ -4310,6 +7745,886 @@ test("requires SOAR findings to give product and buyer actions instead of framew
   assert.match(instructions, /Never return instructions/i);
 });
 
+test("competitive frameworks retain only quoted option-specific findings verified against retrieved documents", () => {
+  const url = "https://example.org/alpha";
+  const marketUrl = "https://example.org/market";
+  const internal = "Alpha operates certified service locations in four regions.";
+  const external = "Alpha customers can terminate their contracts after twelve months.";
+  const market = "Market demand for regional service expanded during the year.";
+  const documents = [
+    { url, finalUrl: url, text: `${internal} ${external}`, contentType: "text/html",
+      sha256: "a".repeat(64), retrievedAt: "2026-04-17T00:00:00.000Z", truncated: false },
+    { url: marketUrl, finalUrl: marketUrl, text: market, contentType: "text/html",
+      sha256: "b".repeat(64), retrievedAt: "2026-04-17T00:00:00.000Z", truncated: false },
+  ];
+  const source = {
+    Strengths: [`Alpha: Certified reach reduces deployment risk; "${internal}" (${url})`],
+    "PESTLE — Legal": [`Alpha: Annual exit terms lower lock-in; "${external}" ${url}`],
+    "TOWS — SO": [
+      `Alpha: Use service coverage to pursue regional growth; "${internal}" ${url} "${market}" ${marketUrl}`,
+      `Beta: Make a growth plan; "${internal}" ${url} "${market}" ${marketUrl}`,
+      `Alpha: Expand tomorrow; "${internal}" ${url}`,
+    ],
+    "Porter's Five Forces — Buyer power": [
+      `Alpha: Annual termination gives customers leverage; "${external}" ${url}`,
+      `Beta: Buyers can switch easily; "${external}" ${url}`,
+      `Alpha: Buyer power is high; "Alpha customers can terminate contracts immediately." ${url}`,
+      `Alpha: Assess buyer power; "${external}" ${url}`,
+    ],
+  };
+  const result = retainDocumentBackedCompetitiveFrameworks(source, ["Alpha", "Beta"], documents);
+  assert.deepEqual(result.Strengths, source.Strengths);
+  assert.deepEqual(result["PESTLE — Legal"], source["PESTLE — Legal"]);
+  assert.deepEqual(result["TOWS — SO"], [source["TOWS — SO"][0]]);
+  assert.deepEqual(result["Porter's Five Forces — Buyer power"], [source["Porter's Five Forces — Buyer power"][0]]);
+  assert.deepEqual(retainDocumentBackedCompetitiveFrameworks(source, ["Alpha", "Beta"], [])["TOWS — SO"], []);
+  const scores = [{ vendor: "Alpha", vrio: {
+    value: { status: "strong", rationale: `"${internal}" ${url}` },
+    rarity: { status: "partial", rationale: `An unsupported rare capability (${url})` },
+    imitability: { status: "weak", rationale: "" },
+    organization: { status: "weak", rationale: "" },
+    implication: "Test the regional rollout.",
+  } }] as AnalysisPayload["vendorScores"];
+  retainDocumentBackedVrio(scores, documents);
+  assert.match(scores[0]!.vrio!.value.rationale, /certified service locations/);
+  assert.equal(scores[0]!.vrio!.rarity.rationale, "");
+});
+
+test("returns an honest unscored diesel brand brief when research found no decision-grade evidence", () => {
+  const prompt = "Compare Mahindra vs Tata Diesel vehicles in India. Which one of them the consumers can choose? The consumers look for value for money, minimum maintenance, performance and better resale value.";
+  assert.equal(isDeterministicIndiaDieselComparison(prompt, ["Mahindra", "Tata"], "IN"), false);
+  assert.deepEqual(deterministicIndiaDieselEvidenceUrls(prompt, ["Mahindra", "Tata"], "IN"), []);
+  assert.equal(isDeterministicIndiaDieselComparison(
+    "Compare Mahindra XUV700 vs Tata Safari diesel in India",
+    ["Mahindra XUV700", "Tata Safari diesel"], "IN",
+  ), true);
+  const result = vehicleEvidenceGapBrief({
+    prompt,
+    vendors: ["Mahindra", "Tata"],
+    criteria: ["Value for money", "Maintenance", "Performance", "Resale value"],
+    urls: [],
+  });
+  assert.equal(result.recommendation, "No qualified option");
+  assert.equal(result.score, 0);
+  assert.deepEqual(result.vendorScores.map((row) => row.vendor), ["Mahindra", "Tata"]);
+  assert.ok(result.vendorScores.every((row) => row.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+  assert.ok(result.vendorScores.every((row) => row.weightedScores?.every((weighted) => weighted.evidence?.length === 0)));
+  assert.match(result.executiveSummary, /brand-wide winner or purchase score is supported/);
+  assert.match(result.executiveSummary, /resale value/i);
+  assert.match(result.nextSteps.join(" "), /written on-road quotes|written on-road/i);
+  assert.doesNotMatch(JSON.stringify(result), /Best overall fit|Strong alternative|faster path to value|Approve migration and production cutover|Supported by Mahindra/);
+  assert.doesNotThrow(() => CreateGuestComparisonResponse.parse({
+    ...result, prompt, vendors: ["Mahindra", "Tata"], criteria: [], urls: [],
+    comparisonIdentity: buildComparisonIdentity(prompt, result.category, ["Mahindra", "Tata"]),
+    sourceAvailability: [],
+    createdAt: new Date().toISOString(),
+    confirmedRecommendation: { status: "NO_CONFIRMED_RECOMMENDATION", option: null, score: null, basis: "NONE", rationale: "Not established" },
+    alternatives: [],
+  }));
+});
+
+test("balances cited Indian diesel-brand sources and excludes another market before retrieval", () => {
+  const market = inferResearchMarket("Compare Indian diesel brands", ["Mahindra", "Tata"], "IN");
+  const sources = selectBalancedIndiaDieselBrandSources([
+    { scope: "Mahindra", urls: [
+      "https://auto.mahindra.com/suv/diesel",
+      "https://auto.mahindra.com/ownership/service",
+      "https://auto.mahindra.com/ownership/warranty",
+      "https://auto.mahindra.com/price",
+      "https://auto.mahindra.com/portfolio",
+      "https://auto.mahindra.com/more",
+      "https://www.mahindra.com.au/cars",
+    ] },
+    { scope: "Tata", urls: [
+      "https://cars.tatamotors.com/suv/diesel",
+      "https://cars.tatamotors.com/service",
+    ] },
+    { scope: "resale", urls: ["https://www.autocarindia.com/used-cars/mahindra-tata-resale"] },
+  ], ["Mahindra", "Tata"], market);
+  assert.ok(sources.some((url) => url.includes("mahindra.com/")));
+  assert.ok(sources.some((url) => url.includes("tatamotors.com/")));
+  assert.ok(sources.some((url) => url.includes("autocarindia.com/")));
+  assert.equal(sources.filter((url) => url.includes("auto.mahindra.com/")).length, 4);
+  assert.ok(sources.indexOf("https://cars.tatamotors.com/suv/diesel") < 5);
+  assert.ok(sources.every((url) => !url.includes(".com.au")));
+});
+
+test("brand-wide diesel evidence excludes one-model prices and shows sourced context with gaps", () => {
+  const prompt = "Compare Mahindra and Tata diesel vehicles in India for value, maintenance, performance and resale";
+  const report = vehicleEvidenceGapBrief({
+    prompt, vendors: ["Mahindra", "Tata"], criteria: ["Value", "Maintenance", "Performance", "Resale"], urls: [],
+  });
+  report.vendorScores[0]!.weightedScores![0]!.evidence = [{
+    ...qualificationEvidence("Mahindra", 95, 95, "a"),
+    metricKey: "price",
+    exactClaim: "Mahindra XUV700 price ₹20 lakh",
+  }];
+  suppressVehicleModelEvidenceForBrandComparison(report);
+  assert.deepEqual(report.vendorScores[0]!.weightedScores![0]!.evidence, []);
+  const doc = (url: string, text: string) => ({
+    url, finalUrl: url, contentType: "text/html", text, sha256: "a".repeat(64),
+    retrievedAt: "2026-09-24T00:00:00Z", truncated: false,
+  });
+  addIndiaDieselBrandSourceContext(report, [
+    doc("https://auto.mahindra.com/", "Mahindra diesel SUV engine performance and price. Related: Tata diesel"),
+    doc("https://cars.tatamotors.com/", "Tata diesel SUV price and service warranty"),
+    doc("https://www.autocarindia.com/mahindra-resale-study", "Mahindra XUV700 resale depreciation study"),
+  ], ["Mahindra", "Tata"]);
+  assert.match(report.pricing[0]!.values.Mahindra!, /auto\.mahindra\.com/);
+  assert.match(report.pricing[0]!.values.Tata!, /cars\.tatamotors\.com/);
+  assert.match(report.features.find((row) => row.dimension === "Maintenance")!.values.Tata!, /cars\.tatamotors\.com/);
+  assert.match(report.features.find((row) => row.dimension === "Resale value")!.values.Mahindra!, /autocarindia\.com/);
+  assert.match(report.features.find((row) => row.dimension === "Resale value")!.values.Tata!, /No retrievable/);
+  assert.ok([...report.pricing, ...report.features].every((row) => row.winner === "Not established"));
+  assert.equal(report.score, 0);
+});
+
+test("preserves comparable manufacturer-level observations and leaves other vehicle routes unchanged", () => {
+  const prompt = "Compare Mahindra and Tata diesel vehicles in India";
+  assert.equal(isIndiaDieselBrandEvidenceRoute(true, "IN", prompt), true);
+  assert.equal(isIndiaDieselBrandEvidenceRoute(true, "AU", prompt), false);
+  assert.equal(isIndiaDieselBrandEvidenceRoute(true, "IN", "Compare Mahindra and Tata electric vehicles"), false);
+  assert.equal(isIndiaDieselBrandEvidenceRoute(false, "IN", prompt), false);
+  const report = vehicleEvidenceGapBrief({ prompt, vendors: ["Mahindra", "Tata"], criteria: [], urls: [] });
+  for (const [index, row] of report.vendorScores.entries()) {
+    row.weightedScores![0]!.evidence = [{
+      ...qualificationEvidence(row.vendor, index ? 30 : 20, 90, index ? "b" : "a"),
+      metricKey: "market_share",
+      metricBasis: "market_share:percent:india_2026",
+      rawMetricUnit: "percent",
+      exactClaim: `${row.vendor} brand market share in India during 2026 was ${index ? 30 : 20}%.`,
+    }];
+  }
+  suppressVehicleModelEvidenceForBrandComparison(report);
+  assert.equal(report.vendorScores[0]!.weightedScores![0]!.evidence?.length, 1);
+  assert.equal(report.vendorScores[1]!.weightedScores![0]!.evidence?.length, 1);
+  report.vendorScores[1]!.weightedScores![0]!.evidence![0]!.metricBasis = "market_share:percent:india_2025";
+  suppressVehicleModelEvidenceForBrandComparison(report);
+  assert.ok(report.vendorScores.every((row) => !row.weightedScores![0]!.evidence?.length));
+});
+
+test("withholds a brand winner when a valid comparison has no verified differentiator", () => {
+  const prompt = "Compare Mahindra vs Tata diesel vehicles in India for value, maintenance, performance and resale";
+  const report = vehicleEvidenceGapBrief({
+    prompt, vendors: ["Mahindra", "Tata"], criteria: ["Value", "Maintenance", "Performance", "Resale"], urls: [],
+  });
+  applyProvisionalChoice(report, prompt);
+  assert.equal(report.recommendation, "No qualified option");
+  assert.equal(report.score, 0);
+  assert.match(report.recommendationReason, /^No defensible winner:/);
+  assert.ok(report.vendorScores.every((row) => row.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+  assert.doesNotMatch(report.recommendationReason, /Mahindra.*(?:better resale|better performance)/i);
+});
+
+test("the buyer's controlling priority decides which verified lens is eligible", () => {
+  const valuePrompt = "Compare Alpha and Beta electric cars. Value for money is most important; assess charging and features too.";
+  const featuresPrompt = "Compare Alpha and Beta electric cars. Features and technology are most important; assess value too.";
+  assert.equal(controllingDecisionLens(valuePrompt), "value");
+  assert.equal(controllingDecisionLens(featuresPrompt), "features");
+  assert.ok(
+    (explicitDecisionPriorityProfile(featuresPrompt)?.weights.find((entry) => entry.criterion === "Meets Needs / Features")?.weight ?? 0)
+    > (explicitDecisionPriorityProfile(featuresPrompt)?.weights.find((entry) => entry.criterion === "Value for Money")?.weight ?? 0),
+  );
+  const report = vehicleEvidenceGapBrief({
+    prompt: valuePrompt, vendors: ["Alpha", "Beta"], criteria: ["Value", "Charging"], urls: [],
+  });
+  for (const [index, vendor] of report.vendorScores.entries()) {
+    vendor.weightedScores = [{
+      criterion: "Value for Money", weight: 70, score: index ? 90 : 65, rationale: "Comparable price",
+      evidence: [{ ...qualificationEvidence(vendor.vendor, index ? 90 : 65, 90, index ? "b" : "a"), metricKey: "price" }],
+    }, {
+      criterion: "Meets Needs / Features", weight: 30, score: index ? 60 : 95, rationale: "Comparable charging",
+      evidence: [{ ...qualificationEvidence(vendor.vendor, index ? 60 : 95, 90, index ? "b" : "a"), metricKey: "charging_power" }],
+    }];
+  }
+  applyProvisionalChoice(report, valuePrompt);
+  assert.equal(report.recommendation, "Beta");
+  assert.equal(report.score, 0);
+  report.recommendation = "No qualified option";
+  applyProvisionalChoice(report, featuresPrompt);
+  assert.equal(report.recommendation, "Alpha");
+  assert.equal(report.score, 0);
+});
+
+test("a secondary charging lead cannot make a value-focused brand winner", () => {
+  const prompt = "Compare BYD and Tesla electric cars in Australia. Value for money is most important; assess charging too.";
+  const report = vehicleEvidenceGapBrief({ prompt, vendors: ["BYD", "Tesla"], criteria: ["Value"], urls: [] });
+  report.recommendation = "Tesla";
+  report.score = 55;
+  for (const [index, row] of report.vendorScores.entries()) {
+    row.qualificationStatus = "QUALIFIED";
+    row.weightedScores = [{
+      criterion: "Meets Needs / Features", weight: 30, score: index ? 90 : 70, rationale: "Charging",
+      evidence: [{ ...qualificationEvidence(row.vendor, index ? 90 : 70, 90, index ? "b" : "a"), metricKey: "charging_power" }],
+    }];
+  }
+  applyProvisionalChoice(report, prompt);
+  assert.equal(report.recommendation, "No qualified option");
+  assert.equal(report.score, 0);
+});
+
+test("Australian car-choice priorities resolve comparable named models, not brand-wide winners", () => {
+  const bydTesla = australianPriorityEvPairing(
+    "Compare BYD and Tesla electric cars in Australia. Software, driver assistance and charging are top priority.",
+    ["BYD", "Tesla"], "AU",
+  );
+  assert.deepEqual(bydTesla?.vendors, ["BYD SEALION 7", "Tesla Model Y"]);
+  assert.ok(bydTesla?.sourceUrls.every((url) => /(?:\.au\/|\/en_au\/)/.test(url)));
+  assert.deepEqual(australianPriorityEvPairing(
+    "Compare Hyundai and Kia electric cars in Australia. Technology is top priority.",
+    ["Hyundai", "Kia"], "AU",
+  )?.vendors, ["Hyundai IONIQ 5", "Kia EV5"]);
+  assert.equal(australianPriorityEvPairing(
+    "Compare BYD and Tesla electric cars in Australia at brand level for their market share.",
+    ["BYD", "Tesla"], "AU",
+  ), null);
+  assert.equal(australianPriorityEvPairing(
+    "Compare BYD and Tesla electric cars in India. Technology is top priority.",
+    ["BYD", "Tesla"], "IN",
+  ), null);
+});
+
+test("technology and value priorities use different comparable model facts for two pairs", () => {
+  const pairs = [
+    { models: ["BYD SEALION 7", "Tesla Model Y"], tech: [2, 4, 7, 9, 150, 250], price: [55000, 60000], techWinner: "Tesla Model Y", valueWinner: "BYD SEALION 7" },
+    { models: ["Kia EV5", "Hyundai IONIQ 5"], tech: [3, 5, 8, 9, 150, 230], price: [55000, 65000], techWinner: "Hyundai IONIQ 5", valueWinner: "Kia EV5" },
+  ];
+  for (const { models, tech, price, techWinner, valueWinner } of pairs) {
+    const techPrompt = `Compare ${models.join(" and ")} electric cars in Australia. Software, driver assistance and charging are top priority.`;
+    const valuePrompt = `Compare ${models.join(" and ")} electric cars in Australia. Price and value for money are top priority; also consider software and charging.`;
+    const documents: RetrievedEvidenceDocument[] = [];
+    const report = vehicleEvidenceGapBrief({ prompt: techPrompt, vendors: models, criteria: [], urls: [] });
+    report.vendorScores.forEach((row, index) => {
+      const metrics = [
+        { key: "software_update_frequency", value: tech[index]!, unit: "updates/year", basis: "software_update_frequency:updates/year:annual_2026" },
+        { key: "adas_feature_count", value: tech[index + 2]!, unit: "features", basis: "adas_feature_count:features:like_for_like_variant" },
+        { key: "charging_power", value: tech[index + 4]!, unit: "kw", basis: "charging_power:kw:dc" },
+        { key: "price", value: price[index]!, unit: "aud", basis: "price:aud:manufacturer_list_price" },
+      ];
+      const text = `${row.vendor} current Australian model\n${metrics.map((metric) => `${row.vendor} ${metric.key} ${metric.value} ${metric.unit}`).join("\n")}`;
+      const url = `https://official.example.au/${row.vendor.toLowerCase().replaceAll(" ", "-")}`;
+      const sha256 = (index ? "b" : "a").repeat(64);
+      documents.push({
+        url, finalUrl: url, text, sha256, contentType: "text/plain",
+        retrievedAt: "2026-09-24T00:00:00Z", truncated: false,
+      });
+      row.weightedScores = [{
+        criterion: "Meets Needs / Features", weight: 50, score: 50, rationale: "Verified model facts",
+        evidence: metrics.map((metric) => {
+          const exactClaim = `${row.vendor} ${metric.key} ${metric.value} ${metric.unit}`;
+          const start = text.indexOf(exactClaim);
+          return {
+            ...qualificationEvidence(row.vendor, 50, 90, index ? "b" : "a"),
+            sourceUrl: url, exactClaim, sourceTextStart: start, sourceTextEnd: start + exactClaim.length,
+            metricKey: metric.key, metricBasis: metric.basis, rawMetricUnit: metric.unit,
+            rawMetricValue: metric.value,
+            normalizationDirection: metric.key === "price" ? "lower_is_better" as const : "higher_is_better" as const,
+          };
+        }),
+      }];
+    });
+    const techDecision = vehiclePriorityEvidenceDecision(report, techPrompt, documents)!;
+    assert.equal(techDecision.winner, techWinner);
+    assert.deepEqual(techDecision.compared, ["software", "driver assistance", "charging"]);
+    assert.deepEqual(techDecision.missing, []);
+    const valueDecision = vehiclePriorityEvidenceDecision(report, valuePrompt, documents)!;
+    assert.equal(valueDecision.winner, valueWinner);
+    assert.deepEqual(valueDecision.compared, ["purchase price"]);
+    applyVehiclePriorityEvidenceDecision(report, techPrompt, documents);
+    assert.equal(report.recommendation, techWinner);
+    assert.equal(report.score, 0);
+    assert.match(report.recommendationReason, /conditional priority preference, not verified overall or manufacturer-wide superiority/i);
+    assert.ok(report.vendorScores.every((row) => row.score === 0));
+    applyVehiclePriorityEvidenceDecision(report, valuePrompt, documents);
+    assert.equal(report.recommendation, valueWinner);
+    assert.match(report.recommendationReason, /purchase price/);
+  }
+});
+
+test("missing requested features stay neutral and mandatory failures block a car priority preference", () => {
+  const prompt = "Compare Kia EV5 and Hyundai IONIQ 5 electric cars in Australia. Software, driver assistance and charging are top priority.";
+  const report = vehicleEvidenceGapBrief({ prompt, vendors: ["Kia EV5", "Hyundai IONIQ 5"], criteria: [], urls: [] });
+  const documents = report.vendorScores.map((row, index): RetrievedEvidenceDocument => {
+    const text = `${row.vendor} Australian model DC charging ${index ? 220 : 150} kW`;
+    const sha256 = (index ? "b" : "a").repeat(64);
+    row.weightedScores = [{
+      criterion: "Meets Needs / Features", weight: 25, score: 50, rationale: "DC charging",
+      evidence: [{
+        ...qualificationEvidence(row.vendor, 50, 90, index ? "b" : "a"),
+        exactClaim: text, sourceTextStart: 0, sourceTextEnd: text.length,
+        metricKey: "charging_power", metricBasis: "charging_power:kw:dc",
+        rawMetricValue: index ? 220 : 150, rawMetricUnit: "kw",
+      }],
+    }];
+    return {
+      url: `https://official.example.au/${index}`, finalUrl: `https://official.example.au/${index}`,
+      text, sha256, contentType: "text/plain", retrievedAt: "2026-09-24T00:00:00Z", truncated: false,
+    };
+  });
+  report.vendorScores.forEach((row, index) => {
+    row.weightedScores![0]!.evidence![0]!.sourceUrl = documents[index]!.url;
+  });
+  applyVehiclePriorityEvidenceDecision(report, prompt, documents);
+  assert.equal(report.recommendation, "Hyundai IONIQ 5");
+  assert.match(report.recommendationReason, /software, driver assistance evidence is missing/i);
+  assert.doesNotMatch(report.recommendationReason, /technology leader|brand-wide advantage/i);
+  report.vendorScores[1]!.qualificationStatus = "NOT_QUALIFIED";
+  report.vendorScores[1]!.qualificationGates = [{
+    gate: "Local availability", mandatory: true, status: "FAIL",
+    rationale: "Unavailable", evidenceSourceIds: [],
+  }];
+  applyVehiclePriorityEvidenceDecision(report, prompt, documents);
+  assert.equal(report.recommendation, "No qualified option");
+  assert.equal(report.vendorScores[1]?.qualificationStatus, "NOT_QUALIFIED");
+  assert.match(report.recommendationReason, /mandatory requirement failed/i);
+  report.vendorScores[1]!.qualificationStatus = "INSUFFICIENT_EVIDENCE";
+  report.vendorScores[1]!.qualificationGates = [];
+  applyVehiclePriorityEvidenceDecision(report, prompt, []);
+  assert.equal(report.recommendation, "No qualified option");
+  assert.equal(report.score, 0);
+});
+
+test("advisory preference names a sourced priority fit without inventing a score", async () => {
+  const prompt = "Compare BYD and Tesla electric cars in Australia. Value for money is most important.";
+  const report = vehicleEvidenceGapBrief({ prompt, vendors: ["BYD", "Tesla"], criteria: ["Value"], urls: [] });
+  const quote = "BYD Atto 2 starts from $33,990 in this listed Australian price guide.";
+  const url = "https://example.com/byd-australia-price";
+  const document = {
+    url, finalUrl: url, text: quote, contentType: "text/plain", sha256: "a".repeat(64),
+    retrievedAt: "2026-09-24T00:00:00Z", truncated: false,
+  } as RetrievedEvidenceDocument;
+  const teslaDocument = {
+    ...document, url: "https://example.com/tesla-australia", finalUrl: "https://example.com/tesla-australia",
+    text: "Tesla offers current Australian electric-car models.",
+  } as RetrievedEvidenceDocument;
+  const ai = {
+    chat: { completions: { create: async () => ({
+      choices: [{ message: { content: JSON.stringify({ vendor: "BYD", url, quote }) } }],
+    }) } },
+  };
+  report.features = [{
+    dimension: "Unverified equipment", values: { BYD: "Unknown", Tesla: "Unknown" }, winner: "Tesla",
+  }];
+  report.insights = [
+    "Alternative outside comparison — Kia EV6: Suggested current option; confirm fit before deciding.",
+    "Outside-alternative coverage — One potential option is listed.",
+  ];
+  report.nextSteps = ["Choose Tesla immediately."];
+  await applyAdvisoryPriorityPreference(report, prompt, [document, teslaDocument], ai as any);
+  assert.equal(report.recommendation, "BYD");
+  assert.equal(report.score, 0);
+  assert.match(report.recommendationReason, /advisory preference, not a verified overall win/i);
+  assert.doesNotMatch(report.recommendationReason, /\$33,990/);
+  assert.match(report.recommendationReason, /comparative commercial claims were not verified/i);
+  assert.equal(report.vendorScores[0]?.qualificationStatus, "INSUFFICIENT_EVIDENCE");
+  assert.ok(report.vendorScores.every((row) => row.score === 0));
+  assert.equal(report.features[0]?.winner, "Not established");
+  assert.ok(report.nextSteps.every((step) => !/Choose Tesla immediately/.test(step)));
+  assert.ok(report.insights.some((insight) => insight.startsWith("Alternative outside comparison — Kia EV6:")));
+  assert.ok(report.insights.some((insight) => insight.startsWith("Outside-alternative coverage —")));
+  const unsupported = vehicleEvidenceGapBrief({ prompt, vendors: ["BYD", "Tesla"], criteria: ["Value"], urls: [] });
+  const inventedAi = {
+    chat: { completions: { create: async () => ({
+      choices: [{ message: { content: JSON.stringify({ vendor: "Tesla", url, quote: "Tesla has the lowest price anywhere." }) } }],
+    }) } },
+  };
+  await applyAdvisoryPriorityPreference(unsupported, prompt, [document, teslaDocument], inventedAi as any);
+  assert.equal(unsupported.recommendation, "No qualified option");
+  assert.doesNotMatch(unsupported.recommendationReason, /lowest price anywhere|example\.com/);
+  assert.equal(unsupported.score, 0);
+});
+
+test("quick indicative scores use only requested criterion rows and disclose that they are unverified", () => {
+  const report = vehicleEvidenceGapBrief({
+    prompt: "Compare Alpha and Beta for features and value for money.",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Features", "Value for Money"],
+    urls: [],
+  });
+  const raw = {
+    vendorScores: [
+      {
+        vendor: "Alpha",
+        score: 99,
+        weightedScores: [
+          { criterion: "Features", score: 80, rationale: "Current feature fit." },
+          { criterion: "Value for Money", score: 60, rationale: "Current value fit." },
+          { criterion: "Support", score: 0, rationale: "Not requested." },
+        ],
+      },
+      {
+        vendor: "Beta",
+        score: 1,
+        weightedScores: [
+          { criterion: "Features", score: 90, rationale: "Current feature fit." },
+          { criterion: "Value for Money", score: 70, rationale: "Current value fit." },
+          { criterion: "Support", score: 100, rationale: "Not requested." },
+        ],
+      },
+    ],
+  } as unknown as Partial<AnalysisPayload>;
+  applyQuickIndicativeScores(report, raw, ["Features", "Value for Money"], "2026-09-24", [
+    { criterion: "Features", weight: 3 },
+    { criterion: "Value for Money", weight: 1 },
+  ]);
+  assert.equal(report.vendorScores.find((row) => row.vendor === "Alpha")?.score, 75);
+  assert.equal(report.vendorScores.find((row) => row.vendor === "Beta")?.score, 85);
+  assert.equal(report.recommendation, "Beta");
+  assert.match(report.recommendationReason, /not been independently verified/i);
+  assert.match(report.insights[0] ?? "", /2026-09-24/);
+  assert.ok(report.vendorScores.every((row) => row.qualificationStatus === undefined));
+  assert.deepEqual(
+    report.vendorScores.find((row) => row.vendor === "Alpha")?.weightedScores?.map((row) => row.criterion),
+    ["Features", "Value for Money"],
+  );
+});
+
+test("quick indicative scoring never turns missing or incomplete ratings into neutral 50s", () => {
+  const report = vehicleEvidenceGapBrief({
+    prompt: "Compare Alpha and Beta for features and value for money.",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Features", "Value for Money"],
+    urls: [],
+  });
+  const raw = {
+    vendorScores: [
+      { vendor: "Alpha", score: 96, weightedScores: [] },
+      { vendor: "Beta", score: 4, weightedScores: [
+        { criterion: "Features", score: 80, rationale: "Current feature fit." },
+        { criterion: "Value for Money", score: 70, rationale: "Current value fit." },
+      ] },
+    ],
+  } as unknown as Partial<AnalysisPayload>;
+
+  applyQuickIndicativeScores(report, raw, ["Features", "Value for Money"], "2026-09-24");
+
+  assert.equal(report.score, 0);
+  assert.equal(report.recommendation, "INSUFFICIENT_EVIDENCE");
+  assert.match(report.recommendationReason, /No comparable criterion ratings were returned/i);
+  assert.ok(report.vendorScores.every((row) => row.score === 0));
+  assert.ok(report.vendorScores.every((row) => row.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+  assert.ok(report.vendorScores.every((row) => row.weightedScores?.length === 0));
+  assert.ok(report.vendorScores.every((row) => row.verdict.startsWith("Not scored")));
+});
+
+test("quick indicative scoring preserves a genuine explicit 50-point tie", () => {
+  const report = vehicleEvidenceGapBrief({
+    prompt: "Compare Alpha and Beta for features.",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Features"],
+    urls: [],
+  });
+  const raw = {
+    vendorScores: ["Alpha", "Beta"].map((vendor) => ({
+      vendor,
+      weightedScores: [{ criterion: "Features", score: 50, rationale: "Both options meet the stated feature requirements to a similar degree." }],
+    })),
+  } as unknown as Partial<AnalysisPayload>;
+
+  applyQuickIndicativeScores(report, raw, ["Features"], "2026-09-24");
+
+  assert.deepEqual(report.vendorScores.map((row) => row.score), [50, 50]);
+  assert.ok(report.vendorScores.every((row) => row.qualificationStatus === undefined));
+  assert.equal(report.recommendation, "Alpha");
+  assert.match(report.recommendationReason, /deterministic low-confidence leader/i);
+});
+
+test("retrieved CRM scoring keeps unsupported rows at neutral 50 and ranks only with comparable evidence", () => {
+  const vendors = ["Alpha CRM", "Beta CRM"];
+  const criteria = ["Core capabilities", "Pricing and total cost"];
+  const report = vehicleEvidenceGapBrief({
+    prompt: "Compare Alpha CRM and Beta CRM.",
+    vendors,
+    criteria,
+    urls: [],
+  });
+  const verifiedEvidence = (vendor: string, path: string) => ({
+    sourceUrl: `https://official.example/${path}`,
+    sourceTitle: `${vendor} official product page`,
+    exactClaim: `${vendor} describes its ${path} capability.`,
+    metricKey: "documented_feature",
+    metricSubject: vendor,
+    metricBasis: "retrieved_document_qualitative_feature",
+    documentSha256: "c".repeat(64),
+    sourceTextStart: 12,
+    sourceTextEnd: 48,
+    evidenceKind: "qualitative",
+    supportDirection: "supports",
+    confidence: 90,
+    normalizationMethod: "retrieved_document_qualitative_claim",
+  });
+  report.vendorScores = vendors.map((vendor) => ({
+    ...report.vendorScores.find((row) => row.vendor === vendor)!,
+    weightedScores: criteria.map((criterion, index) => ({
+      criterion,
+      weight: 50,
+      score: 50,
+      rationale: "A source-backed indicative rating.",
+      evidence: vendor === "Alpha CRM" || index === 0
+        ? [verifiedEvidence(vendor, index === 0 ? "features" : "pricing")]
+        : [],
+    })),
+  })) as unknown as AnalysisPayload["vendorScores"];
+  const raw = {
+    vendorScores: vendors.map((vendor, index) => ({
+      vendor,
+      weightedScores: [
+        { criterion: criteria[0], score: index === 0 ? 80 : 90, rationale: "Retrieved capability evidence supports this fit rating." },
+        { criterion: criteria[1], score: index === 0 ? 60 : 95, rationale: "Retrieved price evidence supports this value rating." },
+      ],
+    })),
+  } as unknown as Partial<AnalysisPayload>;
+
+  applyQuickIndicativeScores(report, raw, criteria, "2026-09-24", [], true);
+
+  assert.equal(report.score, 70);
+  assert.equal(report.recommendation, "Beta CRM");
+  assert.match(report.recommendationReason, /unsupported criteria remain neutral at 50/i);
+  for (const vendor of report.vendorScores) {
+    const pricing = vendor.weightedScores?.find((row) => row.criterion === "Pricing and total cost");
+    assert.equal(pricing?.score, 50);
+    assert.match(pricing?.rationale ?? "", /remains neutral/i);
+  }
+  assert.equal(report.vendorScores.find((row) => row.vendor === "Alpha CRM")?.weightedScores?.[1]?.score, 50);
+  assert.equal(report.vendorScores.find((row) => row.vendor === "Beta CRM")?.weightedScores?.[0]?.score, 90);
+});
+
+test("retrieved CRM scoring with less than half comparable criterion coverage has no overall winner", () => {
+  const vendors = ["Alpha CRM", "Beta CRM"];
+  const criteria = ["Core capabilities", "Pricing and total cost", "Customer experience / NPS"];
+  const report = vehicleEvidenceGapBrief({
+    prompt: "Compare Alpha CRM and Beta CRM.",
+    vendors,
+    criteria,
+    urls: [],
+  });
+  const evidence = (vendor: string) => [{
+    sourceUrl: `https://official.example/${vendor.toLowerCase().replace(/\s+/g, "-")}`,
+    exactClaim: `${vendor} documents its core capability.`,
+    documentSha256: "d".repeat(64),
+    sourceTextStart: 0,
+    sourceTextEnd: 38,
+    evidenceKind: "qualitative",
+    confidence: 80,
+  }];
+  report.vendorScores = vendors.map((vendor) => ({
+    ...report.vendorScores.find((row) => row.vendor === vendor)!,
+    weightedScores: criteria.map((criterion, index) => ({
+      criterion,
+      weight: 100 / criteria.length,
+      score: 50,
+      rationale: "A source-backed indicative rating.",
+      evidence: index === 0 ? evidence(vendor) : [],
+    })),
+  })) as unknown as AnalysisPayload["vendorScores"];
+  const raw = {
+    vendorScores: vendors.map((vendor, index) => ({
+      vendor,
+      weightedScores: criteria.map((criterion) => ({
+        criterion,
+        score: index === 0 ? 85 : 70,
+        rationale: "Retrieved source claims inform this rating.",
+      })),
+    })),
+  } as unknown as Partial<AnalysisPayload>;
+
+  applyQuickIndicativeScores(report, raw, criteria, "2026-09-24", [], true);
+
+  assert.equal(report.score, 0);
+  assert.equal(report.recommendation, "INSUFFICIENT_EVIDENCE");
+  assert.match(report.recommendationReason, /only 33% of requested criterion weight/i);
+  assert.ok(report.vendorScores.every((vendor) => vendor.weightedScores?.length === criteria.length));
+  assert.ok(report.vendorScores.every((vendor) => vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+  assert.ok(report.vendorScores.every((vendor) => (
+    vendor.weightedScores?.filter((row) => row.score === 50).length === 2
+  )));
+});
+
+test("compact CRM reports provide a separate assumption-led recommendation and score when verified coverage is zero", async () => {
+  const vendors = ["Microsoft Dynamics 365", "Salesforce", "Oracle CX", "SAP Sales Cloud"];
+  const criteria = ["Customer outcomes", "Ease of use", "Value for money", "Quality and reliability"];
+  const prompt = `Compare ${vendors.join(" vs ")} for CRM`;
+  const report = vehicleEvidenceGapBrief({ prompt, vendors, criteria, urls: [] });
+  report.category = "CRM";
+  const raw = {
+    vendorScores: vendors.map((vendor) => ({
+      vendor,
+      weightedScores: criteria.map((criterion) => ({
+        criterion,
+        score: 75,
+        rationale: "A provisional assessment was returned.",
+      })),
+    })),
+  } as unknown as Partial<AnalysisPayload>;
+  const ratings = [
+    [84, 80, 75, 82],
+    [78, 76, 80, 81],
+    [82, 72, 58, 75],
+    [75, 70, 72, 75],
+  ];
+  let requestBody = "";
+  const ai = {
+    chat: {
+      completions: {
+        create: async (request: { messages: Array<{ content: string }> }) => {
+          requestBody = request.messages[1]?.content ?? "";
+          return {
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  options: vendors.map((vendor, index) => ({ vendor, ratings: ratings[index] })),
+                }),
+              },
+            }],
+          };
+        },
+      },
+    },
+  } as any;
+
+  await applyCompactQuickIndicativeDecision(
+    report,
+    raw,
+    prompt,
+    criteria,
+    "2026-09-24",
+    [],
+    ai,
+  );
+
+  assert.equal(report.recommendation, "Microsoft Dynamics 365");
+  assert.equal(report.score, 0, "an estimate must not become a verified overall score");
+  assert.ok(report.vendorScores.every((vendor) => vendor.score === 0));
+  assert.ok(report.vendorScores.every((vendor) => vendor.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+  assert.match(report.recommendationReason, /^Provisional choice — Microsoft Dynamics 365/);
+  assert.match(report.recommendationReason, /80\/100 versus Salesforce at 79\/100/);
+  assert.match(
+    report.insights[0] ?? "",
+    /Microsoft Dynamics 365: 80\/100; Salesforce: 79\/100; SAP Sales Cloud: 73\/100; Oracle CX: 72\/100/,
+  );
+  assert.match(report.insights[0] ?? "", /assumption-led, not verified/);
+  assert.equal(JSON.parse(requestBody).vendors.length, 4);
+  assert.deepEqual(JSON.parse(requestBody).criteria, criteria);
+  assert.match(report.pricing[0]?.dimension ?? "", /Estimated Value for money fit \(not an actual price\)/);
+  assert.match(report.pricing[0]?.values?.["Microsoft Dynamics 365"] ?? "", /75\/100 assumption-led/);
+  assert.match(report.features[0]?.dimension ?? "", /Estimated Customer outcomes fit \(not verified\)/);
+});
+
+test("a category-only CRM brief can name a sourced advisory option without inventing comparative scores", async () => {
+  const prompt = "Compare Microsoft Dynamics 365 vs Salesforce for CRM";
+  const report = vehicleEvidenceGapBrief({ prompt, vendors: ["Microsoft Dynamics 365", "Salesforce"], criteria: [], urls: [] });
+  report.category = "CRM";
+  const quote = "Microsoft Dynamics 365 provides customer service and sales software features for teams. "
+    + "A long description of implementation details follows, but it is not needed in the decision headline. "
+    + "Additional platform detail should stay in the linked source rather than filling the decision summary.";
+  const docs = [
+    { url: "https://example.com/dynamics", finalUrl: "https://example.com/dynamics", text: quote },
+    { url: "https://example.com/salesforce", finalUrl: "https://example.com/salesforce",
+      text: "Salesforce provides customer service software features for teams." },
+  ].map((document) => ({
+    ...document, contentType: "text/html", sha256: "a".repeat(64), retrievedAt: "2026-09-24T00:00:00Z", truncated: false,
+  })) as RetrievedEvidenceDocument[];
+  const ai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({ vendor: "Microsoft Dynamics 365", url: docs[0]!.finalUrl, quote }) } }],
+  }) } } };
+  await applyAdvisoryPriorityPreference(report, prompt, docs, ai as any);
+  assert.equal(report.recommendation, "Microsoft Dynamics 365");
+  assert.equal(report.score, 0);
+  assert.match(report.recommendationReason, /documented capability-fit starting point/);
+  assert.match(report.recommendationReason, /Source: https:\/\/example.com\/dynamics/);
+  assert.doesNotMatch(report.recommendationReason, /Additional platform detail/);
+  assert.ok(report.vendorScores.every((row) => row.qualificationStatus === "INSUFFICIENT_EVIDENCE"));
+});
+
+test("a vendor advisory quote cannot turn a publisher's unsupported price comparison into our finding", async () => {
+  const prompt = "Compare Microsoft Dynamics 365 vs Salesforce for CRM";
+  const report = vehicleEvidenceGapBrief({ prompt, vendors: ["Microsoft Dynamics 365", "Salesforce"], criteria: [], urls: [] });
+  report.category = "CRM";
+  const quote = "Dynamics 365 costs roughly 30% less than Salesforce for equivalent CRM functionality.";
+  const docs = [
+    { url: "https://example.com/compare", finalUrl: "https://example.com/compare",
+      text: `Microsoft Dynamics 365 vs Salesforce. ${quote}` },
+  ].map((document) => ({
+    ...document, contentType: "text/html", sha256: "b".repeat(64), retrievedAt: "2026-09-24T00:00:00Z", truncated: false,
+  })) as RetrievedEvidenceDocument[];
+  const ai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({ vendor: "Microsoft Dynamics 365", url: docs[0]!.finalUrl, quote }) } }],
+  }) } } };
+  await applyAdvisoryPriorityPreference(report, prompt, docs, ai as any);
+  assert.equal(report.recommendation, "Microsoft Dynamics 365");
+  assert.doesNotMatch(report.recommendationReason, /30% less/);
+  assert.match(report.recommendationReason, /commercial claims were not verified/);
+});
+
+test("an evidence-gap fallback cannot erase a known mandatory failure to enable an advisory recommendation", async () => {
+  const prompt = "Compare Alpha and Beta cars. Value for money is most important.";
+  const original = vehicleEvidenceGapBrief({ prompt, vendors: ["Alpha", "Beta"], criteria: [], urls: [] });
+  original.vendorScores[0]!.qualificationStatus = "NOT_QUALIFIED";
+  original.vendorScores[0]!.qualificationGates = [{
+    gate: "Market availability", status: "FAIL", mandatory: true,
+    rationale: "Not sold in the requested market.", evidenceSourceIds: [],
+  }];
+  const brief = vehicleEvidenceGapBrief({ prompt, vendors: ["Alpha", "Beta"], criteria: [], urls: [] });
+  preserveMandatoryFailures(brief, original);
+  assert.equal(brief.vendorScores[0]?.qualificationStatus, "NOT_QUALIFIED");
+  assert.equal(brief.vendorScores[0]?.qualificationGates?.[0]?.status, "FAIL");
+  const docs = ["Alpha", "Beta"].map((name) => ({
+    url: `https://example.com/${name}`, finalUrl: `https://example.com/${name}`,
+    text: `${name} car value and price information for shoppers.`,
+  })) as RetrievedEvidenceDocument[];
+  const ai = { chat: { completions: { create: () => { throw new Error("must not select"); } } } };
+  await applyAdvisoryPriorityPreference(brief, prompt, docs, ai as any);
+  assert.equal(brief.recommendation, "No qualified option");
+});
+
+test("one verified comparable charging advantage can determine a provisional winner without an invented overall score", () => {
+  const prompt = "Compare Alpha vs Beta electric vehicles; charging matters most";
+  const report = vehicleEvidenceGapBrief({
+    prompt, vendors: ["Alpha", "Beta"], criteria: ["Charging", "Price"], urls: [],
+  });
+  for (const [index, vendor] of report.vendorScores.entries()) {
+    vendor.weightedScores = [{
+      criterion: "Charging",
+      weight: 60,
+      score: index ? 90 : 70,
+      rationale: "Comparable charging metric",
+      evidence: [{
+        ...qualificationEvidence(vendor.vendor, index ? 90 : 70, 90, index ? "b" : "a"),
+        metricKey: "charging_speed",
+      }],
+    }];
+  }
+  applyProvisionalChoice(report, prompt);
+  assert.equal(report.recommendation, "Beta");
+  assert.equal(report.score, 0);
+  assert.match(report.recommendationReason, /verified, like-for-like charging lead/);
+  assert.doesNotMatch(report.recommendationReason, /first option|guarantees quality/);
+});
+
+test("a documented premium inclusion can choose the second-listed trim without asserting premium guarantees quality", () => {
+  const prompt = "Compare RAV4 GX vs RAV4 Cruiser; I prefer premium inclusions";
+  const report = vehicleEvidenceGapBrief({
+    prompt, vendors: ["RAV4 GX", "RAV4 Cruiser"], criteria: ["Premium inclusions"], urls: [],
+  });
+  const values = {
+    "RAV4 GX": "Panoramic roof not included",
+    "RAV4 Cruiser": "Panoramic roof included",
+  };
+  report.features = [{ dimension: "Panoramic roof", values, winner: "RAV4 Cruiser" }];
+  for (const [index, vendor] of report.vendorScores.entries()) {
+    vendor.weightedScores = [{
+      criterion: "Panoramic roof",
+      weight: 100,
+      score: 50,
+      rationale: "Retrieved trim equipment statement",
+      evidence: [{
+        ...qualificationEvidence(vendor.vendor, 50, 90, index ? "b" : "a"),
+        evidenceKind: "qualitative",
+        exactClaim: values[vendor.vendor as keyof typeof values],
+      }],
+    }];
+  }
+  assert.equal(validatedQualitativeLensDecision(report, [], true)?.winner, "RAV4 Cruiser");
+  applyProvisionalChoice(report, prompt);
+  assert.equal(report.recommendation, "RAV4 Cruiser");
+  assert.match(report.recommendationReason, /uniquely supported feature-lens lead/);
+  assert.match(report.recommendationReason, /not proof of superior quality/);
+  assert.equal(report.score, 0);
+});
+
+test("an exact-model airbag figure cannot decide a manufacturer-wide diesel comparison", () => {
+  const prompt = "Compare Tata vs Mahindra diesel vehicles in India for safety and performance";
+  const report = vehicleEvidenceGapBrief({
+    prompt, vendors: ["Tata", "Mahindra"], criteria: ["Safety", "Performance"], urls: [],
+  });
+  for (const [index, vendor] of report.vendorScores.entries()) {
+    vendor.weightedScores = [{
+      criterion: "Safety equipment",
+      weight: 50,
+      score: index ? 90 : 60,
+      rationale: "Documented figure for one exact model",
+      evidence: [{
+        ...qualificationEvidence(vendor.vendor, index ? 90 : 60, 90, index ? "b" : "a"),
+        metricKey: "airbag_count",
+      }],
+    }];
+  }
+  applyProvisionalChoice(report, prompt);
+  assert.equal(report.recommendation, "No qualified option");
+  assert.match(report.recommendationReason, /No defensible winner/);
+  assert.doesNotMatch(report.recommendationReason, /airbag|safety lead/);
+});
+
+test("interprets the workbook's Mahindra–Tata diesel prompt as a brand decision", () => {
+  const prompt = "Compare Mahindra and Tata diesel passenger vehicles for a family buyer in Bengaluru, India. Usage: 20,000 km/year; 60% city and 40% highway; seven-seat preference; five-year ownership; INR 30 lakh on-road budget. Map each brand to representative eligible products and separate brand-level evidence from model-level evidence. Declare a deterministic brand winner, recommend the best model under that brand.";
+  const parsed = parsePrompt(prompt);
+  assert.deepEqual(parsed.vendors, ["Mahindra", "Tata"]);
+  assert.equal(validateComparisonContext(prompt, parsed.vendors, "IN").valid, true);
+  assert.equal(requestsVehiclePortfolioSelection(prompt, parsed.vendors), false);
+  assert.equal(isIndiaDieselBrandEvidenceRoute(true, "IN", prompt), true);
+});
+
+test("the comparison pack does not turn request descriptors into options", () => {
+  const cases: Array<[string, string[]]> = [
+    ["Compare Gucci and Prada as luxury retail franchise or authorised-store investment opportunities in Bengaluru, India.", ["Gucci", "Prada"]],
+    ["Compare equivalent Mahindra XUV700 and Tata Safari diesel automatic variants in India for a Bengaluru family.", ["Mahindra XUV700", "Tata Safari diesel automatic"]],
+    ["Compare Microsoft Dynamics 365, Salesforce, Oracle CX and SAP Sales Cloud as replacements for a legacy Siebel CRM in Australia.", ["Microsoft Dynamics 365", "Salesforce", "Oracle CX", "SAP Sales Cloud"]],
+    ["Compare current Dell Latitude, Lenovo ThinkPad and HP EliteBook configurations available in the United States.", ["Dell Latitude", "Lenovo ThinkPad", "HP EliteBook"]],
+  ];
+  for (const [prompt, vendors] of cases) assert.deepEqual(parsePrompt(prompt).vendors, vendors, prompt);
+});
+
+test("parses all four exact decimal-version model names in a vs chain", () => {
+  const prompt = "Compare GPT 5.6 Luna fast vs Claude sonnet 4.6 vs Claude sonnet 5 vs GPT 5.6 Terra . Which one of the models is better and uses optimum tokens for vibe coding .";
+  assert.deepEqual(parsePrompt(prompt).vendors, [
+    "GPT 5.6 Luna fast", "Claude sonnet 4.6", "Claude sonnet 5", "GPT 5.6 Terra",
+  ]);
+});
+
+test("keeps the two named diesel models separate from a later criteria-only comparison", () => {
+  const prompt = "Compare equivalent Mahindra XUV700 and Tata Safari diesel automatic variants in India for a Bengaluru family of six driving 18,000 km/year, with frequent highway use, a budget of INR 32 lakh on-road and a seven-year ownership period. Compare equivalent variants only across on-road price, fuel and servicing cost, warranty, safety, performance, comfort, third-row usability, dealer coverage, maintenance accessibility, resale value and value for money";
+  assert.deepEqual(parsePrompt(prompt).vendors, ["Mahindra XUV700", "Tata Safari diesel automatic"]);
+});
+
+test("a later list of criteria and supplied source URLs do not replace the named TS-10 options", () => {
+  const prompt = "Compare Etsy vs BizBubble for a UK small creative business choosing an online discovery channel. Use https://www.etsy.com/uk/ and https://bizbubble.co.uk/ as primary sources. Compare actual seller listing capabilities, published fees and documented support.";
+  const parsed = parsePrompt(prompt);
+  assert.deepEqual(parsed.vendors, ["Etsy", "BizBubble"]);
+  assert.equal(parsed.context.valid, true);
+});
+
+test("keeps workbook report categories aligned with their actual decision", () => {
+  const cases: Array<[string, string[], string, "IN" | "AU" | "US" | "GB"]> = [
+    ["Compare Gucci and Prada as luxury retail franchise or authorised-store investment opportunities in Bengaluru, India. Assess operational risk and premium positioning.", ["Gucci", "Prada"], "Retail investment", "IN"],
+    ["Compare Mahindra and Tata diesel passenger vehicles for a family buyer in Bengaluru, India. Compare brand-level evidence from model-level evidence.", ["Mahindra", "Tata"], "Vehicles", "IN"],
+    ["Compare equivalent Mahindra XUV700 and Tata Safari diesel automatic variants in India.", ["Mahindra XUV700", "Tata Safari diesel automatic"], "Vehicles", "IN"],
+    ["Compare Tata Safari diesel and Mahindra XUV700 diesel for a customer in Sydney, Australia. Check authorised dealer/service support.", ["Tata Safari diesel", "Mahindra XUV700 diesel"], "Vehicles", "AU"],
+    ["Compare Adobe Experience Manager, Sitecore, Contentful, Optimizely and Acquia for an enterprise digital-experience platform in Australia, the United States and the United Kingdom. Declare a winner for each country.", ["Adobe Experience Manager", "Sitecore", "Contentful", "Optimizely", "Acquia"], "Digital experience platforms", "AU"],
+    ["Compare Rouse Hill Toyota and Windsor Toyota for buying and servicing a new Toyota vehicle in Sydney. Assess customer service.", ["Rouse Hill Toyota", "Windsor Toyota"], "Automotive dealerships", "AU"],
+    ["Compare current Dell Latitude, Lenovo ThinkPad and HP EliteBook configurations available in the United States.", ["Dell Latitude", "Lenovo ThinkPad", "HP EliteBook"], "Computers and laptops", "US"],
+    ["Compare Service A and Service B for a UK small business. One unmethoded blog claims Service A is the market leader.", ["Service A", "Service B"], "Product or service comparison", "GB"],
+  ];
+  for (const [prompt, vendors, segment, market] of cases) {
+    const context = validateComparisonContext(prompt, vendors, market);
+    assert.equal(context.valid, true, prompt);
+    assert.equal(context.segment, segment, prompt);
+    const brief = vehicleEvidenceGapBrief({ prompt, vendors, criteria: [], urls: [], market });
+    assert.equal(brief.category, segment, prompt);
+  }
+});
+
+test("Australian diesel source warning is not an India-market request", () => {
+  const prompt = "Compare Tata Safari diesel and Mahindra XUV700 diesel for a customer in Sydney, Australia. Do not substitute Indian prices or specifications.";
+  assert.equal(validateComparisonContext(prompt, ["Tata Safari diesel", "Mahindra XUV700 diesel"], "AU").valid, true);
+});
+
+test("unresolved Apple and Orange meanings require clarification before research", () => {
+  const prompt = "Compare Apple and Orange for a customer in the UK. Detect whether Apple means the technology company or fruit, and whether Orange means the telecommunications brand or fruit.";
+  const context = validateComparisonContext(prompt, ["Apple", "Orange"], "GB");
+  assert.equal(context.valid, false);
+  assert.match(context.message, /CLARIFICATION_REQUIRED.*technology company.*fruit/i);
+});
+
 test("adds outside diesel SUV alternatives when a compared Tata Safari alias is removed", () => {
   const analysis = {
     insights: [
@@ -4323,6 +8638,22 @@ test("adds outside diesel SUV alternatives when a compared Tata Safari alias is 
   assert.match(analysis.insights[0]!, /Hyundai Alcazar/);
   assert.match(analysis.insights[1]!, /Jeep Meridian/);
   assert.doesNotMatch(analysis.insights.join(" "), /Tata Safari/);
+});
+
+test("keeps outside options for the exact India three-row diesel SUV decision", () => {
+  const prompt = "Compare Mahindra XUV700 vs Tata Safari diesel for Automobile | Three-row SUV | Diesel | India";
+  const insights = { insights: [
+    "Outside-alternative coverage — no options could be verified.",
+    "Alternative outside comparison — Tata Safari: Already compared.",
+    "A decision condition.",
+  ] };
+  const market = inferResearchMarket(prompt, ["Mahindra XUV700", "Tata Safari diesel"]).countryCode;
+  ensureVehicleOutsideAlternatives(insights, ["Mahindra XUV700", "Tata Safari diesel"], market, prompt, "2026-09-24");
+  assert.equal(insights.insights.filter((item) => item.startsWith("Alternative outside comparison —")).length, 2);
+  assert.match(insights.insights.join(" "), /Hyundai Alcazar/);
+  assert.match(insights.insights.join(" "), /Jeep Meridian/);
+  assert.ok(insights.insights.includes("A decision condition."));
+  assert.doesNotMatch(insights.insights.join(" "), /Outside-alternative coverage|Already compared/);
 });
 
 test("does not suggest an alternative again after it joins the active shortlist", () => {
@@ -4450,6 +8781,107 @@ test("recognizes model-name-only SUV comparisons and replenishes compatible alte
   assert.ok(analysis.insights.every((insight) => /AU-market SUV/i.test(insight)));
 });
 
+test("keeps Geely in a three-brand EV car-choice prompt and selects one model per brand", () => {
+  const prompt = "Compare BYD EV cars with Tesla EV cars and Geely EV cars. Which of the cars is best value for money in Australia, considering price, range, charging, warranty and safety?";
+  const parsed = parsePrompt(prompt);
+  assert.deepEqual(parsed.vendors, ["BYD", "Tesla", "Geely"]);
+  assert.equal(requestsVehiclePortfolioSelection(prompt, parsed.vendors), true);
+  assert.equal(requestsVehiclePortfolioSelection(
+    "Compare BYD, Tesla and Geely as electric-vehicle manufacturers in Australia",
+    parsed.vendors,
+  ), false);
+  const selection = australianThreeBrandEvCarChoice(prompt, parsed.vendors, "AU");
+  assert.deepEqual(selection?.vendors, ["BYD SEALION 7", "Tesla Model Y", "Geely EX5"]);
+  assert.equal(selection?.sourceUrls.length, 6);
+  assert.equal(australianThreeBrandEvCarChoice(prompt.replace("Australia", "India"), parsed.vendors, "IN"), null);
+  const brief = vehicleEvidenceGapBrief({ prompt, vendors: parsed.vendors, criteria: parsed.criteria, urls: [] });
+  assert.deepEqual(brief.vendorScores.map((vendor) => vendor.vendor), parsed.vendors);
+  assert.doesNotMatch(JSON.stringify(brief), /diesel variant|both vehicles/i);
+});
+
+test("recognizes budget-fit EV model selection across four named manufacturers", () => {
+  const prompt = "Compare BYD vs Tesla vs Geely vs MG. Which EV car will fit my budget of 50,000 AUD? I'm looking for a budget-friendly, decent car.";
+  const brands = ["BYD", "Tesla", "Geely", "MG"];
+  const parsed = parsePrompt(prompt);
+  assert.deepEqual(parsed.vendors, brands);
+  assert.equal(isElectricVehiclePrompt(prompt), true);
+  assert.equal(requestsVehiclePortfolioSelection(prompt, parsed.vendors), true);
+
+  const models = ["BYD Dolphin", "Tesla Model 3", "Geely EX5", "MG4 EV"];
+  const shape = compactElectricVehicleResearchShape(models);
+  assert.equal(shape.category, "Electric vehicles");
+  assert.deepEqual(shape.vendorScores.map((vendor) => vendor.vendor), models);
+  assert.ok(shape.vendorScores.every((vendor) => vendor.weightedScores.length === WEIGHTED_CRITERIA.length));
+  assert.deepEqual(Object.keys(shape.pricing[0]!.values), models);
+  assert.ok(!("marketHistory" in shape.vendorScores[0]!));
+  assert.equal(shape.recommendation, "INSUFFICIENT_EVIDENCE");
+});
+
+test("falls back to an empty source-grounded EV shape when research JSON is malformed", () => {
+  const recovery = parseElectricVehicleResearchOrSeed('{"vendorScores":[{"vendor":"BYD"', ["BYD", "Tesla"]);
+  assert.equal(recovery.usedFallback, true);
+  assert.match(recovery.reason ?? "", /incomplete|malformed|JSON/i);
+  assert.equal(recovery.parsed.recommendation, "INSUFFICIENT_EVIDENCE");
+  assert.deepEqual(recovery.parsed.vendorScores?.map(({ vendor }) => vendor), ["BYD", "Tesla"]);
+  assert.equal(recovery.parsed.vendorScores?.[0]?.weightedScores?.[0]?.evidence?.[0]?.exactClaim, "");
+  assert.deepEqual(recovery.parsed.sources, []);
+});
+
+test("uses the compact EV research route unless the user requests extended analysis", () => {
+  const prompt = "Compare BYD and Tesla in Australia in EV car.";
+  assert.equal(requestsExtendedElectricVehicleResearch(prompt), false);
+  assert.equal(requestsExtendedElectricVehicleResearch(
+    prompt,
+    ["Include a five-year market history and SWOT analysis."],
+  ), true);
+
+  const brandShape = compactElectricVehicleResearchShape(["BYD", "Tesla"]);
+  assert.deepEqual(brandShape.vendorScores.map(({ vendor }) => vendor), ["BYD", "Tesla"]);
+  assert.deepEqual(Object.keys(brandShape.pricing[0]!.values), ["BYD", "Tesla"]);
+});
+
+test("shows only same-publisher retrieved Australian EV prices, without an overall score", () => {
+  const vendors = ["BYD SEALION 7", "Tesla Model Y", "Geely EX5"];
+  const brief = vehicleEvidenceGapBrief({
+    prompt: "Which of the electric cars offers the best value in Australia?",
+    vendors, criteria: ["price", "range", "warranty"], urls: [],
+  });
+  const docs = [
+    ["byd/sealion-7", "Driveaway$59,857 - $69,307†"],
+    ["tesla/model-y", "Driveaway$63,963 - $95,988†"],
+    ["geely/ex5", "Driveaway$46,267 - $50,407†"],
+  ].map(([path, text]) => ({ finalUrl: `https://www.carexpert.com.au/${path}`, text })) as unknown as Parameters<typeof addAustralianEvSourceContext>[1];
+  addAustralianEvSourceContext(brief, docs, vendors);
+  assert.equal(brief.recommendation, "No qualified option");
+  assert.equal(brief.score, 0);
+  assert.deepEqual(Object.keys(brief.pricing[0].values), vendors);
+  assert.equal(brief.pricing[0].winner, "Geely EX5");
+  assert.match(brief.pricing[0].values["Geely EX5"], /\$46,267.*carexpert/);
+  assert.match(brief.pricing[1].dimension, /NOT an overall vehicle score/);
+  assert.match(brief.executiveSummary, /Geely EX5 has the lowest indicative listed starting drive-away price/);
+  assert.match(brief.recommendationReason, /not choose a vehicle from this price result alone/i);
+  assert.match(brief.insights.join(" "), /Price trade-off|Evidence boundary/);
+  assert.equal(brief.nextSteps.length, 3);
+  assert.match(brief.decisionGovernance?.[0]?.decisionGate ?? "", /Before paying a deposit/);
+  assert.doesNotMatch(brief.executiveSummary, /Tesla.*68\/100|BYD.*67\/100/);
+  assert.doesNotMatch(JSON.stringify(brief.pricing), /61,693|54,990/);
+  const withSpecs = [
+    ...docs,
+    { finalUrl: "https://www.geely.com.au/models/EX5", text: "Geely EX5 Up to 475 km1 WLTP Range. With 11kW AC and 100kW DC fast charging." },
+  ] as Parameters<typeof addAustralianEvSourceContext>[1];
+  withSpecs[1].text += "\n22 kW\n\nDC Fast Charging (max kW)";
+  addAustralianEvSourceContext(brief, withSpecs, vendors);
+  assert.match(brief.features[0].values["Geely EX5"], /475 km WLTP/);
+  const charging = brief.features.find((row) => /DC charging power/.test(row.dimension))!;
+  assert.match(charging.values["Geely EX5"], /100 kW DC/);
+  assert.doesNotMatch(charging.values["Tesla Model Y"], /22 kW DC/);
+  addAustralianEvSourceContext(brief, docs.slice(0, 2), vendors);
+  assert.equal(brief.pricing.length, 1);
+  assert.equal(brief.pricing[0].winner, "Not established");
+  assert.match(brief.executiveSummary, /no price leader or overall vehicle score/i);
+  assert.doesNotMatch(brief.recommendationReason, /Geely EX5 leads/i);
+});
+
 test("keeps the no-invention vehicle coverage message idempotent", () => {
   const analysis = { insights: [] as string[] };
 
@@ -4564,6 +8996,70 @@ test("derives EV score evidence from displayed matrix winners", () => {
     hyundai.find((row) => row.criterion === "Quality & Reliability")?.evidence?.[0]?.exactClaim ?? "",
     /No reliability evidence/,
   );
+});
+
+test("admits retrieved fallback and redirect URLs for provenance normalization", () => {
+  const citationUrl = "https://official.example/product";
+  const redirectedUrl = "https://official.example/current-product";
+  const fallbackUrl = "https://official.example/product-brochure.pdf";
+  assert.deepEqual(
+    evidenceAdmissionUrls([citationUrl], [
+      { url: citationUrl, finalUrl: redirectedUrl },
+      { url: fallbackUrl, finalUrl: fallbackUrl },
+    ]),
+    [citationUrl, redirectedUrl, fallbackUrl],
+  );
+});
+
+test("does not overwrite provenance-complete EV evidence with matrix judgment", () => {
+  const claim = "The certified range is 510 km.";
+  const verifiedEvidence = {
+    sourceUrl: "https://www.hyundai.com/in/en/find-a-car/creta-electric/specification",
+    exactClaim: claim,
+    documentSha256: "a".repeat(64),
+    sourceTextStart: 10,
+    sourceTextEnd: 10 + claim.length,
+    evidenceKind: "quantitative" as const,
+    normalizedScore: 80,
+    normalizationMethod: "retrieved_document_metric",
+  };
+  const analysis = {
+    pricing: [],
+    features: [{
+      dimension: "Battery and range",
+      values: { "Hyundai Creta Electric": "51.4 kWh, 510 km", "Mahindra BE 6": "79 kWh, 683 km" },
+      winner: "Mahindra BE 6",
+    }],
+    vendorScores: [
+      {
+        vendor: "Hyundai Creta Electric",
+        score: 80,
+        weightedScores: [{
+          criterion: "Meets Needs / Features",
+          weight: 25,
+          score: 80,
+          rationale: "Verified official range.",
+          evidence: [verifiedEvidence],
+        }],
+      },
+      { vendor: "Mahindra BE 6", score: 50, weightedScores: [] },
+    ],
+  } as unknown as Partial<AnalysisPayload>;
+
+  addElectricVehicleMatrixEvidence(
+    analysis,
+    ["Hyundai Creta Electric", "Mahindra BE 6"],
+    [
+      "https://www.hyundai.com/in/en/find-a-car/creta-electric/specification",
+      "https://www.mahindraelectricsuv.com/esuv/be-6/MBE6.html",
+    ],
+  );
+
+  const evidence = analysis.vendorScores?.[0]?.weightedScores
+    ?.find((row) => row.criterion === "Meets Needs / Features")?.evidence ?? [];
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0]?.exactClaim, claim);
+  assert.equal(evidence[0]?.normalizationMethod, "retrieved_document_metric");
 });
 
 test("verifies EV matrix metrics against exact official product documents before scoring", () => {
@@ -4805,6 +9301,39 @@ test("selects the complete analysis when research returns multiple JSON objects"
   });
 });
 
+test("recovers a top-level research object truncated inside a nested evidence value", () => {
+  assert.deepEqual(parseJsonObject(
+    '{"category":"AI models","recommendation":"Claude Sonnet 4","vendorScores":[{"vendor":"Claude Sonnet 4","weightedScores":[{"criterion":"Meets Needs / Features","evidence":[{"exactClaim":"Verified coding',
+  ), {
+    category: "AI models",
+    recommendation: "Claude Sonnet 4",
+    vendorScores: [{
+      vendor: "Claude Sonnet 4",
+      weightedScores: [{
+        criterion: "Meets Needs / Features",
+        evidence: [{ exactClaim: "Verified coding" }],
+      }],
+    }],
+  });
+});
+
+test("recovers a top-level research object truncated after a completed field", () => {
+  assert.deepEqual(parseJsonObject(
+    '{"category":"AI models","recommendation":"Claude Sonnet 4","vendorScores":[',
+  ), {
+    category: "AI models",
+    recommendation: "Claude Sonnet 4",
+    vendorScores: [],
+  });
+});
+
+test("does not reinterpret non-JSON research prose as a structured result", () => {
+  assert.throws(
+    () => parseJsonObject("Research could not establish a current exact-model comparison."),
+    /incomplete structured result/,
+  );
+});
+
 test("rejects explanatory text disguised as an evidence URL", () => {
   assert.deepEqual(dedupeReferenceUrls([
     "https://www.mgmotor.co.in/vehicles/windsor-ev-electric-car-in-india/baas-faq",
@@ -4852,14 +9381,14 @@ test("keeps only permitted reachable citations eligible for evidence and ranking
   assert.deepEqual(result.sourceAvailability[0]?.registryDecision, registryDecision);
 });
 
-test("seeds official variable and fixed home-loan sources for named banks", () => {
+test("seeds only named banks' official variable and fixed home-loan sources", () => {
   const sources = officialHomeLoanSourcesFor(["Westpac", "ANZ", "NAB", "CBA"]);
-  assert.equal(sources.length, 9);
+  assert.equal(sources.length, 7);
   assert.ok(sources.some((url) => url.includes("westpac.com.au")));
   assert.ok(sources.some((url) => url.includes("anz.com.au")));
   assert.ok(sources.some((url) => url.includes("nab.com.au")));
   assert.ok(sources.some((url) => url.includes("commbank.com.au")));
-  assert.ok(sources.some((url) => url.includes("macquarie.com.au")));
+  assert.equal(sources.some((url) => url.includes("macquarie.com.au")), false);
 });
 
 test("requires an official source for every named credit-card provider", () => {
@@ -4923,6 +9452,213 @@ test("uses comparable DC charging power to replace an incorrect all-option tie",
     ),
     "Tesla Model Y",
   );
+});
+
+function precedenceFixture(): AnalysisPayload {
+  const vendors = ["Alpha", "Beta"];
+  const dimensions: Record<string, [number, number, string]> = {
+    "Meets Needs / Features": [60, 90, "feature package"],
+    "Quality & Reliability": [75, 80, "reliability result"],
+    "Value for Money": [90, 60, "price offer"],
+    "Safety & Security": [99, 65, "safety result"],
+  };
+  return {
+    recommendation: "Alpha",
+    score: 90,
+    recommendationReason: "An old result.",
+    pricing: [{ dimension: "Price", values: { Alpha: "Alpha price offer", Beta: "Beta price offer" }, winner: "Alpha" }],
+    features: [{ dimension: "Features", values: { Alpha: "Alpha feature package", Beta: "Beta feature package" }, winner: "Beta" }],
+    vendorScores: vendors.map((vendor, index) => ({
+      vendor,
+      score: 90 - index * 10,
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => {
+        const dimension = dimensions[criterion];
+        const score = (dimension?.[index] as number | undefined) ?? 50;
+        const claim = dimension?.[2];
+        return {
+          criterion, weight, score,
+          evidence: claim ? [{
+            ...qualificationEvidence(vendor, score, 90, index ? "b" : "a"),
+            exactClaim: `${vendor} ${claim}`,
+            metricKey: claim.replaceAll(" ", "_"),
+          }] : [],
+        };
+      }),
+    })),
+  } as unknown as AnalysisPayload;
+}
+
+test("uses explicit prompt percentages as supplied weights rather than inferred priority weights", () => {
+  const weights = explicitUserWeightsFromPrompt("Compare Alpha and Beta. Value for Money 70%, Features 30%.");
+  assert.equal(weights?.find((row) => row.criterion === "Value for Money")?.weight, 70);
+  assert.equal(weights?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 30);
+  assert.equal(weights?.find((row) => row.criterion === "Safety & Security")?.weight, 0);
+  assert.throws(() => explicitUserWeightsFromPrompt("Features 30%, price 40%"), /total 100%/);
+});
+
+test("combines named vehicle priorities while ignoring city and highway usage percentages", () => {
+  const prompt = [
+    "Compare Mahindra and Tata diesel passenger vehicles for a family buyer in Bengaluru, India.",
+    "Usage: 20,000 km/year; 60% city and 40% highway; seven-seat preference; five-year ownership; INR 30 lakh on-road budget.",
+    "Weights: on-road price 20%; five-year operating cost 18%; reliability and maintenance 15%; dealer and service coverage 12%; safety 12%; performance 10%; resale value 8%; features and comfort 5%.",
+  ].join("\n\n");
+  const weights = explicitUserWeightsFromPrompt(prompt);
+  assert.equal(weights?.find((row) => row.criterion === "Value for Money")?.weight, 46);
+  assert.equal(weights?.find((row) => row.criterion === "Quality & Reliability")?.weight, 15);
+  assert.equal(weights?.find((row) => row.criterion === "Customer Advocacy / NPS")?.weight, 12);
+  assert.equal(weights?.find((row) => row.criterion === "Safety & Security")?.weight, 12);
+  assert.equal(weights?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 15);
+  assert.equal(weights?.reduce((sum, row) => sum + row.weight, 0), 100);
+  assert.throws(
+    () => explicitUserWeightsFromPrompt("Weights: price 20%; moonlight cycles 80%."),
+    /Unrecognized weight: "moonlight cycles"/,
+  );
+  assert.throws(
+    () => explicitUserWeightsFromPrompt("Usage: 60% city, 40% highway. Weights: price 20%; safety 30%."),
+    /Current total: 50%/,
+  );
+});
+
+test("applies supplied weights before a conflicting feature and pricing lens", () => {
+  const report = precedenceFixture();
+  const weights = explicitUserWeightsFromPrompt("Compare Alpha and Beta. Value for Money 70%, Features 30%.");
+  const result = applyScoringPrecedence(report, weights);
+  assert.equal(result?.stage, "user_weights");
+  assert.equal(report.recommendation, "Alpha");
+  assert.equal(report.score, 81);
+  assert.match(report.recommendationReason, /supplied criterion weights/);
+});
+
+test("counts the documented pricing and feature lenses equally before the default score", () => {
+  const report = precedenceFixture();
+  report.pricing.push({ dimension: "Fees", values: { Alpha: "Alpha price offer", Beta: "Beta price offer" }, winner: "Beta" });
+  const result = applyScoringPrecedence(report);
+  assert.equal(result?.stage, "feature_pricing_lenses");
+  assert.equal(report.recommendation, "Beta");
+  assert.equal(report.score, 0);
+  assert.match(report.recommendationReason, /not an overall fit score/);
+});
+
+test("breaks an exact lens tie in criterion order and skips unsupported criteria", () => {
+  const report = precedenceFixture();
+  // The first criterion ties, so comparable reliability wins before the later safety criterion.
+  const featureRow = report.vendorScores[0]!.weightedScores!.find((row) => row.criterion === "Meets Needs / Features")!;
+  featureRow.score = 90;
+  featureRow.evidence![0]!.normalizedScore = 90;
+  const result = selectScoringPrecedence(report);
+  assert.equal(result?.stage, "ordered_criteria");
+  assert.equal(result?.winner, "Beta");
+  assert.match(result?.reason ?? "", /Quality & Reliability/);
+  assert.equal(report.vendorScores[0]!.weightedScores!.find((row) => row.criterion === "Safety & Security")!.score, 99);
+});
+
+test("does not invent a score from absent lens evidence and resolves supplied-weight ties deterministically", () => {
+  const report = precedenceFixture();
+  report.vendorScores[1]!.weightedScores = report.vendorScores[1]!.weightedScores!.map((row) =>
+    row.criterion === "Meets Needs / Features" ? { ...row, evidence: [] } : row);
+  assert.equal(selectScoringPrecedence(report), null);
+  const complete = precedenceFixture();
+  const tiedDecision = selectScoringPrecedence(complete, explicitUserWeightsFromPrompt("Features 50%, price 50%"));
+  assert.equal(tiedDecision?.winner, "Beta");
+  assert.match(tiedDecision?.reason ?? "", /Meets Needs \/ Features priority lens/);
+  assert.match(tiedDecision?.reason ?? "", /not as evidence of a factual advantage/);
+  complete.vendorScores[0]!.qualificationStatus = "NOT_QUALIFIED";
+  assert.equal(selectScoringPrecedence(complete), null);
+});
+
+test("modelled ranking uses unrounded weighted scores and stable tie-breaks without ranking failed options", () => {
+  const rows = [
+    {
+      vendor: "Beta",
+      score: 80,
+      weightedScores: [{ criterion: "Overall Fit", weight: 100, score: 80.004 }],
+    },
+    {
+      vendor: "Alpha",
+      score: 80,
+      weightedScores: [{ criterion: "Overall Fit", weight: 100, score: 80.001 }],
+    },
+    {
+      vendor: "Excluded",
+      score: 99,
+      qualificationStatus: "NOT_QUALIFIED" as const,
+      weightedScores: [{ criterion: "Overall Fit", weight: 100, score: 99 }],
+    },
+  ] as unknown as AnalysisPayload["vendorScores"];
+
+  const ranking = rankEligibleModelledScores(rows);
+  assert.deepEqual(ranking.ranked.map(({ vendor }) => vendor), ["Beta", "Alpha"]);
+  assert.equal(ranking.tied, false);
+
+  const exactTie = rankEligibleModelledScores(rows.slice(0, 2).map((row) => ({
+    ...row,
+    weightedScores: row.weightedScores?.map((item) => ({ ...item, score: 80 })),
+  })));
+  assert.deepEqual(exactTie.ranked.map(({ vendor }) => vendor), ["Alpha", "Beta"]);
+  assert.equal(exactTie.tied, true);
+  assert.match(exactTie.tieBreakReason, /stable canonical option key|stable option-name/);
+});
+
+test("conditional partial model winners retain explicit model and evidence caveats", () => {
+  const report = {
+    recommendation: "Old recommendation",
+    score: 74,
+    executiveSummary: "Old summary.",
+    recommendationReason: "Old reason.",
+    insights: ["Existing note."],
+  } as unknown as AnalysisPayload;
+
+  applyConditionalModelledWinnerCaveat(
+    report,
+    "Alpha",
+    "Research was partial; modelled scores are estimates, not verified comparative facts.",
+  );
+
+  assert.equal(report.recommendation, "Alpha");
+  assert.match(report.recommendationReason, /Conditional modelled winner/);
+  assert.match(report.recommendationReason, /partial/);
+  assert.match(report.recommendationReason, /not verified comparative facts/);
+  assert.match(report.executiveSummary, /conditional modelled choice/i);
+  assert.ok(report.insights?.some((insight) => /Conditional modelled winner/.test(insight)));
+});
+
+test("winner refinements preserve NOT_RELEVANT and NOT_COMPARABLE outcomes", () => {
+  for (const outcome of ["NOT_RELEVANT", "NOT_COMPARABLE"]) {
+    for (const stateField of ["recommendation", "decisionState"] as const) {
+      const report = {
+        recommendation: stateField === "recommendation" ? outcome : "Alpha",
+        ...(stateField === "decisionState" ? { decisionState: outcome } : {}),
+        score: 0,
+        executiveSummary: `${outcome} summary.`,
+        recommendationReason: `${outcome} reason.`,
+        vendorScores: [{ vendor: "Alpha", score: 90 }, { vendor: "Beta", score: 80 }],
+        pricing: [{ dimension: "Price", values: {}, winner: "Alpha" }],
+        features: [{ dimension: "Features", values: {}, winner: "Alpha" }],
+      } as unknown as AnalysisPayload;
+      const before = structuredClone(report);
+
+      annotateUnverifiableWinner(report);
+      reconcileFinalRecommendationNarrative(report);
+      assert.equal(applyScoringPrecedence(report), null);
+      assert.equal(applyEvidenceBackedLensWinner(report), null);
+      assert.equal(
+        reweightAnalysis(report, WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({ criterion, weight }))),
+        report,
+      );
+
+      assert.deepEqual(report, before);
+    }
+  }
+});
+
+test("does not rank a model-written criterion score above its verified normalized metric", () => {
+  const report = precedenceFixture();
+  const featureRow = report.vendorScores[0]!.weightedScores!.find((row) => row.criterion === "Meets Needs / Features")!;
+  featureRow.score = 99; // The model's score conflicts with the normalized document metric of 60.
+  const result = selectScoringPrecedence(report);
+  assert.equal(result?.stage, "ordered_criteria");
+  assert.equal(result?.winner, "Beta");
+  assert.equal(selectScoringPrecedence(report, explicitUserWeightsFromPrompt("Features 100%"))?.winner, "Beta");
 });
 
 test("uses the unique highest score before a pricing and feature lens tie-break", () => {
@@ -5173,26 +9909,28 @@ test("reweights an existing evidence-backed report without changing criterion sc
         score: 65,
         color: "#1c7c78",
         verdict: "Strong alternative",
-        weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => ({
-          criterion,
-          weight: 12.5,
-          score: criterion === "Meets Needs / Features" || criterion === "Innovation / Differentiation" ? 90 : 50,
-          rationale: "Evidence-backed score.",
-          evidence: [],
-        })),
+        weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => {
+          const score = criterion === "Meets Needs / Features" || criterion === "Innovation / Differentiation" ? 90 : 50;
+          return {
+            criterion, weight: 12.5, score,
+            rationale: "Evidence-backed score.",
+            evidence: [qualificationEvidence("MG", score, 80, "a")],
+          };
+        }),
       },
       {
         vendor: "Mahindra",
         score: 60,
         color: "#df7b48",
         verdict: "Best overall fit",
-        weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => ({
-          criterion,
-          weight: 12.5,
-          score: criterion === "Value for Money" ? 95 : 50,
-          rationale: "Evidence-backed score.",
-          evidence: [],
-        })),
+        weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => {
+          const score = criterion === "Value for Money" ? 95 : 50;
+          return {
+            criterion, weight: 12.5, score,
+            rationale: "Evidence-backed score.",
+            evidence: [qualificationEvidence("Mahindra", score, 80, "b")],
+          };
+        }),
       },
     ],
   } as unknown as AnalysisPayload;
@@ -5212,7 +9950,7 @@ test("reweights an existing evidence-backed report without changing criterion sc
     mappedCriteria: ["Value for Money"],
   }]);
   assert.equal(result.recommendation, "MG");
-  assert.equal(result.score, 76);
+  assert.equal(result.score, 75);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.score, 90);
   assert.equal(result.vendorScores?.[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 35);
   assert.match(result.executiveSummary, /regenerated using your adjusted decision model/i);
@@ -5266,18 +10004,256 @@ test("enforces custom-weight relevance during server-side regeneration", () => {
   );
 });
 
-test("rejects adjusted weights that do not total 100", () => {
-  const analysis = {
-    recommendation: "MG",
+test("rejects near-duplicate and misspelled custom labels with a correction suggestion", () => {
+  const report = {
+    prompt: "Compare two electric vehicles for five-year ownership.",
+    category: "Electric vehicles",
+    recommendation: "Alpha",
     vendorScores: [],
   } as unknown as AnalysisPayload;
+  const weights = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion, weight: criterion === "Value for Money" ? 100 : 0,
+  }));
   assert.throws(
-    () => reweightAnalysis(analysis, WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
-      criterion,
-      weight: criterion === "Value for Money" ? weight + 1 : weight,
-    }))),
-    /must total 100%/,
+    () => reweightAnalysis(report, weights, [
+      { criterion: "Long term ownership", weight: 10, mappedCriteria: ["Value for Money"] },
+      { criterion: "Long-term ownership", weight: 10, mappedCriteria: ["Value for Money"] },
+    ]),
+    /repeated|too similar.*Choose a distinct label/i,
   );
+  assert.throws(
+    () => reweightAnalysis(report, weights, [{
+      criterion: "Long-term reslae value",
+      weight: 10,
+      mappedCriteria: ["Value for Money"],
+    }]),
+    /Did you mean "Long-term resale value".*not changed/i,
+  );
+});
+
+test("normalizes under-allocated weights and rejects over-allocation or a zero total", () => {
+  const analysis = {
+    executiveSummary: "Original summary.",
+    recommendationReason: "Original recommendation.",
+    insights: [],
+    recommendation: "MG",
+    vendorScores: ["MG", "Mahindra"].map((vendor) => ({
+      vendor,
+      score: 50,
+      color: "#1c7c78",
+      verdict: "Original verdict",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => ({
+        criterion, weight: 10, score: 50, rationale: "Original", evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+  const underAllocated = reweightAnalysis(analysis, WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion,
+    weight: criterion === "Meets Needs / Features" ? 60 : 0,
+  })));
+  assert.equal(
+    underAllocated.vendorScores[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.weight,
+    100,
+  );
+  assert.match(underAllocated.insights?.[1] ?? "", /entered criterion allocations total 60%/i);
+  assert.match(underAllocated.insights?.[1] ?? "", /unallocated 40% is distributed proportionally/i);
+
+  assert.throws(
+    () => reweightAnalysis(analysis, WEIGHTED_CRITERIA.map(({ criterion }) => ({
+      criterion,
+      weight: criterion === "Value for Money" ? 51 : criterion === "Meets Needs / Features" ? 50 : 0,
+    }))),
+    /Your total allocation is 101%. Reduce the weights by 1% to continue\./,
+  );
+  assert.throws(
+    () => reweightAnalysis(analysis, WEIGHTED_CRITERIA.map(({ criterion }) => ({ criterion, weight: 0 }))),
+    /positive total/,
+  );
+  assert.equal(parseRawWeightAllocations(underAllocated.insights)?.totalWeight, 60);
+  assert.equal(parseRawWeightAllocations(underAllocated.insights)?.unallocatedWeight, 40);
+});
+
+test("regeneration keeps one low-confidence deterministic winner on an exact adjusted-score tie", () => {
+  const report = {
+    prompt: "Compare Alpha and Beta for product selection.",
+    category: "Products",
+    vendors: ["Alpha", "Beta"],
+    recommendation: "Beta",
+    score: 68,
+    executiveSummary: "Original summary.",
+    recommendationReason: "Original reason.",
+    insights: [],
+    vendorScores: ["Alpha", "Beta"].map((vendor) => ({
+      vendor,
+      score: 68,
+      color: "#1c7c78",
+      verdict: "Original verdict.",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion }) => ({
+        criterion,
+        weight: 0,
+        score: criterion === "Meets Needs / Features"
+          ? vendor === "Alpha" ? 80 : 50
+          : criterion === "Quality & Reliability"
+            ? vendor === "Alpha" ? 50 : 95
+            : 50,
+        rationale: criterion === "Meets Needs / Features" || criterion === "Quality & Reliability"
+          ? "Modelled comparative score for the requested criterion."
+          : "Neutral because comparable evidence is unavailable.",
+        evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+  const allocations = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion,
+    weight: criterion === "Meets Needs / Features" ? 60
+      : criterion === "Quality & Reliability" ? 40 : 0,
+  }));
+  const first = reweightAnalysis(report, allocations);
+  assert.equal(first.recommendation, "Alpha", first.recommendationReason);
+  assert.equal(first.score, 68);
+  assert.match(first.executiveSummary, /low-confidence technical tie-break winner/i);
+  assert.match(first.executiveSummary, /not evidence of a factual advantage/i);
+  assert.match(first.recommendationReason, /Meets Needs \/ Features priority lens/i);
+  assert.match(first.vendorScores.find((item) => item.vendor === "Alpha")?.verdict ?? "", /technical tie-break winner/i);
+  assert.match(first.vendorScores.find((item) => item.vendor === "Beta")?.switchConditions?.[0] ?? "", /Quality & Reliability/i);
+
+  const second = reweightAnalysis(first, allocations);
+  assert.equal(second.recommendation, "Alpha");
+  assert.equal(second.insights?.filter((item) => item.startsWith("raw-weight-allocations:v1:")).length, 1);
+  const snapshot = parseRawWeightAllocations(second.insights);
+  assert.deepEqual(snapshot, {
+    version: 1,
+    allocations,
+    totalWeight: 100,
+    unallocatedWeight: 0,
+  });
+  assert.equal(parseRawWeightAllocations(["raw-weight-allocations:v1:{bad json}"]), undefined);
+
+  const duplicateOption = structuredClone(report);
+  duplicateOption.vendorScores[1]!.vendor = "alpha";
+  assert.equal(reweightAnalysis(duplicateOption, allocations).recommendation, "INSUFFICIENT_EVIDENCE");
+  const absentScore = structuredClone(report);
+  absentScore.vendorScores[1]!.score = undefined as unknown as number;
+  assert.equal(reweightAnalysis(absentScore, allocations).recommendation, "INSUFFICIENT_EVIDENCE");
+  const mandatoryFailure = structuredClone(report);
+  mandatoryFailure.vendorScores[1]!.qualificationGates = [{
+    gate: "Eligibility",
+    mandatory: true,
+    status: "FAIL",
+    rationale: "The option failed a mandatory eligibility check.",
+    evidenceSourceIds: [],
+  }];
+  assert.equal(reweightAnalysis(mandatoryFailure, allocations).recommendation, "No qualified option");
+});
+
+test("retains an existing scoreable winner when adjusted weights target a sparse lens during incomplete research", () => {
+  const report = {
+    prompt: "Compare Alpha and Beta for product selection.",
+    category: "Products",
+    vendors: ["Alpha", "Beta"],
+    recommendation: "Alpha",
+    score: 82,
+    vendorScores: ["Alpha", "Beta"].map((vendor, index) => ({
+      vendor,
+      score: index ? 70 : 82,
+      qualificationStatus: "INSUFFICIENT_EVIDENCE" as const,
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion,
+        weight,
+        score: criterion === "Meets Needs / Features" ? index ? 60 : 85 : 50,
+        rationale: criterion === "Meets Needs / Features"
+          ? "Retained comparable score from the original research."
+          : "No comparable verified metric or retained raw lens score is available; this criterion remains neutral.",
+        evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+  const weights = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion,
+    weight: criterion === "Value for Money" ? 100 : 0,
+  }));
+
+  const result = reweightAnalysis(report, weights);
+
+  assert.equal(result.recommendation, "Alpha");
+  assert.equal(result.score, 82);
+  assert.equal(result.vendorScores.find((vendor) => vendor.vendor === "Alpha")?.score, 82);
+  assert.equal(result.vendorScores.find((vendor) => vendor.vendor === "Beta")?.score, 70);
+  assert.match(result.executiveSummary, /existing scoreable recommendation, Alpha, is retained/i);
+  assert.match(result.recommendationReason, /no missing criterion scores were inferred/i);
+
+  const retainedRawLensScores = structuredClone(report);
+  for (const vendor of retainedRawLensScores.vendorScores ?? []) {
+    const valueLens = vendor.weightedScores?.find((row) => row.criterion === "Value for Money");
+    if (valueLens) {
+      valueLens.score = vendor.vendor === "Alpha" ? 40 : 95;
+      valueLens.rationale = "Retained raw score from the original incomplete research.";
+    }
+  }
+  const recalculated = reweightAnalysis(retainedRawLensScores, weights);
+  assert.equal(recalculated.recommendation, "Beta");
+  assert.equal(recalculated.score, 95);
+});
+
+test("regenerates qualified reports without overriding mandatory gates or inventing missing evidence", () => {
+  const report = {
+    prompt: "Compare two current electric vehicles in Australia.",
+    category: "Electric vehicles",
+    vendors: ["Alpha", "Beta"],
+    recommendation: "Alpha",
+    score: 80,
+    vendorScores: ["Alpha", "Beta"].map((vendor, index) => ({
+      vendor,
+      score: index ? 60 : 80,
+      qualificationStatus: "QUALIFIED" as const,
+      qualificationGates: [],
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion, weight, score: index ? 60 : 80,
+        rationale: "Original evidence",
+        evidence: criterion === "Meets Needs / Features"
+          ? [qualificationEvidence(vendor, index ? 60 : 80, 90, index ? "b" : "a")]
+          : [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+  const weights = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion, weight: criterion === "Meets Needs / Features" ? 100 : 0,
+  }));
+  const result = reweightAnalysis(report, weights);
+  assert.equal(result.recommendation, "Alpha");
+  assert.equal(result.vendorScores[0]?.weightedScores?.find((row) => row.criterion === "Meets Needs / Features")?.weight, 100);
+  assert.equal(result.vendorScores[0]?.qualificationStatus, "QUALIFIED");
+  report.vendorScores[0]!.qualificationStatus = "NOT_QUALIFIED";
+  report.vendorScores[0]!.qualificationGates = [{
+    gate: "Market availability", mandatory: true, status: "FAIL", rationale: "Unavailable", evidenceSourceIds: [],
+  }];
+  const blocked = reweightAnalysis(report, weights);
+  assert.equal(blocked.recommendation, "No qualified option");
+  assert.equal(blocked.score, 0);
+  assert.equal(blocked.vendorScores[0]?.qualificationGates?.[0]?.status, "FAIL");
+  assert.match(blocked.recommendationReason, /cannot override failed qualification gates/i);
+  report.vendorScores[0]!.qualificationStatus = "QUALIFIED";
+  report.vendorScores[0]!.qualificationGates = [];
+  report.vendorScores.forEach((vendor) => vendor.weightedScores?.forEach((row) => { row.evidence = []; }));
+  // Missing research reduces confidence, but retained comparable option scores
+  // still support a modelled leader after an otherwise valid reweight.
+  assert.equal(reweightAnalysis(report, weights).recommendation, "Alpha");
+});
+
+test("accepts a user-named mapped factor within 100%, but rejects unmapped allocations", () => {
+  const report = { prompt: "Compare Alpha and Beta services.", category: "Service providers", vendorScores: [] } as unknown as AnalysisPayload;
+  const weights = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion, weight: criterion === "Meets Needs / Features" ? 100 : 0,
+  }));
+  assert.deepEqual(reweightAnalysis(report, weights, [{
+    criterion: "My local fit", weight: 20, mappedCriteria: ["Meets Needs / Features"],
+  }]).weightAdjustments?.map((entry) => entry.criterion), ["My local fit"]);
+  assert.throws(() => reweightAnalysis(report, weights, [{
+    criterion: "My local fit", weight: 20, mappedCriteria: ["Value for Money"],
+  }]), /more than its submitted 0% weight/i);
+  assert.throws(() => reweightAnalysis(report, weights, [{
+    criterion: "My local fit", weight: 20, mappedCriteria: ["Made up score"],
+  }]), /one or two of the ten built-in criteria/i);
 });
 
 test("explains when adjusted weights cannot separate identical underlying scores", () => {
@@ -5308,18 +10284,18 @@ test("explains when adjusted weights cannot separate identical underlying scores
   })), [{
     criterion: "Twenty-year ownership",
     weight: 15,
-    mappedCriteria: ["Quality & Reliability", "Value for Money"],
+    mappedCriteria: ["Value for Money"],
   }]);
 
-  assert.match(result.executiveSummary, /underlying criterion scores are identical/i);
-  assert.match(result.executiveSummary, /Twenty-year ownership 15%/);
-  assert.equal(result.recommendation, "No definitive winner");
+  assert.match(result.executiveSummary, /active lenses have no comparable scores/i);
+  assert.match(result.executiveSummary, /existing scoreable recommendation/i);
+  assert.equal(result.recommendation, "Mahindra diesel");
   assert.doesNotMatch(result.executiveSummary, /highest resulting score|leads/i);
   assert.doesNotMatch(result.recommendationReason, /leads/i);
   assert.deepEqual(result.weightAdjustments, [{
     criterion: "Twenty-year ownership",
     weight: 15,
-    mappedCriteria: ["Quality & Reliability", "Value for Money"],
+    mappedCriteria: ["Value for Money"],
   }]);
   assert.deepEqual(
     result.vendorScores?.find((vendor) => vendor.vendor === "Tata Safari diesel vehicle")?.switchConditions,
@@ -5327,10 +10303,4292 @@ test("explains when adjusted weights cannot separate identical underlying scores
   );
   assert.match(
     result.vendorScores?.find((vendor) => vendor.vendor === "Tata Safari diesel vehicle")?.verdict ?? "",
-    /does not support a definitive winner/i,
+    /active lenses lack comparable scores/i,
   );
   assert.doesNotMatch(
     result.vendorScores?.find((vendor) => vendor.vendor === "Mahindra diesel")?.verdict ?? "",
     /leads/i,
   );
 });
+
+test("authoritative raw weights preserve Brand Reputation and Value for Money adjustments", () => {
+  const original = {
+    prompt: "Compare Pepper Money and Westpac for a home loan in Australia.",
+    category: "Home Loan Provider Comparison",
+    vendors: ["Pepper Money", "Westpac"],
+    recommendation: "Westpac",
+    score: 70,
+    recommendationReason: "Previous decision.",
+    executiveSummary: "Previous report.",
+    insights: [],
+    vendorScores: ["Pepper Money", "Westpac"].map((vendor) => ({
+      vendor, score: vendor === "Westpac" ? 70 : 65, color: "#246",
+      verdict: "Preliminary modelled decision.",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion, weight,
+        score: criterion === "Brand Reputation" ? (vendor === "Westpac" ? 90 : 55)
+          : criterion === "Value for Money" ? (vendor === "Pepper Money" ? 85 : 45) : 65,
+        rationale: "Retained modelled score.", evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+  const adjusted = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion,
+    weight: ({
+      "Meets Needs / Features": 20, "Quality & Reliability": 10, "Value for Money": 10,
+      "Brand Reputation": 35, "Customer Advocacy / NPS": 8, "Safety & Security": 5,
+      "Innovation / Differentiation": 4, "Regulatory Compliance": 3,
+      "Strategic Provider Role": 3, Sustainability: 2,
+    } as Record<string, number>)[criterion]!,
+  }));
+  const result = reweightAnalysis(original, adjusted);
+  assert.equal(result.weightModel?.totalWeight, 100);
+  assert.equal(result.weightModel?.criteria.find((entry) => entry.criterionId === "BRAND_REPUTATION")?.weight, 35);
+  assert.equal(result.weightModel?.criteria.find((entry) => entry.criterionId === "VALUE_FOR_MONEY")?.weight, 10);
+  assert.equal(original.recommendation, "Westpac");
+  assert.ok(original.vendorScores.every((vendor) => vendor.weightedScores?.every((entry) => entry.weight >= 0)));
+  assert.ok(original.vendorScores.some((vendor) => vendor.vendor === result.recommendation));
+  const partial = reweightAnalysis(original, adjusted.map((item) => ({
+    ...item, weight: item.criterion === "Brand Reputation" ? 15 : item.weight,
+  })));
+  assert.equal(partial.weightModel?.totalWeight, 80);
+  assert.equal(partial.weightModel?.unallocatedWeight, 20);
+  assert.equal(partial.weightModel?.criteria.find((entry) => entry.criterionId === "VALUE_FOR_MONEY")?.weight, 10);
+  assert.equal(partial.vendorScores[0]?.weightedScores?.find((entry) => entry.criterion === "Value for Money")?.weight, 12.5);
+  assert.throws(() => reweightAnalysis(original, adjusted.map((item) => ({
+    ...item, weight: item.criterion === "Brand Reputation" ? 43 : item.weight,
+  }))), /Your total allocation is 108%. Reduce the weights by 8% to continue\./);
+  assert.equal(original.recommendation, "Westpac");
+  const explicitZero = reweightAnalysis(original, adjusted.map((item) => ({
+    ...item, weight: item.criterion === "Safety & Security" ? 0 : item.weight,
+  })));
+  assert.equal(explicitZero.weightModel?.criteria.find((entry) => entry.criterionId === "SAFETY_SECURITY")?.weight, 0);
+});
+
+test("custom criteria validate spelling, overlap, home-loan relevance and service mapping", () => {
+  const report = {
+    prompt: "Compare Pepper Money and Westpac home loans in Australia.",
+    category: "Home Loan Provider Comparison",
+    vendors: ["Pepper Money", "Westpac"],
+    recommendation: "Pepper Money",
+    score: 67,
+    recommendationReason: "Previous decision.",
+    executiveSummary: "Previous report.",
+    insights: [],
+    vendorScores: ["Pepper Money", "Westpac"].map((vendor) => ({
+      vendor, score: 67, color: "#246", verdict: "Preliminary modelled decision.",
+      weightedScores: WEIGHTED_CRITERIA.map(({ criterion, weight }) => ({
+        criterion, weight, score: vendor === "Pepper Money" ? 67 : 65,
+        rationale: "Retained modelled score.", evidence: [],
+      })),
+    })),
+  } as unknown as AnalysisPayload;
+  const weights = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion, weight: criterion === "Customer Advocacy / NPS" ? 20 : criterion === "Brand Reputation" ? 20 : 0,
+  }));
+  assert.throws(() => reweightAnalysis(report, weights, [{
+    criterion: "Brand Reputaion", weight: 5, mappedCriteria: ["Brand Reputation"],
+  }]), /Did you mean "Brand Reputation"/);
+  assert.throws(() => reweightAnalysis(report, weights, [{
+    criterion: "Brand Trust", weight: 5, mappedCriteria: ["Brand Reputation"],
+  }]), /overlaps with Brand Reputation/);
+  assert.throws(() => reweightAnalysis(report, weights, [{
+    criterion: "Resale Value", weight: 5, mappedCriteria: ["Value for Money"],
+  }]), /Resale Value is not relevant to a Home Loan comparison/);
+  const custom = { criterionId: "custom_approval_speed_001", criterion: "Approval Speed",
+    weight: 5, mappedCriteria: ["Customer Advocacy / NPS"] };
+  const result = reweightAnalysis(report, weights, [custom]);
+  const approved = result.weightModel?.criteria.find((entry) => entry.criterionId === custom.criterionId);
+  assert.equal(approved?.criterionLabel, "Approval Speed");
+  assert.equal(approved?.mappedLensId, "CUSTOMER_ADVOCACY");
+  assert.equal(approved?.weight, 5);
+  assert.equal(result.weightModel?.criteria.find((entry) => entry.criterionId === "CUSTOMER_ADVOCACY")?.weight, 15);
+  assert.ok(report.vendorScores.some((vendor) => vendor.vendor === result.recommendation));
+  assert.equal(reweightAnalysis(result, weights, [custom]).weightModel?.criteria.find((entry) => entry.criterionId === custom.criterionId)?.criterionLabel, "Approval Speed");
+});
+
+test("discovers vehicle metrics from retrieved document sections outside the matrix", () => {
+  const url = "https://cars.example/xuv700";
+  const parsed = {
+    vendorScores: [{
+      vendor: "Mahindra XUV700 diesel automatic",
+      weightedScores: [],
+    }],
+  };
+  const documents = [{
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text: "Mahindra XUV700\nDiesel automatic\nEngine power: 185 PS\nMaximum torque: 450 Nm.",
+    sha256: "d".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.ok(addVerifiedVehicleDocumentMetrics(parsed, documents) > 0);
+  const evidence = (parsed.vendorScores[0].weightedScores as Array<{ evidence?: Array<Record<string, unknown>> }>)
+    .flatMap((row) => row.evidence ?? []);
+  assert.ok(evidence.some((entry) => entry.metricKey === "engine_power"));
+  assert.equal(evidence[0].documentSha256, "d".repeat(64));
+});
+
+test("shows a sourced indicative vehicle starting price without pretending it is an on-road quote", () => {
+  const name = "Mahindra XUV700 diesel";
+  const parsed: Record<string, unknown> = {
+    vendorScores: [{ vendor: name, weightedScores: [] }],
+    pricing: [],
+  };
+  const url = "https://auto.mahindra.com/xuv700-diesel-price";
+  const documents = [{
+    url, finalUrl: url, contentType: "text/html",
+    text: "Mahindra XUV700 diesel starts at ₹14.49 lakh ex-showroom.",
+    sha256: "d".repeat(64), retrievedAt: "2026-09-23T00:00:00.000Z", truncated: false,
+  }];
+  assert.ok(addVerifiedVehicleDocumentMetrics(parsed, documents) > 0);
+  validateQuantitativeEvidenceAgainstDocuments(parsed, documents);
+  assert.equal(addIndicativeVehiclePriceRow(parsed, [name]), 1);
+  const row = (parsed.pricing as Array<{ values: Record<string, string>; winner: string }>)[0];
+  assert.match(row.values[name], /₹14\.49 lakh/);
+  assert.match(row.values[name], /State taxes, registration, insurance and other charges may apply/);
+  assert.equal(row.winner, "");
+  assert.equal(addIndicativeVehiclePriceRow({ vendorScores: [{ vendor: name, weightedScores: [] }] }, [name]), 0);
+});
+
+test("derives qualitative feature evidence from exact retrieved sentences", () => {
+  const url = "https://aem.example/product";
+  const parsed = {
+    features: [{ dimension: "managed service coverage", values: { AEM: "Available" } }],
+    vendorScores: [{ vendor: "AEM", weightedScores: [] }],
+  };
+  const documents = [{
+    url,
+    finalUrl: url,
+    contentType: "text/html",
+    text: "AEM provides managed service coverage for enterprise content teams.",
+    sha256: "e".repeat(64),
+    retrievedAt: "2026-09-23T00:00:00.000Z",
+    truncated: false,
+  }];
+  assert.equal(addVerifiedQualitativeDocumentClaims(parsed, documents), 1);
+  const evidence = (parsed.vendorScores[0].weightedScores as Array<{ evidence: Array<Record<string, unknown>> }>)[0]!.evidence[0]!;
+  assert.equal(evidence.exactClaim, documents[0].text);
+  assert.equal(evidence.sourceTextStart, 0);
+  assert.equal(evidence.documentSha256, "e".repeat(64));
+});
+
+test("preliminary Decision Mode follows stated priority weights and labels scores as assumptions", () => {
+  const result = createDecisionModeAnalysis({
+    prompt: "Budget is the top priority",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features"],
+    urls: ["https://example.invalid/ignored"],
+  }, {
+    lenses: [
+      { criterion: "Budget Lens", scores: { Alpha: 92, Beta: 55 }, rationale: "Budget is emphasized." },
+      { criterion: "Feature Lens", scores: { Alpha: 50, Beta: 98 }, rationale: "Features are secondary." },
+    ],
+  });
+
+  assert.equal(result.recommendation, "Alpha");
+  assert.match(result.recommendationReason, /Budget Lens 60%/);
+  assert.match(result.recommendationReason, /confidence/i);
+  assert.ok(result.contextAssumptions?.some((assumption) => /modelled assumptions/i.test(assumption)));
+  assert.ok(result.contextAssumptions?.some((assumption) => /preliminary model-only scorecard/i.test(assumption)));
+  assert.ok(result.vendorScores[0]?.weightedScores?.some((score) => /not a verified product fact/i.test(score.rationale)));
+  assert.match(result.vendorScores[0]?.marketPosition?.evidence ?? "", /research has not been performed/i);
+  assert.doesNotMatch(JSON.stringify(result), /source-free Decision Mode/i);
+  assert.deepEqual(result.sourceAvailability, []);
+});
+
+test("preliminary Decision Mode calls complete model coverage scored, not judged or source-validated", () => {
+  const result = createDecisionModeAnalysis({
+    prompt: "Compare two options. Budget is the top priority.",
+    vendors: ["Mahindra XUV700", "Tata Safari"],
+    criteria: ["Budget", "Features"],
+    urls: [],
+  }, {
+    lenses: [
+      { criterion: "Budget Lens", scores: { "Mahindra XUV700": 85, "Tata Safari": 81 } },
+      { criterion: "Feature Lens", scores: { "Mahindra XUV700": 82, "Tata Safari": 79 } },
+    ],
+  });
+
+  assert.equal(result.recommendation, "Mahindra XUV700");
+  assert.match(result.executiveSummary, /100% of active priority lenses have comparable model scores across every option/i);
+  assert.match(result.executiveSummary, /not source-backed evidence coverage/i);
+  assert.match(result.executiveSummary, /source-backed validation has not yet run/i);
+  assert.doesNotMatch(result.executiveSummary, /100%[^.]*judged/i);
+  assert.match(result.insights[0]!, /100% of active priority lenses have comparable model scores/i);
+  assert.match(result.insights[0]!, /does not measure source-backed validation/i);
+  assert.match(result.insights[1]!, /has not yet run/i);
+  assert.deepEqual(result.sourceAvailability, []);
+});
+
+test("preliminary Decision Mode applies actual scoped budget before modelled feature rankings", () => {
+  const input = {
+    prompt: "Choose a new EV in Australia under AUD $40,000; features matter most",
+    market: "AU" as const,
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features"],
+    urls: [],
+    comparableCosts: {
+      Alpha: { amount: 46000, currency: "AUD", basis: "new purchase price in AU" },
+      Beta: { amount: 39000, currency: "AUD", basis: "new purchase price in AU" },
+    },
+  };
+  const scores = { lenses: [
+    { criterion: "Budget Lens", scores: { Alpha: 95, Beta: 60 } },
+    { criterion: "Feature Lens", scores: { Alpha: 99, Beta: 65 } },
+  ] };
+  const result = createDecisionModeAnalysis(input, scores);
+  assert.equal(result.recommendation, "Beta");
+  assert.match(result.recommendationReason, /supplied comparable price meets the stated hard cap/i);
+  const noMatch = createDecisionModeAnalysis({
+    ...input, comparableCosts: {
+      Alpha: input.comparableCosts.Alpha,
+      Beta: { amount: 41000, currency: "AUD", basis: "new purchase price in AU" },
+    },
+  }, scores);
+  assert.equal(noMatch.recommendation, "No budget match");
+  assert.match(noMatch.recommendationReason, /closest priced option is Beta.*1000 over budget/i);
+  const unknown = createDecisionModeAnalysis({
+    ...input, comparableCosts: { Alpha: input.comparableCosts.Alpha },
+  }, scores);
+  assert.equal(unknown.recommendation, "Beta");
+  assert.match(unknown.recommendationReason, /affordability is unverified/i);
+});
+
+test("researched Decision Mode uses retrieved scoped total prices for a hard budget without injected comparableCosts", async () => {
+  const input = {
+    prompt: "Choose a new Australian EV under AUD $40,000; features are my top priority",
+    market: "AU" as const,
+    vendors: ["BYD Atto 3", "MG4 EV"],
+    criteria: ["Features", "Budget"],
+    urls: ["https://www.byd.com/au/car/atto3", "https://mgmotor.com.au/models/mg4"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [
+      { criterion: "Feature Lens", scores: { "BYD Atto 3": 95, "MG4 EV": 70 } },
+      { criterion: "Budget Lens", scores: { "BYD Atto 3": 90, "MG4 EV": 60 } },
+    ],
+  });
+  const retrieveDocuments = async (urls: string[]) => urls.map((url) => {
+    const option = url.includes("byd") ? "BYD Atto 3" : "MG4 EV";
+    const amount = option === "BYD Atto 3" ? "45,000" : "42,000";
+    return { url, document: {
+      url, finalUrl: url, contentType: "text/html",
+      text: `${option} is currently available as a new EV in Australia. ${option} new drive-away price in Australia is AUD $${amount}.`,
+      sha256: "a".repeat(64), retrievedAt: "2025-01-01T00:00:00.000Z", truncated: false,
+    } };
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments,
+    scoreResearch: async () => ({ items: [] }),
+  });
+  assert.equal(result.recommendation, "No budget match");
+  assert.match(result.recommendationReason, /closest priced option is MG4 EV.*2000 over budget/i);
+  assert.ok(result.contextAssumptions?.some((note) => /MG4 EV: retrieved new AU drive-away price 42000 AUD/i.test(note)));
+  const priceUnknown = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => (await retrieveDocuments(urls)).map((row) =>
+      row.document?.text.includes("MG4 EV")
+        ? { ...row, document: { ...row.document, text: "MG4 EV availability and features in Australia. No current drive-away price is supplied." } }
+        : row),
+    scoreResearch: async () => ({ items: [] }),
+  });
+  assert.equal(priceUnknown.recommendation, "MG4 EV");
+  assert.match(priceUnknown.recommendationReason, /affordability is unverified/i);
+  assert.match(priceUnknown.recommendationReason, /market availability is unresolved/i);
+  const underCap = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => (await retrieveDocuments(urls)).map((row) =>
+      row.document?.text.includes("MG4 EV")
+        ? { ...row, document: { ...row.document, text: row.document.text.replace("42,000", "39,000") } }
+        : row),
+    scoreResearch: async () => ({ items: [] }),
+  });
+  assert.equal(underCap.recommendation, "MG4 EV");
+  assert.match(underCap.recommendationReason, /supplied comparable price meets the stated hard cap/i);
+});
+
+test("preliminary Decision Mode declares a low-confidence winner from an exact tie", () => {
+  const result = createDecisionModeAnalysis({
+    prompt: "Choose between two equally suitable options for budget",
+    vendors: ["Zulu", "Alpha"],
+    criteria: ["Budget"],
+    urls: [],
+  }, {
+    lenses: [{ criterion: "Budget Lens", scores: { Zulu: 70, Alpha: 70 } }],
+  });
+
+  assert.equal(result.recommendation, "Alpha");
+  assert.match(result.recommendationReason, /effectively tied/i);
+  assert.match(result.recommendationReason, /stable canonical option key/i);
+  assert.match(result.executiveSummary, /Confidence: 20\/100/i);
+});
+
+test("preliminary Decision Mode recommends when comparative scores exist below 20% coverage", () => {
+  const result = createDecisionModeAnalysis({
+    prompt: "Compare the options",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features", "Safety", "Reliability", "Support", "Range"],
+    urls: [],
+  }, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 90, Beta: 40 } }],
+  });
+
+  assert.equal(result.recommendation, "Alpha");
+  assert.equal(result.score, 90);
+  assert.match(result.recommendationReason, /17%/);
+  assert.doesNotMatch(result.executiveSummary, /No winner is declared/);
+});
+
+test("preliminary Decision Mode degrades malformed model output to an honest insufficient-data result", () => {
+  const result = createDecisionModeAnalysis({
+    prompt: "Choose the better option for budget and features",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features"],
+    urls: [],
+  }, "{ malformed json");
+
+  assert.equal(result.recommendation, "INSUFFICIENT_DATA");
+  assert.match(result.recommendationReason, /0%/);
+  assert.deepEqual(result.sourceAvailability, []);
+});
+
+test("researched Decision Mode scores retrieved pages and produces a deterministic recommendation", async () => {
+  const input = {
+    prompt: "Choose the better option; budget is the top priority",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 52, Beta: 70 } }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} official pricing and budget information for the listed product.`,
+          sha256: "a".repeat(64),
+          retrievedAt: "2025-01-01T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => ({
+        sourceId: source.sourceId,
+        option: source.eligibleOptions[0],
+        scores: [{
+          criterion: priorities[0]!.lens,
+          score: source.eligibleOptions[0] === "Alpha" ? 91 : 38,
+          rationale: "The retrieved page directly informs budget fit.",
+          quoteSpanId: eligibleDecisionQuoteSpanId(source, source.eligibleOptions[0]!, priorities[0]!.lens),
+        }],
+      })),
+    }),
+  });
+
+  assert.equal(result.recommendation, "Alpha");
+  assert.equal(result.sourceAvailability?.filter((source) => source.status === "reachable").length, 2);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(result.contextAssumptions?.some((assumption) => /research context, not verified evidence/i.test(assumption)));
+  const budgetScore = result.vendorScores.find((vendor) => vendor.vendor === "Alpha")?.weightedScores
+    ?.find((score) => score.criterion === "Budget Lens");
+  assert.equal(budgetScore?.evidence?.[0]?.sourceUrl, "https://alpha.example/pricing");
+  assert.match(budgetScore?.evidence?.[0]?.exactClaim ?? "", /Alpha official pricing/);
+  assert.equal(budgetScore?.evidence?.[0]?.evidenceKind, "unverified");
+  assert.ok(result.insights.some((insight) => /Unverified research context.*https:\/\/alpha\.example\/pricing.*Alpha official pricing/.test(insight)));
+  assert.match(result.vendorScores[0]?.marketPosition?.evidence ?? "", /out of scope/i);
+});
+
+test("market-neutral Decision Mode discovery runs without an explicit market or user URLs", async () => {
+  const input = {
+    prompt: "Choose the better option for budget and features",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 52, Beta: 70 } }],
+  });
+  let discoveryCalled = false;
+  let discoveryLocale: { countryCode: string; country: string } | undefined;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async (_options, _category, countryCode, country) => {
+      discoveryCalled = true;
+      discoveryLocale = { countryCode, country };
+      return ["https://alpha.example/overview", "https://beta.example/overview"];
+    },
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      const text = `${option} product features and budget plans for comparison.`;
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text,
+          sha256: "c".repeat(64),
+          retrievedAt: "2025-01-01T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.flatMap((source) => {
+        const option = source.eligibleOptions[0]!;
+        const span = source.quoteSpans?.find(({ eligibleOptions, priorityLenses }) => (
+          eligibleOptions.includes(option) && priorities.some(({ lens }) => priorityLenses.includes(lens))
+        ));
+        const criterion = priorities.find(({ lens }) => span?.priorityLenses.includes(lens))?.lens;
+        if (!span || !criterion) return [];
+        return [{
+          sourceId: source.sourceId,
+          option,
+          scores: [{
+            criterion,
+            score: option === "Alpha" ? 91 : 38,
+            rationale: "The retrieved page provides comparative context.",
+            quoteSpanId: span.spanId,
+          }],
+        }];
+      }),
+    }),
+  });
+
+  assert.equal(discoveryCalled, true);
+  assert.deepEqual(discoveryLocale, { countryCode: "", country: "" });
+  assert.equal(result.recommendation, "Alpha");
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.contextAssumptions?.some((assumption) => /market-neutral web discovery was used.*geographic.*remain uncertain/i.test(assumption)));
+  assert.match(result.executiveSummary, /No comparison market was specified/i);
+  assert.match(result.vendorScores[0]?.marketPosition?.evidence ?? "", /geographic.*remain uncertain/i);
+});
+
+test("marketless Decision Mode does not seed country URLs from an inferred market", async () => {
+  const input = {
+    prompt: "Compare Hyundai Creta Electric and Mahindra BE 6 for range",
+    vendors: ["Hyundai Creta Electric", "Mahindra BE 6"],
+    criteria: ["Range"],
+    urls: [],
+  };
+  const inferredMarket = inferResearchMarket(input.prompt, input.vendors);
+  const inferredMarketSeeds = officialMarketSourcesFor(input.prompt, input.vendors, inferredMarket);
+  assert.equal(inferredMarket.countryCode, "IN");
+  assert.ok(inferredMarketSeeds.some((url) => /hyundai\.com\/in|mahindraelectricsuv/i.test(url)));
+
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Range Lens", scores: { "Hyundai Creta Electric": 70, "Mahindra BE 6": 75 } }],
+  });
+  const candidateUrls = [
+    "https://neutral.example/creta-electric",
+    "https://neutral.example/be-6",
+  ];
+  const retrievedUrls: string[] = [];
+  let discoveryLocale: { countryCode: string; country: string } | undefined;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async (_options, _category, countryCode, country) => {
+      discoveryLocale = { countryCode, country };
+      return candidateUrls;
+    },
+    retrieveDocuments: async (urls) => {
+      retrievedUrls.push(...urls);
+      return urls.map((url) => {
+        const option = url.includes("creta") ? "Hyundai Creta Electric" : "Mahindra BE 6";
+        const text = `${option} specifications include an electric vehicle range figure.`;
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: "e".repeat(64),
+            retrievedAt: "2026-09-25T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      });
+    },
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => ({
+        sourceId: source.sourceId,
+        option: source.eligibleOptions[0],
+        scores: [{
+          criterion: priorities[0]!.lens,
+          score: 75,
+          rationale: "The retrieved product page provides range context.",
+          quoteSpanId: eligibleDecisionQuoteSpanId(source, source.eligibleOptions[0]!, priorities[0]!.lens),
+        }],
+      })),
+    }),
+  });
+
+  assert.deepEqual(discoveryLocale, { countryCode: "", country: "" });
+  assert.deepEqual(retrievedUrls, candidateUrls);
+  assert.ok(!retrievedUrls.some((url) => inferredMarketSeeds.includes(url)));
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+});
+
+test("malformed researched items get one repair and are quarantined without stopping comparison", async () => {
+  const input = {
+    prompt: "Choose the better option for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing", "https://beta.example/features"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 80, Beta: 40 } }],
+  });
+  let calls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} official pricing and budget information.`,
+          sha256: "b".repeat(64),
+          retrievedAt: "2025-01-01T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async (request) => {
+      calls += 1;
+      if (request.repairSourceIds.length) {
+        assert.deepEqual(request.repairSourceIds, ["source-2"]);
+        return { items: [{ sourceId: "source-2", option: "Beta", scores: [{
+          criterion: "Budget Lens",
+          score: "bad",
+          rationale: "invalid score",
+          quoteSpanId: eligibleDecisionQuoteSpanId(request.sources[0]!, "Beta", "Budget Lens"),
+        }] }] };
+      }
+      return {
+        items: [
+          { sourceId: "source-1", option: "Alpha", scores: [{ criterion: "Budget Lens", score: 92, rationale: "Grounded in the page.", quoteSpanId: eligibleDecisionQuoteSpanId(request.sources[0]!, "Alpha", "Budget Lens") }] },
+          { sourceId: "source-2", option: "Beta", scores: [{ criterion: "Budget Lens", score: "bad", rationale: "Invalid score.", quoteSpanId: eligibleDecisionQuoteSpanId(request.sources[1]!, "Beta", "Budget Lens") }] },
+          { sourceId: "source-3", option: "Beta", scores: [{ criterion: "Budget Lens", score: 60, rationale: "Grounded in a separate page.", quoteSpanId: eligibleDecisionQuoteSpanId(request.sources[2]!, "Beta", "Budget Lens") }] },
+        ],
+      };
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.recommendation, "Alpha");
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.contextAssumptions?.some((assumption) => /2 rejected research score item/i.test(assumption)));
+  assert.ok(result.insights.some((insight) => /confidence is reduced/i.test(insight)));
+});
+
+test("one malformed score does not discard a separately grounded shared-lens score", async () => {
+  const input = {
+    prompt: "Choose the better option for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 80, Beta: 40 } }],
+  });
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} official pricing and budget information.`,
+          sha256: "c".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources }) => {
+      scoringCalls += 1;
+      return {
+        items: sources.map((source) => ({
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: source.eligibleOptions[0] === "Alpha"
+            ? [
+                { criterion: "Budget Lens", score: 50, rationale: "Grounded price context.", quoteSpanId: eligibleDecisionQuoteSpanId(source, "Alpha", "Budget Lens") },
+                { criterion: "Feature Lens", score: 100, rationale: "Unsupported lens.", quoteSpanId: "unapproved-feature-span" },
+              ]
+            : [{ criterion: "Budget Lens", score: 92, rationale: "Grounded price context.", quoteSpanId: eligibleDecisionQuoteSpanId(source, "Beta", "Budget Lens") }],
+        })),
+      };
+    },
+  });
+  assert.equal(scoringCalls, 1);
+  assert.equal(result.recommendation, "Beta");
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.contextAssumptions?.some((assumption) => /1 rejected research score item/i.test(assumption)));
+  for (const vendor of result.vendorScores) {
+    const evidence = vendor.weightedScores?.flatMap((lens) => lens.evidence ?? []) ?? [];
+    assert.equal(evidence.length, 1);
+    assert.equal(evidence[0]?.sourceId, `docsha256:${"c".repeat(64)}`);
+    assert.equal(evidence[0]?.documentSha256, "c".repeat(64));
+    assert.equal(evidence[0]?.supportDirection, "context");
+    assert.equal(evidence[0]?.evidenceKind, "unverified");
+    assert.doesNotThrow(() => CreateGuestComparisonResponse._def.left.shape.vendorScores.element.shape.weightedScores.unwrap().element.shape.evidence.unwrap().element.parse(evidence[0]));
+  }
+});
+
+test("quote span IDs resolve to exact retrieved text and allow a grounded comparative score", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 70, Beta: 55 } }],
+  });
+  const selectedSpans = new Map<string, string>();
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      const boilerplate = "General documentation covers support, security, deployment, and service operations. ".repeat(42);
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} product documentation overview.\n${boilerplate}\nPricing details include monthly budget plans for small businesses.`,
+          sha256: option === "Alpha" ? "a".repeat(64) : "b".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => {
+        const span = source.quoteSpans?.[0];
+        assert.ok(span);
+        assert.ok(span.text.length <= 280);
+        assert.ok(span.text.length >= 30);
+        assert.ok(span.eligibleOptions.includes(source.eligibleOptions[0]!));
+        assert.ok(span.priorityLenses.includes(priorities[0]!.lens));
+        assert.ok(source.spanSourceText!.length > 2_000);
+        assert.ok(source.text.length <= 2_000);
+        assert.ok(source.spanSourceText!.includes(span.text));
+        assert.match(span.text, /pricing|budget/i);
+        selectedSpans.set(source.sourceId, span.text);
+        return {
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: 76,
+            rationale: "The selected passage discusses the option's budget pricing.",
+            quoteSpanId: span.spanId,
+            // The validator must use its own exact text, not model-written text.
+            excerpt: "Invented paraphrase that was not retrieved.",
+          }],
+        };
+      }),
+    }),
+  });
+
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  for (const vendor of result.vendorScores) {
+    const evidence = vendor.weightedScores?.flatMap((lens) => lens.evidence ?? []) ?? [];
+    assert.equal(evidence.length, 1);
+    const sourceId = evidence[0]?.sourceId?.replace(/^docsha256:/, "");
+    const matched = [...selectedSpans.entries()].find(([id]) => (
+      evidence[0]?.sourceId === `docsha256:${id === "source-1" ? "a".repeat(64) : "b".repeat(64)}`
+    ));
+    assert.ok(sourceId);
+    assert.ok(matched);
+    assert.equal(evidence[0]?.exactClaim, matched ? selectedSpans.get(matched[0]) : undefined);
+  }
+});
+
+test("invalid and wrong-source quote span IDs cannot supply a score", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 71, Beta: 43 } }],
+  });
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} publishes monthly budget pricing and plan details for small businesses.`,
+          sha256: "c".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities, repairSourceIds }) => {
+      scoringCalls += 1;
+      const beta = sources.find((source) => source.eligibleOptions.includes("Beta"))!;
+      const alpha = sources.find((source) => source.eligibleOptions.includes("Alpha"))!;
+      const betaSpan = beta.quoteSpans?.[0]!;
+      const alphaSpan = alpha.quoteSpans?.[0]!;
+      const requested = repairSourceIds.length ? beta : alpha;
+      const otherSourceSpan = requested === beta ? alphaSpan : betaSpan;
+      return {
+        items: [{
+          sourceId: requested.sourceId,
+          option: requested.eligibleOptions[0],
+          scores: [
+            { criterion: priorities[0]!.lens, score: 85, rationale: "Invalid ID.", quoteSpanId: "invented-quote-id" },
+            { criterion: priorities[0]!.lens, score: 90, rationale: "Wrong source.", quoteSpanId: otherSourceSpan.spanId },
+          ],
+        }],
+      };
+    },
+  });
+
+  assert.equal(scoringCalls, 2);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.equal(result.vendorScores.find(({ vendor }) => vendor === "Alpha")?.weightedScores?.[0]?.score, 71);
+  assert.equal(result.vendorScores.find(({ vendor }) => vendor === "Beta")?.weightedScores?.[0]?.score, 43);
+});
+
+test("a quote span cannot support a priority lens it was not selected for", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget and features",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget", "Features"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 72, Beta: 51 } }],
+  });
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} publishes monthly budget pricing and plan details for small businesses.`,
+          sha256: option === "Alpha" ? "d".repeat(64) : "e".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities, repairSourceIds }) => {
+      scoringCalls += 1;
+      assert.ok(priorities.length >= 2);
+      const source = sources[0]!;
+      const span = source.quoteSpans?.[0]!;
+      const unsupportedPriority = priorities.find(({ lens }) => !span.priorityLenses.includes(lens));
+      assert.ok(unsupportedPriority);
+      return {
+        items: [{
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: [{
+            criterion: unsupportedPriority.lens,
+            score: 99,
+            rationale: "This unsupported lens must not be accepted.",
+            quoteSpanId: span.spanId,
+          }],
+        }],
+      };
+    },
+  });
+
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+});
+
+test("one shared source can ground distinct option spans without double-counting duplicate items", async () => {
+  const input = {
+    prompt: "Compare Alpha and Beta on price",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Price"],
+    urls: ["https://catalog.example/compare"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Price Lens", scores: { Alpha: 60, Beta: 55 } }],
+  });
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      document: {
+        url,
+        finalUrl: url,
+        contentType: "text/html",
+        text: "Alpha product overview. Alpha selected plan has a monthly price of $10. Beta product overview. Beta selected plan has a monthly price of $100.",
+        sha256: "f".repeat(64),
+        retrievedAt: "2026-09-25T00:00:00.000Z",
+        truncated: false,
+      },
+    })),
+    scoreResearch: async ({ sources, priorities }) => {
+      scoringCalls += 1;
+      const source = sources[0]!;
+      const alphaSpan = source.quoteSpans?.find((span) => span.text.includes("Alpha selected plan"))!;
+      const betaSpan = source.quoteSpans?.find((span) => span.text.includes("Beta selected plan"))!;
+      assert.equal(source.sourceId, "source-1");
+      assert.deepEqual(alphaSpan.eligibleOptions, ["Alpha"]);
+      assert.deepEqual(betaSpan.eligibleOptions, ["Beta"]);
+      const item = (option: string, score: number, quoteSpanId: string) => ({
+        sourceId: source.sourceId,
+        option,
+        scores: [{
+          criterion: priorities[0]!.lens,
+          score,
+          rationale: `The retrieved passage supports ${option}.`,
+          quoteSpanId,
+        }],
+      });
+      return {
+        items: [
+          item("Alpha", 60, alphaSpan.spanId),
+          item("Beta", 45, betaSpan.spanId),
+          item("Beta", 99, betaSpan.spanId),
+        ],
+      };
+    },
+  });
+
+  assert.equal(scoringCalls, 1);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.equal(result.recommendation, "Alpha");
+  for (const vendor of result.vendorScores) {
+    const evidence = vendor.weightedScores?.flatMap((lens) => lens.evidence ?? []) ?? [];
+    assert.equal(evidence.length, 1);
+  }
+  assert.equal(
+    result.vendorScores.find(({ vendor }) => vendor === "Beta")?.weightedScores?.[0]?.score,
+    45,
+  );
+});
+
+test("quote-span cap reserves exact evidence for every eligible option/lens pair", async () => {
+  const input = {
+    prompt: "Compare Alpha and Beta on price",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Price"],
+    urls: ["https://catalog.example/compare"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Price Lens", scores: { Alpha: 60, Beta: 55 } }],
+  });
+  const alphaPassages = Array.from({ length: 20 }, (_, index) => (
+    `Alpha selected package ${index + 1} has a monthly price of $${index + 1} for subscribers.`
+  ));
+  const betaPassage = "Beta selected plan has a monthly price of $100 per subscriber.";
+  const documentText = [...alphaPassages, betaPassage].join("\n");
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      document: {
+        url,
+        finalUrl: url,
+        contentType: "text/html",
+        text: documentText,
+        sha256: "a".repeat(64),
+        retrievedAt: "2026-09-25T00:00:00.000Z",
+        truncated: false,
+      },
+    })),
+    scoreResearch: async ({ sources, priorities }) => {
+      const source = sources[0]!;
+      assert.equal(source.quoteSpans?.length, 16);
+      assert.ok(source.quoteSpans?.some((span) => span.eligibleOptions.includes("Alpha")));
+      const betaSpan = source.quoteSpans?.find((span) => span.eligibleOptions.includes("Beta"));
+      assert.ok(betaSpan);
+      assert.equal(betaSpan.text, betaPassage);
+      assert.ok(source.spanSourceText?.includes(betaSpan.text));
+      return {
+        items: ["Alpha", "Beta"].map((option) => {
+          const span = source.quoteSpans?.find((candidate) => candidate.eligibleOptions.includes(option));
+          assert.ok(span);
+          return {
+            sourceId: source.sourceId,
+            option,
+            scores: [{
+              criterion: priorities[0]!.lens,
+              score: option === "Alpha" ? 65 : 50,
+              rationale: `The exact passage supports ${option}.`,
+              quoteSpanId: span.spanId,
+            }],
+          };
+        }),
+      };
+    },
+  });
+
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.vendorScores.every((vendor) => (
+    (vendor.weightedScores ?? []).some((lens) => (lens.evidence ?? []).length === 1)
+  )));
+});
+
+test("a single bounded repair can target a shared source's missing option without double-counting", async () => {
+  const input = {
+    prompt: "Compare Alpha and Beta on price",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Price"],
+    urls: ["https://catalog.example/compare"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Price Lens", scores: { Alpha: 60, Beta: 55 } }],
+  });
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      document: {
+        url,
+        finalUrl: url,
+        contentType: "text/html",
+        text: "Alpha product overview. Alpha selected plan has a monthly price of $10. Beta product overview. Beta selected plan has a monthly price of $100.",
+        sha256: "e".repeat(64),
+        retrievedAt: "2026-09-25T00:00:00.000Z",
+        truncated: false,
+      },
+    })),
+    scoreResearch: async ({ sources, priorities, repairSourceIds, repairTargets }) => {
+      scoringCalls += 1;
+      const source = sources[0]!;
+      const alphaSpan = source.quoteSpans?.find((span) => span.text.includes("Alpha selected plan"))!;
+      const betaSpan = source.quoteSpans?.find((span) => span.text.includes("Beta selected plan"))!;
+      if (repairSourceIds.length) {
+        assert.deepEqual(repairSourceIds, ["source-1"]);
+        assert.deepEqual(repairTargets, [{ sourceId: "source-1", option: "Beta", criterion: priorities[0]!.lens }]);
+        assert.deepEqual(source.eligibleOptions, ["Beta"]);
+        assert.ok(source.quoteSpans?.every((span) => span.eligibleOptions.includes("Beta")));
+        return {
+          items: [
+            {
+              sourceId: source.sourceId,
+              option: "Beta",
+              scores: [{
+                criterion: priorities[0]!.lens,
+                score: 45,
+                rationale: "The Beta passage is source-specific.",
+                quoteSpanId: betaSpan.spanId,
+              }],
+            },
+            {
+              sourceId: source.sourceId,
+              option: "Beta",
+              scores: [{
+                criterion: priorities[0]!.lens,
+                score: 99,
+                rationale: "Duplicate Beta item must not count again.",
+                quoteSpanId: betaSpan.spanId,
+              }],
+            },
+          ],
+        };
+      }
+      return {
+        items: [{
+          sourceId: source.sourceId,
+          option: "Alpha",
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: 60,
+            rationale: "The Alpha passage is source-specific.",
+            quoteSpanId: alphaSpan.spanId,
+          }],
+        }],
+      };
+    },
+  });
+
+  assert.equal(scoringCalls, 2);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.equal(result.recommendation, "Alpha");
+  assert.equal(
+    result.vendorScores.find(({ vendor }) => vendor === "Beta")?.weightedScores?.[0]?.score,
+    45,
+  );
+  for (const vendor of result.vendorScores) {
+    const evidence = vendor.weightedScores?.flatMap((lens) => lens.evidence ?? []) ?? [];
+    assert.equal(evidence.length, 1);
+  }
+});
+
+test("multi-option quote windows cannot transfer one option's price to another and repair targets only the missing option", async () => {
+  const input = {
+    prompt: "Compare Alpha and Beta on price",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Price"],
+    urls: ["https://catalog.example/compare"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Price Lens", scores: { Alpha: 60, Beta: 55 } }],
+  });
+  let scoringCalls = 0;
+  let betaSpanId = "";
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      document: {
+        url,
+        finalUrl: url,
+        contentType: "text/html",
+        text: "Alpha product overview. Alpha selected plan has a monthly price of $10. Beta product overview. Beta selected plan has a monthly price of $100.",
+        sha256: "f".repeat(64),
+        retrievedAt: "2026-09-25T00:00:00.000Z",
+        truncated: false,
+      },
+    })),
+    scoreResearch: async ({ sources, priorities, repairSourceIds, repairTargets }) => {
+      scoringCalls += 1;
+      const source = sources[0]!;
+      if (repairSourceIds.length) {
+        assert.deepEqual(repairSourceIds, ["source-1"]);
+        assert.deepEqual(repairTargets, [{ sourceId: "source-1", option: "Alpha", criterion: priorities[0]!.lens }]);
+        assert.deepEqual(source.eligibleOptions, ["Alpha"]);
+        return {
+          items: [{
+            sourceId: source.sourceId,
+            option: "Alpha",
+            scores: [{
+              criterion: priorities[0]!.lens,
+              score: 95,
+              rationale: "Wrong option span remains invalid during repair.",
+              quoteSpanId: betaSpanId,
+            }],
+          }],
+        };
+      }
+      const alphaSpan = source.quoteSpans?.find((span) => span.text.includes("Alpha selected plan"))!;
+      const betaSpan = source.quoteSpans?.find((span) => span.text.includes("Beta selected plan"))!;
+      betaSpanId = betaSpan.spanId;
+      assert.deepEqual(alphaSpan.eligibleOptions, ["Alpha"]);
+      assert.deepEqual(betaSpan.eligibleOptions, ["Beta"]);
+      return {
+        items: [
+          {
+            sourceId: source.sourceId,
+            option: "Beta",
+            scores: [{
+              criterion: priorities[0]!.lens,
+              score: 45,
+              rationale: "This passage is attributed to Beta.",
+              quoteSpanId: betaSpan.spanId,
+            }],
+          },
+        ],
+      };
+    },
+  });
+
+  assert.equal(scoringCalls, 2);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.equal(result.recommendation, initial.recommendation);
+  assert.ok(result.vendorScores.every((vendor) => (
+    (vendor.weightedScores ?? []).every((lens) => (lens.evidence ?? []).length === 0)
+  )));
+});
+
+test("a source without relevant quote spans is not sent to scoring", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/about", "https://beta.example/about"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 72, Beta: 53 } }],
+  });
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} official documentation summarizes company history and customer support.`,
+          sha256: option === "Alpha" ? "1".repeat(64) : "2".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => {
+        scoringCalls += 1;
+        assert.deepEqual(source.quoteSpans, []);
+        return {
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: 68,
+            rationale: "A source without spans must not be scored.",
+            excerpt: source.text,
+          }],
+        };
+      }),
+    }),
+  });
+
+  assert.equal(scoringCalls, 0);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.vendorScores.every((vendor) => (
+    (vendor.weightedScores ?? []).every((lens) => (lens.evidence ?? []).length === 0)
+  )));
+});
+
+test("an exact model-written excerpt without quoteSpanId is rejected as evidence", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 72, Beta: 53 } }],
+  });
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: `${option} publishes official budget pricing with monthly plans for small businesses.`,
+          sha256: option === "Alpha" ? "3".repeat(64) : "4".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities, repairSourceIds }) => {
+      scoringCalls += 1;
+      return {
+        items: sources.map((source) => {
+          const span = source.quoteSpans?.find(({ priorityLenses }) => priorityLenses.includes(priorities[0]!.lens));
+          assert.ok(span);
+          const score = {
+            criterion: priorities[0]!.lens,
+            score: 82,
+            rationale: "The exact retrieved wording appears in the document.",
+            excerpt: span.text,
+          };
+          return {
+            sourceId: source.sourceId,
+            option: source.eligibleOptions[0],
+            scores: [score],
+          };
+        }),
+      };
+    },
+  });
+
+  assert.equal(scoringCalls, 2);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.vendorScores.every((vendor) => (
+    (vendor.weightedScores ?? []).every((lens) => (lens.evidence ?? []).length === 0)
+  )));
+});
+
+test("research from only one option cannot make a preliminary two-option scorecard complete", async () => {
+  const input = {
+    prompt: "Compare Alpha versus Beta on budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      document: {
+        url,
+        finalUrl: url,
+        contentType: "text/html",
+        text: `${url.includes("alpha") ? "Alpha" : "Beta"} official budget pricing details.`,
+        sha256: "d".repeat(64),
+        retrievedAt: "2026-09-25T00:00:00.000Z",
+        truncated: false,
+      },
+    })),
+    scoreResearch: async ({ sources, repairSourceIds }) => ({
+      items: repairSourceIds.length ? [] : [{
+        sourceId: sources[0]!.sourceId,
+        option: "Alpha",
+        scores: [{
+          criterion: "Budget Lens",
+          score: 30,
+          rationale: "Only Alpha has a grounded score.",
+          quoteSpanId: eligibleDecisionQuoteSpanId(sources[0]!, "Alpha", "Budget Lens"),
+        }],
+      }],
+    }),
+  });
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.match(result.contextAssumptions?.find((assumption) => /Research scoring covered/.test(assumption)) ?? "", /1 of 2 eligible options/);
+  assert.ok(!result.contextAssumptions?.some((assumption) => /rejected research score item/i.test(assumption)));
+  assert.ok(!result.insights.some((insight) => /research score item.*rejected/i.test(insight)));
+  assert.equal(result.vendorScores.find(({ vendor }) => vendor === "Alpha")?.weightedScores?.[0]?.score, 30);
+  assert.equal(result.recommendation, "Beta");
+  assert.match(result.recommendationReason, /confidence is reduced/i);
+});
+
+test("research resilience configuration validates separate production timeout budgets", () => {
+  const keys = [
+    "RESEARCH_JOB_DEADLINE_MS",
+    "RESEARCH_STAGE_TIMEOUT_MS",
+    "SEARCH_REQUEST_TIMEOUT_MS",
+    "SOURCE_FETCH_TIMEOUT_MS",
+    "EXTRACTION_TIMEOUT_MS",
+    "LLM_REQUEST_TIMEOUT_MS",
+    "SCORING_TIMEOUT_MS",
+    "MAX_SEARCH_ATTEMPTS",
+    "MAX_FETCH_ATTEMPTS",
+    "MAX_LLM_ATTEMPTS",
+    "RESEARCH_CONCURRENCY",
+    "RETRY_BASE_DELAY_MS",
+    "RETRY_MAX_DELAY_MS",
+    "RETRY_JITTER_RATIO",
+  ] as const;
+  const prior = new Map(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) delete process.env[key];
+    assert.deepEqual(readResearchResilienceConfig(), {
+      jobDeadlineMs: 120_000,
+      stageTimeoutMs: 45_000,
+      searchRequestTimeoutMs: 12_000,
+      sourceFetchTimeoutMs: 10_000,
+      extractionTimeoutMs: 15_000,
+      llmRequestTimeoutMs: 25_000,
+      scoringTimeoutMs: 10_000,
+      maxSearchAttempts: 3,
+      maxFetchAttempts: 3,
+      maxLlmAttempts: 2,
+      concurrency: 3,
+      retryBaseDelayMs: 500,
+      retryMaxDelayMs: 8_000,
+      retryJitterRatio: 0.25,
+    });
+    process.env.SEARCH_REQUEST_TIMEOUT_MS = "0";
+    assert.throws(() => readResearchResilienceConfig(), /SEARCH_REQUEST_TIMEOUT_MS/);
+    process.env.SEARCH_REQUEST_TIMEOUT_MS = "12000";
+    process.env.RETRY_JITTER_RATIO = "1.1";
+    assert.throws(() => readResearchResilienceConfig(), /RETRY_JITTER_RATIO/);
+  } finally {
+    for (const key of keys) {
+      const value = prior.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("research retries classify only explicit transient HTTP and network failures", () => {
+  for (const status of [408, 425, 429, 500, 502, 503, 504]) {
+    assert.equal(isTransientResearchError({ status }), true);
+  }
+  for (const status of [400, 401, 403, 404]) {
+    assert.equal(isTransientResearchError({ status }), false);
+  }
+  assert.equal(isTransientResearchError({ code: "ECONNRESET" }), true);
+  assert.equal(isTransientResearchError({ cause: { code: "EAI_AGAIN" } }), true);
+  assert.equal(isTransientResearchError({ code: "ERR_INVALID_URL" }), false);
+  assert.equal(isTransientResearchError({ status: 503, retryable: false }), false);
+  assert.ok(researchRetryDelayMs(0) >= 375 && researchRetryDelayMs(0) <= 625);
+  assert.equal(researchRetryDelayMs(2, 20_000), 20_000);
+});
+
+test("malformed research with every item quarantined falls back with partial status", async () => {
+  const input = {
+    prompt: "Choose the better option for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/pricing", "https://beta.example/pricing"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 80, Beta: 40 } }],
+  });
+  let calls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      const text = `${option} official pricing and budget information.`;
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text,
+          sha256: "d".repeat(64),
+          retrievedAt: "2025-01-01T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities }) => {
+      calls += 1;
+      return {
+        items: sources.map((source) => ({
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: "invalid",
+            rationale: "Malformed score for quarantine coverage.",
+            quoteSpanId: eligibleDecisionQuoteSpanId(source, source.eligibleOptions[0]!, priorities[0]!.lens),
+          }],
+        })),
+      };
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.recommendation, "Alpha");
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.contextAssumptions?.some((assumption) => /4 rejected research score item/i.test(assumption)));
+});
+
+test("targeted research timeout preserves the preliminary analysis", async () => {
+  const input = {
+    prompt: "Choose between the options for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://alpha.example/pricing"],
+    deadlineAt: Date.now() - 1,
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial);
+
+  assert.equal(result.recommendation, initial.recommendation);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.equal(result.sourceAvailability?.[0]?.status, "timed_out");
+  const initialConfidence = Number(initial.executiveSummary.match(/Confidence: (\d+)\/100/)?.[1]);
+  const resultConfidence = Number(result.executiveSummary.match(/Confidence: (\d+)\/100/)?.[1]);
+  assert.ok(resultConfidence < initialConfidence, "incomplete research reduces confidence without changing the preliminary winner");
+  assert.match(result.executiveSummary, /research was unavailable for scoring.*preliminary modelled recommendation is preserved/i);
+  assert.match(result.vendorScores[0]?.marketPosition?.evidence ?? "", /research was unavailable/i);
+});
+
+test("SearchAPI failure falls back to cited OpenAI web-search URLs and retrieves them", async () => {
+  const input = {
+    prompt: "Choose between the options for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: ["https://user.example/supplied"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  const alphaUrl = "https://official.example/alpha/product";
+  const betaUrl = "https://official.example/beta/product";
+  const narrativeUrl = "https://narrative.example/not-a-citation";
+  const retrievedUrls: string[] = [];
+  let fallbackRequest: { prompt: string; options: string[]; category: string; priorities: string[] } | undefined;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => { throw new Error("SearchAPI returned HTTP 503"); },
+    discoverOfficialSources: async (request) => {
+      fallbackRequest = request;
+      return {
+        output: [
+          {
+            type: "web_search_call",
+            action: {
+              sources: [
+                { type: "url", url: alphaUrl },
+              ],
+            },
+          },
+          {
+            type: "message",
+            content: [{
+              type: "output_text",
+              text: `Uncited narrative URL: ${narrativeUrl}`,
+              annotations: [{ type: "url_citation", url: betaUrl }],
+            }],
+          },
+        ],
+        output_text: `Uncited narrative URL: ${narrativeUrl}`,
+      };
+    },
+    retrieveDocuments: async (urls) => {
+      retrievedUrls.push(...urls);
+      return urls.map((url) => {
+        if (url === "https://user.example/supplied") return { url, reason: "robots_disallowed" as const };
+        const option = url === alphaUrl ? "Alpha" : "Beta";
+        const text = `${option} official product features and budget plans.`;
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: "e".repeat(64),
+            retrievedAt: "2025-01-01T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      });
+    },
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => ({
+        sourceId: source.sourceId,
+        option: source.eligibleOptions[0],
+        scores: [{
+          criterion: priorities[0]!.lens,
+          score: source.eligibleOptions[0] === "Alpha" ? 90 : 35,
+          rationale: "The permitted retrieved page informs this score.",
+          quoteSpanId: eligibleDecisionQuoteSpanId(source, source.eligibleOptions[0]!, priorities[0]!.lens),
+        }],
+      })),
+    }),
+  });
+
+  assert.deepEqual(fallbackRequest?.options, ["Alpha", "Beta"]);
+  assert.ok(fallbackRequest?.priorities.includes("Budget Lens"));
+  assert.deepEqual(retrievedUrls, ["https://user.example/supplied", alphaUrl, betaUrl]);
+  assert.ok(!retrievedUrls.includes(narrativeUrl));
+  assert.equal(result.recommendation, "Alpha");
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.match(result.contextAssumptions?.join(" ") ?? "", /market-neutral web discovery was used/i);
+  assert.equal(result.sourceAvailability?.find((source) => source.url === "https://user.example/supplied")?.status, "restricted");
+  assert.ok(result.sourceAvailability?.some((source) => source.url === alphaUrl && source.status === "reachable"));
+  assert.ok(result.sourceAvailability?.some((source) => source.url === betaUrl && source.status === "reachable"));
+});
+
+test("SearchAPI and OpenAI web-search failures leave an honest partial result", async () => {
+  const input = {
+    prompt: "Choose between the options for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => { throw new Error("SearchAPI returned HTTP 503"); },
+    discoverOfficialSources: async () => { throw new Error("OpenAI web_search unavailable"); },
+  });
+
+  assert.equal(result.recommendation, "Alpha");
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.match(result.contextAssumptions?.join(" ") ?? "", /Search discovery was unavailable/i);
+  assert.doesNotMatch(result.contextAssumptions?.join(" ") ?? "", /timed out/i);
+  assert.deepEqual(result.sourceAvailability, []);
+});
+
+test("India Zepto/Blinkit requests seed first-party pages before paid discovery without extra context words", async () => {
+  const input = {
+    prompt: "Compare Zepto vs Blinkit",
+    market: "IN" as const,
+    vendors: ["Zepto", "Blinkit"],
+    criteria: ["Delivery speed"],
+    urls: [],
+  };
+  const seeds = officialMarketSourcesFor(
+    input.prompt,
+    input.vendors,
+    inferResearchMarket(input.prompt, input.vendors, "IN"),
+  );
+  assert.ok(seeds.includes("https://www.zepto.com/"));
+  assert.ok(seeds.includes("https://blinkit.com/"));
+  assert.deepEqual(officialMarketSourcesFor(
+    input.prompt,
+    input.vendors,
+    inferResearchMarket(input.prompt, input.vendors, "IN"),
+  ).slice(0, 2), ["https://www.zepto.com/", "https://blinkit.com/"]);
+
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Delivery speed", scores: { Zepto: 70, Blinkit: 65 } }],
+  });
+  const retrievedUrls: string[] = [];
+  let searchCalls = 0;
+  let webSearchCalls = 0;
+  let scoringCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => { searchCalls += 1; return []; },
+    discoverOfficialSources: async () => { webSearchCalls += 1; return undefined; },
+    retrieveDocuments: async (urls) => {
+      retrievedUrls.push(...urls);
+      return urls.map((url) => {
+        const host = new URL(url).hostname;
+        const option = host.includes("zepto") ? "Zepto" : host.includes("blinkit") ? "Blinkit" : "Zepto and Blinkit";
+        const text = `${option} delivery service provides local order updates and app features in India. ${option} delivery service is available to new customers in India.`;
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: "a".repeat(64),
+            retrievedAt: "2026-09-25T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      });
+    },
+    scoreResearch: async ({ sources, priorities }) => {
+      scoringCalls += 1;
+      return {
+        items: sources.flatMap((source) => source.eligibleOptions.map((option) => ({
+          sourceId: source.sourceId,
+          option,
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: option === "Zepto" ? 78 : 72,
+            rationale: "The retrieved page provides context for this option.",
+            quoteSpanId: eligibleDecisionQuoteSpanId(source, option, priorities[0]!.lens),
+          }],
+        }))),
+      };
+    },
+  });
+
+  assert.deepEqual(retrievedUrls.slice(0, 2), ["https://www.zepto.com/", "https://blinkit.com/"]);
+  assert.equal(searchCalls, 0);
+  assert.equal(webSearchCalls, 0);
+  assert.equal(scoringCalls, 0);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+});
+
+test("curated AI-model pages cover options before SearchAPI or web-search fallback", async () => {
+  const input = {
+    prompt: "Compare GPT-4.1 with Claude Sonnet 4.6 for API coding.",
+    vendors: ["GPT-4.1", "Claude Sonnet 4.6"],
+    criteria: ["Features"],
+    urls: [],
+  };
+  const seeds = officialAiModelSourcesFor(input.vendors);
+  assert.ok(seeds.includes("https://developers.openai.com/api/docs/models/gpt-4.1"));
+  assert.ok(seeds.includes("https://platform.claude.com/docs/en/models/sonnet-4-6/overview"));
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Features", scores: { "GPT-4.1": 80, "Claude Sonnet 4.6": 75 } }],
+  });
+  const retrievedUrls: string[] = [];
+  let searchCalls = 0;
+  let webSearchCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => { searchCalls += 1; return []; },
+    discoverOfficialSources: async () => { webSearchCalls += 1; return undefined; },
+    retrieveDocuments: async (urls) => {
+      retrievedUrls.push(...urls);
+      return urls.map((url) => {
+        const option = url.includes("openai") ? "GPT-4.1" : "Claude Sonnet 4.6";
+        const text = `${option} official model features and API documentation.`;
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: "b".repeat(64),
+            retrievedAt: "2026-09-25T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      });
+    },
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.flatMap((source) => source.eligibleOptions.map((option) => ({
+        sourceId: source.sourceId,
+        option,
+        scores: [{
+          criterion: priorities[0]!.lens,
+          score: 76,
+          rationale: "The retrieved official documentation provides model context.",
+          quoteSpanId: eligibleDecisionQuoteSpanId(source, option, priorities[0]!.lens),
+        }],
+      }))),
+    }),
+  });
+
+  assert.ok(retrievedUrls.includes("https://developers.openai.com/api/docs/models/gpt-4.1"));
+  assert.ok(retrievedUrls.includes("https://platform.claude.com/docs/en/models/sonnet-4-6/overview"));
+  assert.equal(searchCalls, 0);
+  assert.equal(webSearchCalls, 0);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+});
+
+test("seeded partial coverage queries only missing options and keeps fallback coverage-aware", async () => {
+  const input = {
+    prompt: "Compare Zepto vs Blinkit",
+    market: "IN" as const,
+    vendors: ["Zepto", "Blinkit"],
+    criteria: ["Delivery speed"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Delivery speed", scores: { Zepto: 70, Blinkit: 65 } }],
+  });
+  const searchOptionRequests: string[][] = [];
+  let webSearchCalls = 0;
+  let scoringCalls = 0;
+  const blinkitSearchResult = "https://discovered.example/blinkit";
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async (vendors) => {
+      searchOptionRequests.push(vendors);
+      return [blinkitSearchResult];
+    },
+    discoverOfficialSources: async () => { webSearchCalls += 1; return undefined; },
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      if (url === "https://www.zepto.com/") {
+        const text = "Zepto delivery service provides local order updates and app features in India. Zepto delivery service is available to new customers in India.";
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: "c".repeat(64),
+            retrievedAt: "2026-09-25T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      }
+      if (url === blinkitSearchResult) {
+        const text = "Blinkit delivery service provides local order updates and app features in India. Blinkit delivery service is available to new customers in India.";
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: "d".repeat(64),
+            retrievedAt: "2026-09-25T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      }
+      return { url, reason: "robots_disallowed" as const };
+    }),
+    scoreResearch: async ({ sources, priorities }) => {
+      scoringCalls += 1;
+      return {
+        items: sources.flatMap((source) => source.eligibleOptions.map((option) => ({
+          sourceId: source.sourceId,
+          option,
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: option === "Zepto" ? 78 : 72,
+            rationale: "The retrieved page provides context for this option.",
+            quoteSpanId: eligibleDecisionQuoteSpanId(source, option, priorities[0]!.lens),
+          }],
+        }))),
+      };
+    },
+  });
+
+  assert.deepEqual(searchOptionRequests, [["Blinkit"]]);
+  assert.equal(webSearchCalls, 0);
+  assert.equal(scoringCalls, 0);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+});
+
+test("SearchAPI candidates without retrieved coverage trigger fallback without admitting narrative URLs", async () => {
+  const input = {
+    prompt: "Compare Zepto vs Blinkit",
+    vendors: ["Zepto", "Blinkit"],
+    criteria: ["Delivery speed"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Delivery speed", scores: { Zepto: 70, Blinkit: 65 } }],
+  });
+  let scoringCalls = 0;
+  let webSearchCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => ["https://searchapi.example/zepto-blinkit"],
+    discoverOfficialSources: async () => {
+      webSearchCalls += 1;
+      return {
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "Possible pages: https://www.zepto.com/ and https://blinkit.com/",
+          }],
+        }],
+        output_text: "Possible pages: https://www.zepto.com/ and https://blinkit.com/",
+      };
+    },
+    retrieveDocuments: async (urls) => urls.map((url) => ({ url, reason: "robots_disallowed" as const })),
+    scoreResearch: async () => { scoringCalls += 1; return { items: [] }; },
+  });
+
+  assert.equal(webSearchCalls, 1);
+  assert.equal(scoringCalls, 0);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.sourceAvailability?.every((source) => source.status === "restricted"));
+});
+
+test("keyless Firecrawl discovery retrieves both options and can complete grounded scoring", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  let searchCalls = 0;
+  let firecrawlOptions: string[] = [];
+  let openAiCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => { searchCalls += 1; return []; },
+    discoverKeylessSources: async (options) => {
+      firecrawlOptions = options;
+      return ["https://alpha.example/pricing", "https://beta.example/pricing"];
+    },
+    discoverOfficialSources: async () => { openAiCalls += 1; return undefined; },
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url.includes("alpha") ? "Alpha" : "Beta";
+      const text = `${option} official pricing provides monthly budget plans for business customers.`;
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text,
+          sha256: option === "Alpha" ? "a".repeat(64) : "b".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => {
+        const span = source.quoteSpans?.find(({ eligibleOptions }) => (
+          eligibleOptions.includes(source.eligibleOptions[0]!)
+        ));
+        assert.ok(span);
+        return {
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: source.eligibleOptions[0] === "Alpha" ? 85 : 70,
+            rationale: "The retrieved passage describes the option's budget pricing.",
+            quoteSpanId: span.spanId,
+          }],
+        };
+      }),
+    }),
+  });
+
+  assert.equal(searchCalls, 1);
+  assert.deepEqual(firecrawlOptions, ["Alpha", "Beta"]);
+  assert.equal(openAiCalls, 0);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.deepEqual(
+    result.vendorScores.map((vendor) => vendor.vendor).sort(),
+    ["Alpha", "Beta"],
+  );
+});
+
+test("SearchAPI exhaustion switches discovery to Firecrawl without using discovery text as evidence", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  const retrievedTexts = new Set<string>();
+  const stages: Array<Record<string, unknown>> = [];
+  const originalInfo = console.info;
+  let searchCalls = 0;
+  let firecrawlCalls = 0;
+  console.info = ((event: unknown, detail: unknown) => {
+    if (event === "decision_mode_research_stage" && detail && typeof detail === "object") {
+      stages.push(detail as Record<string, unknown>);
+    }
+  }) as typeof console.info;
+  try {
+    const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+      discoverSources: async () => {
+        searchCalls += 1;
+        throw Object.assign(new Error("SearchAPI discovery returned HTTP 429"), { status: 429 });
+      },
+      discoverKeylessSources: async (options) => {
+        firecrawlCalls += 1;
+        assert.deepEqual(options, ["Alpha", "Beta"]);
+        return ["https://alpha.example/pricing", "https://beta.example/pricing"];
+      },
+      retrieveDocuments: async (urls) => urls.map((url) => {
+        const option = url.includes("alpha") ? "Alpha" : "Beta";
+        const text = `${option} official pricing provides monthly budget plans for business customers.`;
+        retrievedTexts.add(text);
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: option === "Alpha" ? "1".repeat(64) : "2".repeat(64),
+            retrievedAt: "2026-09-25T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      }),
+      scoreResearch: async ({ sources, priorities }) => {
+        assert.ok(sources.every((source) => retrievedTexts.has(source.text)));
+        return {
+          items: sources.map((source) => {
+            const span = source.quoteSpans?.find(({ eligibleOptions }) => (
+              eligibleOptions.includes(source.eligibleOptions[0]!)
+            ));
+            assert.ok(span);
+            return {
+              sourceId: source.sourceId,
+              option: source.eligibleOptions[0],
+              scores: [{
+                criterion: priorities[0]!.lens,
+                score: source.eligibleOptions[0] === "Alpha" ? 85 : 70,
+                rationale: "The retrieved passage describes the option's budget pricing.",
+                quoteSpanId: span.spanId,
+              }],
+            };
+          }),
+        };
+      },
+    });
+
+    assert.equal(searchCalls, 3);
+    assert.equal(firecrawlCalls, 1);
+    assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+    assert.deepEqual(
+      result.vendorScores.map((vendor) => vendor.vendor).sort(),
+      ["Alpha", "Beta"],
+    );
+    assert.ok(stages.some((event) => event.stage === "evidence_span_extraction" && event.evidenceSpanCount));
+    assert.ok(stages.some((event) => event.stage === "evidence_validation" && event.validationSuccess));
+    assert.ok(stages.some((event) => event.stage === "research_completion" && event.status === "complete"));
+    assert.ok(stages.every((event) => !("url" in event) && !("text" in event)));
+  } finally {
+    console.info = originalInfo;
+  }
+});
+
+test("keyless Firecrawl candidates blocked by publisher policy remain partial", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  let openAiCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    discoverKeylessSources: async () => [
+      "https://alpha.example/pricing",
+      "https://beta.example/pricing",
+    ],
+    discoverOfficialSources: async () => { openAiCalls += 1; return undefined; },
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      reason: "robots_disallowed" as const,
+    })),
+    scoreResearch: async () => ({ items: [] }),
+  });
+
+  assert.equal(openAiCalls, 1);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+  assert.ok(!result.contextAssumptions?.includes("Decision Mode research status: complete"));
+  assert.ok(result.sourceAvailability?.every((source) => source.status === "restricted"));
+});
+
+test("Firecrawl HTTP 429 falls through to cited OpenAI search", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  const alphaUrl = "https://official.example/alpha/pricing";
+  const betaUrl = "https://official.example/beta/pricing";
+  let openAiCalls = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    discoverKeylessSources: async () => {
+      throw Object.assign(new Error("Firecrawl discovery returned HTTP 429"), { status: 429 });
+    },
+    discoverOfficialSources: async () => {
+      openAiCalls += 1;
+      return {
+        output: [{
+          type: "web_search_call",
+          action: { sources: [{ type: "url", url: alphaUrl }, { type: "url", url: betaUrl }] },
+        }],
+      };
+    },
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const option = url === alphaUrl ? "Alpha" : "Beta";
+      const text = `${option} official pricing provides monthly budget plans for business customers.`;
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text,
+          sha256: option === "Alpha" ? "c".repeat(64) : "d".repeat(64),
+          retrievedAt: "2026-09-25T00:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => {
+        const span = source.quoteSpans?.[0];
+        assert.ok(span);
+        return {
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: 78,
+            rationale: "The retrieved passage describes the option's budget pricing.",
+            quoteSpanId: span.spanId,
+          }],
+        };
+      }),
+    }),
+  });
+
+  assert.equal(openAiCalls, 1);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+});
+
+test("Firecrawl preserves and retrieves prior option URLs after a later 429", async () => {
+  const input = {
+    prompt: "Choose between Alpha and Beta for budget",
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Budget"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 75, Beta: 60 } }],
+  });
+  const alphaUrl = "https://alpha.example/pricing";
+  const betaUrl = "https://beta.example/pricing";
+  const retrievedUrls: string[] = [];
+  let openAiOptions: string[] = [];
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    discoverKeylessSources: async () => {
+      throw new FirecrawlDiscoveryError(
+        "Firecrawl discovery returned HTTP 429",
+        [alphaUrl],
+        429,
+      );
+    },
+    discoverOfficialSources: async ({ options }) => {
+      openAiOptions = options;
+      return {
+        output: [{
+          type: "web_search_call",
+          action: { sources: [{ type: "url", url: betaUrl }] },
+        }],
+      };
+    },
+    retrieveDocuments: async (urls) => {
+      retrievedUrls.push(...urls);
+      return urls.map((url) => {
+        const option = url === alphaUrl ? "Alpha" : "Beta";
+        const text = `${option} official pricing provides monthly budget plans for business customers.`;
+        return {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text,
+            sha256: option === "Alpha" ? "e".repeat(64) : "f".repeat(64),
+            retrievedAt: "2026-09-25T00:00:00.000Z",
+            truncated: false,
+          },
+        };
+      });
+    },
+    scoreResearch: async ({ sources, priorities }) => ({
+      items: sources.map((source) => {
+        const span = source.quoteSpans?.[0];
+        assert.ok(span);
+        return {
+          sourceId: source.sourceId,
+          option: source.eligibleOptions[0],
+          scores: [{
+            criterion: priorities[0]!.lens,
+            score: 78,
+            rationale: "The retrieved passage describes this option's budget pricing.",
+            quoteSpanId: span.spanId,
+          }],
+        };
+      }),
+    }),
+  });
+
+  assert.deepEqual(retrievedUrls, [alphaUrl, betaUrl]);
+  assert.deepEqual(openAiOptions, ["Beta"]);
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: complete"));
+});
+
+test("curated sources leave the first Firecrawl result for every option within the source cap", async () => {
+  const input = {
+    prompt: "Compare Zepto and Blinkit for delivery speed in India",
+    market: "IN" as const,
+    vendors: ["Zepto", "Blinkit"],
+    criteria: ["Delivery speed"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Delivery speed", scores: { Zepto: 70, Blinkit: 65 } }],
+  });
+  const firecrawlUrls = [
+    "https://candidate.example/zepto-one",
+    "https://candidate.example/blinkit-one",
+    "https://candidate.example/zepto-two",
+    "https://candidate.example/blinkit-two",
+  ];
+  const retrievedUrls: string[] = [];
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    discoverKeylessSources: async () => firecrawlUrls,
+    discoverOfficialSources: async () => undefined,
+    retrieveDocuments: async (urls) => {
+      retrievedUrls.push(...urls);
+      return urls.map((url) => {
+        if (url.startsWith("https://candidate.example/")) {
+          const option = url.includes("zepto") ? "Zepto" : "Blinkit";
+          const text = `${option} delivery service publishes order delivery speed information for customers. ${option} delivery service is available to new customers in India.`;
+          return {
+            url,
+            document: {
+              url,
+              finalUrl: url,
+              contentType: "text/html",
+              text,
+              sha256: "g".repeat(64),
+              retrievedAt: "2026-09-25T00:00:00.000Z",
+              truncated: false,
+            },
+          };
+        }
+        return { url, reason: "robots_disallowed" as const };
+      });
+    },
+    scoreResearch: async () => ({ items: [] }),
+  });
+
+  assert.equal(officialMarketSourcesFor(
+    "Compare Zepto and Blinkit for delivery speed in India",
+    input.vendors,
+    inferResearchMarket("Compare Zepto and Blinkit for delivery speed in India", input.vendors, "IN"),
+  ).length, 5);
+  assert.deepEqual(retrievedUrls.slice(5), firecrawlUrls.slice(0, 3));
+  assert.ok(retrievedUrls.includes(firecrawlUrls[0]!));
+  assert.ok(retrievedUrls.includes(firecrawlUrls[1]!));
+  assert.ok(!retrievedUrls.includes(firecrawlUrls[3]!));
+  assert.ok(result.contextAssumptions?.includes("Decision Mode research status: partial"));
+});
+
+test("market eligibility requires exact current product evidence from the provider's market source", () => {
+  const retrievedAt = "2026-10-01T12:00:00.000Z";
+  const document = (url: string, text: string) => ({
+    url,
+    document: {
+      url,
+      finalUrl: url,
+      contentType: "text/html",
+      text,
+      sha256: "a".repeat(64),
+      retrievedAt,
+      truncated: false,
+    },
+  });
+  const assess = (
+    option: string,
+    market: string,
+    documents: Array<ReturnType<typeof document> | { url: string; reason: "robots_disallowed" | "timeout" }>,
+  ) =>
+    determineMarketEligibility(option, "Home loans", market, documents, retrievedAt);
+
+  const hsbcClosed = assess("HSBC", "Australia", [document(
+    "https://www.hsbc.com.au/loans/home-loans/",
+    "HSBC Australia home loans are no longer accepting new applications.",
+  )]);
+  assert.equal(hsbcClosed.status, "INELIGIBLE");
+  assert.equal(hsbcClosed.evidenceStatus, "CONFIRMED");
+  assert.equal(hsbcClosed.basis, "OFFICIAL_DOCUMENT");
+  assert.match(hsbcClosed.exactClaim ?? "", /no longer accepting new applications/i);
+  assert.equal(hsbcClosed.sourceUrl, "https://www.hsbc.com.au/loans/home-loans/");
+
+  for (const bank of ["Westpac", "NAB"]) {
+    const url = `https://www.${bank.toLowerCase()}.com.au/personal/home-loans/`;
+    const status = assess(bank, "Australia", [document(
+      url,
+      `${bank} Australia home loans are accepting new applications. Apply now.`,
+    )]);
+    assert.equal(status.status, "ELIGIBLE");
+  }
+
+  for (const bank of ["HDFC", "ICICI", "SBI"]) {
+    assert.equal(assess(bank, "Australia", []).status, "UNKNOWN");
+    assert.equal(assess(bank, "India", []).status, "ELIGIBLE");
+  }
+
+  const indiaBanks = [
+    ["HDFC", "https://www.hdfcbank.com/personal/borrow/popular-loans/home-loan"],
+    ["ICICI", "https://www.icicibank.com/personal-banking/loans/home-loan"],
+    ["SBI", "https://sbi.co.in/web/personal-banking/loans/home-loans"],
+  ] as const;
+  for (const [bank, url] of indiaBanks) {
+    assert.equal(assess(bank, "India", [document(
+      url,
+      `${bank} Bank India home loans are accepting new applications. Apply online now.`,
+    )]).status, "ELIGIBLE");
+  }
+
+  assert.equal(assess("HSBC", "Australia", [document(
+    "https://www.hsbc.com.au/",
+    "HSBC is a global bank serving customers in Australia.",
+  )]).status, "UNKNOWN");
+  assert.equal(assess("HDFC", "Australia", [document(
+    "https://www.hdfcbank.com/",
+    "HDFC Bank India home loans are accepting new applications.",
+  )]).status, "UNKNOWN");
+  const conflicting = assess("Westpac", "Australia", [
+    document("https://www.westpac.com.au/home-loans/", "Westpac Australia home loans are accepting new applications."),
+    document("https://www.westpac.com.au/home-loans/closed", "Westpac Australia home loans are no longer accepting new applications."),
+  ]);
+  assert.equal(conflicting.status, "INELIGIBLE", "explicit closure overrides general open participation");
+  assert.equal(conflicting.evidenceStatus, "CONFLICTING");
+  assert.equal(assess("HSBC", "Australia", [{ url: "https://www.hsbc.com.au/", reason: "robots_disallowed" }]).status, "UNKNOWN");
+  assert.equal(assess("HSBC", "Australia", [{
+    url: "https://www.hsbc.com.au/loans/home-loans/",
+    reason: "timeout",
+  }]).evidenceStatus, "TIMED_OUT");
+  const limited = assess("Westpac", "Australia", [document(
+    "https://www.westpac.com.au/home-loans/",
+    "Westpac Australia home loans are available to existing customers only.",
+  )]);
+  assert.equal(limited.status, "LIMITED");
+  assert.match(limited.reason, /Existing customers only/);
+
+  const closing = assess("Westpac", "Australia", [document(
+    "https://www.westpac.com.au/home-loans/",
+    "Westpac Australia home loans are closing to new applications.",
+  )]);
+  assert.equal(closing.status, "CLOSING");
+  assert.equal(closing.evidenceStatus, "CONFIRMED");
+  assert.equal(isMarketEligibilityScoreable(closing.status), false);
+  assert.equal(isMarketEligibilityScoreable(closing.status, true), true);
+  assert.equal(isMarketEligibilityScoreable("LIMITED"), true);
+  assert.equal(isMarketEligibilityScoreable("INELIGIBLE", true), false);
+  assert.equal(isMarketEligibilityScoreable("UNKNOWN", true), false);
+});
+
+test("streaming aliases share a resolved category without treating missing or timed-out market research as availability", () => {
+  const prompt = "Compare Netflix and Amazon Prime in Australia";
+  const vendors = ["netflix", "amazon prime"];
+  assert.equal(marketEligibilityProduct(prompt, vendors), "Video Streaming Services");
+
+  const identities = vendors.map((rawOption) => resolveEntityIdentity({
+    rawOption,
+    market: "AU",
+    otherOptions: vendors.filter((option) => option !== rawOption),
+    userQuery: prompt,
+  }));
+  assert.deepEqual(identities.map(({ canonicalName }) => canonicalName), ["Netflix", "Amazon Prime Video"]);
+  assert.deepEqual(identities.map(({ canonicalEntityId }) => canonicalEntityId), [
+    "netflix-streaming",
+    "amazon-prime-video",
+  ]);
+
+  for (const [index, option] of vendors.entries()) {
+    const missing = determineMarketEligibility(
+      option, "Video Streaming Services", "Australia", [], "2026-10-01T12:00:00.000Z",
+      { identity: identities[index] },
+    );
+    assert.equal(missing.status, "UNKNOWN", option);
+    assert.equal(missing.evidenceStatus, "MISSING", option);
+    assert.equal(missing.basis, "UNESTABLISHED", option);
+    assert.equal(missing.newApplicationAcceptance, undefined, option);
+    assert.match(missing.reason, /missing or timed-out evidence does not establish unavailability/i);
+
+    const timedOut = determineMarketEligibility(
+      option, "Video Streaming Services", "Australia",
+      [{ url: "https://example.test/market-page", reason: "timeout" }],
+      "2026-10-01T12:00:00.000Z",
+      { identity: identities[index] },
+    );
+    assert.equal(timedOut.status, "UNKNOWN", option);
+    assert.equal(timedOut.evidenceStatus, "TIMED_OUT", option);
+    assert.equal(timedOut.newApplicationAcceptance, undefined, option);
+  }
+});
+
+test("a resolved streaming pair uses an alphabetical last resort when no scoreable inputs exist", async () => {
+  const prompt = "Compare Netflix and Amazon Prime in Australia based on price and available content.";
+  const aliasOptions = ["netflix", "amazon prime"];
+  const resolvedEntities = aliasOptions.map((rawOption) => resolveEntityIdentity({
+    rawOption,
+    market: "AU",
+    otherOptions: aliasOptions.filter((option) => option !== rawOption),
+    userQuery: prompt,
+  }));
+  const input = {
+    prompt,
+    eligibilityPrompt: prompt,
+    validatedCategory: "Video Streaming Services",
+    market: "AU" as const,
+    vendors: ["Netflix", "Amazon Prime Video"],
+    resolvedEntities,
+    criteria: ["Price", "Available content"],
+    urls: [],
+    deadlineAt: Date.now() - 1,
+  } as import("./analysis").AnalysisInput;
+  const initial = createDecisionModeAnalysis(input, { lenses: [] });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial);
+
+  assert.equal(result.recommendation, "Amazon Prime Video");
+  assert.match(result.recommendationReason, /alphabetical last resort/i);
+  assert.match(result.recommendationReason, /score is 0 \(unscored\)/i);
+  assert.match(result.recommendationReason, /no verified availability/i);
+  assert.equal(result.score, 0);
+  assert.deepEqual(result.vendorScores.map(({ marketEligibility }) => marketEligibility?.status), ["UNKNOWN", "UNKNOWN"]);
+  assert.ok(result.vendorScores.every(({ marketEligibility }) => marketEligibility?.basis === "UNESTABLISHED"));
+});
+
+test("streaming ineligibility requires exact publisher-owned contrary evidence", () => {
+  const identity = resolveEntityIdentity({
+    rawOption: "amazon prime",
+    market: "AU",
+    otherOptions: ["Netflix"],
+    userQuery: "Compare Netflix and Amazon Prime in Australia",
+  });
+  const checkedAt = "2026-10-01T12:00:00.000Z";
+  const officialDocument = {
+    url: "https://www.primevideo.com/region/au",
+    document: {
+      url: "https://www.primevideo.com/region/au",
+      finalUrl: "https://www.primevideo.com/region/au",
+      contentType: "text/html",
+      text: "Prime Video streaming is not available in Australia to new customers.",
+      sha256: "p".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  };
+  const unavailable = determineMarketEligibility(
+    "amazon prime", "Video Streaming Services", "Australia", [officialDocument], checkedAt, { identity },
+  );
+  assert.equal(unavailable.status, "INELIGIBLE");
+  assert.equal(unavailable.basis, "OFFICIAL_DOCUMENT");
+  assert.equal(unavailable.sourceUrl, officialDocument.url);
+  assert.match(unavailable.exactClaim ?? "", /not available in Australia/i);
+
+  const unrelatedTimeout = determineMarketEligibility(
+    "amazon prime", "Video Streaming Services", "Australia",
+    [{ url: "https://www.primevideo.com/region/au", reason: "timeout" }],
+    checkedAt,
+    { identity },
+  );
+  assert.notEqual(unrelatedTimeout.status, "INELIGIBLE");
+
+  const officialEvidence = (url: string, text: string) => ({
+    url,
+    document: {
+      url,
+      finalUrl: url,
+      contentType: "text/html",
+      text,
+      sha256: "q".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  });
+  const amazonPrimeEligibility = (url: string, text: string) => determineMarketEligibility(
+    "amazon prime",
+    "Video Streaming Services",
+    "Australia",
+    [officialEvidence(url, text)],
+    checkedAt,
+    { identity },
+  );
+
+  const officialPositive = amazonPrimeEligibility(
+    "https://www.primevideo.com/region/au",
+    "Prime Video streaming is open to new customers in Australia.",
+  );
+  assert.equal(officialPositive.status, "ELIGIBLE");
+  assert.equal(officialPositive.evidenceStatus, "CONFIRMED");
+
+  const crossMarketNegative = amazonPrimeEligibility(
+    "https://www.primevideo.com/region/au",
+    "Prime Video streaming is not available in India to new customers. Our support team also serves customers in Australia.",
+  );
+  assert.equal(crossMarketNegative.status, "UNKNOWN");
+  assert.equal(crossMarketNegative.basis, "UNESTABLISHED");
+
+  const crossMarketContrast = amazonPrimeEligibility(
+    "https://www.primevideo.com/region/au",
+    "Prime Video streaming is not available in India, but Australia remains part of our content market.",
+  );
+  assert.equal(crossMarketContrast.status, "UNKNOWN");
+
+  const lookalikePublisher = amazonPrimeEligibility(
+    "https://www.amazon-fake.com/region/au",
+    "Prime Video streaming is not available in Australia to new customers.",
+  );
+  assert.equal(lookalikePublisher.status, "UNKNOWN");
+  assert.equal(lookalikePublisher.basis, "UNESTABLISHED");
+
+  const competitorClaim = amazonPrimeEligibility(
+    "https://www.primevideo.com/region/au",
+    "Prime Video streaming options for Australia. Netflix streaming is not available in Australia to new customers.",
+  );
+  assert.equal(competitorClaim.status, "UNKNOWN");
+
+  const netflixIdentity = resolveEntityIdentity({
+    rawOption: "Netflix",
+    market: "AU",
+    otherOptions: ["Amazon Prime Video"],
+    userQuery: "Compare Netflix and Amazon Prime in Australia",
+  });
+  const officialNetflixPositive = determineMarketEligibility(
+    "Netflix",
+    "Video Streaming Services",
+    "Australia",
+    [officialEvidence(
+      "https://www.netflix.com/au/",
+      "Netflix streaming is open to new customers in Australia.",
+    )],
+    checkedAt,
+    { identity: netflixIdentity },
+  );
+  assert.equal(officialNetflixPositive.status, "ELIGIBLE");
+});
+
+test("known Australian home-loan offerings remain eligible with independent missing evidence status", () => {
+  const checkedAt = "2026-10-01T12:00:00.000Z";
+  for (const option of ["Pepper Money", "Westpac"]) {
+    const eligibility = determineMarketEligibility(option, "Home loans", "Australia", [], checkedAt);
+    assert.equal(eligibility.status, "ELIGIBLE");
+    assert.equal(eligibility.evidenceStatus, "MISSING");
+    assert.equal(eligibility.basis, "KNOWN_OFFERING");
+    assert.equal(eligibility.newApplicationAcceptance, "UNVERIFIED");
+    assert.equal(eligibility.sourceUrl, undefined);
+    assert.equal(eligibility.exactClaim, undefined);
+    assert.match(eligibility.reason, /acceptance is UNVERIFIED/i);
+  }
+  const westpacDocument = {
+    url: "https://www.westpac.com.au/home-loans/",
+    document: {
+      url: "https://www.westpac.com.au/home-loans/",
+      finalUrl: "https://www.westpac.com.au/home-loans/",
+      contentType: "text/html",
+      text: "Westpac Australia home loans are accepting new applications.",
+      sha256: "e".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  };
+  const verifiedWestpac = determineMarketEligibility("Westpac", "Home loans", "Australia", [westpacDocument], checkedAt);
+  const missingPepper = determineMarketEligibility("Pepper Money", "Home loans", "Australia", [], checkedAt);
+  assert.equal(verifiedWestpac.status, "ELIGIBLE");
+  assert.equal(verifiedWestpac.evidenceStatus, "CONFIRMED");
+  assert.equal(verifiedWestpac.basis, "OFFICIAL_DOCUMENT");
+  assert.equal(verifiedWestpac.newCustomerStatus, "OPEN");
+  assert.equal(missingPepper.status, "ELIGIBLE");
+  assert.equal(missingPepper.evidenceStatus, "MISSING");
+});
+
+test("eligibility scope separates retail and business loan segments", () => {
+  const retailPrompt = "Compare Pepper Money for retail home loans in Australia.";
+  const businessPrompt = "Compare Pepper Money for business-purpose home loans in Australia.";
+  const product = marketEligibilityProduct(businessPrompt, ["Pepper Money"]);
+  const businessSegment = marketEligibilityCustomerSegment(businessPrompt, product);
+  const businessSubcategory = marketEligibilitySubcategory(businessPrompt, product, businessSegment);
+  assert.equal(product, "Home loans");
+  assert.equal(marketEligibilityCustomerSegment(retailPrompt, product), "Retail");
+  assert.equal(businessSegment, "Business");
+  assert.equal(businessSubcategory, "Business-purpose property loans");
+  const retailEligibility = determineMarketEligibility("Pepper Money", product, "Australia", [], "2026-10-01T12:00:00.000Z");
+  assert.equal(retailEligibility.status, "ELIGIBLE");
+  assert.equal(retailEligibility.customerSegment, "Retail");
+  assert.equal(retailEligibility.subcategory, "Residential home loans");
+  const businessEligibility = determineMarketEligibility("Pepper Money", product, "Australia", [], "2026-10-01T12:00:00.000Z", {
+    customerSegment: businessSegment,
+    subcategory: businessSubcategory,
+  });
+  assert.equal(businessEligibility.status, "UNKNOWN");
+  assert.equal(businessEligibility.customerSegment, "Business");
+  assert.equal(businessEligibility.subcategory, "Business-purpose property loans");
+  assert.equal(businessEligibility.effectiveDate, "2026-10-01");
+});
+
+test("eligibility timeouts preserve known participation and historic VERIFIED remains recognized", () => {
+  const timedOut = determineMarketEligibility("Westpac", "Home loans", "Australia", [{
+    url: "https://www.westpac.com.au/home-loans/",
+    reason: "timeout",
+  }], "2026-10-01T12:00:00.000Z");
+  assert.equal(timedOut.status, "ELIGIBLE");
+  assert.equal(timedOut.evidenceStatus, "TIMED_OUT");
+  assert.equal(timedOut.newApplicationAcceptance, "UNVERIFIED");
+  assert.equal(marketEligibilityEvidenceConfirmed("CONFIRMED"), true);
+  assert.equal(marketEligibilityEvidenceConfirmed("VERIFIED"), true);
+  assert.equal(marketEligibilityEvidenceConfirmed("TIMED_OUT"), false);
+});
+
+test("identified products inherit parent categories without category words in the prompt", () => {
+  const vehicleNames = ["Mahindra Thar OG", "Tata Nexon"];
+  const prompt = "Compare Mahindra Thar OG vs Tata Nexon in India";
+  const vehicle = comparisonPreflightClassification(vehicleNames, "IN");
+  assert.equal(vehicle.comparisonType, "Vehicle Comparison");
+  assert.equal(vehicle.decisionDomain, "Vehicle Purchase");
+  assert.deepEqual(vehicle.optionClassifications.map(({ entityType, productCategory, resolutionStatus }) =>
+    [entityType, productCategory, resolutionStatus]), [
+    ["PRODUCT", "Passenger Vehicle", "RESOLVED"],
+    ["PRODUCT", "Passenger Vehicle", "RESOLVED"],
+  ]);
+  assert.equal(vehicle.optionClassifications[0]?.originalText, "Mahindra Thar OG");
+  assert.equal(marketEligibilityProduct(prompt, vehicleNames), "Vehicles");
+  assert.equal(validateComparisonContext(prompt, vehicleNames).segment, "Vehicles");
+
+  const smartphones = ["iPhone 18 Pro", "Samsung Galaxy S28"];
+  assert.equal(marketEligibilityProduct("Compare iPhone 18 Pro vs Samsung Galaxy S28", smartphones), "Smartphones");
+  assert.ok(comparisonPreflightClassification(smartphones).optionClassifications.every(
+    ({ entityType, productCategory }) => entityType === "PRODUCT" && productCategory === "Smartphones",
+  ));
+  assert.equal(marketEligibilityProduct("Compare Adobe Experience Manager vs Sitecore",
+    ["Adobe Experience Manager", "Sitecore"]), "Digital Experience Platforms");
+  assert.ok(comparisonPreflightClassification(["Adobe Experience Manager", "Sitecore"])
+    .optionClassifications.every(({ productCategory }) => productCategory === "DXP"));
+});
+
+test("a dated exact-model offering keeps India vehicles eligible on retrieval failure without approving other models", () => {
+  for (const proof of KNOWN_VEHICLE_MODEL_OFFERINGS) {
+    assert.equal(createHash("sha256").update(proof.observedClaim).digest("hex"), proof.excerptSha256);
+    assert.match(proof.officialUrl, /^https:\/\/(?:auto\.mahindra\.com|cars\.tatamotors\.com)\//);
+  }
+  const checkedAt = "2026-09-28T12:00:00.000Z";
+  for (const option of ["Mahindra Thar OG", "Tata Nexon"]) {
+    const eligibility = determineMarketEligibility(option, "Vehicles", "India",
+      [{ url: "https://example.com/timeout", reason: "timeout" }], checkedAt);
+    assert.equal(eligibility.status, "ELIGIBLE", option);
+    assert.equal(eligibility.evidenceStatus, "TIMED_OUT", option);
+    assert.equal(eligibility.basis, "KNOWN_OFFERING", option);
+    assert.equal(eligibility.newApplicationAcceptance, "UNVERIFIED", option);
+  }
+  assert.equal(determineMarketEligibility("Tata Imaginary", "Vehicles", "India", [], checkedAt).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("Mahindra Thar OG", "Vehicles", "Australia", [], checkedAt).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("Mahindra Thar OG", "Vehicles", "India", [],
+    "2027-02-01T00:00:00.000Z").status, "UNKNOWN");
+});
+
+test("modelled India vehicle scores keep a single qualified preliminary winner when retrieval times out", async () => {
+  const input = {
+    prompt: "Compare Mahindra Thar OG vs Tata Nexon in India",
+    market: "IN" as const,
+    vendors: ["Mahindra Thar OG", "Tata Nexon"],
+    criteria: ["Value"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, { lenses: [] });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => ({ url, reason: "timeout" as const })),
+    scoreResearch: async () => ({ items: [] }),
+    buildFallbackScorecard: async (scorecardInput) => createDecisionModeAnalysis(scorecardInput, {
+      lenses: [{ criterion: "Budget Lens", scores: { "Mahindra Thar OG": 81, "Tata Nexon": 78 },
+        rationale: "Assumption-led model scores, not verified measurements." }],
+    }),
+  });
+  assert.equal(result.category, "Vehicles");
+  assert.equal(result.recommendation, "Mahindra Thar OG");
+  assert.ok(result.score > 0);
+  assert.ok(result.vendorScores.every(({ marketEligibility }) => marketEligibility?.status === "ELIGIBLE"));
+  assert.match(result.executiveSummary, /Confidence:/);
+});
+
+test("Australian vehicle timeouts leave established manufacturers eligible without admitting an unknown model", () => {
+  assert.equal(marketEligibilityProduct("Compare BYD vs Tesla vs Mahindra in Australia", [
+    "BYD", "Tesla", "Mahindra",
+  ]), "Vehicles");
+  assert.notEqual(marketEligibilityProduct("Compare BYD vs Tesla market share prices in Australia", [
+    "BYD", "Tesla",
+  ]), "Vehicles");
+  const timedOut = [{ url: "https://example.com/au/cars", reason: "timeout" as const }];
+  for (const option of ["BYD", "Tesla"]) {
+    const eligibility = determineMarketEligibility(option, "Vehicles", "Australia", timedOut);
+    assert.equal(eligibility.status, "ELIGIBLE", option);
+    assert.equal(eligibility.basis, "KNOWN_OFFERING");
+    assert.equal(eligibility.evidenceStatus, "TIMED_OUT");
+    assert.equal(eligibility.newCustomerStatus, "UNKNOWN");
+  }
+  for (const option of ["Mahindra", "BYD Unreleased Model"]) {
+    assert.equal(determineMarketEligibility(option, "Vehicles", "Australia", timedOut).status, "UNKNOWN");
+  }
+  assert.match(determineMarketEligibility("Mahindra", "Vehicles", "Australia", timedOut).reason, /vehicle category/i);
+  const mahindraModel = determineMarketEligibility("Mahindra XUV700", "Vehicles", "Australia", [{
+    url: "https://www.mahindra.com.au/models/xuv700",
+    document: {
+      url: "https://www.mahindra.com.au/models/xuv700",
+      finalUrl: "https://www.mahindra.com.au/models/xuv700",
+      contentType: "text/html",
+      text: "Mahindra XUV700 vehicles are available now for purchase in Australia.",
+      sha256: "a".repeat(64),
+      retrievedAt: "2026-09-28T00:00:00Z",
+      truncated: false,
+    },
+  }]);
+  assert.equal(mahindraModel.status, "ELIGIBLE");
+  assert.equal(mahindraModel.basis, "OFFICIAL_DOCUMENT");
+  assert.equal(determineMarketEligibility("BYD", "Home loans", "Australia", timedOut).status, "UNKNOWN");
+  const closure = determineMarketEligibility("Tesla", "Vehicles", "Australia", [{
+    url: "https://www.tesla.com/en_au/vehicles",
+    document: {
+      url: "https://www.tesla.com/en_au/vehicles",
+      finalUrl: "https://www.tesla.com/en_au/vehicles",
+      contentType: "text/html",
+      text: "Tesla vehicles in Australia are no longer available for purchase.",
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-28T00:00:00Z",
+      truncated: false,
+    },
+  }, ...timedOut]);
+  assert.equal(closure.status, "INELIGIBLE");
+});
+
+test("validated CRM Platform keeps exact UK products eligible but not an ambiguous parent brand", () => {
+  for (const option of ["Dynamics 365", "Salesforce CRM"]) {
+    const eligibility = determineMarketEligibility(option, "CRM Platform", "United Kingdom", [{
+      url: "https://example.com/crm", reason: "timeout",
+    }]);
+    assert.equal(eligibility.status, "ELIGIBLE");
+    assert.equal(eligibility.evidenceStatus, "TIMED_OUT");
+    assert.equal(eligibility.newApplicationAcceptance, "UNVERIFIED");
+  }
+  assert.equal(determineMarketEligibility("Salesforce", "CRM Platform", "United Kingdom", []).status, "UNKNOWN");
+});
+
+test("dealer comparison role wording does not become part of the second named dealer", () => {
+  const prompt = "Compare Rouse Hill Toyota and Windsor Toyota as vendors for buying and servicing a new Toyota vehicle in Sydney.";
+  const parsed = parsePrompt(prompt);
+  assert.deepEqual(parsed.vendors, ["Rouse Hill Toyota", "Windsor Toyota"]);
+  assert.equal(parsed.hasExplicitVendorList, true);
+});
+
+test("eligible modelled score ties use the highest weighted criterion before option name", () => {
+  const rows = [
+    { vendor: "BYD", score: 76, weightedScores: [
+      { criterion: "Budget Lens", weight: 60, score: 80 },
+      { criterion: "Range Lens", weight: 40, score: 70 },
+    ] },
+    { vendor: "Tesla", score: 76, weightedScores: [
+      { criterion: "Budget Lens", weight: 60, score: 70 },
+      { criterion: "Range Lens", weight: 40, score: 85 },
+    ] },
+  ] as unknown as Parameters<typeof rankEligibleModelledScores>[0];
+  const ranked = rankEligibleModelledScores(rows);
+  assert.equal(ranked.ranked[0]?.vendor, "BYD");
+  assert.equal(ranked.tied, true);
+  assert.match(ranked.tieBreakReason, /priority lens/i);
+});
+
+test("eligible modelled comparisons with two through six options have one permutation-stable weighted winner", () => {
+  for (let count = 2; count <= 6; count += 1) {
+    const eligible = Array.from({ length: count }, (_, index) => {
+      const ordinal = index + 1;
+      const budget = 45 + ordinal * 7.123;
+      const features = 92 - ordinal * 2.417;
+      const score = (budget * 67 + features * 33) / 100;
+      return {
+        vendor: `Eligible Option ${ordinal}`,
+        score,
+        marketRelevance: { participationStatus: "ELIGIBLE" },
+        weightedScores: [
+          { criterion: "Budget Lens", weight: 67, score: budget },
+          { criterion: "Feature Lens", weight: 33, score: features },
+        ],
+      };
+    });
+    const ineligible = {
+      vendor: "Ineligible High Score",
+      score: 100,
+      marketRelevance: { participationStatus: "INELIGIBLE" },
+      weightedScores: [
+        { criterion: "Budget Lens", weight: 67, score: 100 },
+        { criterion: "Feature Lens", weight: 33, score: 100 },
+      ],
+    };
+    const expected = [...eligible].sort((left, right) => right.score - left.score)[0]!.vendor;
+    const baseline = rankEligibleModelledScores(
+      [...eligible, ineligible] as unknown as AnalysisPayload["vendorScores"],
+    );
+    const reversed = rankEligibleModelledScores(
+      [ineligible, ...eligible.slice().reverse()] as unknown as AnalysisPayload["vendorScores"],
+    );
+
+    assert.equal(baseline.ranked.length, count, `${count} eligible options`);
+    assert.equal(baseline.ranked[0]?.vendor, expected, `${count} eligible options`);
+    assert.equal(reversed.ranked[0]?.vendor, expected, `${count} eligible options, reversed`);
+    assert.deepEqual(
+      reversed.ranked.map(({ vendor }) => vendor),
+      baseline.ranked.map(({ vendor }) => vendor),
+    );
+    assert.equal(baseline.ranked.some(({ vendor }) => vendor === ineligible.vendor), false);
+  }
+});
+
+test("eligible modelled scores retain full weighted precision and exclude options that fail mandatory gates", () => {
+  const close = [
+    {
+      vendor: "Beta",
+      score: (80 * 67 + 70.00199 * 33) / 100,
+      weightedScores: [
+        { criterion: "Budget Lens", weight: 67, score: 80 },
+        { criterion: "Feature Lens", weight: 33, score: 70.00199 },
+      ],
+    },
+    {
+      vendor: "Alpha",
+      score: (80.001 * 67 + 70 * 33) / 100,
+      weightedScores: [
+        { criterion: "Budget Lens", weight: 67, score: 80.001 },
+        { criterion: "Feature Lens", weight: 33, score: 70 },
+      ],
+    },
+  ] as unknown as AnalysisPayload["vendorScores"];
+  const ranking = rankEligibleModelledScores(close);
+  assert.equal(ranking.ranked[0]?.vendor, "Alpha");
+  assert.ok(ranking.ranked[0]!.score > ranking.ranked[1]!.score);
+  assert.ok(ranking.ranked[0]!.score - ranking.ranked[1]!.score < 0.001);
+  assert.equal(ranking.tied, false);
+
+  const noEligibleOptions = rankEligibleModelledScores([
+    {
+      vendor: "Failed gate",
+      score: 100,
+      qualificationGates: [{
+        gate: "Mandatory condition",
+        status: "FAIL",
+        mandatory: true,
+        rationale: "The option fails a mandatory condition.",
+        evidenceSourceIds: [],
+      }],
+      weightedScores: [{ criterion: "Budget Lens", weight: 100, score: 100 }],
+    },
+  ] as unknown as AnalysisPayload["vendorScores"]);
+  assert.deepEqual(noEligibleOptions.ranked, []);
+  assert.equal(noEligibleOptions.tied, false);
+});
+
+test("known UK CRM and marketing-platform participants stay eligible through retrieval timeouts", () => {
+  const options = [
+    "Microsoft Dynamics 365",
+    "Salesforce Marketing Cloud",
+    "Oracle CX",
+    "SAP Sales Cloud",
+  ];
+  const crmPrompt = "Compare Microsoft Dynamics 365, Salesforce Marketing Cloud, Oracle CX and SAP Sales Cloud for CRM in the United Kingdom.";
+  const marketingPrompt = "Compare Microsoft Dynamics 365, Salesforce Marketing Cloud, Oracle CX and SAP Sales Cloud for a Marketing Platform in the United Kingdom.";
+  assert.equal(marketEligibilityProduct(crmPrompt, options), "CRM software");
+  assert.equal(marketEligibilityProduct(marketingPrompt, options), "Marketing Platform");
+  assert.equal(marketEligibilityProduct(
+    "Compare Dynamics 365, Oracle CX and SAP Sales Cloud in the United Kingdom.",
+    ["Dynamics 365", "Oracle CX", "SAP Sales Cloud"],
+  ), "CRM / Marketing Platform");
+  assert.equal(marketEligibilityProduct("Compare Oracle CX for a CX Platform in the United Kingdom.", ["Oracle CX"]), "CX Platform");
+  assert.equal(marketEligibilityProduct("Compare SAP Sales Cloud for a CRM Platform in the United Kingdom.", ["SAP Sales Cloud"]), "CRM Platform");
+  assert.equal(
+    marketEligibilityProduct("Compare Salesforce Marketing Cloud and Alpha for home loans in Australia.", ["Salesforce Marketing Cloud", "Alpha"]),
+    "Home loans",
+  );
+  const unrelatedUkPrompt = `Compare ${options.join(", ")} for streaming services in the United Kingdom.`;
+  const unrelatedUkProduct = marketEligibilityProduct(unrelatedUkPrompt, options);
+  assert.equal(unrelatedUkProduct, "Streaming services");
+
+  const timedOutEligibility = (option: string, product: string) => determineMarketEligibility(
+    option,
+    product,
+    "United Kingdom",
+    [{ url: "https://www.microsoft.com/en-gb/dynamics-365", reason: "timeout" }],
+    "2026-10-01T12:00:00.000Z",
+  );
+  for (const option of options) {
+    assert.equal(timedOutEligibility(option, unrelatedUkProduct).status, "UNKNOWN");
+  }
+  for (const option of options) {
+    const eligibility = timedOutEligibility(option, "CRM / Marketing Platform");
+    assert.equal(eligibility.status, "ELIGIBLE", `${option} / combined category`);
+    assert.equal(eligibility.evidenceStatus, "TIMED_OUT", `${option} / combined category`);
+    assert.equal(eligibility.newApplicationAcceptance, "UNVERIFIED");
+    assert.equal(eligibility.newCustomerStatus, "UNKNOWN");
+  }
+  for (const option of ["Microsoft Dynamics 365", "Dynamics 365", "Oracle CX", "SAP Sales Cloud"]) {
+    assert.equal(timedOutEligibility(option, "CRM software").status, "ELIGIBLE", `${option} / CRM`);
+  }
+  assert.equal(timedOutEligibility("Salesforce Marketing Cloud", "CRM software").status, "ELIGIBLE", "domain participation is not restricted to a CRM subtype");
+  assert.equal(timedOutEligibility("Salesforce Marketing Cloud", "Marketing Platform").status, "ELIGIBLE");
+  assert.equal(timedOutEligibility("SAP Sales Cloud", "Marketing Platform").status, "ELIGIBLE");
+  assert.equal(timedOutEligibility("Oracle CX", "Marketing Platform").status, "ELIGIBLE");
+  const oracleCxTimeout = timedOutEligibility("Oracle CX", "CX Platform");
+  assert.equal(oracleCxTimeout.status, "ELIGIBLE");
+  assert.equal(oracleCxTimeout.evidenceStatus, "TIMED_OUT");
+  const sapCrmTimeout = timedOutEligibility("SAP Sales Cloud", "CRM Platform");
+  assert.equal(sapCrmTimeout.status, "ELIGIBLE");
+  assert.equal(sapCrmTimeout.evidenceStatus, "TIMED_OUT");
+  assert.equal(timedOutEligibility("SAP Sales Cloud", "CX Platform").status, "ELIGIBLE");
+  assert.equal(timedOutEligibility("Oracle CX", "CRM Platform").status, "ELIGIBLE");
+  const documentedOracleMarketing = determineMarketEligibility("Oracle CX", "Marketing Platform", "United Kingdom", [{
+    url: "https://www.oracle.com/uk/cx/",
+    document: {
+      url: "https://www.oracle.com/uk/cx/",
+      finalUrl: "https://www.oracle.com/uk/cx/",
+      contentType: "text/html",
+      text: "Oracle CX marketing platform in the United Kingdom is accepting new customers.",
+      sha256: "c".repeat(64),
+      retrievedAt: "2026-10-01T12:00:00.000Z",
+      truncated: false,
+    },
+  }], "2026-10-01T12:00:00.000Z");
+  assert.equal(documentedOracleMarketing.status, "ELIGIBLE", "matching official evidence may establish an otherwise unknown category");
+
+  assert.equal(determineMarketEligibility(
+    "Microsoft Dynamics 365",
+    "CRM software",
+    "Australia",
+    [{ url: "https://www.microsoft.com/en-gb/dynamics-365", reason: "timeout" }],
+  ).status, "ELIGIBLE", "the exact platform is an established Australian category participant");
+  assert.equal(determineMarketEligibility(
+    "Microsoft",
+    "CRM software",
+    "United Kingdom",
+    [{ url: "https://www.microsoft.com/en-gb/", reason: "timeout" }],
+  ).status, "UNKNOWN", "generic vendor presence is not category participation");
+  assert.equal(determineMarketEligibility(
+    "Microsoft Dynamics 365",
+    "Software",
+    "United Kingdom",
+    [{ url: "https://www.microsoft.com/en-gb/dynamics-365", reason: "timeout" }],
+  ).status, "UNKNOWN", "known category status does not broaden to generic software");
+
+  const closed = determineMarketEligibility("Microsoft Dynamics 365", "CRM / Marketing Platform", "United Kingdom", [{
+    url: "https://www.microsoft.com/en-gb/dynamics-365",
+    document: {
+      url: "https://www.microsoft.com/en-gb/dynamics-365",
+      finalUrl: "https://www.microsoft.com/en-gb/dynamics-365",
+      contentType: "text/html",
+      text: "Microsoft Dynamics 365 CRM software is discontinued in the United Kingdom.",
+      sha256: "d".repeat(64),
+      retrievedAt: "2026-10-01T12:00:00.000Z",
+      truncated: false,
+    },
+  }], "2026-10-01T12:00:00.000Z");
+  assert.equal(closed.status, "INELIGIBLE", "current official withdrawal overrides known participation");
+  assert.equal(closed.evidenceStatus, "CONFIRMED");
+});
+
+test("Australian known platform participation survives missing, incomplete, and timed-out evidence", () => {
+  const categoryParticipants = [
+    ["Microsoft Dynamics 365", "CRM / Marketing Platform"],
+    ["Dynamics 365", "CRM / Marketing Platform"],
+    ["Salesforce Marketing Cloud", "CRM / Marketing Platform"],
+    ["Salesforce CRM", "CRM / Marketing Platform"],
+    ["Oracle CX", "CRM / Marketing Platform"],
+    ["SAP Sales Cloud", "CRM / Marketing Platform"],
+    ["Adobe Experience Manager", "Digital Experience Platforms"],
+    ["Sitecore", "Digital Experience Platforms"],
+    ["Contentful", "Digital Experience Platforms"],
+    ["Optimizely", "Digital Experience Platforms"],
+    ["Acquia", "Digital Experience Platforms"],
+  ] as const;
+  const checkedAt = "2026-09-28T12:00:00.000Z";
+  for (const [option, category] of categoryParticipants) {
+    const missing = determineMarketEligibility(option, category, "Australia", [], checkedAt);
+    const timedOut = determineMarketEligibility(option, category, "Australia",
+      [{ url: "https://example.com/official", reason: "timeout" }], checkedAt);
+    const incomplete = determineMarketEligibility(option, category, "Australia", [{
+      url: "https://example.com/unrelated",
+      document: {
+        url: "https://example.com/unrelated",
+        finalUrl: "https://example.com/unrelated",
+        contentType: "text/html",
+        text: "An unrelated document.",
+        sha256: "a".repeat(64),
+        retrievedAt: checkedAt,
+        truncated: false,
+      },
+    }], checkedAt);
+    for (const [result, status] of [[missing, "MISSING"], [timedOut, "TIMED_OUT"], [incomplete, "INCOMPLETE"]] as const) {
+      assert.equal(result.status, "ELIGIBLE", `${option} / ${status}`);
+      assert.equal(result.evidenceStatus, status);
+      assert.equal(result.newApplicationAcceptance, "UNVERIFIED");
+    }
+  }
+  assert.equal(determineMarketEligibility("Salesforce Marketing Cloud", "CRM software", "Australia", []).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("Salesforce", "CRM / Marketing Platform", "Australia", []).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("Microsoft", "CRM / Marketing Platform", "Australia", []).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("Dynamics 365", "Streaming services", "Australia", []).status, "UNKNOWN");
+  const closure = determineMarketEligibility("Microsoft Dynamics 365", "CRM / Marketing Platform", "Australia", [{
+    url: "https://www.microsoft.com/en-au/dynamics-365",
+    document: {
+      url: "https://www.microsoft.com/en-au/dynamics-365",
+      finalUrl: "https://www.microsoft.com/en-au/dynamics-365",
+      contentType: "text/html",
+      text: "Microsoft Dynamics 365 CRM platform is discontinued in Australia.",
+      sha256: "b".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  }], checkedAt);
+  assert.equal(closure.status, "INELIGIBLE", "current official withdrawal overrides known participation");
+});
+
+test("category participation is independent of retrieval quality, but stays scoped to identity and market", () => {
+  const known = [
+    ["Tata", "Vehicles", "India"],
+    ["Mahindra", "Vehicles", "India"],
+    ["BYD", "Vehicles", "Australia"],
+    ["Tesla", "Vehicles", "Australia"],
+    ["HDFC", "Home loans", "India"],
+    ["ICICI", "Home loans", "India"],
+    ["SBI", "Home loans", "India"],
+    ["Westpac", "Home loans", "Australia"],
+    ["NAB", "Home loans", "Australia"],
+    ["Dynamics 365", "CRM software", "Australia"],
+    ["Salesforce Marketing Cloud", "Marketing Platform", "Australia"],
+  ] as const;
+  const checkedAt = "2026-09-28T12:00:00.000Z";
+  const incomplete = [{
+    url: "https://example.org/unrelated",
+    document: {
+      url: "https://example.org/unrelated", finalUrl: "https://example.org/unrelated",
+      contentType: "text/html", text: "Unrelated material.",
+      sha256: "a".repeat(64), retrievedAt: checkedAt, truncated: false,
+    },
+  }];
+  for (const [option, category, market] of known) {
+    for (const [documents, evidenceStatus] of [
+      [[], "MISSING"],
+      [[{ url: "https://example.org/unavailable", reason: "timeout" }], "TIMED_OUT"],
+      [incomplete, "INCOMPLETE"],
+    ] as const) {
+      const result = determineMarketEligibility(option, category, market, [...documents], checkedAt);
+      assert.equal(result.status, "ELIGIBLE", `${option} / ${category} / ${market}`);
+      assert.equal(result.evidenceStatus, evidenceStatus);
+      assert.equal(result.newApplicationAcceptance, "UNVERIFIED");
+    }
+  }
+  assert.equal(determineMarketEligibility("Tata Safari", "Vehicles", "India", []).status, "UNKNOWN",
+    "a manufacturer does not establish exact model availability");
+  assert.equal(determineMarketEligibility("Mahindra", "Vehicles", "Australia", []).status, "UNKNOWN",
+    "category participation in India does not assert Australian market entry");
+  assert.equal(determineMarketEligibility("NAB", "Home loans", "India", []).status, "UNKNOWN");
+
+  const official = (text: string) => [{
+    url: "https://tata.in/vehicles",
+    document: {
+      url: "https://tata.in/vehicles", finalUrl: "https://tata.in/vehicles",
+      contentType: "text/html", text, sha256: "b".repeat(64),
+      retrievedAt: checkedAt, truncated: false,
+    },
+  }];
+  const conflicting = determineMarketEligibility("Tata", "Vehicles", "India", official(
+    "Tata vehicles are available to new customers in India. Tata vehicles are restricted to selected customers in India.",
+  ));
+  assert.equal(conflicting.status, "ELIGIBLE");
+  assert.equal(conflicting.evidenceStatus, "CONFLICTING");
+  const withdrawn = determineMarketEligibility("Tata", "Vehicles", "India", official(
+    "Tata vehicles are discontinued in India.",
+  ));
+  assert.equal(withdrawn.status, "INELIGIBLE", "explicit official closure overrides participation");
+});
+
+test("software domain participation is market-independent while financial eligibility stays market- and product-specific", () => {
+  assert.equal(marketEligibilityProduct(
+    "Compare Dynamics 365 and Salesforce Marketing Cloud software systems in India.",
+    ["Dynamics 365", "Salesforce Marketing Cloud"],
+  ), "CRM / Marketing Platform");
+  for (const market of ["Australia", "India", "United Kingdom", "United States"]) {
+    for (const option of ["Microsoft Dynamics 365", "Salesforce Marketing Cloud", "Oracle CX", "SAP Sales Cloud"]) {
+      const result = determineMarketEligibility(option, "CRM / Marketing Platform", market, [], "2026-09-28T12:00:00.000Z");
+      assert.equal(result.status, "ELIGIBLE", `${option} participates in ${market}`);
+      assert.equal(result.evidenceStatus, "MISSING");
+      assert.equal(result.newCustomerStatus, "UNKNOWN", "domain participation does not verify local availability");
+    }
+    assert.equal(determineMarketEligibility("Sitecore", "Digital Experience Platforms", market, []).status, "ELIGIBLE");
+    assert.equal(determineMarketEligibility("Sitecore", "CRM / Marketing Platform", market, []).status, "UNKNOWN");
+    assert.equal(determineMarketEligibility("Acme Marketing Cloud", "CRM / Marketing Platform", market, []).status, "UNKNOWN");
+    assert.equal(determineMarketEligibility("Salesforce", "CRM / Marketing Platform", market, []).status, "UNKNOWN");
+    assert.equal(determineMarketEligibility("Salesforce Marketing Cloud", "Customer Engagement Platform", market,
+      [{ url: "https://www.salesforce.com/au/marketing/", reason: "timeout" }]).status, "ELIGIBLE");
+  }
+  assert.equal(determineMarketEligibility("Westpac", "Home loans", "Australia", []).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("Westpac", "Home loans", "India", []).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("HDFC", "Home loans", "India", []).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("HDFC", "Home loans", "Australia", []).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("Pepper Money", "Home loans", "Australia", []).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("Pepper Money", "Business Banking", "Australia", []).status, "UNKNOWN");
+  for (const market of ["Australia", "India", "United States"]) {
+    assert.equal(determineMarketEligibility("HubSpot", "CRM software", market, []).status, "ELIGIBLE");
+    assert.equal(determineMarketEligibility("ServiceNow", "Software Platform", market, []).status, "ELIGIBLE");
+    assert.equal(determineMarketEligibility("ServiceNow", "CRM software", market, []).status, "UNKNOWN",
+      "a software platform is not automatically a CRM platform");
+  }
+  assert.equal(marketEligibilityProduct(
+    "Compare ServiceNow and Workday as software systems.",
+    ["ServiceNow", "Workday"],
+  ), "Software Platform");
+  assert.equal(marketEligibilityProduct("Compare Acme ERP vs Workday for ERP.", ["Acme ERP", "Workday"]), "ERP");
+  const closed = determineMarketEligibility("Salesforce Marketing Cloud", "CRM software", "Australia", [{
+    url: "https://www.salesforce.com/au/marketing/",
+    document: {
+      url: "https://www.salesforce.com/au/marketing/",
+      finalUrl: "https://www.salesforce.com/au/marketing/",
+      contentType: "text/html",
+      text: "Salesforce Marketing Cloud is discontinued in Australia.",
+      sha256: "a".repeat(64),
+      retrievedAt: "2026-09-28T12:00:00.000Z",
+      truncated: false,
+    },
+  }], "2026-09-28T12:00:00.000Z");
+  assert.equal(closed.status, "INELIGIBLE", "current official closure overrides domain participation across subtypes");
+  const licenceRestricted = determineMarketEligibility("ServiceNow", "Software Platform", "Australia", [{
+    url: "https://www.servicenow.com/au/software-platform/",
+    document: {
+      url: "https://www.servicenow.com/au/software-platform/",
+      finalUrl: "https://www.servicenow.com/au/software-platform/",
+      contentType: "text/html",
+      text: "ServiceNow software platform is not licensed in Australia.",
+      sha256: "b".repeat(64),
+      retrievedAt: "2026-09-28T12:00:00.000Z",
+      truncated: false,
+    },
+  }], "2026-09-28T12:00:00.000Z");
+  assert.equal(licenceRestricted.status, "INELIGIBLE", "official local licensing restriction overrides domain participation");
+  const marketWithdrawn = determineMarketEligibility("ServiceNow", "Software Platform", "Australia", [{
+    url: "https://www.servicenow.com/au/software-platform/",
+    document: {
+      url: "https://www.servicenow.com/au/software-platform/",
+      finalUrl: "https://www.servicenow.com/au/software-platform/",
+      contentType: "text/html",
+      text: "ServiceNow software platform is unavailable in Australia.",
+      sha256: "c".repeat(64),
+      retrievedAt: "2026-09-28T12:00:00.000Z",
+      truncated: false,
+    },
+  }], "2026-09-28T12:00:00.000Z");
+  assert.equal(marketWithdrawn.status, "INELIGIBLE", "official market unavailability overrides category participation");
+});
+
+test("current official negative new-business evidence overrides a known Pepper Money offering", () => {
+  const url = "https://www.pepper.com.au/home-loans/";
+  const closed = determineMarketEligibility("Pepper Money", "Home loans", "Australia", [{
+    url,
+    document: {
+      url,
+      finalUrl: url,
+      contentType: "text/html",
+      text: "Pepper Money Australia home loans are no longer accepting new applications.",
+      sha256: "f".repeat(64),
+      retrievedAt: "2026-10-01T12:00:00.000Z",
+      truncated: false,
+    },
+  }], "2026-10-01T12:00:00.000Z");
+  assert.equal(closed.status, "INELIGIBLE");
+  assert.equal(closed.evidenceStatus, "CONFIRMED");
+  assert.equal(closed.basis, "OFFICIAL_DOCUMENT");
+});
+
+test("unknown market eligibility blocks the researched scoring provider and clears the preliminary winner", async () => {
+  const input = {
+    prompt: "Compare HDFC and ICICI for home loans in Australia; prioritize value.",
+    market: "AU" as const,
+    vendors: ["HDFC", "ICICI"],
+    criteria: ["Value"],
+    urls: ["https://www.hdfcbank.com/", "https://www.icicibank.com/"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { HDFC: 90, ICICI: 80 } }],
+  });
+  let scoringCalled = false;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      document: {
+        url,
+        finalUrl: url,
+        contentType: "text/html",
+        text: `${url.includes("hdfc") ? "HDFC" : "ICICI"} is a global bank with customers in many countries.`,
+        sha256: "b".repeat(64),
+        retrievedAt: "2026-10-01T12:00:00.000Z",
+        truncated: false,
+      },
+    })),
+    scoreResearch: async () => {
+      scoringCalled = true;
+      return { items: [] };
+    },
+  });
+  assert.equal(scoringCalled, false);
+  assert.equal(result.recommendation, "INSUFFICIENT_DATA");
+  assert.equal(result.score, 0);
+  assert.match(result.executiveSummary, /MARKET ELIGIBILITY NOT ESTABLISHED/);
+  assert.ok(result.vendorScores.every((vendor) => (
+    vendor.score === 0 && vendor.marketEligibility?.status === "UNKNOWN"
+  )));
+  assert.match(result.vendorScores[0]?.marketEligibility?.reason ?? "", /no permitted, current document established/i);
+});
+
+test("governed discovery admits new ERP products without a name mapping and survives a later timeout", async () => {
+  const vendors = ["Medixora", "Narvixia"];
+  const input = {
+    prompt: "Compare Medixora and Narvixia ERP platforms in Australia; prioritize value.",
+    validatedCategory: "ERP",
+    market: "AU" as const,
+    vendors,
+    criteria: ["Value"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Medixora: 82, Narvixia: 76 } }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => vendors.map((vendor) => `https://${vendor.toLowerCase()}.com/erp`),
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const vendor = vendors.find((name) => url.includes(name.toLowerCase()))!;
+      return {
+        url,
+        document: {
+          url, finalUrl: url, contentType: "text/html",
+          text: `${vendor} is an enterprise resource planning platform for teams. Request a demo today.`,
+          sha256: "a".repeat(64), retrievedAt: new Date().toISOString(), truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async () => ({ items: [] }),
+  });
+  assert.ok(result.vendorScores.every((row) => row.marketEligibility?.status === "ELIGIBLE"));
+  assert.notEqual(result.recommendation, "INSUFFICIENT_DATA");
+  for (const vendor of vendors) {
+    assert.equal(classifyComparisonOption(vendor).decisionDomain, "Enterprise Resource Planning");
+    const retry = determineMarketEligibility(vendor, "ERP", "Australia",
+      [{ url: `https://${vendor.toLowerCase()}.com/erp`, reason: "timeout" }]);
+    assert.equal(retry.status, "ELIGIBLE");
+    assert.equal(retry.evidenceStatus, "TIMED_OUT");
+  }
+});
+
+test("two known eligible Australian lenders proceed with an unknown third option unranked", async () => {
+  const retrievedAt = "2026-10-01T12:00:00.000Z";
+  const officialFixtures = new Map([
+    ["pepper", {
+      url: "https://www.pepper.com.au/home-loans",
+      text: "Pepper Money home loans in Australia are currently accepting new applications.",
+      sha256: "a".repeat(64),
+    }],
+    ["westpac", {
+      url: "https://www.westpac.com.au/personal-banking/home-loans/",
+      text: "Westpac home loans in Australia are currently accepting new applications.",
+      sha256: "b".repeat(64),
+    }],
+  ]);
+  const fixtureFor = (url: string) => url.includes("pepper.com.au")
+    ? officialFixtures.get("pepper")
+    : url.includes("westpac.com.au")
+      ? officialFixtures.get("westpac")
+      : undefined;
+  const input = {
+    prompt: "Compare Pepper Money, Westpac and Unknown Bank for home loans in Australia; prioritize value.",
+    market: "AU" as const,
+    vendors: ["Pepper Money", "Westpac", "Unknown Bank"],
+    criteria: ["Value"],
+    urls: [
+      officialFixtures.get("pepper")!.url,
+      officialFixtures.get("westpac")!.url,
+    ],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { "Pepper Money": 85, Westpac: 80, "Unknown Bank": 99 } }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async (options) => options.flatMap((option) => {
+      const fixture = option === "Pepper Money"
+        ? officialFixtures.get("pepper")
+        : option === "Westpac" ? officialFixtures.get("westpac") : undefined;
+      return fixture ? [fixture.url] : [];
+    }),
+    discoverKeylessSources: async () => [],
+    discoverOfficialSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const fixture = fixtureFor(url);
+      return fixture
+        ? {
+          url,
+          document: {
+            url,
+            finalUrl: url,
+            contentType: "text/html",
+            text: fixture.text,
+            sha256: fixture.sha256,
+            retrievedAt,
+            truncated: false,
+          },
+        }
+        : { url, reason: "unreachable" as const };
+    }),
+    buildFallbackScorecard: async (scorecardInput) => createDecisionModeAnalysis(scorecardInput, {
+      lenses: [{
+        criterion: "Budget Lens",
+        scores: { "Pepper Money": 85, Westpac: 80 },
+        rationale: "Frozen test-only ranking inputs; no product facts are asserted.",
+      }],
+    }),
+    scoreResearch: async () => ({ items: [] }),
+  });
+  const pepper = result.vendorScores.find((vendor) => vendor.vendor === "Pepper Money")!;
+  const westpac = result.vendorScores.find((vendor) => vendor.vendor === "Westpac")!;
+  const unknown = result.vendorScores.find((vendor) => vendor.vendor === "Unknown Bank")!;
+  assert.equal(pepper.marketEligibility?.status, "ELIGIBLE");
+  assert.equal(pepper.marketEligibility?.basis, "OFFICIAL_DOCUMENT");
+  assert.equal(pepper.marketEligibility?.evidenceStatus, "CONFIRMED");
+  assert.equal(pepper.marketEligibility?.sourceUrl, officialFixtures.get("pepper")?.url);
+  assert.equal(pepper.marketEligibility?.checkedAt, retrievedAt);
+  assert.equal(westpac.marketEligibility?.status, "ELIGIBLE");
+  assert.equal(westpac.marketEligibility?.basis, "OFFICIAL_DOCUMENT");
+  assert.equal(westpac.marketEligibility?.evidenceStatus, "CONFIRMED");
+  assert.equal(westpac.marketEligibility?.sourceUrl, officialFixtures.get("westpac")?.url);
+  assert.equal(westpac.marketEligibility?.checkedAt, retrievedAt);
+  assert.equal(unknown.marketEligibility?.status, "UNKNOWN");
+  assert.equal(unknown.score, 0);
+  assert.deepEqual(unknown.weightedScores, []);
+  assert.notEqual(result.recommendation, "INSUFFICIENT_DATA");
+  assert.equal(result.recommendation, "Pepper Money");
+  assert.match(result.recommendationReason, /UNKNOWN options are left unranked/i);
+  assert.ok(result.insights.some((insight) => /Confidence is reduced because market eligibility evidence is incomplete/i.test(insight)));
+});
+
+test("entity spelling cannot change Australian home-loan eligibility, scores, or winner", async () => {
+  const checkedAt = "2026-10-01T12:00:00.000Z";
+  assert.equal(canonicalEntityId("PepperMoney"), canonicalEntityId("  PEPPER-MONEY  "));
+  assert.notEqual(canonicalEntityId("C++"), canonicalEntityId("C#"));
+  assert.equal(canonicalEntityId("Dynamics 365"), canonicalEntityId("Microsoft Dynamics 365"));
+  assert.equal(canonicalEntityId("Salesforce MC"), canonicalEntityId("Salesforce Marketing Cloud"));
+  assert.equal(canonicalEntityId("Westpac"), canonicalEntityId("Westpac Bank"));
+  assert.equal(canonicalScoringPrompt("Compare PepperMoney vs Westpac", ["PepperMoney", "Westpac"]),
+    canonicalScoringPrompt("Compare Pepper Money vs Westpac", ["Pepper Money", "Westpac"]));
+  assert.equal(canonicalScoringPrompt("Compare Microsoft Dynamics 365 vs Salesforce Marketing Cloud", ["Microsoft Dynamics 365", "Salesforce Marketing Cloud"]),
+    canonicalScoringPrompt("Compare Dynamics 365 vs Salesforce MC", ["Dynamics 365", "Salesforce MC"]));
+  assert.deepEqual(
+    (({ name, type, primaryMarket, canonicalEntityId, originalText }) =>
+      ({ name, type, primaryMarket, canonicalEntityId, originalText }))(classifyComparisonOption("PepperMoney")),
+    { name: "PepperMoney", type: "bank", primaryMarket: "AU",
+      canonicalEntityId: canonicalEntityId("Pepper Money"), originalText: "PepperMoney" },
+  );
+  assert.equal(classifyComparisonOption("Dynamics 365").type, classifyComparisonOption("Microsoft Dynamics 365").type);
+  assert.equal(classifyComparisonOption("Salesforce MC").type, classifyComparisonOption("Salesforce Marketing Cloud").type);
+  assert.equal(comparisonPreflightClassification(["PepperMoney", "Westpac"], "AU").crossMarket, false);
+  for (const name of ["PepperMoney", "Pepper Money"]) {
+    const marketCheck = validateContextAndMarket({
+      prompt: "Compare PepperMoney vs Westpac for Home loans in Australia.",
+      vendors: [name, "Westpac"],
+      inferredMarket: "AU",
+      selectedMarket: "AU",
+    });
+    assert.equal(marketCheck.valid, true);
+    if (marketCheck.valid) assert.equal(marketCheck.market, "AU");
+  }
+  const statuses = ["PepperMoney", "Pepper Money", "PEPPER-MONEY", "Westpac"].map((name) =>
+    determineMarketEligibility(name, "Home loans", "Australia", [], checkedAt));
+  assert.ok(statuses.every((status) => status.status === "ELIGIBLE" && status.basis === "KNOWN_OFFERING"));
+  assert.deepEqual(statuses[0], statuses[1]);
+  const officialUrl = "https://www.pepper.com.au/home-loans/";
+  const official = {
+    url: officialUrl,
+    document: {
+      url: officialUrl,
+      finalUrl: officialUrl,
+      contentType: "text/html",
+      text: "Pepper Money home loans in Australia are accepting new applications.",
+      sha256: "a".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  };
+  assert.deepEqual(
+    determineMarketEligibility("PepperMoney", "Home loans", "Australia", [official], checkedAt),
+    determineMarketEligibility("Pepper Money", "Home loans", "Australia", [official], checkedAt),
+  );
+  assert.equal(determineMarketEligibility("Dynamics 365", "CRM software", "United Kingdom", [], checkedAt).status,
+    determineMarketEligibility("Microsoft Dynamics 365", "CRM software", "United Kingdom", [], checkedAt).status);
+  assert.equal(determineMarketEligibility("Salesforce MC", "Marketing Platform", "United Kingdom", [], checkedAt).status, "ELIGIBLE");
+
+  for (const name of ["PepperMoney", "Pepper Money"]) {
+    const input = {
+      prompt: `Compare ${name} vs Westpac for Home loans in Australia; prioritize value.`,
+      market: "AU" as const,
+      vendors: [name, "Westpac"],
+      criteria: ["Value"],
+      urls: [],
+    };
+    // Scorecards can use canonical names even when the requested spelling differs.
+    const initial = createDecisionModeAnalysis(input, {
+      lenses: [{ criterion: "Budget Lens", scores: { "Pepper Money": 88, Westpac: 72 } }],
+    });
+    const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+      discoverSources: async () => [],
+      retrieveDocuments: async () => [],
+      scoreResearch: async () => ({ items: [] }),
+    });
+    assert.equal(result.vendorScores.find((row) => row.vendor === name)?.marketEligibility?.status, "ELIGIBLE");
+    assert.equal(result.vendorScores.find((row) => row.vendor === "Westpac")?.marketEligibility?.status, "ELIGIBLE");
+    assert.ok(result.vendorScores.every((row) => row.score > 0 && (row.weightedScores?.length ?? 0) > 0));
+    assert.equal(result.recommendation, name);
+  }
+});
+
+test("known Pepper Money and Westpac offerings get a low-confidence modelled fallback when all retrieval fails", async () => {
+  const input = {
+    prompt: "Compare Pepper Money and Westpac for home loans in Australia; prioritize value.",
+    market: "AU" as const,
+    vendors: ["Pepper Money", "Westpac"],
+    criteria: ["Value"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, { lenses: [] });
+  let fallbackScorecardCalls = 0;
+  let baselineConfidence = 0;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => ({ url, reason: "unreachable" as const })),
+    scoreResearch: async () => ({ items: [] }),
+    buildFallbackScorecard: async (scorecardInput) => {
+      fallbackScorecardCalls += 1;
+      const scorecard = createDecisionModeAnalysis(scorecardInput, {
+        lenses: [{
+          criterion: "Budget Lens",
+          scores: { "Pepper Money": 88, Westpac: 72 },
+          rationale: "Modelled comparison only; no sourced product claims.",
+        }],
+      });
+      baselineConfidence = Number(scorecard.executiveSummary.match(/Confidence: (\d+)\/100/)?.[1] ?? 0);
+      return scorecard;
+    },
+  });
+  assert.equal(fallbackScorecardCalls, 1);
+  assert.equal(result.recommendation, "Pepper Money");
+  assert.ok(result.score > 0);
+  const finalConfidence = Number(result.executiveSummary.match(/Confidence: (\d+)\/100/)?.[1] ?? 0);
+  assert.ok(baselineConfidence > 0);
+  assert.ok(finalConfidence < baselineConfidence);
+  assert.ok(result.insights.some((insight) => /Confidence is reduced because market eligibility evidence is incomplete/i.test(insight)));
+  for (const vendor of result.vendorScores) {
+    assert.equal(vendor.marketEligibility?.status, "ELIGIBLE");
+    assert.ok(["INCOMPLETE", "MISSING"].includes(vendor.marketEligibility?.evidenceStatus ?? ""));
+    assert.equal(vendor.marketEligibility?.basis, "KNOWN_OFFERING");
+    assert.equal(vendor.marketEligibility?.newApplicationAcceptance, "UNVERIFIED");
+    assert.equal(vendor.marketEligibility?.sourceUrl, undefined);
+  }
+});
+
+test("HDFC Bank, ICICI Bank, and SBI Bank remain ranked in India home loans after retrieval failure", async () => {
+  const input = {
+    prompt: "Compare HDFC Bank, ICICI Bank and SBI Bank for home loans in India; prioritize value.",
+    market: "IN" as const,
+    vendors: ["HDFC Bank", "ICICI Bank", "SBI Bank"],
+    criteria: ["Value"],
+    urls: [
+      "https://www.hdfcbank.com/personal/borrow/popular-loans/home-loan",
+      "https://www.icicibank.com/personal-banking/loans/home-loan",
+      "https://sbi.co.in/web/personal-banking/loans/home-loans",
+    ],
+  };
+  const initial = createDecisionModeAnalysis(input, { lenses: [] });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => ({ url, reason: "unreachable" as const })),
+    scoreResearch: async () => ({ items: [] }),
+    buildFallbackScorecard: async (scorecardInput) => createDecisionModeAnalysis(scorecardInput, {
+      lenses: [{
+        criterion: "Budget Lens",
+        scores: { "HDFC Bank": 82, "ICICI Bank": 91, "SBI Bank": 86 },
+        rationale: "Modelled fallback ranking; no verified facts are asserted.",
+      }],
+    }),
+  });
+
+  assert.equal(result.recommendation, "ICICI Bank");
+  assert.ok(result.score > 0);
+  assert.deepEqual(result.vendorScores.slice(0, 3).map((row) => row.vendor), [
+    "ICICI Bank",
+    "SBI Bank",
+    "HDFC Bank",
+  ]);
+  for (const vendor of result.vendorScores) {
+    assert.equal(vendor.marketEligibility?.status, "ELIGIBLE", vendor.vendor);
+    assert.equal(vendor.marketEligibility?.evidenceStatus, "INCOMPLETE", vendor.vendor);
+  }
+});
+
+test("fewer than two eligible options still block scoring", async () => {
+  const input = {
+    prompt: "Compare Pepper Money and Unknown Bank for home loans in Australia.",
+    market: "AU" as const,
+    vendors: ["Pepper Money", "Unknown Bank"],
+    criteria: ["Value"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { "Pepper Money": 90, "Unknown Bank": 80 } }],
+  });
+  let scoreResearchCalled = false;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async () => [],
+    scoreResearch: async () => {
+      scoreResearchCalled = true;
+      return { items: [] };
+    },
+  });
+  assert.equal(scoreResearchCalled, false);
+  assert.equal(result.recommendation, "INSUFFICIENT_DATA");
+  assert.equal(result.vendorScores.find((vendor) => vendor.vendor === "Pepper Money")?.marketEligibility?.status, "ELIGIBLE");
+});
+
+test("confirmed demographic context ranks a sole conditional survivor without claiming verified availability", async () => {
+  const input = {
+    prompt: "Compare Alpha Bank and Beta Bank for home loans in Australia; prioritize value.",
+    validatedCategory: "Home loans",
+    market: "AU" as const,
+    demographicContext: {
+      country: "Australia",
+      customerSegment: "consumer home-loan borrower",
+      businessOrConsumer: "CONSUMER" as const,
+      useCase: "new home loan",
+      currency: "AUD",
+    },
+    vendors: ["Alpha Bank", "Beta Bank"],
+    criteria: ["Value"],
+    urls: ["https://alpha.example/home-loans", "https://beta.example/home-loans"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{
+      criterion: "Budget Lens",
+      scores: { "Alpha Bank": 84, "Beta Bank": 78 },
+      rationale: "Modelled comparison only; no verified provider facts.",
+    }],
+  });
+  let scoringCalled = false;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => url.includes("beta")
+      ? {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: "Beta Bank home loans are not available in Australia to new customers.",
+          sha256: "c".repeat(64),
+          retrievedAt: "2026-10-01T12:00:00.000Z",
+          truncated: false,
+        },
+      }
+      : { url, reason: "unreachable" as const }),
+    scoreResearch: async () => {
+      scoringCalled = true;
+      return { items: [] };
+    },
+  });
+  const alpha = result.vendorScores.find(({ vendor }) => vendor === "Alpha Bank")!;
+  const beta = result.vendorScores.find(({ vendor }) => vendor === "Beta Bank")!;
+  assert.equal(scoringCalled, false, "the one surviving preliminary score is sufficient; no zero-score substitute is fabricated");
+  assert.equal(result.recommendation, "Alpha Bank");
+  assert.ok(alpha.score > 0);
+  assert.ok((alpha.weightedScores?.length ?? 0) > 0);
+  assert.equal(alpha.marketEligibility?.status, "UNKNOWN");
+  assert.equal(alpha.marketRelevance?.availabilityStatus, "NOT_VERIFIED");
+  assert.equal(alpha.marketRelevance?.participationStatus, "CONDITIONALLY_ELIGIBLE");
+  assert.equal(alpha.marketRelevance?.relevantForObjective, null);
+  assert.equal(beta.marketEligibility?.status, "INELIGIBLE");
+  assert.equal(beta.marketRelevance?.participationStatus, "INELIGIBLE");
+  assert.equal(beta.score, 0);
+  assert.deepEqual(beta.weightedScores, []);
+});
+
+test("two equal scoreable conditional candidates are deterministically tie-broken without asserting local availability", async () => {
+  const input = {
+    prompt: "Compare Alpha and Beta for software in Australia; prioritize value.",
+    validatedCategory: "Software Platform",
+    market: "AU" as const,
+    demographicContext: {
+      country: "Australia",
+      businessOrConsumer: "ENTERPRISE" as const,
+      useCase: "enterprise software evaluation",
+      currency: "AUD",
+    },
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Value"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{
+      criterion: "Budget Lens",
+      scores: { Alpha: 80, Beta: 80 },
+      rationale: "Equal assumption-based scores; no provider facts are asserted.",
+    }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async () => [],
+    scoreResearch: async () => ({ items: [] }),
+  });
+  assert.ok(["Alpha", "Beta"].includes(result.recommendation));
+  assert.ok(result.vendorScores.every(({ marketRelevance }) => (
+    marketRelevance?.participationStatus === "CONDITIONALLY_ELIGIBLE"
+      && marketRelevance.availabilityStatus === "NOT_VERIFIED"
+  )));
+  assert.ok(result.vendorScores.every(({ weightedScores }) => (weightedScores?.length ?? 0) > 0));
+  assert.match(result.recommendationReason, /tie-break|Conditional modelled choice/i);
+  assert.doesNotMatch(JSON.stringify(result.vendorScores.map(({ marketRelevance }) => marketRelevance)), /LOCALLY_AVAILABLE|DIGITALLY_AVAILABLE/);
+});
+
+test("conditional market candidates do not get a zero-score alphabetical winner without scoreable inputs", async () => {
+  const input = {
+    prompt: "Compare Alpha and Beta enterprise software in Australia.",
+    validatedCategory: "Software Platform",
+    market: "AU" as const,
+    demographicContext: {
+      country: "Australia",
+      businessOrConsumer: "ENTERPRISE" as const,
+      useCase: "enterprise software evaluation",
+    },
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Value"],
+    urls: [],
+  };
+  const initial = createDecisionModeAnalysis(input, { lenses: [] });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async () => [],
+    scoreResearch: async () => ({ items: [] }),
+    buildFallbackScorecard: async (scorecardInput) => {
+      const unscored = createDecisionModeAnalysis(scorecardInput, { lenses: [] });
+      unscored.vendorScores = unscored.vendorScores.map((vendor) => ({
+        ...vendor,
+        score: 0,
+        weightedScores: [],
+      }));
+      unscored.recommendation = "INSUFFICIENT_DATA";
+      return unscored;
+    },
+  });
+  assert.equal(result.recommendation, "INSUFFICIENT_DATA");
+  assert.equal(result.score, 0);
+  assert.match(result.recommendationReason, /no scoreable model inputs/i);
+  assert.ok(result.vendorScores.every(({ marketRelevance }) => (
+    marketRelevance?.participationStatus === "CONDITIONALLY_ELIGIBLE"
+    && marketRelevance.availabilityStatus === "NOT_VERIFIED"
+  )));
+});
+
+test("retrieved route, segment, residency, and returns claims satisfy only their exact demographic gates", async () => {
+  const input = {
+    prompt: "Compare FedEx and UPS for enterprise delivery from Sydney to Melbourne with local returns.",
+    validatedCategory: "Delivery services",
+    market: "AU" as const,
+    demographicContext: {
+      country: "Australia",
+      customerSegment: "enterprise customers",
+      businessOrConsumer: "ENTERPRISE" as const,
+      useCase: "delivery from Sydney to Melbourne with local returns",
+      regulatoryContext: ["Australian data residency required"],
+    },
+    vendors: ["FedEx", "UPS"],
+    criteria: ["Value"],
+    urls: ["https://www.fedex.com/au/services", "https://www.ups.com/au/services"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { FedEx: 82, UPS: 78 } }],
+  });
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => {
+      const vendor = url.includes("fedex") ? "FedEx" : "UPS";
+      const claim = vendor === "FedEx"
+        ? "FedEx domestic delivery services from Sydney to Melbourne are currently available to new customers, including enterprise customers, in Australia; FedEx domestic delivery services from Sydney to Melbourne are currently serviceable on this Australian route; FedEx domestic delivery services currently store customer data in Australia in line with Australian data residency; FedEx domestic delivery services currently provide local returns in Australia."
+        : "UPS domestic delivery services are currently available to new customers in Australia.";
+      return {
+        url,
+        document: {
+          url,
+          finalUrl: url,
+          contentType: "text/html",
+          text: claim,
+          sha256: "d".repeat(64),
+          retrievedAt: "2026-10-01T12:00:00.000Z",
+          truncated: false,
+        },
+      };
+    }),
+    scoreResearch: async () => ({ items: [] }),
+  });
+  const fedex = result.vendorScores.find(({ vendor }) => vendor === "FedEx")!;
+  const ups = result.vendorScores.find(({ vendor }) => vendor === "UPS")!;
+  const status = (row: typeof fedex, gate: string) => row.marketRelevance?.mandatoryGateResults.find((entry) => entry.gate === gate)?.status;
+  assert.equal(status(fedex, "ROUTE_SERVICEABILITY"), "PASS");
+  assert.equal(status(fedex, "CUSTOMER_SEGMENT"), "PASS");
+  assert.equal(status(fedex, "ENTERPRISE_DATA_RESIDENCY"), "PASS");
+  assert.equal(status(fedex, "LOCAL_RETURNS_REQUIRED"), "PASS");
+  assert.equal(status(ups, "ROUTE_SERVICEABILITY"), "CONDITIONAL");
+  assert.equal(status(ups, "CUSTOMER_SEGMENT"), "CONDITIONAL");
+  assert.equal(status(ups, "ENTERPRISE_DATA_RESIDENCY"), "CONDITIONAL");
+  assert.equal(status(ups, "LOCAL_RETURNS_REQUIRED"), "CONDITIONAL");
+});
+
+test("non-loan market eligibility is checked before recommendation scoring", async () => {
+  const input = {
+    prompt: "Compare Alpha and Beta business software in Australia; choose one for a new purchase.",
+    market: "AU" as const,
+    vendors: ["Alpha", "Beta"],
+    criteria: ["Value"],
+    urls: ["https://alpha.example/software", "https://beta.example/software"],
+  };
+  const initial = createDecisionModeAnalysis(input, {
+    lenses: [{ criterion: "Budget Lens", scores: { Alpha: 90, Beta: 80 } }],
+  });
+  let scoringCalled = false;
+  const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+    discoverSources: async () => [],
+    retrieveDocuments: async (urls) => urls.map((url) => ({
+      url,
+      document: {
+        url,
+        finalUrl: url,
+        contentType: "text/html",
+        text: `${url.includes("alpha") ? "Alpha" : "Beta"} software is used by customers across Australia.`,
+        sha256: "d".repeat(64),
+        retrievedAt: "2026-10-01T12:00:00.000Z",
+        truncated: false,
+      },
+    })),
+    scoreResearch: async () => {
+      scoringCalled = true;
+      return { items: [] };
+    },
+  });
+  assert.equal(scoringCalled, false);
+  assert.equal(result.recommendation, "INSUFFICIENT_DATA");
+  assert.ok(result.vendorScores.every((vendor) => vendor.marketEligibility?.status === "UNKNOWN"));
+});
+
+test("market eligibility covers non-loan offerings and never infers availability from provider presence", () => {
+  const checkedAt = "2026-10-01T12:00:00.000Z";
+  const product = marketEligibilityProduct(
+    "Compare HSBC and NAB credit cards for new customers in Australia.",
+    ["HSBC", "NAB"],
+  );
+  assert.equal(product, "Credit cards");
+  const doc = (url: string, text: string) => ({
+    url,
+    document: {
+      url,
+      finalUrl: url,
+      contentType: "text/html",
+      text,
+      sha256: "c".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  });
+  assert.equal(determineMarketEligibility("HSBC", product, "Australia", [doc(
+    "https://www.hsbc.com.au/credit-cards/",
+    "HSBC Australia credit cards are no longer accepting new applications.",
+  )], checkedAt).status, "INELIGIBLE");
+  assert.equal(determineMarketEligibility("NAB", product, "Australia", [doc(
+    "https://www.nab.com.au/personal/credit-cards",
+    "NAB Australia credit cards are accepting new applications.",
+  )], checkedAt).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("ICICI", product, "Australia", [doc(
+    "https://www.icicibank.com/",
+    "ICICI is an international bank serving customers in Australia.",
+  )], checkedAt).status, "UNKNOWN");
+
+  assert.equal(marketEligibilityProduct(
+    "Compare Alpha and Beta business software subscriptions in the UK.",
+    ["Alpha", "Beta"],
+  ), "Software");
+  assert.equal(determineMarketEligibility("Alpha", "Software", "United Kingdom", [doc(
+    "https://alpha.example/",
+    "Alpha serves software customers in the United Kingdom.",
+  )], checkedAt).status, "UNKNOWN");
+});
+
+test("market eligibility is scoped to provider, resolved category, and market", () => {
+  const checkedAt = "2026-10-01T12:00:00.000Z";
+  const businessBanking = marketEligibilityProduct(
+    "Compare Pepper Money, Westpac and HSBC for Business Banking in Australia.",
+    ["Pepper Money", "Westpac", "HSBC"],
+  );
+  assert.equal(businessBanking, "Business Banking");
+  assert.equal(determineMarketEligibility("Pepper Money", businessBanking, "Australia", [], checkedAt).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("Westpac", businessBanking, "Australia", [], checkedAt).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("HSBC", businessBanking, "Australia", [], checkedAt).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("Pepper Money", "Home loans", "Australia", [], checkedAt).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("Westpac", "Home loans", "Australia", [], checkedAt).status, "ELIGIBLE");
+  assert.equal(determineMarketEligibility("HSBC", "Home loans", "Australia", [], checkedAt).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("HSBC", "Home loans", "Australia", [{
+    url: "https://www.hsbc.com.au/loans/home-loans/",
+    reason: "unreachable",
+  }], checkedAt).status, "UNKNOWN");
+  assert.equal(determineMarketEligibility("HSBC", "Home loans", "Australia", [{
+    url: "https://www.hsbc.com.au/loans/home-loans/",
+    document: {
+      url: "https://www.hsbc.com.au/loans/home-loans/",
+      finalUrl: "https://www.hsbc.com.au/loans/home-loans/",
+      contentType: "text/html",
+      text: "HSBC Australia home loans are accepting new applications.",
+      sha256: "8".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  }], checkedAt).status, "ELIGIBLE");
+  for (const bank of ["HDFC", "ICICI", "SBI"]) {
+    assert.equal(determineMarketEligibility(bank, "Home loans", "India", [], checkedAt).status, "ELIGIBLE");
+  }
+  for (const bank of ["HDFC Bank", "ICICI Bank", "SBI Bank"]) {
+    const eligibility = determineMarketEligibility(bank, "Home loans", "India", [{
+      url: `https://unreachable.example/${encodeURIComponent(bank)}`,
+      reason: "unreachable",
+    }], checkedAt);
+    assert.equal(eligibility.status, "ELIGIBLE", `${bank} remains eligible when official retrieval fails`);
+    assert.equal(eligibility.evidenceStatus, "INCOMPLETE");
+  }
+  assert.equal(
+    determineMarketEligibility("HSBC", businessBanking, "Australia", [{ url: "https://www.hsbc.com.au/business", reason: "unreachable" }], checkedAt).status,
+    "ELIGIBLE",
+  );
+  const closedUrl = "https://www.hsbc.com.au/business/";
+  const officialClosure = determineMarketEligibility("HSBC", businessBanking, "Australia", [{
+    url: closedUrl,
+    document: {
+      url: closedUrl,
+      finalUrl: closedUrl,
+      contentType: "text/html",
+      text: "HSBC Australia Business Banking is no longer accepting new applications.",
+      sha256: "9".repeat(64),
+      retrievedAt: checkedAt,
+      truncated: false,
+    },
+  }], checkedAt);
+  assert.equal(officialClosure.status, "INELIGIBLE");
+  assert.equal(officialClosure.basis, "OFFICIAL_DOCUMENT");
+});
+
+test("score recomputation cannot revive a verified INELIGIBLE option", () => {
+  const report = createDecisionModeAnalysis({
+    prompt: "Compare Closed Bank and Open Bank home loans in Australia.",
+    market: "AU",
+    vendors: ["Closed Bank", "Open Bank"],
+    criteria: ["Value"],
+    urls: [],
+  }, {
+    lenses: [{ criterion: "Budget Lens", scores: { "Closed Bank": 100, "Open Bank": 20 } }],
+  });
+  for (const vendor of report.vendorScores) {
+    vendor.weightedScores = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+      criterion,
+      weight: 10,
+      score: vendor.vendor === "Closed Bank" ? 99 : 20,
+      rationale: "Comparable retained score for regression coverage.",
+      evidence: [],
+    }));
+  }
+  report.recommendation = "Closed Bank";
+  report.vendorScores.find((vendor) => vendor.vendor === "Closed Bank")!.marketEligibility = {
+    status: "INELIGIBLE",
+    market: "Australia",
+    product: "Home loans",
+    reason: "Current applications are closed.",
+    checkedAt: "2026-10-01T12:00:00.000Z",
+    sourceUrl: "https://closedbank.com.au/home-loans",
+    exactClaim: "Closed Bank Australia home loans are no longer accepting new applications.",
+  };
+  report.vendorScores.find((vendor) => vendor.vendor === "Open Bank")!.marketEligibility = {
+    status: "ELIGIBLE",
+    market: "Australia",
+    product: "Home loans",
+    reason: "The provider accepts new applications.",
+    checkedAt: "2026-10-01T12:00:00.000Z",
+    sourceUrl: "https://openbank.com.au/home-loans",
+    exactClaim: "Open Bank Australia home loans are accepting new applications.",
+  };
+  const weights = WEIGHTED_CRITERIA.map(({ criterion }) => ({ criterion, weight: 10 }));
+  const recomputed = reweightAnalysis(report, weights);
+  assert.equal(recomputed.recommendation, "Open Bank");
+  assert.equal(recomputed.vendorScores.find((vendor) => vendor.vendor === "Closed Bank")?.score, 0);
+  assert.deepEqual(recomputed.vendorScores.find((vendor) => vendor.vendor === "Closed Bank")?.weightedScores, []);
+});
+
+const demographicAcceptanceProof = (
+  optionId: string,
+  gate: RelevanceGate,
+  outcome: "PASS" | "FAIL",
+  country = "Australia",
+  overrides: Partial<RelevanceEvidence> = {},
+): RelevanceEvidence => ({
+  id: `acceptance:${optionId}:${gate}:${outcome}`,
+  optionId,
+  gate,
+  outcome,
+  country,
+  sourceUrl: `https://official-${optionId.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-")}.example/current`,
+  exactClaim: `${optionId} ${outcome === "PASS" ? "currently supports" : "does not support"} ${gate} in ${country}.`,
+  retrievedAt: "2026-10-01T12:00:00.000Z",
+  currentMarketSpecific: true,
+  ...overrides,
+});
+
+const demographicAcceptanceAssessment = (
+  optionId: string,
+  objective: string,
+  context: DemographicContext,
+  evidence: RelevanceEvidence[] = [],
+  timedOut = false,
+) => assessMarketRelevance({
+  optionId,
+  objective,
+  context,
+  evidence,
+  timedOut,
+  assessedAt: "2026-10-01T12:00:00.000Z",
+});
+
+const demographicIntegrationDocument = (url: string, text: string, hash: string): RetrievedEvidenceDocument => ({
+  url,
+  finalUrl: url,
+  contentType: "text/html",
+  text,
+  sha256: hash.repeat(64),
+  retrievedAt: "2026-10-01T12:00:00.000Z",
+  truncated: false,
+});
+
+const demographicAcceptanceScenarios: Array<{
+  number: number;
+  name: string;
+  run: () => void | Promise<void>;
+}> = [
+  {
+    number: 1,
+    name: "Tanishq vs CaratLane for online jewellery delivered to Australia.",
+    run: () => {
+      const context: DemographicContext = {
+        country: "Australia",
+        deliveryNeed: "CROSS_BORDER",
+        useCase: "online jewellery delivered to Australia, including shipping, duties, returns, warranty and local support",
+        currency: "AUD",
+      };
+      for (const option of ["Tanishq", "CaratLane"]) {
+        const result = demographicAcceptanceAssessment(option, "online jewellery delivered to Australia", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "Australia", {
+            accessMode: "CROSS_BORDER",
+            exactClaim: `${option} currently accepts Australian jewellery orders with cross-border delivery, shipping, duties, returns and warranty information.`,
+          }),
+        ]);
+        assert.equal(result.availabilityStatus, "CROSS_BORDER_AVAILABLE", option);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+        assert.equal(result.market.country, "Australia");
+      }
+    },
+  },
+  {
+    number: 2,
+    name: "Tanishq vs CaratLane for visiting a physical store in Sydney.",
+    run: () => {
+      const context: DemographicContext = { country: "Australia", city: "Sydney", deliveryNeed: "LOCAL_STORE" };
+      const tanishq = demographicAcceptanceAssessment("Tanishq", "visit a physical store in Sydney", context, [
+        demographicAcceptanceProof("Tanishq", "MARKET_AVAILABILITY", "PASS", "Australia", {
+          location: "Sydney", accessMode: "PHYSICAL_STORE",
+        }),
+        demographicAcceptanceProof("Tanishq", "PHYSICAL_STORE_REQUIRED", "PASS", "Australia", {
+          location: "Sydney", accessMode: "PHYSICAL_STORE",
+          exactClaim: "Tanishq currently operates a physical jewellery store in Sydney, Australia.",
+        }),
+      ]);
+      const caratLane = demographicAcceptanceAssessment("CaratLane", "visit a physical store in Sydney", context, [
+        demographicAcceptanceProof("CaratLane", "PHYSICAL_STORE_REQUIRED", "FAIL", "Australia", {
+          location: "Sydney", accessMode: "PHYSICAL_STORE",
+          exactClaim: "CaratLane has no physical store in Sydney, Australia.",
+        }),
+      ]);
+      assert.equal(tanishq.localPhysicalPresence, true);
+      assert.equal(tanishq.participationStatus, "ELIGIBLE");
+      assert.equal(caratLane.localPhysicalPresence, false);
+      assert.equal(caratLane.participationStatus, "INELIGIBLE");
+      assert.equal(caratLane.relevantForObjective, false);
+    },
+  },
+  {
+    number: 3,
+    name: "Tata Safari vs Mahindra XUV700 diesel for new purchase in Australia.",
+    run: () => {
+      const context: DemographicContext = { country: "Australia", useCase: "new purchase of exact diesel model and powertrain" };
+      const safari = demographicAcceptanceAssessment("Tata Safari diesel", "new purchase in Australia", context, [
+        demographicAcceptanceProof("Tata Safari diesel", "MARKET_AVAILABILITY", "FAIL", "Australia", {
+          exactClaim: "The exact Tata Safari diesel powertrain is not sold for new purchases in Australia.",
+        }),
+      ]);
+      const xuv = demographicAcceptanceAssessment("Mahindra XUV700 diesel", "new purchase in Australia", context, [
+        demographicAcceptanceProof("Mahindra XUV700 diesel", "MARKET_AVAILABILITY", "PASS", "India", {
+          exactClaim: "The Mahindra XUV700 diesel is currently sold in India.",
+        }),
+      ]);
+      assert.equal(safari.participationStatus, "INELIGIBLE");
+      assert.equal(xuv.participationStatus, "CONDITIONALLY_ELIGIBLE");
+      assert.equal(xuv.availabilityStatus, "NOT_VERIFIED");
+    },
+  },
+  {
+    number: 4,
+    name: "Netflix vs Amazon Prime Video in Australia.",
+    run: () => {
+      const context: DemographicContext = { country: "Australia", deliveryNeed: "DIGITAL", currency: "AUD" };
+      for (const option of ["Netflix", "Amazon Prime Video"]) {
+        const result = demographicAcceptanceAssessment(option, "streaming subscription in Australia with local pricing", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "Australia", {
+            accessMode: "DIGITAL",
+            exactClaim: `${option} currently offers Australian streaming subscriptions and Australian-dollar billing.`,
+          }),
+        ]);
+        assert.equal(result.availabilityStatus, "DIGITALLY_AVAILABLE", option);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+        assert.equal(result.localPricingAvailable, undefined, "no price was fabricated from availability evidence");
+      }
+    },
+  },
+  {
+    number: 5,
+    name: "Flipkart vs Amazon for an Australian shopper.",
+    run: () => {
+      const context: DemographicContext = { country: "Australia", businessOrConsumer: "CONSUMER", useCase: "online marketplace shopping" };
+      const results = ["Flipkart", "Amazon"].map((option) => demographicAcceptanceAssessment(
+        option, "Australian online shopper", context, option === "Flipkart"
+          ? [demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "India", {
+              exactClaim: "Flipkart operates an online marketplace in India.",
+            })]
+          : [],
+      ));
+      assert.ok(results.every(({ availabilityStatus }) => availabilityStatus === "NOT_VERIFIED"));
+      assert.ok(results.every(({ participationStatus }) => participationStatus === "CONDITIONALLY_ELIGIBLE"));
+    },
+  },
+  {
+    number: 6,
+    name: "FedEx vs Australia Post for domestic Australian delivery.",
+    run: () => {
+      const context: DemographicContext = {
+        country: "Australia",
+        useCase: "domestic parcel delivery from Sydney to Melbourne",
+      };
+      for (const option of ["FedEx", "Australia Post"]) {
+        const result = demographicAcceptanceAssessment(option, "domestic parcel delivery from Sydney to Melbourne", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS"),
+          demographicAcceptanceProof(option, "ROUTE_SERVICEABILITY", "PASS", "Australia", {
+            location: "Sydney to Melbourne",
+            exactClaim: `${option} currently provides domestic parcel delivery from Sydney to Melbourne.`,
+          }),
+        ]);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+        assert.equal(result.mandatoryGateResults.find(({ gate }) => gate === "ROUTE_SERVICEABILITY")?.status, "PASS");
+      }
+    },
+  },
+  {
+    number: 7,
+    name: "Westpac vs Pepper Money for an Australian home loan.",
+    run: () => {
+      const context: DemographicContext = {
+        country: "Australia",
+        customerSegment: "self-employed residential borrower",
+        businessOrConsumer: "CONSUMER",
+        useCase: "new residential home loan",
+      };
+      for (const option of ["Westpac", "Pepper Money"]) {
+        const result = demographicAcceptanceAssessment(option, "home loan for a self-employed borrower", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS"),
+          demographicAcceptanceProof(option, "CUSTOMER_SEGMENT", "PASS", "Australia", {
+            exactClaim: `${option} currently supports self-employed residential borrowers for Australian home loans.`,
+          }),
+        ]);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+      }
+    },
+  },
+  {
+    number: 8,
+    name: "HDFC vs ICICI vs SBI for a home loan in India.",
+    run: () => {
+      const context: DemographicContext = {
+        country: "India",
+        customerSegment: "first-time home buyer",
+        businessOrConsumer: "CONSUMER",
+        useCase: "new residential home loan",
+        currency: "INR",
+      };
+      for (const option of ["HDFC", "ICICI", "SBI"]) {
+        const result = demographicAcceptanceAssessment(option, "home loan in India", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "India"),
+          demographicAcceptanceProof(option, "CUSTOMER_SEGMENT", "PASS", "India", {
+            exactClaim: `${option} supports first-time home buyer borrowers for residential loans in India.`,
+          }),
+        ]);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+      }
+    },
+  },
+  {
+    number: 9,
+    name: "Amazon vs Flipkart for online shopping in India.",
+    run: () => {
+      const context: DemographicContext = { country: "India", deliveryNeed: "LOCAL_ONLINE" };
+      for (const option of ["Amazon", "Flipkart"]) {
+        const result = demographicAcceptanceAssessment(option, "online shopping in India", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "India", {
+            accessMode: "LOCAL_ONLINE",
+            exactClaim: `${option} currently operates an online marketplace serving shoppers in India.`,
+          }),
+        ]);
+        assert.equal(result.availabilityStatus, "ONLINE_LOCALLY_AVAILABLE", option);
+        assert.equal(result.localOnlinePresence, true, option);
+      }
+    },
+  },
+  {
+    number: 10,
+    name: "Tanishq vs CaratLane for store purchase in Bengaluru.",
+    run: () => {
+      const context: DemographicContext = { country: "India", city: "Bengaluru", deliveryNeed: "LOCAL_STORE" };
+      for (const option of ["Tanishq", "CaratLane"]) {
+        const result = demographicAcceptanceAssessment(option, "visit jewellery retailer store in Bengaluru", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "India", {
+            location: "Bengaluru", accessMode: "PHYSICAL_STORE",
+          }),
+          demographicAcceptanceProof(option, "PHYSICAL_STORE_REQUIRED", "PASS", "India", {
+            location: "Bengaluru", accessMode: "PHYSICAL_STORE",
+            exactClaim: `${option} currently operates a jewellery retail store in Bengaluru, India.`,
+          }),
+        ]);
+        assert.equal(result.localPhysicalPresence, true, option);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+      }
+    },
+  },
+  {
+    number: 11,
+    name: "Etsy vs Amazon for a handmade-goods seller in the US.",
+    run: () => {
+      const context: DemographicContext = {
+        country: "United States",
+        customerSegment: "handmade-goods seller",
+        businessOrConsumer: "SMALL_BUSINESS",
+        useCase: "sell handmade goods",
+      };
+      for (const option of ["Etsy", "Amazon"]) {
+        const result = demographicAcceptanceAssessment(option, "marketplace for a US handmade-goods seller", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "United States", {
+            exactClaim: `${option} currently operates a marketplace in the United States for small businesses.`,
+          }),
+          demographicAcceptanceProof(option, "CUSTOMER_SEGMENT", "PASS", "United States", {
+            exactClaim: `${option} supports handmade-goods seller customers in the United States.`,
+          }),
+        ]);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+      }
+    },
+  },
+  {
+    number: 12,
+    name: "Prime Video vs Apple TV+ in the UK.",
+    run: () => {
+      const context: DemographicContext = { country: "United Kingdom", deliveryNeed: "DIGITAL", currency: "GBP" };
+      for (const option of ["Prime Video", "Apple TV+"]) {
+        const result = demographicAcceptanceAssessment(option, "streaming subscription in the UK with local pricing", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "United Kingdom", {
+            accessMode: "DIGITAL",
+            exactClaim: `${option} currently offers a UK streaming subscription and British-pound billing.`,
+          }),
+        ]);
+        assert.equal(result.availabilityStatus, "DIGITALLY_AVAILABLE", option);
+        assert.equal(result.participationStatus, "ELIGIBLE", option);
+      }
+    },
+  },
+  {
+    number: 13,
+    name: "Product available nationally but not at requested postcode.",
+    run: () => {
+      const result = demographicAcceptanceAssessment("Provider", "service in postcode 2000", {
+        country: "Australia",
+        postcode: "2000",
+      }, [demographicAcceptanceProof("Provider", "MARKET_AVAILABILITY", "PASS", "Australia", {
+        location: "Australia nationwide",
+      })]);
+      assert.equal(result.availabilityStatus, "NOT_VERIFIED");
+      assert.equal(result.participationStatus, "CONDITIONALLY_ELIGIBLE");
+      assert.match(result.mandatoryGateResults[0]!.reason, /No decisive current/);
+    },
+  },
+  {
+    number: 14,
+    name: "Product available to enterprise customers but not consumers.",
+    run: () => {
+      const result = demographicAcceptanceAssessment("Business Plan", "consumer subscription", {
+        country: "Australia",
+        customerSegment: "consumer",
+        businessOrConsumer: "CONSUMER",
+      }, [
+        demographicAcceptanceProof("Business Plan", "MARKET_AVAILABILITY", "PASS"),
+        demographicAcceptanceProof("Business Plan", "CUSTOMER_SEGMENT", "FAIL", "Australia", {
+          exactClaim: "Business Plan is not available to consumer customers in Australia.",
+        }),
+      ]);
+      assert.equal(result.participationStatus, "INELIGIBLE");
+    },
+  },
+  {
+    number: 15,
+    name: "Digital service available globally but lacks required Australian data residency.",
+    run: () => {
+      const result = demographicAcceptanceAssessment("Global SaaS", "enterprise software with Australian data residency", {
+        country: "Australia",
+        businessOrConsumer: "ENTERPRISE",
+        deliveryNeed: "DIGITAL",
+        regulatoryContext: ["Australian data residency required"],
+      }, [
+        demographicAcceptanceProof("Global SaaS", "MARKET_AVAILABILITY", "PASS", "Australia", {
+          accessMode: "DIGITAL",
+        }),
+        demographicAcceptanceProof("Global SaaS", "ENTERPRISE_DATA_RESIDENCY", "FAIL", "Australia", {
+          exactClaim: "Global SaaS does not provide required Australian data residency for enterprise customer data.",
+        }),
+      ]);
+      assert.equal(result.availabilityStatus, "DIGITALLY_AVAILABLE");
+      assert.equal(result.participationStatus, "INELIGIBLE");
+      assert.equal(result.mandatoryGateResults.find(({ gate }) => gate === "ENTERPRISE_DATA_RESIDENCY")?.status, "FAIL");
+    },
+  },
+  {
+    number: 16,
+    name: "Cross-border product available but user requires local returns.",
+    run: () => {
+      const context: DemographicContext = { country: "Australia", deliveryNeed: "CROSS_BORDER" };
+      const unresolved = demographicAcceptanceAssessment(
+        "Retailer",
+        "cross-border order with local returns",
+        context,
+        [demographicAcceptanceProof("Retailer", "MARKET_AVAILABILITY", "PASS", "Australia", {
+          accessMode: "CROSS_BORDER",
+        })],
+      );
+      const denied = demographicAcceptanceAssessment(
+        "Retailer",
+        "cross-border order with local returns",
+        context,
+        [
+          demographicAcceptanceProof("Retailer", "MARKET_AVAILABILITY", "PASS", "Australia", {
+            accessMode: "CROSS_BORDER",
+          }),
+          demographicAcceptanceProof("Retailer", "LOCAL_RETURNS_REQUIRED", "FAIL", "Australia", {
+            exactClaim: "Retailer does not provide local returns in Australia.",
+          }),
+        ],
+      );
+      assert.equal(unresolved.participationStatus, "CONDITIONALLY_ELIGIBLE");
+      assert.equal(denied.participationStatus, "INELIGIBLE");
+    },
+  },
+  {
+    number: 17,
+    name: "Market evidence times out.",
+    run: () => {
+      const result = demographicAcceptanceAssessment(
+        "Option",
+        "online shopping in Australia",
+        { country: "Australia", deliveryNeed: "LOCAL_ONLINE" },
+        [],
+        true,
+      );
+      assert.equal(result.availabilityStatus, "NOT_VERIFIED");
+      assert.notEqual(result.availabilityStatus, "NOT_AVAILABLE");
+      assert.equal(result.participationStatus, "CONDITIONALLY_ELIGIBLE");
+      assert.equal(result.researchStatus, "PARTIAL_TIMEOUT");
+      assert.ok(result.mandatoryGateResults.every(({ status }) => status !== "FAIL"));
+    },
+  },
+  {
+    number: 18,
+    name: "All user options are irrelevant.",
+    run: async () => {
+      const vendors = ["Alpha Bank", "Beta Bank"];
+      const input = {
+        prompt: "Compare Alpha Bank and Beta Bank home loans in Australia.",
+        validatedCategory: "Home loans",
+        market: "AU" as const,
+        demographicContext: { country: "Australia", customerSegment: "consumer home-loan borrower" },
+        vendors,
+        criteria: ["Value"],
+        urls: ["https://alpha.example/home-loans", "https://beta.example/home-loans"],
+      };
+      const initial = createDecisionModeAnalysis(input, {
+        lenses: [{ criterion: "Value", scores: { "Alpha Bank": 90, "Beta Bank": 80 } }],
+      });
+      const result = await buildResearchedDecisionModeAnalysis(input, initial, {
+        discoverSources: async () => [],
+        retrieveDocuments: async (urls) => urls.map((url, index) => ({
+          url,
+          document: demographicIntegrationDocument(
+            url,
+            `${vendors[index]} home loans are not available in Australia to new customers.`,
+            index === 0 ? "a" : "b",
+          ),
+        })),
+        scoreResearch: async () => ({ items: [] }),
+      });
+      assert.equal(result.recommendation, "NO_ELIGIBLE_WINNER");
+      assert.ok(result.vendorScores.every(({ marketRelevance }) => marketRelevance?.participationStatus === "INELIGIBLE"));
+    },
+  },
+  {
+    number: 19,
+    name: "One option is eligible and all others are ineligible.",
+    run: () => {
+      const context: DemographicContext = {
+        country: "Australia",
+        customerSegment: "consumer home-loan borrower",
+        businessOrConsumer: "CONSUMER",
+      };
+      const eligible = demographicAcceptanceAssessment("Alpha Bank", "home loans in Australia", context, [
+        demographicAcceptanceProof("Alpha Bank", "MARKET_AVAILABILITY", "PASS", "Australia", {
+          exactClaim: "Alpha Bank home loans are currently available to new customers in Australia.",
+        }),
+        demographicAcceptanceProof("Alpha Bank", "CUSTOMER_SEGMENT", "PASS", "Australia", {
+          exactClaim: "Alpha Bank accepts consumer home-loan borrower applications in Australia.",
+        }),
+      ]);
+      const excluded = demographicAcceptanceAssessment("Beta Bank", "home loans in Australia", context, [
+        demographicAcceptanceProof("Beta Bank", "MARKET_AVAILABILITY", "FAIL", "Australia", {
+          exactClaim: "Beta Bank home loans are not available to new customers in Australia.",
+        }),
+      ]);
+      const candidates = [
+        { vendor: "Alpha Bank", score: 84, marketRelevance: eligible, weightedScores: [{ criterion: "Value", weight: 100, score: 84 }] },
+        { vendor: "Beta Bank", score: 98, marketRelevance: excluded, weightedScores: [{ criterion: "Value", weight: 100, score: 98 }] },
+      ].filter(({ marketRelevance }) => marketRelevance.participationStatus !== "INELIGIBLE");
+      const ranking = rankEligibleModelledScores(candidates as unknown as AnalysisPayload["vendorScores"]);
+      assert.equal(candidates.length, 1);
+      assert.equal(ranking.ranked[0]?.vendor, "Alpha Bank");
+      assert.equal(excluded.participationStatus, "INELIGIBLE");
+    },
+  },
+  {
+    number: 20,
+    name: "Two eligible options tie.",
+    run: () => {
+      const context: DemographicContext = {
+        country: "Australia",
+        customerSegment: "consumer home-loan borrower",
+        businessOrConsumer: "CONSUMER",
+      };
+      const candidates = ["Alpha Bank", "Beta Bank"].map((option) => ({
+        vendor: option,
+        score: 80,
+        marketRelevance: demographicAcceptanceAssessment(option, "home loans in Australia", context, [
+          demographicAcceptanceProof(option, "MARKET_AVAILABILITY", "PASS", "Australia", {
+            exactClaim: `${option} home loans are currently available to new customers in Australia.`,
+          }),
+          demographicAcceptanceProof(option, "CUSTOMER_SEGMENT", "PASS", "Australia", {
+            exactClaim: `${option} accepts consumer home-loan borrower applications in Australia.`,
+          }),
+        ]),
+        weightedScores: [{ criterion: "Value", weight: 100, score: 80 }],
+      }));
+      assert.ok(candidates.every(({ marketRelevance }) => marketRelevance.participationStatus === "ELIGIBLE"));
+      const ranking = rankEligibleModelledScores(candidates as unknown as AnalysisPayload["vendorScores"]);
+      assert.equal(ranking.ranked.length, 2);
+      assert.equal(ranking.tied, true);
+      assert.ok(["Alpha Bank", "Beta Bank"].includes(ranking.ranked[0]!.vendor));
+      assert.match(ranking.tieBreakReason, /stable|tie|priority|criterion|score/i);
+    },
+  },
+];
+
+for (const scenario of demographicAcceptanceScenarios) {
+  test(`${scenario.number}. ${scenario.name}`, scenario.run);
+}

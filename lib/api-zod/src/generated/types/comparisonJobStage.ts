@@ -22,7 +22,10 @@ export const ComparisonJobStage = {
   finding_official_sources: 'finding_official_sources',
   building_evidence: 'building_evidence',
   analysing_evidence: 'analysing_evidence',
+  verifying_market: 'verifying_market',
+  validating_market_eligibility: 'validating_market_eligibility',
   validating_comparison: 'validating_comparison',
   preparing_result: 'preparing_result',
   completed: 'completed',
+  partial_result: 'partial_result',
 } as const;

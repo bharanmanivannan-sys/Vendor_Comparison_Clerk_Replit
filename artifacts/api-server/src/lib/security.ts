@@ -4,6 +4,7 @@ import http from "node:http";
 import https from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { parse } from "parse5";
 
 const promptInjectionPattern =
@@ -112,6 +113,8 @@ const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const DOCUMENT_CACHE_MS = 15 * 60_000;
 const MAX_DOCUMENT_BYTES = 512 * 1024;
+const MAX_PDF_BYTES = 2 * 1024 * 1024;
+const MAX_EXTRACTED_TEXT_BYTES = 512 * 1024;
 const RESEARCH_BOT_NAME = "DecisionIntelResearchBot";
 const RESEARCH_USER_AGENT = `${RESEARCH_BOT_NAME}/1.0 (+https://vendor-comparison-workspace.replit.app)`;
 const robotsCache = new Map<string, { allowedByPath: Map<string, boolean>; expiresAt: number }>();
@@ -133,7 +136,7 @@ export type RetrievedEvidenceDocument = {
 export type EvidenceDocumentResult = {
   url: string;
   document?: RetrievedEvidenceDocument;
-  reason?: EvidenceUrlResult["reason"] | "unsupported_content" | "empty_document";
+  reason?: EvidenceUrlResult["reason"] | "unsupported_content" | "empty_document" | "pdf_extraction_failed";
 };
 
 type DocumentCacheEntry = {
@@ -337,7 +340,7 @@ function requestDocumentOnce(url: URL, timeoutMs: number, maxBytes: number): Pro
       ...({ autoSelectFamily: false } as Record<string, unknown>),
       headers: {
         "user-agent": RESEARCH_USER_AGENT,
-        accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.8",
+        accept: "text/html,application/xhtml+xml,application/pdf,text/plain,application/json;q=0.8",
         "accept-encoding": "identity",
       },
       lookup: createPublicLookup(),
@@ -347,6 +350,9 @@ function requestDocumentOnce(url: URL, timeoutMs: number, maxBytes: number): Pro
       const contentType = typeof response.headers["content-type"] === "string"
         ? response.headers["content-type"].split(";")[0].trim().toLowerCase()
         : undefined;
+      const responseMaxBytes = contentType === "application/pdf"
+        ? MAX_PDF_BYTES
+        : maxBytes;
       if (status >= 300 && status < 400) {
         response.resume();
         finish({ status, location, contentType });
@@ -358,7 +364,7 @@ function requestDocumentOnce(url: URL, timeoutMs: number, maxBytes: number): Pro
       response.on("data", (chunk: Buffer | string) => {
         if (settled) return;
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        const remaining = maxBytes - received;
+        const remaining = responseMaxBytes - received;
         if (remaining > 0) {
           chunks.push(buffer.subarray(0, remaining));
           received += Math.min(buffer.length, remaining);
@@ -517,6 +523,58 @@ export function normalizeRetrievedText(body: string, contentType: string): strin
     .trim();
 }
 
+function extractPdfText(body: Buffer, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (timeoutMs <= 0) {
+      reject(new Error("timeout"));
+      return;
+    }
+    const child = spawn("pdftotext", ["-layout", "-", "-"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    let stderr = "";
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(normalizeRetrievedText(Buffer.concat(chunks).toString("utf8"), "text/plain"));
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(new Error("timeout"));
+    }, timeoutMs);
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.length;
+      if (bytes > MAX_EXTRACTED_TEXT_BYTES) {
+        child.kill("SIGKILL");
+        finish(new Error("pdf_extraction_failed"));
+        return;
+      }
+      chunks.push(buffer);
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      if (stderr.length < 2_000) stderr += chunk.toString();
+    });
+    child.on("error", () => finish(new Error("pdf_extraction_failed")));
+    child.on("close", (code) => {
+      if (settled) return;
+      if (code !== 0) {
+        finish(new Error(stderr.trim() || "pdf_extraction_failed"));
+        return;
+      }
+      finish();
+    });
+    child.stdin.on("error", () => finish(new Error("pdf_extraction_failed")));
+    child.stdin.end(body);
+  });
+}
+
 async function retrieveOneEvidenceDocument(
   originalUrl: string,
   options: Required<Pick<RetrieveDocumentOptions, "timeoutMs" | "maxRedirects" | "maxBytes">>
@@ -603,6 +661,7 @@ async function retrieveOneEvidenceDocument(
     };
   }
   for (let redirects = 0; redirects <= options.maxRedirects; redirects += 1) {
+    let parsingPdf = false;
     try {
       if (redirects > 0) {
         registered = await options.permissionRegistry?.lookup(current.toString(), checkedAt) ?? null;
@@ -633,10 +692,17 @@ async function retrieveOneEvidenceDocument(
       }
       if (response.status < 200 || response.status >= 300) return { url: originalUrl, reason: "unreachable" };
       const contentType = response.contentType ?? "";
-      if (!/^(?:text\/html|application\/xhtml\+xml|text\/plain|application\/json)$/.test(contentType)) {
+      if (!/^(?:text\/html|application\/xhtml\+xml|text\/plain|application\/json|application\/pdf)$/.test(contentType)) {
         return { url: originalUrl, reason: "unsupported_content" };
       }
-      const text = normalizeRetrievedText((response.body ?? Buffer.alloc(0)).toString("utf8"), contentType);
+      if (contentType === "application/pdf" && response.truncated) {
+        return { url: originalUrl, reason: "unsupported_content" };
+      }
+      const body = response.body ?? Buffer.alloc(0);
+      parsingPdf = contentType === "application/pdf";
+      const text = contentType === "application/pdf"
+        ? await extractPdfText(body, Math.min(options.timeoutMs, options.deadlineAt - Date.now()))
+        : normalizeRetrievedText(body.toString("utf8"), contentType);
       if (!text) return { url: originalUrl, reason: "empty_document" };
       const document: RetrievedEvidenceDocument = {
         url: originalUrl,
@@ -648,7 +714,7 @@ async function retrieveOneEvidenceDocument(
         retrievedAt: new Date(now()).toISOString(),
         truncated: Boolean(response.truncated),
         retrievalMethod: "direct_http",
-        parserVersion: "security-html-v1",
+        parserVersion: contentType === "application/pdf" ? "security-pdftotext-v1" : "security-html-v1",
       };
       const result = { url: originalUrl, document };
       await options.permissionRegistry?.record(originalUrl, {
@@ -676,7 +742,9 @@ async function retrieveOneEvidenceDocument(
         url: originalUrl,
         reason: message === "blocked_destination" || message === "robots_disallowed"
           ? message as "blocked_destination" | "robots_disallowed"
-          : /timeout|timed out|abort/i.test(message) ? "timeout" : message === "access_restricted" ? "access_restricted" : "unreachable",
+          : /timeout|timed out|abort/i.test(message) ? "timeout"
+            : message === "access_restricted" ? "access_restricted"
+              : parsingPdf ? "pdf_extraction_failed" : "unreachable",
       };
     }
   }

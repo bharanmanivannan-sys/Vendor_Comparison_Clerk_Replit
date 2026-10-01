@@ -17,6 +17,6 @@
 import type { ErrorResponse } from './errorResponse';
 
 /**
- * Idempotency key conflict
+ * Idempotency key or draft-version conflict
  */
 export type ConflictResponse = ErrorResponse;

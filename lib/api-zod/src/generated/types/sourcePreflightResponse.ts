@@ -17,5 +17,8 @@
 import type { SourcePreflightResult } from './sourcePreflightResult';
 
 export interface SourcePreflightResponse {
+  draftId: string;
+  draftVersion: number;
+  requestId: string;
   sources: SourcePreflightResult[];
 }

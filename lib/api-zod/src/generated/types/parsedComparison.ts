@@ -17,16 +17,21 @@
 import type { ComparisonContext } from './comparisonContext';
 import type { ComparisonIdentity } from './comparisonIdentity';
 import type { ComparisonIntent } from './comparisonIntent';
+import type { ComparisonLevel } from './comparisonLevel';
+import type { ConfirmedComparisonValue } from './confirmedComparisonValue';
 
 /**
  * One-shot parse result. Entity boundaries are resolved before source retrieval.
  * The response preserves user order and exposes the qualifiers, decision criterion,
- * and freshness requirements that downstream research must honor.
+ * and freshness requirements that downstream research must honor. Incomplete
+ * requests return context.valid=false with a clarification, not a server error.
  */
 export interface ParsedComparison {
   prompt: string;
+  comparisonLevel?: ComparisonLevel;
+  comparisonValues?: ConfirmedComparisonValue[];
   /**
-     * @minItems 2
+     * @minItems 0
      * @maxItems 6
      */
   vendors: string[];

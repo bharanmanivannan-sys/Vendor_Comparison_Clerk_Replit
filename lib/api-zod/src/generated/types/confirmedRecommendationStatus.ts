@@ -20,5 +20,6 @@ export type ConfirmedRecommendationStatus = typeof ConfirmedRecommendationStatus
 
 export const ConfirmedRecommendationStatus = {
   CONFIRMED: 'CONFIRMED',
+  PROVISIONAL: 'PROVISIONAL',
   NO_CONFIRMED_RECOMMENDATION: 'NO_CONFIRMED_RECOMMENDATION',
 } as const;

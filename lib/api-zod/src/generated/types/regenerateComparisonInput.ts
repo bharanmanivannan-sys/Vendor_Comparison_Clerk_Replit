@@ -19,8 +19,13 @@ import type { ComparisonWeight } from './comparisonWeight';
 
 export interface RegenerateComparisonInput {
   /**
+     * Optional replacement list of user-supplied research URLs. Omitting it preserves the existing list. Changing the list does not rerun research.
+     * @maxItems 12
+     */
+  suppliedUrls?: string[];
+  /**
      * @minItems 9
-     * @maxItems 9
+     * @maxItems 10
      */
   weights: ComparisonWeight[];
   /** @maxItems 8 */

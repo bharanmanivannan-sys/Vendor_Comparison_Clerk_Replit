@@ -17,29 +17,44 @@
 import type { AdditionalComparisonWeight } from './additionalComparisonWeight';
 import type { AnalysisRow } from './analysisRow';
 import type { ComparedAlternative } from './comparedAlternative';
+import type { ComparisonDecisionStatus } from './comparisonDecisionStatus';
+import type { ComparisonEvidenceReview } from './comparisonEvidenceReview';
 import type { ComparisonSummary } from './comparisonSummary';
 import type { ComparisonSwot } from './comparisonSwot';
+import type { ComparisonWeightModel } from './comparisonWeightModel';
 import type { ConfirmedRecommendation } from './confirmedRecommendation';
+import type { DecisionAdvice } from './decisionAdvice';
 import type { DecisionGovernanceItem } from './decisionGovernanceItem';
 import type { FunctionalGapItem } from './functionalGapItem';
+import type { MarketRelevanceAssessment } from './marketRelevanceAssessment';
 import type { MigrationPhase } from './migrationPhase';
 import type { ProductEquivalencyItem } from './productEquivalencyItem';
 import type { ReportSource } from './reportSource';
 import type { ServiceProductMapItem } from './serviceProductMapItem';
+import type { ValidatedComparisonContext } from './validatedComparisonContext';
 import type { VendorScore } from './vendorScore';
 
-export type Comparison = ComparisonSummary & {
+export type Comparison = ComparisonSummary & ({
   urls: string[];
+  /** URLs explicitly supplied by the user, separate from discovered evidence sources. */
+  suppliedUrls?: string[];
   /** Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls. */
   sourceAvailability: ReportSource[];
+  /** Participation status for the selected recommendation in its validated market and demographic context. */
+  decisionStatus?: ComparisonDecisionStatus;
+  /** Per-option demographic and geographic relevance assessments. */
+  marketRelevance?: MarketRelevanceAssessment[];
   criteria: string[];
   executiveSummary: string;
   recommendationReason: string;
+  decisionAdvice?: DecisionAdvice;
+  evidenceReview?: ComparisonEvidenceReview;
   confirmedRecommendation: ConfirmedRecommendation;
   /** Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation. */
   alternatives: ComparedAlternative[];
   /** @maxItems 8 */
   weightAdjustments?: AdditionalComparisonWeight[];
+  weightModel?: ComparisonWeightModel | null;
   vendorScores: VendorScore[];
   pricing: AnalysisRow[];
   features: AnalysisRow[];
@@ -49,6 +64,7 @@ export type Comparison = ComparisonSummary & {
   nextSteps: string[];
   /** Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing. */
   contextAssumptions: string[];
+  validatedContext?: ValidatedComparisonContext;
   /** Like-for-like mapping of current and target products or services, including partial equivalence and uncovered scope. */
   productEquivalency: ProductEquivalencyItem[];
   /** Required capabilities that are absent, partial, changed, or unverified in the target arrangement. */
@@ -59,4 +75,4 @@ export type Comparison = ComparisonSummary & {
   migrationSequence: MigrationPhase[];
   /** Decision rights, evidence requirements, approvers, and approval gates. */
   decisionGovernance: DecisionGovernanceItem[];
-};
+});

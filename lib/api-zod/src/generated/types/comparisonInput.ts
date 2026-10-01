@@ -15,15 +15,71 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ComparisonInputMarket } from './comparisonInputMarket';
+import type { ComparisonLevel } from './comparisonLevel';
+import type { ComparisonSourceAssociation } from './comparisonSourceAssociation';
+import type { ConfirmedComparisonValue } from './confirmedComparisonValue';
+import type { DemographicContext } from './demographicContext';
 
+/**
+ * Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.
+ */
 export interface ComparisonInput {
+  /** Required persisted review draft whose options the user confirmed. */
+  draftId: string;
+  /**
+     * Required draft version observed at confirmation; later enrichment-only versions may be compatible.
+     * @minimum 1
+     */
+  draftVersion: number;
   /**
      * @minLength 8
      * @maxLength 2000
      */
   prompt: string;
   /** Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt. */
-  market?: ComparisonInputMarket;
+  market: ComparisonInputMarket;
+  /**
+     * User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.
+     * @maxLength 80
+     */
+  validatedComparisonType?: string;
+  comparisonLevel?: ComparisonLevel;
+  /**
+     * Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.
+     * @minItems 2
+     * @maxItems 6
+     */
+  comparisonValues: ConfirmedComparisonValue[];
+  demographicContext?: DemographicContext;
+  /**
+     * Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.
+     * @maxItems 12
+     */
+  sourceAssociations?: ComparisonSourceAssociation[];
+  /**
+     * User-confirmed decision domain, checked against the option identities and selected type.
+     * @maxLength 100
+     */
+  validatedDecisionDomain?: string;
+  /**
+     * User-confirmed category, checked against the option identities and selected type.
+     * @maxLength 100
+     */
+  validatedCategory?: string;
+  /**
+     * Optional buyer/customer segment to apply to this decision.
+     * @maxLength 100
+     */
+  customerSegment?: string;
+  /**
+     * Customer origin city or postcode for a dealer decision; never a dealer address.
+     * @maxLength 120
+     */
+  customerLocation?: string;
+  /** Explicit user confirmation that options with known different primary markets are intentionally being compared across countries. */
+  crossMarketConfirmed?: boolean;
+  /** Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false. */
+  includeClosingProducts?: boolean;
   /**
      * Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.
      * @minimum 1

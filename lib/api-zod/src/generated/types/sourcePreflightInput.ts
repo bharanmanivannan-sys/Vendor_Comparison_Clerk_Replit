@@ -14,18 +14,36 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { ConfirmedComparisonValue } from './confirmedComparisonValue';
 import type { SourcePreflightInputMarket } from './sourcePreflightInputMarket';
 
 export interface SourcePreflightInput {
+  draftId: string;
+  /** @minimum 1 */
+  draftVersion: number;
   /**
      * @minLength 8
      * @maxLength 4000
      */
   prompt: string;
+  /** Explicit selected market bound to the confirmed draft. */
   market: SourcePreflightInputMarket;
+  /**
+     * @minItems 2
+     * @maxItems 6
+     */
+  comparisonValues: ConfirmedComparisonValue[];
   /**
      * @minItems 1
      * @maxItems 12
      */
   urls: string[];
+  /**
+     * Optional user-confirmed option names for URL relevance checks only; source URLs never define identity.
+     * @minItems 2
+     * @maxItems 6
+     * @items.minLength 1
+     * @items.maxLength 120
+     */
+  vendors?: string[];
 }

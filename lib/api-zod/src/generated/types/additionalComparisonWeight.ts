@@ -14,8 +14,11 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { AdditionalComparisonWeightOverlapResolution } from './additionalComparisonWeightOverlapResolution';
 
 export interface AdditionalComparisonWeight {
+  /** Stable generated custom criterion identifier. Optional only for older clients. */
+  criterionId?: string;
   /**
      * @minLength 1
      * @maxLength 100
@@ -31,4 +34,8 @@ export interface AdditionalComparisonWeight {
      * @maxItems 2
      */
   mappedCriteria: string[];
+  /** Explicit acknowledgement that a related built-in factor measures something distinct. */
+  overlapResolution?: AdditionalComparisonWeightOverlapResolution;
+  /** User's distinction between the custom and overlapping built-in factors. */
+  overlapReason?: string;
 }

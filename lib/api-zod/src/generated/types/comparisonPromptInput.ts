@@ -14,6 +14,7 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+import type { ComparisonPromptInputMarket } from './comparisonPromptInputMarket';
 
 export interface ComparisonPromptInput {
   /**
@@ -21,4 +22,5 @@ export interface ComparisonPromptInput {
      * @maxLength 2000
      */
   prompt: string;
+  market?: ComparisonPromptInputMarket;
 }

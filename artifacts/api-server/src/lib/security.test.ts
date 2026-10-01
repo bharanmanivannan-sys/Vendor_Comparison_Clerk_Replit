@@ -13,6 +13,29 @@ import {
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
 
+function minimalTextPdf(text: string): Buffer {
+  const escaped = text.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
+  const stream = `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf);
+}
+
 const prohibitedRegistryDecision: PublisherPermissionSnapshot = {
   domain: "blocked.example",
   decisionOrigin: "reviewed",
@@ -571,8 +594,20 @@ test("rejects a cached canonical redirect target when DNS later resolves private
   assert.equal(requests, 2);
 });
 
-test("rejects unsupported document content and keeps normalized table rows", async () => {
-  const [unsupported] = await retrieveEvidenceDocuments(["https://example.com/brochure.pdf"], {
+test("extracts bounded PDF text and keeps non-PDF normalization unchanged", async () => {
+  const [pdf] = await retrieveEvidenceDocuments(["https://example.com/brochure.pdf"], {
+    lookupHost: publicLookup,
+    request: async () => ({
+      status: 200,
+      contentType: "application/pdf",
+      body: minimalTextPdf("XU V 70 0 diesel maximum power 136 kW"),
+    }),
+  });
+  assert.equal(pdf.document?.text, "XU V 70 0 diesel maximum power 136 kW");
+  assert.equal(pdf.document?.parserVersion, "security-pdftotext-v1");
+  assert.match(pdf.document?.sha256 ?? "", /^[a-f0-9]{64}$/);
+
+  const [invalid] = await retrieveEvidenceDocuments(["https://example.com/invalid.pdf"], {
     lookupHost: publicLookup,
     request: async () => ({
       status: 200,
@@ -580,7 +615,18 @@ test("rejects unsupported document content and keeps normalized table rows", asy
       body: Buffer.from("%PDF"),
     }),
   });
-  assert.equal(unsupported.reason, "unsupported_content");
+  assert.equal(invalid.reason, "pdf_extraction_failed");
+
+  const [oversized] = await retrieveEvidenceDocuments(["https://example.com/oversized.pdf"], {
+    lookupHost: publicLookup,
+    request: async () => ({
+      status: 200,
+      contentType: "application/pdf",
+      body: Buffer.from("%PDF"),
+      truncated: true,
+    }),
+  });
+  assert.equal(oversized.reason, "unsupported_content");
   assert.equal(
     normalizeRetrievedText("<table><tr><th>Range</th><td>456&nbsp;km</td></tr></table>", "text/html"),
     "Range | 456 km |",

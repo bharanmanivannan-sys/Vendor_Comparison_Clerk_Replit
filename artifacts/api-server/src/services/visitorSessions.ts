@@ -43,6 +43,20 @@ function clientIp(req: Request): string {
   return normalizeClientIp(value || req.socket.remoteAddress || req.ip || "unknown");
 }
 
+export function getOrCreateVisitorSessionId(req: Request, res: Response): string {
+  const existing = cookieValue(req);
+  if (existing) return existing;
+  const rawSessionId = randomUUID();
+  res.cookie(COOKIE_NAME, rawSessionId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: RETENTION_MS,
+    path: "/",
+  });
+  return rawSessionId;
+}
+
 function runtimeEnvironment(): "development" | "production" {
   return process.env.NODE_ENV === "production" ? "production" : "development";
 }
@@ -61,16 +75,7 @@ export async function recordVisitorSession(
   try {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + RETENTION_MS);
-    const rawSessionId = cookieValue(req) || randomUUID();
-    if (!cookieValue(req)) {
-      res.cookie(COOKIE_NAME, rawSessionId, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
-        maxAge: RETENTION_MS,
-        path: "/",
-      });
-    }
+    const rawSessionId = getOrCreateVisitorSessionId(req, res);
     const environment = runtimeEnvironment();
     const sessionHash = pseudonymizeVisitorValue(rawSessionId, secret, "session");
     const ipHash = pseudonymizeVisitorValue(clientIp(req), secret, "ip");

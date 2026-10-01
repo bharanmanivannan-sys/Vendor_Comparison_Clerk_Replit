@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, ilike, lte, or, sql } from "drizzle-orm";
 import {
   db,
   sourceRegistryTable,
@@ -171,6 +171,98 @@ export const publisherPermissionRegistry: PublisherPermissionRegistry = {
     return observation;
   },
 };
+
+/**
+ * Return a small set of fresh automated observations whose publisher identity
+ * is apparent from the host, path, or registered owner. These are URL
+ * candidates only; callers must re-check current policy before retrieval.
+ */
+export async function findCachedPublisherUrls(identity: string, now: Date, limit = 12): Promise<string[]> {
+  const phrase = identity.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  if (!phrase) return [];
+  const compactIdentity = phrase.replace(/\s+/g, "");
+  const patterns = [...new Set([
+    `%${phrase.replace(/\s+/g, "%")}%`,
+    `%${compactIdentity}%`,
+  ])];
+  const identityConditions = patterns.flatMap((pattern) => [
+    ilike(sourceRegistryTable.domain, pattern),
+    ilike(sourceRegistryTable.pathScope, pattern),
+    ilike(sourceRegistryTable.owner, pattern),
+    sql`${sourceRegistryTable.automatedObservation} ->> 'pathScope' ILIKE ${pattern}`,
+  ]);
+  const observation = sourceRegistryTable.automatedObservation;
+  const freshAllowedObservation = and(
+    sql`(${observation} ->> 'accessStatus') = 'ALLOWED'`,
+    sql`(${observation} ->> 'robotsResult') = 'allowed'`,
+    sql`(${observation} ->> 'checkDueAt') > ${now.toISOString()}`,
+    sql`(${observation} -> 'allowedUses') ? 'automated_retrieval'`,
+    sql`(${observation} -> 'allowedUses') ? 'comparison_evidence'`,
+  );
+  const currentAutomatedDecision = and(
+    eq(sourceRegistryTable.decisionOrigin, "automated"),
+    eq(sourceRegistryTable.accessStatus, "ALLOWED"),
+    eq(sourceRegistryTable.accessMethod, "public_web"),
+    eq(sourceRegistryTable.robotsResult, "allowed"),
+    sql`${sourceRegistryTable.reviewDueAt} > ${now}`,
+    sql`${sourceRegistryTable.allowedUses} ? 'automated_retrieval'`,
+    sql`${sourceRegistryTable.allowedUses} ? 'comparison_evidence'`,
+  );
+  const expiredReviewObservation = and(
+    eq(sourceRegistryTable.decisionOrigin, "reviewed"),
+    lte(sourceRegistryTable.reviewDueAt, now),
+    freshAllowedObservation,
+  );
+
+  const entries = await db
+    .select()
+    .from(sourceRegistryTable)
+    .where(and(
+      or(currentAutomatedDecision, expiredReviewObservation),
+      or(...identityConditions),
+    ))
+    .orderBy(desc(sourceRegistryTable.updatedAt))
+    .limit(100);
+  const matches = (value: string | null | undefined) => {
+    if (!value) return false;
+    const normalized = value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    return ` ${normalized} `.includes(` ${phrase} `)
+      || normalized.split(" ").includes(compactIdentity);
+  };
+  const urls: string[] = [];
+  for (const entry of entries) {
+    const observation = entry.automatedObservation;
+    const useObservation = entry.decisionOrigin === "reviewed" && entry.reviewDueAt <= now;
+    if (useObservation) {
+      if (!observation
+        || observation.accessStatus !== "ALLOWED"
+        || observation.robotsResult !== "allowed"
+        || !observation.allowedUses.includes("automated_retrieval")
+        || !observation.allowedUses.includes("comparison_evidence")
+        || !Number.isFinite(Date.parse(observation.checkDueAt))
+        || Date.parse(observation.checkDueAt) <= now.getTime()) continue;
+    } else if (entry.decisionOrigin !== "automated"
+      || entry.accessStatus !== "ALLOWED"
+      || entry.accessMethod !== "public_web"
+      || entry.robotsResult !== "allowed"
+      || !entry.allowedUses.includes("automated_retrieval")
+      || !entry.allowedUses.includes("comparison_evidence")
+      || entry.reviewDueAt <= now) continue;
+    const path = (useObservation ? observation?.pathScope : entry.pathScope) || "/";
+    const url = `https://${entry.domain}${path.startsWith("/") ? path : `/${path}`}`;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password
+      || !(matches(parsed.hostname) || matches(parsed.pathname) || matches(entry.owner))) continue;
+    urls.push(parsed.toString());
+    if (urls.length >= Math.max(1, Math.min(12, limit))) break;
+  }
+  return [...new Set(urls)];
+}
 
 export function registrySnapshotForResult(
   result: EvidenceUrlResult,

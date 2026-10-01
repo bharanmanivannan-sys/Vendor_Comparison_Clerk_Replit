@@ -18,6 +18,552 @@ import * as zod from 'zod';
 
 
 /**
+ * Local deterministic interpretation only; this operation does not perform research. Requires a request correlation header and echoes draftId, draftVersion, and requestId on the draft response. If idempotencyKey is omitted, the server assigns a unique key when creating the draft.
+ * @summary Interpret and persist a fast comparison draft
+ */
+export const InterpretComparisonDraftHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+export const interpretComparisonDraftBodyQueryMin = 8;
+export const interpretComparisonDraftBodyQueryMax = 4000;
+
+
+
+export const InterpretComparisonDraftBody = zod.object({
+  "query": zod.string().min(interpretComparisonDraftBodyQueryMin).max(interpretComparisonDraftBodyQueryMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
+  "currency": zod.enum(['INR', 'AUD', 'USD', 'GBP']),
+  "idempotencyKey": zod.string().uuid().optional().describe('Optional stable key for safely repeating the same draft request. A key is generated when omitted.')
+})
+
+export const interpretComparisonDraftResponseOptionDiscoveryTargetCountMin = 2;
+export const interpretComparisonDraftResponseOptionDiscoveryTargetCountMax = 6;
+
+
+
+export const InterpretComparisonDraftResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "idempotencyKey": zod.string().uuid().optional().describe('Server-provided value to retain when repeating this exact draft submission.'),
+  "version": zod.number().int(),
+  "status": zod.enum(['READY_FOR_REVIEW', 'READY_FOR_REVIEW_WITH_FALLBACK']),
+  "originalQuery": zod.string(),
+  "rawUserQuery": zod.string().optional().describe('Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract.'),
+  "options": zod.array(zod.object({
+  "optionId": zod.string().uuid(),
+  "originalText": zod.string(),
+  "comparisonValue": zod.string(),
+  "canonicalName": zod.string().nullable(),
+  "resolutionStatus": zod.enum(['SUGGESTED']),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "marketVerificationStatus": zod.enum(['NOT_ASSESSED']),
+  "availabilityStatus": zod.enum(['NOT_ASSESSED']),
+  "demographicRelevanceStatus": zod.enum(['NOT_ASSESSED']),
+  "participationStatus": zod.enum(['NOT_ASSESSED'])
+})),
+  "optionDiscovery": zod.object({
+  "status": zod.enum(['REQUIRED', 'PROPOSED']),
+  "anchorOptionId": zod.string().uuid(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "targetCount": zod.number().int().min(interpretComparisonDraftResponseOptionDiscoveryTargetCountMin).max(interpretComparisonDraftResponseOptionDiscoveryTargetCountMax),
+  "objectives": zod.array(zod.string()),
+  "provenance": zod.object({
+  "provider": zod.string(),
+  "model": zod.string()
+}).optional()
+}).optional().describe('Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'MIXED']),
+  "decisionObjective": zod.string(),
+  "decisionDomain": zod.string(),
+  "category": zod.string(),
+  "market": zod.object({
+  "country": zod.string(),
+  "currency": zod.string()
+}),
+  "criteria": zod.array(zod.string()),
+  "includeClosingProducts": zod.boolean().optional(),
+  "enrichmentStatus": zod.enum(['NOT_STARTED', 'QUEUED', 'COMPLETE', 'PARTIAL', 'FAILED']),
+  "marketSuggestions": zod.record(zod.string(), zod.unknown()).optional(),
+  "urls": zod.array(zod.object({
+  "urlId": zod.string().uuid(),
+  "url": zod.string().url(),
+  "requestedUrl": zod.string().optional(),
+  "status": zod.string(),
+  "optionId": zod.string().uuid().optional()
+})).optional(),
+  "warnings": zod.array(zod.object({
+  "code": zod.string(),
+  "message": zod.string()
+})).optional()
+})
+
+
+/**
+ * Requires a UUID X-Request-Id header and echoes draftId, draftVersion, and requestId with the current draft. The optional draftVersion query parameter can assert the expected version; a mismatch returns 409.
+ * @summary Fetch the current owner-scoped comparison draft
+ */
+export const GetComparisonDraftParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const GetComparisonDraftHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+export const getComparisonDraftResponseOptionDiscoveryTargetCountMin = 2;
+export const getComparisonDraftResponseOptionDiscoveryTargetCountMax = 6;
+
+
+
+export const GetComparisonDraftResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "idempotencyKey": zod.string().uuid().optional().describe('Server-provided value to retain when repeating this exact draft submission.'),
+  "version": zod.number().int(),
+  "status": zod.enum(['READY_FOR_REVIEW', 'READY_FOR_REVIEW_WITH_FALLBACK']),
+  "originalQuery": zod.string(),
+  "rawUserQuery": zod.string().optional().describe('Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract.'),
+  "options": zod.array(zod.object({
+  "optionId": zod.string().uuid(),
+  "originalText": zod.string(),
+  "comparisonValue": zod.string(),
+  "canonicalName": zod.string().nullable(),
+  "resolutionStatus": zod.enum(['SUGGESTED']),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "marketVerificationStatus": zod.enum(['NOT_ASSESSED']),
+  "availabilityStatus": zod.enum(['NOT_ASSESSED']),
+  "demographicRelevanceStatus": zod.enum(['NOT_ASSESSED']),
+  "participationStatus": zod.enum(['NOT_ASSESSED'])
+})),
+  "optionDiscovery": zod.object({
+  "status": zod.enum(['REQUIRED', 'PROPOSED']),
+  "anchorOptionId": zod.string().uuid(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "targetCount": zod.number().int().min(getComparisonDraftResponseOptionDiscoveryTargetCountMin).max(getComparisonDraftResponseOptionDiscoveryTargetCountMax),
+  "objectives": zod.array(zod.string()),
+  "provenance": zod.object({
+  "provider": zod.string(),
+  "model": zod.string()
+}).optional()
+}).optional().describe('Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'MIXED']),
+  "decisionObjective": zod.string(),
+  "decisionDomain": zod.string(),
+  "category": zod.string(),
+  "market": zod.object({
+  "country": zod.string(),
+  "currency": zod.string()
+}),
+  "criteria": zod.array(zod.string()),
+  "includeClosingProducts": zod.boolean().optional(),
+  "enrichmentStatus": zod.enum(['NOT_STARTED', 'QUEUED', 'COMPLETE', 'PARTIAL', 'FAILED']),
+  "marketSuggestions": zod.record(zod.string(), zod.unknown()).optional(),
+  "urls": zod.array(zod.object({
+  "urlId": zod.string().uuid(),
+  "url": zod.string().url(),
+  "requestedUrl": zod.string().optional(),
+  "status": zod.string(),
+  "optionId": zod.string().uuid().optional()
+})).optional(),
+  "warnings": zod.array(zod.object({
+  "code": zod.string(),
+  "message": zod.string()
+})).optional()
+})
+
+
+/**
+ * Requires a UUID X-Request-Id, an Idempotency-Key, and the current
+ *  draftVersion. Options, criteria, market/currency, URL rows, and
+ *  includeClosingProducts may be saved together; each supplied field is
+ *  validated locally and URLs are never fetched. Option edits create new
+ *  option IDs. Criteria and URL-only edits preserve option IDs and order.
+ *  Option or market edits invalidate prior market proof, source
+ *  associations, preflight results, suggestions, and older enrichment
+ *  jobs. Replays require the same key and edit body at the current version.
+ * @summary Save local review edits to an owned comparison draft
+ */
+export const UpdateComparisonDraftOptionsParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const updateComparisonDraftOptionsHeaderIdempotencyKeyMin = 8;
+export const updateComparisonDraftOptionsHeaderIdempotencyKeyMax = 255;
+
+
+
+export const UpdateComparisonDraftOptionsHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.'),
+  "Idempotency-Key": zod.string().min(updateComparisonDraftOptionsHeaderIdempotencyKeyMin).max(updateComparisonDraftOptionsHeaderIdempotencyKeyMax).describe('Unique key for this request. Reusing it with a changed body returns 409.')
+})
+
+
+export const updateComparisonDraftOptionsBodyOneOptionsItemNameMax = 120;
+
+export const updateComparisonDraftOptionsBodyOneOptionsMin = 2;
+export const updateComparisonDraftOptionsBodyOneOptionsMax = 6;
+
+export const updateComparisonDraftOptionsBodyOneCriteriaItemMax = 120;
+
+export const updateComparisonDraftOptionsBodyOneCriteriaMax = 8;
+
+export const updateComparisonDraftOptionsBodyOneUrlsItemUrlMax = 2048;
+
+export const updateComparisonDraftOptionsBodyOneUrlsMax = 20;
+
+
+export const updateComparisonDraftOptionsBodyTwoOptionsItemNameMax = 120;
+
+export const updateComparisonDraftOptionsBodyTwoOptionsMin = 2;
+export const updateComparisonDraftOptionsBodyTwoOptionsMax = 6;
+
+export const updateComparisonDraftOptionsBodyTwoCriteriaItemMax = 120;
+
+export const updateComparisonDraftOptionsBodyTwoCriteriaMax = 8;
+
+export const updateComparisonDraftOptionsBodyTwoUrlsItemUrlMax = 2048;
+
+export const updateComparisonDraftOptionsBodyTwoUrlsMax = 20;
+
+
+export const updateComparisonDraftOptionsBodyThreeOptionsItemNameMax = 120;
+
+export const updateComparisonDraftOptionsBodyThreeOptionsMin = 2;
+export const updateComparisonDraftOptionsBodyThreeOptionsMax = 6;
+
+export const updateComparisonDraftOptionsBodyThreeCriteriaItemMax = 120;
+
+export const updateComparisonDraftOptionsBodyThreeCriteriaMax = 8;
+
+export const updateComparisonDraftOptionsBodyThreeUrlsItemUrlMax = 2048;
+
+export const updateComparisonDraftOptionsBodyThreeUrlsMax = 20;
+
+
+export const updateComparisonDraftOptionsBodyFourOptionsItemNameMax = 120;
+
+export const updateComparisonDraftOptionsBodyFourOptionsMin = 2;
+export const updateComparisonDraftOptionsBodyFourOptionsMax = 6;
+
+export const updateComparisonDraftOptionsBodyFourCriteriaItemMax = 120;
+
+export const updateComparisonDraftOptionsBodyFourCriteriaMax = 8;
+
+export const updateComparisonDraftOptionsBodyFourUrlsItemUrlMax = 2048;
+
+export const updateComparisonDraftOptionsBodyFourUrlsMax = 20;
+
+
+export const updateComparisonDraftOptionsBodyFiveOptionsItemNameMax = 120;
+
+export const updateComparisonDraftOptionsBodyFiveOptionsMin = 2;
+export const updateComparisonDraftOptionsBodyFiveOptionsMax = 6;
+
+export const updateComparisonDraftOptionsBodyFiveCriteriaItemMax = 120;
+
+export const updateComparisonDraftOptionsBodyFiveCriteriaMax = 8;
+
+export const updateComparisonDraftOptionsBodyFiveUrlsItemUrlMax = 2048;
+
+export const updateComparisonDraftOptionsBodyFiveUrlsMax = 20;
+
+
+export const updateComparisonDraftOptionsBodySixOptionsItemNameMax = 120;
+
+export const updateComparisonDraftOptionsBodySixOptionsMin = 2;
+export const updateComparisonDraftOptionsBodySixOptionsMax = 6;
+
+export const updateComparisonDraftOptionsBodySixCriteriaItemMax = 120;
+
+export const updateComparisonDraftOptionsBodySixCriteriaMax = 8;
+
+export const updateComparisonDraftOptionsBodySixUrlsItemUrlMax = 2048;
+
+export const updateComparisonDraftOptionsBodySixUrlsMax = 20;
+
+
+
+export const UpdateComparisonDraftOptionsBody = zod.union([zod.object({
+  "draftVersion": zod.number().int().min(1).optional(),
+  "options": zod.array(zod.object({
+  "name": zod.string().min(1).max(updateComparisonDraftOptionsBodyOneOptionsItemNameMax),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND'])
+})).min(updateComparisonDraftOptionsBodyOneOptionsMin).max(updateComparisonDraftOptionsBodyOneOptionsMax),
+  "criteria": zod.array(zod.string().min(1).max(updateComparisonDraftOptionsBodyOneCriteriaItemMax)).max(updateComparisonDraftOptionsBodyOneCriteriaMax).optional(),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional(),
+  "currency": zod.enum(['INR', 'AUD', 'USD', 'GBP']).optional(),
+  "urls": zod.array(zod.object({
+  "url": zod.string().url().min(1).max(updateComparisonDraftOptionsBodyOneUrlsItemUrlMax),
+  "optionId": zod.string().uuid().optional()
+})).max(updateComparisonDraftOptionsBodyOneUrlsMax).optional(),
+  "includeClosingProducts": zod.boolean().optional()
+}),zod.object({
+  "draftVersion": zod.number().int().min(1).optional(),
+  "options": zod.array(zod.object({
+  "name": zod.string().min(1).max(updateComparisonDraftOptionsBodyTwoOptionsItemNameMax),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND'])
+})).min(updateComparisonDraftOptionsBodyTwoOptionsMin).max(updateComparisonDraftOptionsBodyTwoOptionsMax).optional(),
+  "criteria": zod.array(zod.string().min(1).max(updateComparisonDraftOptionsBodyTwoCriteriaItemMax)).max(updateComparisonDraftOptionsBodyTwoCriteriaMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional(),
+  "currency": zod.enum(['INR', 'AUD', 'USD', 'GBP']).optional(),
+  "urls": zod.array(zod.object({
+  "url": zod.string().url().min(1).max(updateComparisonDraftOptionsBodyTwoUrlsItemUrlMax),
+  "optionId": zod.string().uuid().optional()
+})).max(updateComparisonDraftOptionsBodyTwoUrlsMax).optional(),
+  "includeClosingProducts": zod.boolean().optional()
+}),zod.object({
+  "draftVersion": zod.number().int().min(1).optional(),
+  "options": zod.array(zod.object({
+  "name": zod.string().min(1).max(updateComparisonDraftOptionsBodyThreeOptionsItemNameMax),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND'])
+})).min(updateComparisonDraftOptionsBodyThreeOptionsMin).max(updateComparisonDraftOptionsBodyThreeOptionsMax).optional(),
+  "criteria": zod.array(zod.string().min(1).max(updateComparisonDraftOptionsBodyThreeCriteriaItemMax)).max(updateComparisonDraftOptionsBodyThreeCriteriaMax).optional(),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
+  "currency": zod.enum(['INR', 'AUD', 'USD', 'GBP']),
+  "urls": zod.array(zod.object({
+  "url": zod.string().url().min(1).max(updateComparisonDraftOptionsBodyThreeUrlsItemUrlMax),
+  "optionId": zod.string().uuid().optional()
+})).max(updateComparisonDraftOptionsBodyThreeUrlsMax).optional(),
+  "includeClosingProducts": zod.boolean().optional()
+}),zod.object({
+  "draftVersion": zod.number().int().min(1).optional(),
+  "options": zod.array(zod.object({
+  "name": zod.string().min(1).max(updateComparisonDraftOptionsBodyFourOptionsItemNameMax),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND'])
+})).min(updateComparisonDraftOptionsBodyFourOptionsMin).max(updateComparisonDraftOptionsBodyFourOptionsMax).optional(),
+  "criteria": zod.array(zod.string().min(1).max(updateComparisonDraftOptionsBodyFourCriteriaItemMax)).max(updateComparisonDraftOptionsBodyFourCriteriaMax).optional(),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional(),
+  "currency": zod.enum(['INR', 'AUD', 'USD', 'GBP']).optional(),
+  "urls": zod.array(zod.object({
+  "url": zod.string().url().min(1).max(updateComparisonDraftOptionsBodyFourUrlsItemUrlMax),
+  "optionId": zod.string().uuid().optional()
+})).max(updateComparisonDraftOptionsBodyFourUrlsMax),
+  "includeClosingProducts": zod.boolean().optional()
+}),zod.object({
+  "draftVersion": zod.number().int().min(1).optional(),
+  "options": zod.array(zod.object({
+  "name": zod.string().min(1).max(updateComparisonDraftOptionsBodyFiveOptionsItemNameMax),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND'])
+})).min(updateComparisonDraftOptionsBodyFiveOptionsMin).max(updateComparisonDraftOptionsBodyFiveOptionsMax).optional(),
+  "criteria": zod.array(zod.string().min(1).max(updateComparisonDraftOptionsBodyFiveCriteriaItemMax)).max(updateComparisonDraftOptionsBodyFiveCriteriaMax).optional(),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional(),
+  "currency": zod.enum(['INR', 'AUD', 'USD', 'GBP']).optional(),
+  "urls": zod.array(zod.object({
+  "url": zod.string().url().min(1).max(updateComparisonDraftOptionsBodyFiveUrlsItemUrlMax),
+  "optionId": zod.string().uuid().optional()
+})).max(updateComparisonDraftOptionsBodyFiveUrlsMax).optional(),
+  "includeClosingProducts": zod.boolean()
+})]).and(zod.object({
+  "draftVersion": zod.number().int().min(1),
+  "options": zod.array(zod.object({
+  "name": zod.string().min(1).max(updateComparisonDraftOptionsBodySixOptionsItemNameMax),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND'])
+})).min(updateComparisonDraftOptionsBodySixOptionsMin).max(updateComparisonDraftOptionsBodySixOptionsMax).optional(),
+  "criteria": zod.array(zod.string().min(1).max(updateComparisonDraftOptionsBodySixCriteriaItemMax)).max(updateComparisonDraftOptionsBodySixCriteriaMax).optional(),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional(),
+  "currency": zod.enum(['INR', 'AUD', 'USD', 'GBP']).optional(),
+  "urls": zod.array(zod.object({
+  "url": zod.string().url().min(1).max(updateComparisonDraftOptionsBodySixUrlsItemUrlMax),
+  "optionId": zod.string().uuid().optional()
+})).max(updateComparisonDraftOptionsBodySixUrlsMax).optional(),
+  "includeClosingProducts": zod.boolean().optional()
+})).describe('Save one or more local review edits. Omitted fields remain unchanged, except replacing options clears old URL rows. Options replace the complete option set with 2-6 unique names. Criteria allow at most 8 unique nonblank strings. Market and currency must be supplied together and match. URL rows are syntactically checked only; no network request occurs.')
+
+export const updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMin = 2;
+export const updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMax = 6;
+
+
+
+export const UpdateComparisonDraftOptionsResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "idempotencyKey": zod.string().uuid().optional().describe('Server-provided value to retain when repeating this exact draft submission.'),
+  "version": zod.number().int(),
+  "status": zod.enum(['READY_FOR_REVIEW', 'READY_FOR_REVIEW_WITH_FALLBACK']),
+  "originalQuery": zod.string(),
+  "rawUserQuery": zod.string().optional().describe('Original user input retained for audit. originalQuery is the deterministic corrected, persisted confirmation and scoring contract.'),
+  "options": zod.array(zod.object({
+  "optionId": zod.string().uuid(),
+  "originalText": zod.string(),
+  "comparisonValue": zod.string(),
+  "canonicalName": zod.string().nullable(),
+  "resolutionStatus": zod.enum(['SUGGESTED']),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "marketVerificationStatus": zod.enum(['NOT_ASSESSED']),
+  "availabilityStatus": zod.enum(['NOT_ASSESSED']),
+  "demographicRelevanceStatus": zod.enum(['NOT_ASSESSED']),
+  "participationStatus": zod.enum(['NOT_ASSESSED'])
+})),
+  "optionDiscovery": zod.object({
+  "status": zod.enum(['REQUIRED', 'PROPOSED']),
+  "anchorOptionId": zod.string().uuid(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND']),
+  "targetCount": zod.number().int().min(updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMin).max(updateComparisonDraftOptionsResponseOptionDiscoveryTargetCountMax),
+  "objectives": zod.array(zod.string()),
+  "provenance": zod.object({
+  "provider": zod.string(),
+  "model": zod.string()
+}).optional()
+}).optional().describe('Concrete shortlist discovery is a proposed interpretation, not proof of market availability. Provider/model provenance describes AI-generated labels only, with no source verification. Successful newly interpreted drafts contain concrete options for confirmation.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'MIXED']),
+  "decisionObjective": zod.string(),
+  "decisionDomain": zod.string(),
+  "category": zod.string(),
+  "market": zod.object({
+  "country": zod.string(),
+  "currency": zod.string()
+}),
+  "criteria": zod.array(zod.string()),
+  "includeClosingProducts": zod.boolean().optional(),
+  "enrichmentStatus": zod.enum(['NOT_STARTED', 'QUEUED', 'COMPLETE', 'PARTIAL', 'FAILED']),
+  "marketSuggestions": zod.record(zod.string(), zod.unknown()).optional(),
+  "urls": zod.array(zod.object({
+  "urlId": zod.string().uuid(),
+  "url": zod.string().url(),
+  "requestedUrl": zod.string().optional(),
+  "status": zod.string(),
+  "optionId": zod.string().uuid().optional()
+})).optional(),
+  "warnings": zod.array(zod.object({
+  "code": zod.string(),
+  "message": zod.string()
+})).optional()
+})
+
+
+/**
+ * Requires a UUID X-Request-Id and echoes draftId, draftVersion, requestId, and the requested optionId so suggestions can only be applied to that draft option. The optional draftVersion query parameter can assert the expected version; a mismatch returns 409. An optional typedText query may provide current safely validated text of 2-120 characters to contextualize suggestions; the accepted value is described here rather than as a generated operation parameter to avoid a TypeScript *Params export collision.
+ * @summary Get fast contextual suggestions for one draft option
+ */
+export const GetComparisonDraftOptionSuggestionsParams = zod.object({
+  "id": zod.coerce.string().uuid(),
+  "optionId": zod.coerce.string().uuid()
+})
+
+export const GetComparisonDraftOptionSuggestionsHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+export const GetComparisonDraftOptionSuggestionsResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "optionId": zod.string().uuid(),
+  "suggestions": zod.array(zod.object({
+  "canonicalEntityId": zod.string(),
+  "displayName": zod.string(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']),
+  "category": zod.string(),
+  "parentBrand": zod.string().nullable(),
+  "contextFit": zod.number(),
+  "marketRelevance": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_ASSESSED']),
+  "availabilityMode": zod.string(),
+  "reason": zod.string(),
+  "selected": zod.boolean(),
+  "marketVerificationStatus": zod.enum(['NOT_ASSESSED'])
+})),
+  "status": zod.enum(['SUGGESTED_NOT_VERIFIED']),
+  "message": zod.string()
+}).describe('Suggestions echo draftId, draftVersion, requestId, and the requested optionId.')
+
+
+/**
+ * Submit the current draftVersion and a UUID X-Request-Id. The queued response echoes draftId, the new draftVersion, and requestId.
+ * @summary Queue targeted enrichment for a persisted draft
+ */
+export const StartComparisonDraftEnrichmentParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const StartComparisonDraftEnrichmentHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
+
+
+export const StartComparisonDraftEnrichmentBody = zod.object({
+  "draftVersion": zod.number().int().min(1)
+})
+
+export const StartComparisonDraftEnrichmentResponse = zod.object({
+  "jobId": zod.string().uuid(),
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "status": zod.enum(['queued']),
+  "pollUrl": zod.string()
+}).describe('Correlation tuple identifies the draft version and caller request that queued this asynchronous operation.')
+
+
+/**
+ * Requires a UUID X-Request-Id for this poll and echoes the current draftId, draftVersion, and requestId. Optional draftId and draftVersion query parameters assert the expected draft association; a mismatch returns 409.
+ * @summary Poll queued enrichment job status
+ */
+export const GetComparisonDraftEnrichmentJobParams = zod.object({
+  "jobId": zod.coerce.string().uuid()
+})
+
+export const GetComparisonDraftEnrichmentJobHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+export const GetComparisonDraftEnrichmentJobResponse = zod.object({
+  "jobId": zod.string().uuid(),
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "status": zod.enum(['queued', 'running', 'complete', 'partial', 'failed', 'stale']),
+  "result": zod.record(zod.string(), zod.unknown()).optional(),
+  "error": zod.string().optional(),
+  "message": zod.string().optional()
+}).describe('Echoes the current polling request\'s requestId with the current draftId and draftVersion.')
+
+
+/**
+ * Requires a UUID X-Request-Id and echoes draftId, draftVersion, requestId, urlId, the checked URL, requestedUrl, and its required optionId; a URL never resolves or changes comparison identity.
+ * @summary Validate one optional URL associated with a comparison draft
+ */
+export const ValidateComparisonDraftUrlParams = zod.object({
+  "id": zod.coerce.string().uuid(),
+  "urlId": zod.coerce.string().uuid()
+})
+
+export const ValidateComparisonDraftUrlHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+export const validateComparisonDraftUrlBodyUrlMax = 2048;
+
+
+
+
+export const ValidateComparisonDraftUrlBody = zod.object({
+  "url": zod.string().url().max(validateComparisonDraftUrlBodyUrlMax),
+  "optionId": zod.string().uuid(),
+  "draftVersion": zod.number().int().min(1)
+})
+
+export const ValidateComparisonDraftUrlResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "urlId": zod.string().uuid(),
+  "url": zod.string().url(),
+  "optionId": zod.string().uuid(),
+  "requestedUrl": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional(),
+  "version": zod.number().int()
+}).describe('Echoes draftId, draftVersion, requestId, the checked URL, and its required optionId. requestedUrl retains the supplied URL; url is the validated URL.')
+
+
+/**
  * Returns server health status
  * @summary Health check
  */
@@ -29,12 +575,14 @@ export const HealthCheckResponse = zod.object({
 /**
  * @summary Get comparison workspace summary
  */
+export const getDashboardSummaryResponseRecentComparisonsItemProvenanceGapCountMin = 0;
+
 export const getDashboardSummaryResponseRecentComparisonsItemVendorsMax = 6;
 
-export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMin = 2;
+export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMin = 0;
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntitiesMax = 6;
 
-export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMin = 2;
+export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMin = 0;
 export const getDashboardSummaryResponseRecentComparisonsItemComparisonIdentityEntityCountMax = 6;
 
 export const getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMin = 0;
@@ -48,6 +596,7 @@ export const GetDashboardSummaryResponse = zod.object({
   "averageScore": zod.number().int(),
   "topCategory": zod.string(),
   "recentComparisons": zod.array(zod.object({
+  "provenanceGapCount": zod.number().int().min(getDashboardSummaryResponseRecentComparisonsItemProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getDashboardSummaryResponseRecentComparisonsItemVendorsMax),
@@ -69,7 +618,8 @@ export const GetDashboardSummaryResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMin).max(getDashboardSummaryResponseRecentComparisonsItemProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }))
 })
 
@@ -83,12 +633,14 @@ export const RecordVisitorSessionResponse = zod.void()
 /**
  * @summary List the signed-in user's comparison history
  */
+export const listComparisonsResponseProvenanceGapCountMin = 0;
+
 export const listComparisonsResponseVendorsMax = 6;
 
-export const listComparisonsResponseComparisonIdentityEntitiesMin = 2;
+export const listComparisonsResponseComparisonIdentityEntitiesMin = 0;
 export const listComparisonsResponseComparisonIdentityEntitiesMax = 6;
 
-export const listComparisonsResponseComparisonIdentityEntityCountMin = 2;
+export const listComparisonsResponseComparisonIdentityEntityCountMin = 0;
 export const listComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
 export const listComparisonsResponseProviderRoleTieBreakBonusMin = 0;
@@ -97,6 +649,7 @@ export const listComparisonsResponseProviderRoleTieBreakBonusMax = 2;
 
 
 export const ListComparisonsResponseItem = zod.object({
+  "provenanceGapCount": zod.number().int().min(listComparisonsResponseProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(listComparisonsResponseVendorsMax),
@@ -118,17 +671,77 @@ export const ListComparisonsResponseItem = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(listComparisonsResponseProviderRoleTieBreakBonusMin).max(listComparisonsResponseProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 })
 export const ListComparisonsResponse = zod.array(ListComparisonsResponseItem)
 
 
 /**
+ * Requires a UUID X-Request-Id and a confirmed draft handoff. Successful report and asynchronous job responses echo draftId, draftVersion, and requestId.
  * @summary Create and analyze a new vendor comparison
  */
+export const createComparisonHeaderIdempotencyKeyRegExp = new RegExp('^[a-zA-Z0-9-]{8,100}$');
+
+
+export const CreateComparisonHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.'),
+  "Prefer": zod.string().optional().describe('Set to respond-async to start a durable, idempotent comparison job instead of waiting for synchronous analysis.'),
+  "Idempotency-Key": zod.string().regex(createComparisonHeaderIdempotencyKeyRegExp).optional().describe('Required with Prefer: respond-async. Must contain 8 to 100 alphanumeric or hyphen characters.')
+})
+
+
 export const createComparisonBodyPromptMin = 8;
 export const createComparisonBodyPromptMax = 2000;
 
+export const createComparisonBodyValidatedComparisonTypeMax = 80;
+
+export const createComparisonBodyComparisonValuesItemRawTextMax = 120;
+
+export const createComparisonBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const createComparisonBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const createComparisonBodyComparisonValuesMin = 2;
+export const createComparisonBodyComparisonValuesMax = 6;
+
+export const createComparisonBodyDemographicContextCountryMax = 120;
+
+export const createComparisonBodyDemographicContextRegionMax = 120;
+
+export const createComparisonBodyDemographicContextStateOrRegionMax = 120;
+
+export const createComparisonBodyDemographicContextCityMax = 120;
+
+export const createComparisonBodyDemographicContextPostcodeMax = 120;
+
+export const createComparisonBodyDemographicContextCustomerSegmentMax = 120;
+
+export const createComparisonBodyDemographicContextAgeGroupMax = 120;
+
+export const createComparisonBodyDemographicContextUseCaseMax = 120;
+
+export const createComparisonBodyDemographicContextCurrencyMax = 120;
+
+export const createComparisonBodyDemographicContextLanguageMax = 120;
+
+export const createComparisonBodyDemographicContextRegulatoryContextItemMax = 120;
+
+export const createComparisonBodyDemographicContextRegulatoryContextMax = 12;
+
+export const createComparisonBodySourceAssociationsItemOptionMax = 120;
+
+export const createComparisonBodySourceAssociationsMax = 12;
+
+export const createComparisonBodyValidatedDecisionDomainMax = 100;
+
+export const createComparisonBodyValidatedCategoryMax = 100;
+
+export const createComparisonBodyCustomerSegmentMax = 100;
+
+export const createComparisonBodyCustomerLocationMax = 120;
+
+export const createComparisonBodyIncludeClosingProductsDefault = false;
 export const createComparisonBodyAnnualDistanceKmMax = 500000;
 
 export const createComparisonBodyOwnershipPeriodYearsMin = 0.5;
@@ -147,97 +760,249 @@ export const createComparisonBodyCriteriaMax = 8;
 
 
 export const CreateComparisonBody = zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
   "prompt": zod.string().min(createComparisonBodyPromptMin).max(createComparisonBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(createComparisonBodyValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(createComparisonBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(createComparisonBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(createComparisonBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(createComparisonBodyComparisonValuesMin).max(createComparisonBodyComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(createComparisonBodyDemographicContextCountryMax),
+  "region": zod.string().max(createComparisonBodyDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createComparisonBodyDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(createComparisonBodyDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(createComparisonBodyDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createComparisonBodyDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createComparisonBodyDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createComparisonBodyDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createComparisonBodyDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(createComparisonBodyDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createComparisonBodyDemographicContextRegulatoryContextItemMax)).max(createComparisonBodyDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(createComparisonBodySourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(createComparisonBodySourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(createComparisonBodyValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(createComparisonBodyValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(createComparisonBodyCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(createComparisonBodyCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(createComparisonBodyIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
   "annualDistanceKm": zod.number().int().min(1).max(createComparisonBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
   "ownershipPeriodYears": zod.number().min(createComparisonBodyOwnershipPeriodYearsMin).max(createComparisonBodyOwnershipPeriodYearsMax).multipleOf(createComparisonBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonBodyVendorsItemMax)).min(createComparisonBodyVendorsMin).max(createComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonBodyCriteriaItemMax)).max(createComparisonBodyCriteriaMax).optional()
-})
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
 
-export const createComparisonResponseOneVendorsMax = 6;
+export const createComparisonResponseOneOneProvenanceGapCountMin = 0;
 
-export const createComparisonResponseOneComparisonIdentityEntitiesMin = 2;
-export const createComparisonResponseOneComparisonIdentityEntitiesMax = 6;
+export const createComparisonResponseOneOneVendorsMax = 6;
 
-export const createComparisonResponseOneComparisonIdentityEntityCountMin = 2;
-export const createComparisonResponseOneComparisonIdentityEntityCountMax = 6;
+export const createComparisonResponseOneOneComparisonIdentityEntitiesMin = 0;
+export const createComparisonResponseOneOneComparisonIdentityEntitiesMax = 6;
 
-export const createComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
-export const createComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+export const createComparisonResponseOneOneComparisonIdentityEntityCountMin = 0;
+export const createComparisonResponseOneOneComparisonIdentityEntityCountMax = 6;
 
-export const createComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
-export const createComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
+export const createComparisonResponseOneOneProviderRoleTieBreakBonusMin = 0;
+export const createComparisonResponseOneOneProviderRoleTieBreakBonusMax = 2;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const createComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const createComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceScoreMin = 0;
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const createComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const createComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const createComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMax = 100;
+
+export const createComparisonResponseOneTwoConfirmedRecommendationScoreMin = 0;
+export const createComparisonResponseOneTwoConfirmedRecommendationScoreMax = 100;
 
 
-export const createComparisonResponseTwoAlternativesItemScoreMin = 0;
-export const createComparisonResponseTwoAlternativesItemScoreMax = 100;
+export const createComparisonResponseOneTwoAlternativesItemScoreMin = 0;
+export const createComparisonResponseOneTwoAlternativesItemScoreMax = 100;
 
-export const createComparisonResponseTwoAlternativesItemScoreDifferenceMin = 0;
-export const createComparisonResponseTwoAlternativesItemScoreDifferenceMax = 100;
+export const createComparisonResponseOneTwoAlternativesItemScoreDifferenceMin = 0;
+export const createComparisonResponseOneTwoAlternativesItemScoreDifferenceMax = 100;
 
-export const createComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+export const createComparisonResponseOneTwoWeightAdjustmentsItemCriterionMax = 100;
 
-export const createComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
-export const createComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
+export const createComparisonResponseOneTwoWeightAdjustmentsItemWeightMin = 0;
+export const createComparisonResponseOneTwoWeightAdjustmentsItemWeightMax = 100;
 
-export const createComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+export const createComparisonResponseOneTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
 
-export const createComparisonResponseTwoWeightAdjustmentsMax = 8;
+export const createComparisonResponseOneTwoWeightAdjustmentsMax = 8;
 
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+export const createComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const createComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+export const createComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const createComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const createComparisonResponseOneTwoWeightModelOneTotalWeightMax = 100;
+
+export const createComparisonResponseOneTwoWeightModelOneUnallocatedWeightMin = 0;
+export const createComparisonResponseOneTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
+
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
 
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
-export const createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemModelScoreMin = 0;
-export const createComparisonResponseTwoVendorScoresItemModelScoreMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemModelScoreMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemModelScoreMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
-export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
-export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
 
-export const createComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
 
-export const createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
-export const createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMax = 100;
 
-export const createComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
-export const createComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
+export const createComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const createComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMax = 100;
+
+export const createComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const createComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const createComparisonResponseOneTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextCityMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const createComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
 
 
 
 export const CreateComparisonResponse = zod.object({
+  "provenanceGapCount": zod.number().int().min(createComparisonResponseOneOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()).max(createComparisonResponseOneVendorsMax),
+  "vendors": zod.array(zod.string()).max(createComparisonResponseOneOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
   "entities": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string()
-})).min(createComparisonResponseOneComparisonIdentityEntitiesMin).max(createComparisonResponseOneComparisonIdentityEntitiesMax),
-  "entityCount": zod.number().int().min(createComparisonResponseOneComparisonIdentityEntityCountMin).max(createComparisonResponseOneComparisonIdentityEntityCountMax),
+})).min(createComparisonResponseOneOneComparisonIdentityEntitiesMin).max(createComparisonResponseOneOneComparisonIdentityEntitiesMax),
+  "entityCount": zod.number().int().min(createComparisonResponseOneOneComparisonIdentityEntityCountMin).max(createComparisonResponseOneOneComparisonIdentityEntityCountMax),
   "comparisonType": zod.enum(['pair', 'multi_entity']),
   "displayName": zod.string(),
   "headline": zod.string()
@@ -246,11 +1011,13 @@ export const CreateComparisonResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
-  "providerRoleTieBreakBonus": zod.number().int().min(createComparisonResponseOneProviderRoleTieBreakBonusMin).max(createComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(createComparisonResponseOneOneProviderRoleTieBreakBonusMin).max(createComparisonResponseOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
   "sourceAvailability": zod.array(zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
@@ -277,43 +1044,281 @@ export const CreateComparisonResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(createComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(createComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMin).max(createComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(createComparisonResponseOneTwoDecisionAdviceConfidenceScoreMin).max(createComparisonResponseOneTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(createComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMin).max(createComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(createComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMin).max(createComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(createComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMin).max(createComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(createComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMin).max(createComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
-  "score": zod.number().int().min(createComparisonResponseTwoConfirmedRecommendationScoreMin).max(createComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "score": zod.number().int().min(createComparisonResponseOneTwoConfirmedRecommendationScoreMin).max(createComparisonResponseOneTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
   "rationale": zod.string()
 }),
   "alternatives": zod.array(zod.object({
   "option": zod.string(),
   "rank": zod.number().int().min(1),
-  "score": zod.number().int().min(createComparisonResponseTwoAlternativesItemScoreMin).max(createComparisonResponseTwoAlternativesItemScoreMax).nullable(),
-  "scoreDifference": zod.number().int().min(createComparisonResponseTwoAlternativesItemScoreDifferenceMin).max(createComparisonResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "score": zod.number().int().min(createComparisonResponseOneTwoAlternativesItemScoreMin).max(createComparisonResponseOneTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(createComparisonResponseOneTwoAlternativesItemScoreDifferenceMin).max(createComparisonResponseOneTwoAlternativesItemScoreDifferenceMax).nullable(),
   "qualificationStatus": zod.string(),
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
-  "criterion": zod.string().min(1).max(createComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
-  "weight": zod.number().int().min(createComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(createComparisonResponseTwoWeightAdjustmentsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(createComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
-})).max(createComparisonResponseTwoWeightAdjustmentsMax).optional(),
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
+  "criterion": zod.string().min(1).max(createComparisonResponseOneTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(createComparisonResponseOneTwoWeightAdjustmentsItemWeightMin).max(createComparisonResponseOneTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(createComparisonResponseOneTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
+})).max(createComparisonResponseOneTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(createComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMin).max(createComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(createComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(createComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(createComparisonResponseOneTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(createComparisonResponseOneTwoWeightModelOneUnallocatedWeightMin).max(createComparisonResponseOneTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(createComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
-  "score": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
+  "weight": zod.number(),
+  "score": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMin).max(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
-  "sourceId": zod.string().regex(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
+  "sourceId": zod.string().regex(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -324,22 +1329,22 @@ export const CreateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
-  "sourceTextStart": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "documentSha256": zod.string().regex(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
   "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
   "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
   "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
-  "sampleSize": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "sampleSize": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
-  "confidence": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
-  "normalizedScore": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
-  "criterionWeight": zod.number().int().min(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "confidence": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
-  "modelScore": zod.number().min(createComparisonResponseTwoVendorScoresItemModelScoreMin).max(createComparisonResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "modelScore": zod.number().min(createComparisonResponseOneTwoVendorScoresItemModelScoreMin).max(createComparisonResponseOneTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
   "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
   "qualificationGates": zod.array(zod.object({
   "gate": zod.string(),
@@ -351,15 +1356,15 @@ export const CreateComparisonResponse = zod.object({
   "dimensionScores": zod.array(zod.object({
   "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
   "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
-  "score": zod.number().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(createComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
-  "coverage": zod.number().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(createComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "score": zod.number().min(createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMin).max(createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMin).max(createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMax),
   "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
-  "supportedSubcriteria": zod.number().int().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
-  "totalSubcriteria": zod.number().int().min(createComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "supportedSubcriteria": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(createComparisonResponseOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
   "rationale": zod.string()
 })).optional(),
-  "evidenceConfidence": zod.number().min(createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin).max(createComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
-  "evidenceCoverage": zod.number().min(createComparisonResponseTwoVendorScoresItemEvidenceCoverageMin).max(createComparisonResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "evidenceConfidence": zod.number().min(createComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMin).max(createComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(createComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMin).max(createComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMax).optional(),
   "strengths": zod.array(zod.string()).optional(),
   "gaps": zod.array(zod.string()).optional(),
   "conditions": zod.array(zod.string()).optional(),
@@ -450,6 +1455,75 @@ export const CreateComparisonResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(createComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(createComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(createComparisonResponseOneTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(createComparisonResponseOneTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(createComparisonResponseOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(createComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -486,15 +1560,73 @@ export const CreateComparisonResponse = zod.object({
   "evidenceRequired": zod.string(),
   "decisionGate": zod.string()
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
-}))
+})).and(zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int().min(1),
+  "requestId": zod.string().uuid()
+}).describe('Correlation tuple returned with draft-scoped operation responses.'))
 
 
 /**
+ * Requires a UUID X-Request-Id and a confirmed draft handoff. The response echoes draftId, draftVersion, and requestId.
  * @summary Create an unsaved guest vendor comparison
  */
+export const CreateGuestComparisonHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
 export const createGuestComparisonBodyPromptMin = 8;
 export const createGuestComparisonBodyPromptMax = 2000;
 
+export const createGuestComparisonBodyValidatedComparisonTypeMax = 80;
+
+export const createGuestComparisonBodyComparisonValuesItemRawTextMax = 120;
+
+export const createGuestComparisonBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const createGuestComparisonBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const createGuestComparisonBodyComparisonValuesMin = 2;
+export const createGuestComparisonBodyComparisonValuesMax = 6;
+
+export const createGuestComparisonBodyDemographicContextCountryMax = 120;
+
+export const createGuestComparisonBodyDemographicContextRegionMax = 120;
+
+export const createGuestComparisonBodyDemographicContextStateOrRegionMax = 120;
+
+export const createGuestComparisonBodyDemographicContextCityMax = 120;
+
+export const createGuestComparisonBodyDemographicContextPostcodeMax = 120;
+
+export const createGuestComparisonBodyDemographicContextCustomerSegmentMax = 120;
+
+export const createGuestComparisonBodyDemographicContextAgeGroupMax = 120;
+
+export const createGuestComparisonBodyDemographicContextUseCaseMax = 120;
+
+export const createGuestComparisonBodyDemographicContextCurrencyMax = 120;
+
+export const createGuestComparisonBodyDemographicContextLanguageMax = 120;
+
+export const createGuestComparisonBodyDemographicContextRegulatoryContextItemMax = 120;
+
+export const createGuestComparisonBodyDemographicContextRegulatoryContextMax = 12;
+
+export const createGuestComparisonBodySourceAssociationsItemOptionMax = 120;
+
+export const createGuestComparisonBodySourceAssociationsMax = 12;
+
+export const createGuestComparisonBodyValidatedDecisionDomainMax = 100;
+
+export const createGuestComparisonBodyValidatedCategoryMax = 100;
+
+export const createGuestComparisonBodyCustomerSegmentMax = 100;
+
+export const createGuestComparisonBodyCustomerLocationMax = 120;
+
+export const createGuestComparisonBodyIncludeClosingProductsDefault = false;
 export const createGuestComparisonBodyAnnualDistanceKmMax = 500000;
 
 export const createGuestComparisonBodyOwnershipPeriodYearsMin = 0.5;
@@ -513,84 +1645,251 @@ export const createGuestComparisonBodyCriteriaMax = 8;
 
 
 export const CreateGuestComparisonBody = zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
   "prompt": zod.string().min(createGuestComparisonBodyPromptMin).max(createGuestComparisonBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(createGuestComparisonBodyValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(createGuestComparisonBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(createGuestComparisonBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(createGuestComparisonBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(createGuestComparisonBodyComparisonValuesMin).max(createGuestComparisonBodyComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(createGuestComparisonBodyDemographicContextCountryMax),
+  "region": zod.string().max(createGuestComparisonBodyDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createGuestComparisonBodyDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(createGuestComparisonBodyDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(createGuestComparisonBodyDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createGuestComparisonBodyDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createGuestComparisonBodyDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createGuestComparisonBodyDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createGuestComparisonBodyDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(createGuestComparisonBodyDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createGuestComparisonBodyDemographicContextRegulatoryContextItemMax)).max(createGuestComparisonBodyDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(createGuestComparisonBodySourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(createGuestComparisonBodySourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(createGuestComparisonBodyValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(createGuestComparisonBodyValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(createGuestComparisonBodyCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(createGuestComparisonBodyCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(createGuestComparisonBodyIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
   "annualDistanceKm": zod.number().int().min(1).max(createGuestComparisonBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
   "ownershipPeriodYears": zod.number().min(createGuestComparisonBodyOwnershipPeriodYearsMin).max(createGuestComparisonBodyOwnershipPeriodYearsMax).multipleOf(createGuestComparisonBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonBodyVendorsItemMax)).min(createGuestComparisonBodyVendorsMin).max(createGuestComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonBodyCriteriaItemMax)).max(createGuestComparisonBodyCriteriaMax).optional()
-})
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
 
-export const createGuestComparisonResponseVendorsMax = 6;
+export const createGuestComparisonResponseOneWeightModelOneCriteriaItemWeightMin = 0;
+export const createGuestComparisonResponseOneWeightModelOneCriteriaItemWeightMax = 100;
 
-export const createGuestComparisonResponseComparisonIdentityEntitiesMin = 2;
-export const createGuestComparisonResponseComparisonIdentityEntitiesMax = 6;
+export const createGuestComparisonResponseOneWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const createGuestComparisonResponseOneWeightModelOneCriteriaItemMappingConfidenceMax = 1;
 
-export const createGuestComparisonResponseComparisonIdentityEntityCountMin = 2;
-export const createGuestComparisonResponseComparisonIdentityEntityCountMax = 6;
+export const createGuestComparisonResponseOneWeightModelOneTotalWeightMax = 100;
 
-export const createGuestComparisonResponseConfirmedRecommendationScoreMin = 0;
-export const createGuestComparisonResponseConfirmedRecommendationScoreMax = 100;
+export const createGuestComparisonResponseOneWeightModelOneUnallocatedWeightMin = 0;
+export const createGuestComparisonResponseOneWeightModelOneUnallocatedWeightMax = 99;
+
+export const createGuestComparisonResponseOneVendorsMax = 6;
+
+export const createGuestComparisonResponseOneComparisonIdentityEntitiesMin = 0;
+export const createGuestComparisonResponseOneComparisonIdentityEntitiesMax = 6;
+
+export const createGuestComparisonResponseOneComparisonIdentityEntityCountMin = 0;
+export const createGuestComparisonResponseOneComparisonIdentityEntityCountMax = 6;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketCountryMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketRegionMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketCityMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketLanguageMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const createGuestComparisonResponseOneMarketRelevanceItemRelevanceScoreMin = 0;
+export const createGuestComparisonResponseOneMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceScoreMin = 0;
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceScoreMax = 100;
+
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceDataCoverageMin = 0;
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const createGuestComparisonResponseOneDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const createGuestComparisonResponseOneDecisionAdviceConfidencePriorityClarityMin = 0;
+export const createGuestComparisonResponseOneDecisionAdviceConfidencePriorityClarityMax = 100;
+
+export const createGuestComparisonResponseOneConfirmedRecommendationScoreMin = 0;
+export const createGuestComparisonResponseOneConfirmedRecommendationScoreMax = 100;
 
 
-export const createGuestComparisonResponseAlternativesItemScoreMin = 0;
-export const createGuestComparisonResponseAlternativesItemScoreMax = 100;
+export const createGuestComparisonResponseOneAlternativesItemScoreMin = 0;
+export const createGuestComparisonResponseOneAlternativesItemScoreMax = 100;
 
-export const createGuestComparisonResponseAlternativesItemScoreDifferenceMin = 0;
-export const createGuestComparisonResponseAlternativesItemScoreDifferenceMax = 100;
+export const createGuestComparisonResponseOneAlternativesItemScoreDifferenceMin = 0;
+export const createGuestComparisonResponseOneAlternativesItemScoreDifferenceMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin = 0;
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCountryMax = 120;
 
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
+
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemScoreMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
 
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
-export const createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemModelScoreMin = 0;
-export const createGuestComparisonResponseVendorScoresItemModelScoreMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemModelScoreMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemModelScoreMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMin = 0;
-export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemScoreMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMin = 0;
-export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemCoverageMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
 
-export const createGuestComparisonResponseVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
 
-export const createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMin = 0;
-export const createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemEvidenceConfidenceMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemEvidenceConfidenceMax = 100;
 
-export const createGuestComparisonResponseVendorScoresItemEvidenceCoverageMin = 0;
-export const createGuestComparisonResponseVendorScoresItemEvidenceCoverageMax = 100;
+export const createGuestComparisonResponseOneVendorScoresItemEvidenceCoverageMin = 0;
+export const createGuestComparisonResponseOneVendorScoresItemEvidenceCoverageMax = 100;
+
+export const createGuestComparisonResponseOneValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const createGuestComparisonResponseOneValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const createGuestComparisonResponseOneValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextCountryMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextRegionMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextCityMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextPostcodeMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextUseCaseMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextCurrencyMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextLanguageMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const createGuestComparisonResponseOneValidatedContextDemographicContextRegulatoryContextMax = 12;
+
 
 
 
 export const CreateGuestComparisonResponse = zod.object({
+  "suppliedUrls": zod.array(zod.string()).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(createGuestComparisonResponseOneWeightModelOneCriteriaItemWeightMin).max(createGuestComparisonResponseOneWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(createGuestComparisonResponseOneWeightModelOneCriteriaItemMappingConfidenceMin).max(createGuestComparisonResponseOneWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(createGuestComparisonResponseOneWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(createGuestComparisonResponseOneWeightModelOneUnallocatedWeightMin).max(createGuestComparisonResponseOneWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
+  "id": zod.number().int().optional().describe('Present for a partially completed authenticated comparison only after its report has been persisted.'),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()).max(createGuestComparisonResponseVendorsMax),
+  "vendors": zod.array(zod.string()).max(createGuestComparisonResponseOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
   "entities": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string()
-})).min(createGuestComparisonResponseComparisonIdentityEntitiesMin).max(createGuestComparisonResponseComparisonIdentityEntitiesMax),
-  "entityCount": zod.number().int().min(createGuestComparisonResponseComparisonIdentityEntityCountMin).max(createGuestComparisonResponseComparisonIdentityEntityCountMax),
+})).min(createGuestComparisonResponseOneComparisonIdentityEntitiesMin).max(createGuestComparisonResponseOneComparisonIdentityEntitiesMax),
+  "entityCount": zod.number().int().min(createGuestComparisonResponseOneComparisonIdentityEntityCountMin).max(createGuestComparisonResponseOneComparisonIdentityEntityCountMax),
   "comparisonType": zod.enum(['pair', 'multi_entity']),
   "displayName": zod.string(),
   "headline": zod.string()
@@ -599,6 +1898,7 @@ export const CreateGuestComparisonResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.'),
   "createdAt": zod.coerce.date(),
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -627,21 +1927,102 @@ export const CreateGuestComparisonResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional(),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createGuestComparisonResponseOneMarketRelevanceItemMarketRegulatoryContextItemMax)).max(createGuestComparisonResponseOneMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(createGuestComparisonResponseOneMarketRelevanceItemRelevanceScoreMin).max(createGuestComparisonResponseOneMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional(),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(createGuestComparisonResponseOneDecisionAdviceConfidenceScoreMin).max(createGuestComparisonResponseOneDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(createGuestComparisonResponseOneDecisionAdviceConfidenceDataCoverageMin).max(createGuestComparisonResponseOneDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(createGuestComparisonResponseOneDecisionAdviceConfidenceSourceConsistencyMin).max(createGuestComparisonResponseOneDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(createGuestComparisonResponseOneDecisionAdviceConfidenceScoreSeparationMin).max(createGuestComparisonResponseOneDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(createGuestComparisonResponseOneDecisionAdviceConfidencePriorityClarityMin).max(createGuestComparisonResponseOneDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
-  "score": zod.number().int().min(createGuestComparisonResponseConfirmedRecommendationScoreMin).max(createGuestComparisonResponseConfirmedRecommendationScoreMax).nullable(),
+  "score": zod.number().int().min(createGuestComparisonResponseOneConfirmedRecommendationScoreMin).max(createGuestComparisonResponseOneConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
   "rationale": zod.string()
 }),
   "alternatives": zod.array(zod.object({
   "option": zod.string(),
   "rank": zod.number().int().min(1),
-  "score": zod.number().int().min(createGuestComparisonResponseAlternativesItemScoreMin).max(createGuestComparisonResponseAlternativesItemScoreMax).nullable(),
-  "scoreDifference": zod.number().int().min(createGuestComparisonResponseAlternativesItemScoreDifferenceMin).max(createGuestComparisonResponseAlternativesItemScoreDifferenceMax).nullable(),
+  "score": zod.number().int().min(createGuestComparisonResponseOneAlternativesItemScoreMin).max(createGuestComparisonResponseOneAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(createGuestComparisonResponseOneAlternativesItemScoreDifferenceMin).max(createGuestComparisonResponseOneAlternativesItemScoreDifferenceMax).nullable(),
   "qualificationStatus": zod.string(),
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
@@ -650,15 +2031,88 @@ export const CreateGuestComparisonResponse = zod.object({
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceRelevanceScoreMin).max(createGuestComparisonResponseOneVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
-  "score": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemScoreMax),
+  "weight": zod.number(),
+  "score": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemScoreMin).max(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
-  "sourceId": zod.string().regex(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
+  "sourceId": zod.string().regex(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -669,22 +2123,22 @@ export const CreateGuestComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
-  "sourceTextStart": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "documentSha256": zod.string().regex(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
   "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
   "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
   "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
-  "sampleSize": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "sampleSize": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
-  "confidence": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
-  "normalizedScore": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
-  "criterionWeight": zod.number().int().min(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createGuestComparisonResponseVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "confidence": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(createGuestComparisonResponseOneVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
-  "modelScore": zod.number().min(createGuestComparisonResponseVendorScoresItemModelScoreMin).max(createGuestComparisonResponseVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "modelScore": zod.number().min(createGuestComparisonResponseOneVendorScoresItemModelScoreMin).max(createGuestComparisonResponseOneVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
   "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
   "qualificationGates": zod.array(zod.object({
   "gate": zod.string(),
@@ -696,15 +2150,15 @@ export const CreateGuestComparisonResponse = zod.object({
   "dimensionScores": zod.array(zod.object({
   "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
   "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
-  "score": zod.number().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMin).max(createGuestComparisonResponseVendorScoresItemDimensionScoresItemScoreMax).optional(),
-  "coverage": zod.number().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMin).max(createGuestComparisonResponseVendorScoresItemDimensionScoresItemCoverageMax),
+  "score": zod.number().min(createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemScoreMin).max(createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemCoverageMin).max(createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemCoverageMax),
   "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
-  "supportedSubcriteria": zod.number().int().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
-  "totalSubcriteria": zod.number().int().min(createGuestComparisonResponseVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "supportedSubcriteria": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(createGuestComparisonResponseOneVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
   "rationale": zod.string()
 })).optional(),
-  "evidenceConfidence": zod.number().min(createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMin).max(createGuestComparisonResponseVendorScoresItemEvidenceConfidenceMax).optional(),
-  "evidenceCoverage": zod.number().min(createGuestComparisonResponseVendorScoresItemEvidenceCoverageMin).max(createGuestComparisonResponseVendorScoresItemEvidenceCoverageMax).optional(),
+  "evidenceConfidence": zod.number().min(createGuestComparisonResponseOneVendorScoresItemEvidenceConfidenceMin).max(createGuestComparisonResponseOneVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(createGuestComparisonResponseOneVendorScoresItemEvidenceCoverageMin).max(createGuestComparisonResponseOneVendorScoresItemEvidenceCoverageMax).optional(),
   "strengths": zod.array(zod.string()).optional(),
   "gaps": zod.array(zod.string()).optional(),
   "conditions": zod.array(zod.string()).optional(),
@@ -795,6 +2249,75 @@ export const CreateGuestComparisonResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(createGuestComparisonResponseOneValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(createGuestComparisonResponseOneValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(createGuestComparisonResponseOneValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(createGuestComparisonResponseOneValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(createGuestComparisonResponseOneValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createGuestComparisonResponseOneValidatedContextDemographicContextRegulatoryContextItemMax)).max(createGuestComparisonResponseOneValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -831,6 +2354,202 @@ export const CreateGuestComparisonResponse = zod.object({
   "evidenceRequired": zod.string(),
   "decisionGate": zod.string()
 }))
+}).and(zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int().min(1),
+  "requestId": zod.string().uuid()
+}).describe('Correlation tuple returned with draft-scoped operation responses.'))
+
+
+/**
+ * @summary Suggest comparison identities using the decision context
+ */
+export const suggestComparisonOptionsBodyTypedTextMin = 2;
+export const suggestComparisonOptionsBodyTypedTextMax = 120;
+
+export const suggestComparisonOptionsBodyFullQueryMax = 2000;
+
+export const suggestComparisonOptionsBodyOtherOptionsItemMax = 120;
+
+export const suggestComparisonOptionsBodyOtherOptionsMax = 6;
+
+export const suggestComparisonOptionsBodyDecisionObjectiveMax = 500;
+
+export const suggestComparisonOptionsBodyMarketTwoCountryMax = 120;
+
+export const suggestComparisonOptionsBodyMarketTwoStateOrRegionMax = 120;
+
+export const suggestComparisonOptionsBodyMarketTwoCityMax = 120;
+
+export const suggestComparisonOptionsBodyMarketTwoPostcodeMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextCountryMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextRegionMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextStateOrRegionMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextCityMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextPostcodeMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextCustomerSegmentMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextAgeGroupMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextUseCaseMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextCurrencyMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextLanguageMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextRegulatoryContextItemMax = 120;
+
+export const suggestComparisonOptionsBodyCustomerContextRegulatoryContextMax = 12;
+
+
+
+export const SuggestComparisonOptionsBody = zod.object({
+  "typedText": zod.string().min(suggestComparisonOptionsBodyTypedTextMin).max(suggestComparisonOptionsBodyTypedTextMax),
+  "fullQuery": zod.string().max(suggestComparisonOptionsBodyFullQueryMax),
+  "otherOptions": zod.array(zod.string().max(suggestComparisonOptionsBodyOtherOptionsItemMax)).max(suggestComparisonOptionsBodyOtherOptionsMax),
+  "decisionObjective": zod.string().max(suggestComparisonOptionsBodyDecisionObjectiveMax),
+  "market": zod.union([zod.enum(['IN', 'AU', 'US', 'GB']),zod.object({
+  "country": zod.string().max(suggestComparisonOptionsBodyMarketTwoCountryMax).optional(),
+  "stateOrRegion": zod.string().max(suggestComparisonOptionsBodyMarketTwoStateOrRegionMax).optional(),
+  "city": zod.string().max(suggestComparisonOptionsBodyMarketTwoCityMax).optional(),
+  "postcode": zod.string().max(suggestComparisonOptionsBodyMarketTwoPostcodeMax).optional()
+})]).optional().describe('User-selected market context. Market relevance is NOT_ASSESSED unless verified evidence is available.'),
+  "customerContext": zod.object({
+  "country": zod.string().max(suggestComparisonOptionsBodyCustomerContextCountryMax),
+  "region": zod.string().max(suggestComparisonOptionsBodyCustomerContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(suggestComparisonOptionsBodyCustomerContextStateOrRegionMax).optional(),
+  "city": zod.string().max(suggestComparisonOptionsBodyCustomerContextCityMax).optional(),
+  "postcode": zod.string().max(suggestComparisonOptionsBodyCustomerContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(suggestComparisonOptionsBodyCustomerContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(suggestComparisonOptionsBodyCustomerContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(suggestComparisonOptionsBodyCustomerContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(suggestComparisonOptionsBodyCustomerContextCurrencyMax).optional(),
+  "language": zod.string().max(suggestComparisonOptionsBodyCustomerContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(suggestComparisonOptionsBodyCustomerContextRegulatoryContextItemMax)).max(suggestComparisonOptionsBodyCustomerContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.')
+})
+
+export const suggestComparisonOptionsResponseSuggestionsItemContextFitMin = 0;
+export const suggestComparisonOptionsResponseSuggestionsItemContextFitMax = 1;
+
+
+
+export const SuggestComparisonOptionsResponse = zod.object({
+  "suggestions": zod.array(zod.object({
+  "canonicalEntityId": zod.string(),
+  "displayName": zod.string(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "category": zod.string(),
+  "parentBrand": zod.string().nullable(),
+  "contextFit": zod.number().min(suggestComparisonOptionsResponseSuggestionsItemContextFitMin).max(suggestComparisonOptionsResponseSuggestionsItemContextFitMax),
+  "marketRelevance": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_ASSESSED']),
+  "availabilityMode": zod.string(),
+  "reason": zod.string()
+}))
+})
+
+
+/**
+ * @summary Suggest comparison identities for a guest using decision context
+ */
+export const suggestGuestComparisonOptionsBodyTypedTextMin = 2;
+export const suggestGuestComparisonOptionsBodyTypedTextMax = 120;
+
+export const suggestGuestComparisonOptionsBodyFullQueryMax = 2000;
+
+export const suggestGuestComparisonOptionsBodyOtherOptionsItemMax = 120;
+
+export const suggestGuestComparisonOptionsBodyOtherOptionsMax = 6;
+
+export const suggestGuestComparisonOptionsBodyDecisionObjectiveMax = 500;
+
+export const suggestGuestComparisonOptionsBodyMarketTwoCountryMax = 120;
+
+export const suggestGuestComparisonOptionsBodyMarketTwoStateOrRegionMax = 120;
+
+export const suggestGuestComparisonOptionsBodyMarketTwoCityMax = 120;
+
+export const suggestGuestComparisonOptionsBodyMarketTwoPostcodeMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextCountryMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextRegionMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextStateOrRegionMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextCityMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextPostcodeMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextCustomerSegmentMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextAgeGroupMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextUseCaseMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextCurrencyMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextLanguageMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextRegulatoryContextItemMax = 120;
+
+export const suggestGuestComparisonOptionsBodyCustomerContextRegulatoryContextMax = 12;
+
+
+
+export const SuggestGuestComparisonOptionsBody = zod.object({
+  "typedText": zod.string().min(suggestGuestComparisonOptionsBodyTypedTextMin).max(suggestGuestComparisonOptionsBodyTypedTextMax),
+  "fullQuery": zod.string().max(suggestGuestComparisonOptionsBodyFullQueryMax),
+  "otherOptions": zod.array(zod.string().max(suggestGuestComparisonOptionsBodyOtherOptionsItemMax)).max(suggestGuestComparisonOptionsBodyOtherOptionsMax),
+  "decisionObjective": zod.string().max(suggestGuestComparisonOptionsBodyDecisionObjectiveMax),
+  "market": zod.union([zod.enum(['IN', 'AU', 'US', 'GB']),zod.object({
+  "country": zod.string().max(suggestGuestComparisonOptionsBodyMarketTwoCountryMax).optional(),
+  "stateOrRegion": zod.string().max(suggestGuestComparisonOptionsBodyMarketTwoStateOrRegionMax).optional(),
+  "city": zod.string().max(suggestGuestComparisonOptionsBodyMarketTwoCityMax).optional(),
+  "postcode": zod.string().max(suggestGuestComparisonOptionsBodyMarketTwoPostcodeMax).optional()
+})]).optional().describe('User-selected market context. Market relevance is NOT_ASSESSED unless verified evidence is available.'),
+  "customerContext": zod.object({
+  "country": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextCountryMax),
+  "region": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextStateOrRegionMax).optional(),
+  "city": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextCityMax).optional(),
+  "postcode": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextCurrencyMax).optional(),
+  "language": zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(suggestGuestComparisonOptionsBodyCustomerContextRegulatoryContextItemMax)).max(suggestGuestComparisonOptionsBodyCustomerContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.')
+})
+
+export const suggestGuestComparisonOptionsResponseSuggestionsItemContextFitMin = 0;
+export const suggestGuestComparisonOptionsResponseSuggestionsItemContextFitMax = 1;
+
+
+
+export const SuggestGuestComparisonOptionsResponse = zod.object({
+  "suggestions": zod.array(zod.object({
+  "canonicalEntityId": zod.string(),
+  "displayName": zod.string(),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "category": zod.string(),
+  "parentBrand": zod.string().nullable(),
+  "contextFit": zod.number().min(suggestGuestComparisonOptionsResponseSuggestionsItemContextFitMin).max(suggestGuestComparisonOptionsResponseSuggestionsItemContextFitMax),
+  "marketRelevance": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_ASSESSED']),
+  "availabilityMode": zod.string(),
+  "reason": zod.string()
+}))
 })
 
 
@@ -843,11 +2562,21 @@ export const parseComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseComparisonPromptBodyPromptMin).max(parseComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
-export const parseComparisonPromptResponseVendorsMin = 2;
+export const parseComparisonPromptResponseComparisonValuesItemRawTextMax = 120;
+
+export const parseComparisonPromptResponseComparisonValuesItemConfirmedNameMax = 120;
+
+export const parseComparisonPromptResponseComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const parseComparisonPromptResponseVendorsMin = 0;
 export const parseComparisonPromptResponseVendorsMax = 6;
+
+export const parseComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const parseComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMax = 1;
 
 export const parseComparisonPromptResponseIntentOptionsMax = 6;
 
@@ -856,16 +2585,23 @@ export const parseComparisonPromptResponseIntentQualifiersMax = 8;
 export const parseComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseComparisonPromptResponseIntentConfidenceMax = 1;
 
-export const parseComparisonPromptResponseComparisonIdentityEntitiesMin = 2;
+export const parseComparisonPromptResponseComparisonIdentityEntitiesMin = 0;
 export const parseComparisonPromptResponseComparisonIdentityEntitiesMax = 6;
 
-export const parseComparisonPromptResponseComparisonIdentityEntityCountMin = 2;
+export const parseComparisonPromptResponseComparisonIdentityEntityCountMin = 0;
 export const parseComparisonPromptResponseComparisonIdentityEntityCountMax = 6;
 
 
 
 export const ParseComparisonPromptResponse = zod.object({
   "prompt": zod.string(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(parseComparisonPromptResponseComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(parseComparisonPromptResponseComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(parseComparisonPromptResponseComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
   "vendors": zod.array(zod.string()).min(parseComparisonPromptResponseVendorsMin).max(parseComparisonPromptResponseVendorsMax),
   "urls": zod.array(zod.string()),
   "criteria": zod.array(zod.string()),
@@ -873,7 +2609,30 @@ export const ParseComparisonPromptResponse = zod.object({
   "valid": zod.boolean(),
   "segment": zod.string(),
   "industry": zod.string(),
-  "message": zod.string()
+  "message": zod.string(),
+  "comparisonType": zod.string().optional().describe('Deterministic comparison category derived from identified options, such as Vehicle Comparison or Curriculum Comparison.'),
+  "decisionDomain": zod.string().optional().describe('Shared recognized decision domain for the compared options.'),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(parseComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMin).max(parseComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional().describe('True only when a known primary market differs between options or from the selected market.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Validated or inferred customer market code when known.'),
+  "country": zod.string().optional().describe('Human-readable validated or inferred country when known.'),
+  "customerLocation": zod.string().optional().describe('Explicit customer city, state, or postcode when known.')
 }),
   "intent": zod.object({
   "options": zod.array(zod.string()).max(parseComparisonPromptResponseIntentOptionsMax),
@@ -899,26 +2658,207 @@ export const ParseComparisonPromptResponse = zod.object({
   "displayName": zod.string(),
   "headline": zod.string()
 }).describe('Canonical comparison set used by every downstream label and recommendation.')
-}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor.\n')
+}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor. Incomplete\nrequests return context.valid=false with a clarification, not a server error.\n')
 
 
 /**
+ * Requires a UUID X-Request-Id and the owned draftId/draftVersion. The validated response echoes the draft correlation tuple.
+ * @summary Revalidate edited comparison context before research
+ */
+export const ReviewComparisonContextHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
+export const reviewComparisonContextBodyPromptMin = 8;
+export const reviewComparisonContextBodyPromptMax = 2000;
+
+export const reviewComparisonContextBodyValidatedComparisonTypeMax = 80;
+
+export const reviewComparisonContextBodyComparisonValuesItemRawTextMax = 120;
+
+export const reviewComparisonContextBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const reviewComparisonContextBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const reviewComparisonContextBodyComparisonValuesMin = 2;
+export const reviewComparisonContextBodyComparisonValuesMax = 6;
+
+export const reviewComparisonContextBodyDemographicContextCountryMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextRegionMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextStateOrRegionMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextCityMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextPostcodeMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextCustomerSegmentMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextAgeGroupMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextUseCaseMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextCurrencyMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextLanguageMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextRegulatoryContextItemMax = 120;
+
+export const reviewComparisonContextBodyDemographicContextRegulatoryContextMax = 12;
+
+export const reviewComparisonContextBodySourceAssociationsItemOptionMax = 120;
+
+export const reviewComparisonContextBodySourceAssociationsMax = 12;
+
+export const reviewComparisonContextBodyValidatedDecisionDomainMax = 100;
+
+export const reviewComparisonContextBodyValidatedCategoryMax = 100;
+
+export const reviewComparisonContextBodyCustomerSegmentMax = 100;
+
+export const reviewComparisonContextBodyCustomerLocationMax = 120;
+
+export const reviewComparisonContextBodyIncludeClosingProductsDefault = false;
+export const reviewComparisonContextBodyAnnualDistanceKmMax = 500000;
+
+export const reviewComparisonContextBodyOwnershipPeriodYearsMin = 0.5;
+export const reviewComparisonContextBodyOwnershipPeriodYearsMax = 30;
+export const reviewComparisonContextBodyOwnershipPeriodYearsMultipleOf = 0.5;
+
+export const reviewComparisonContextBodyVendorsItemMax = 120;
+
+export const reviewComparisonContextBodyVendorsMin = 2;
+export const reviewComparisonContextBodyVendorsMax = 6;
+
+export const reviewComparisonContextBodyCriteriaItemMax = 100;
+
+export const reviewComparisonContextBodyCriteriaMax = 8;
+
+
+
+export const ReviewComparisonContextBody = zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
+  "prompt": zod.string().min(reviewComparisonContextBodyPromptMin).max(reviewComparisonContextBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(reviewComparisonContextBodyValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(reviewComparisonContextBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(reviewComparisonContextBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(reviewComparisonContextBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(reviewComparisonContextBodyComparisonValuesMin).max(reviewComparisonContextBodyComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(reviewComparisonContextBodyDemographicContextCountryMax),
+  "region": zod.string().max(reviewComparisonContextBodyDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(reviewComparisonContextBodyDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(reviewComparisonContextBodyDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(reviewComparisonContextBodyDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(reviewComparisonContextBodyDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(reviewComparisonContextBodyDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(reviewComparisonContextBodyDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(reviewComparisonContextBodyDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(reviewComparisonContextBodyDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(reviewComparisonContextBodyDemographicContextRegulatoryContextItemMax)).max(reviewComparisonContextBodyDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(reviewComparisonContextBodySourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(reviewComparisonContextBodySourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(reviewComparisonContextBodyValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(reviewComparisonContextBodyValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(reviewComparisonContextBodyCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(reviewComparisonContextBodyCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(reviewComparisonContextBodyIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
+  "annualDistanceKm": zod.number().int().min(1).max(reviewComparisonContextBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(reviewComparisonContextBodyOwnershipPeriodYearsMin).max(reviewComparisonContextBodyOwnershipPeriodYearsMax).multipleOf(reviewComparisonContextBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
+  "vendors": zod.array(zod.string().min(1).max(reviewComparisonContextBodyVendorsItemMax)).min(reviewComparisonContextBodyVendorsMin).max(reviewComparisonContextBodyVendorsMax).optional(),
+  "urls": zod.array(zod.string().url()).optional(),
+  "criteria": zod.array(zod.string().min(1).max(reviewComparisonContextBodyCriteriaItemMax)).max(reviewComparisonContextBodyCriteriaMax).optional()
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
+
+export const reviewComparisonContextResponseComparisonValuesItemRawTextMax = 120;
+
+export const reviewComparisonContextResponseComparisonValuesItemConfirmedNameMax = 120;
+
+export const reviewComparisonContextResponseComparisonValuesItemCanonicalEntityIdMax = 160;
+
+
+
+export const ReviewComparisonContextResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "comparisonType": zod.string(),
+  "decisionDomain": zod.string(),
+  "category": zod.string(),
+  "customerLocation": zod.string().nullable(),
+  "criteria": zod.array(zod.string()),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(reviewComparisonContextResponseComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(reviewComparisonContextResponseComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(reviewComparisonContextResponseComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})
+
+
+/**
+ * Requires a UUID X-Request-Id and confirmed draft handoff; the response echoes draftId, draftVersion, and requestId.
  * @summary Validate supplied sources before authenticated research
  */
+export const PreflightComparisonSourcesHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
 export const preflightComparisonSourcesBodyPromptMin = 8;
 export const preflightComparisonSourcesBodyPromptMax = 4000;
 
+export const preflightComparisonSourcesBodyComparisonValuesItemRawTextMax = 120;
+
+export const preflightComparisonSourcesBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const preflightComparisonSourcesBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const preflightComparisonSourcesBodyComparisonValuesMin = 2;
+export const preflightComparisonSourcesBodyComparisonValuesMax = 6;
+
 export const preflightComparisonSourcesBodyUrlsMax = 12;
+
+export const preflightComparisonSourcesBodyVendorsItemMax = 120;
+
+export const preflightComparisonSourcesBodyVendorsMin = 2;
+export const preflightComparisonSourcesBodyVendorsMax = 6;
 
 
 
 export const PreflightComparisonSourcesBody = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int().min(1),
   "prompt": zod.string().min(preflightComparisonSourcesBodyPromptMin).max(preflightComparisonSourcesBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
-  "urls": zod.array(zod.string().url()).min(1).max(preflightComparisonSourcesBodyUrlsMax)
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Explicit selected market bound to the confirmed draft.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(preflightComparisonSourcesBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(preflightComparisonSourcesBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(preflightComparisonSourcesBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(preflightComparisonSourcesBodyComparisonValuesMin).max(preflightComparisonSourcesBodyComparisonValuesMax),
+  "urls": zod.array(zod.string().url()).min(1).max(preflightComparisonSourcesBodyUrlsMax),
+  "vendors": zod.array(zod.string().min(1).max(preflightComparisonSourcesBodyVendorsItemMax)).min(preflightComparisonSourcesBodyVendorsMin).max(preflightComparisonSourcesBodyVendorsMax).optional().describe('Optional user-confirmed option names for URL relevance checks only; source URLs never define identity.')
 })
 
 export const PreflightComparisonSourcesResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
   "sources": zod.array(zod.object({
   "url": zod.string().url(),
   "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
@@ -937,11 +2877,21 @@ export const parseGuestComparisonPromptBodyPromptMax = 2000;
 
 
 export const ParseGuestComparisonPromptBody = zod.object({
-  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax)
+  "prompt": zod.string().min(parseGuestComparisonPromptBodyPromptMin).max(parseGuestComparisonPromptBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional()
 })
 
-export const parseGuestComparisonPromptResponseVendorsMin = 2;
+export const parseGuestComparisonPromptResponseComparisonValuesItemRawTextMax = 120;
+
+export const parseGuestComparisonPromptResponseComparisonValuesItemConfirmedNameMax = 120;
+
+export const parseGuestComparisonPromptResponseComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const parseGuestComparisonPromptResponseVendorsMin = 0;
 export const parseGuestComparisonPromptResponseVendorsMax = 6;
+
+export const parseGuestComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const parseGuestComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMax = 1;
 
 export const parseGuestComparisonPromptResponseIntentOptionsMax = 6;
 
@@ -950,16 +2900,23 @@ export const parseGuestComparisonPromptResponseIntentQualifiersMax = 8;
 export const parseGuestComparisonPromptResponseIntentConfidenceMin = 0;
 export const parseGuestComparisonPromptResponseIntentConfidenceMax = 1;
 
-export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMin = 2;
+export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMin = 0;
 export const parseGuestComparisonPromptResponseComparisonIdentityEntitiesMax = 6;
 
-export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMin = 2;
+export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMin = 0;
 export const parseGuestComparisonPromptResponseComparisonIdentityEntityCountMax = 6;
 
 
 
 export const ParseGuestComparisonPromptResponse = zod.object({
   "prompt": zod.string(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(parseGuestComparisonPromptResponseComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(parseGuestComparisonPromptResponseComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(parseGuestComparisonPromptResponseComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
   "vendors": zod.array(zod.string()).min(parseGuestComparisonPromptResponseVendorsMin).max(parseGuestComparisonPromptResponseVendorsMax),
   "urls": zod.array(zod.string()),
   "criteria": zod.array(zod.string()),
@@ -967,7 +2924,30 @@ export const ParseGuestComparisonPromptResponse = zod.object({
   "valid": zod.boolean(),
   "segment": zod.string(),
   "industry": zod.string(),
-  "message": zod.string()
+  "message": zod.string(),
+  "comparisonType": zod.string().optional().describe('Deterministic comparison category derived from identified options, such as Vehicle Comparison or Curriculum Comparison.'),
+  "decisionDomain": zod.string().optional().describe('Shared recognized decision domain for the compared options.'),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(parseGuestComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMin).max(parseGuestComparisonPromptResponseContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional().describe('True only when a known primary market differs between options or from the selected market.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Validated or inferred customer market code when known.'),
+  "country": zod.string().optional().describe('Human-readable validated or inferred country when known.'),
+  "customerLocation": zod.string().optional().describe('Explicit customer city, state, or postcode when known.')
 }),
   "intent": zod.object({
   "options": zod.array(zod.string()).max(parseGuestComparisonPromptResponseIntentOptionsMax),
@@ -993,26 +2973,207 @@ export const ParseGuestComparisonPromptResponse = zod.object({
   "displayName": zod.string(),
   "headline": zod.string()
 }).describe('Canonical comparison set used by every downstream label and recommendation.')
-}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor.\n')
+}).describe('One-shot parse result. Entity boundaries are resolved before source retrieval.\nThe response preserves user order and exposes the qualifiers, decision criterion,\nand freshness requirements that downstream research must honor. Incomplete\nrequests return context.valid=false with a clarification, not a server error.\n')
 
 
 /**
+ * Requires a UUID X-Request-Id and the guest-owned draftId/draftVersion. The validated response echoes the draft correlation tuple.
+ * @summary Revalidate an edited guest comparison before research
+ */
+export const ReviewGuestComparisonContextHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
+export const reviewGuestComparisonContextBodyPromptMin = 8;
+export const reviewGuestComparisonContextBodyPromptMax = 2000;
+
+export const reviewGuestComparisonContextBodyValidatedComparisonTypeMax = 80;
+
+export const reviewGuestComparisonContextBodyComparisonValuesItemRawTextMax = 120;
+
+export const reviewGuestComparisonContextBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const reviewGuestComparisonContextBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const reviewGuestComparisonContextBodyComparisonValuesMin = 2;
+export const reviewGuestComparisonContextBodyComparisonValuesMax = 6;
+
+export const reviewGuestComparisonContextBodyDemographicContextCountryMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextRegionMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextStateOrRegionMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextCityMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextPostcodeMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextCustomerSegmentMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextAgeGroupMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextUseCaseMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextCurrencyMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextLanguageMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextRegulatoryContextItemMax = 120;
+
+export const reviewGuestComparisonContextBodyDemographicContextRegulatoryContextMax = 12;
+
+export const reviewGuestComparisonContextBodySourceAssociationsItemOptionMax = 120;
+
+export const reviewGuestComparisonContextBodySourceAssociationsMax = 12;
+
+export const reviewGuestComparisonContextBodyValidatedDecisionDomainMax = 100;
+
+export const reviewGuestComparisonContextBodyValidatedCategoryMax = 100;
+
+export const reviewGuestComparisonContextBodyCustomerSegmentMax = 100;
+
+export const reviewGuestComparisonContextBodyCustomerLocationMax = 120;
+
+export const reviewGuestComparisonContextBodyIncludeClosingProductsDefault = false;
+export const reviewGuestComparisonContextBodyAnnualDistanceKmMax = 500000;
+
+export const reviewGuestComparisonContextBodyOwnershipPeriodYearsMin = 0.5;
+export const reviewGuestComparisonContextBodyOwnershipPeriodYearsMax = 30;
+export const reviewGuestComparisonContextBodyOwnershipPeriodYearsMultipleOf = 0.5;
+
+export const reviewGuestComparisonContextBodyVendorsItemMax = 120;
+
+export const reviewGuestComparisonContextBodyVendorsMin = 2;
+export const reviewGuestComparisonContextBodyVendorsMax = 6;
+
+export const reviewGuestComparisonContextBodyCriteriaItemMax = 100;
+
+export const reviewGuestComparisonContextBodyCriteriaMax = 8;
+
+
+
+export const ReviewGuestComparisonContextBody = zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
+  "prompt": zod.string().min(reviewGuestComparisonContextBodyPromptMin).max(reviewGuestComparisonContextBodyPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(reviewGuestComparisonContextBodyValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(reviewGuestComparisonContextBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(reviewGuestComparisonContextBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(reviewGuestComparisonContextBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(reviewGuestComparisonContextBodyComparisonValuesMin).max(reviewGuestComparisonContextBodyComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(reviewGuestComparisonContextBodyDemographicContextCountryMax),
+  "region": zod.string().max(reviewGuestComparisonContextBodyDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(reviewGuestComparisonContextBodyDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(reviewGuestComparisonContextBodyDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(reviewGuestComparisonContextBodyDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(reviewGuestComparisonContextBodyDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(reviewGuestComparisonContextBodyDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(reviewGuestComparisonContextBodyDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(reviewGuestComparisonContextBodyDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(reviewGuestComparisonContextBodyDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(reviewGuestComparisonContextBodyDemographicContextRegulatoryContextItemMax)).max(reviewGuestComparisonContextBodyDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(reviewGuestComparisonContextBodySourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(reviewGuestComparisonContextBodySourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(reviewGuestComparisonContextBodyValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(reviewGuestComparisonContextBodyValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(reviewGuestComparisonContextBodyCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(reviewGuestComparisonContextBodyCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(reviewGuestComparisonContextBodyIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
+  "annualDistanceKm": zod.number().int().min(1).max(reviewGuestComparisonContextBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(reviewGuestComparisonContextBodyOwnershipPeriodYearsMin).max(reviewGuestComparisonContextBodyOwnershipPeriodYearsMax).multipleOf(reviewGuestComparisonContextBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
+  "vendors": zod.array(zod.string().min(1).max(reviewGuestComparisonContextBodyVendorsItemMax)).min(reviewGuestComparisonContextBodyVendorsMin).max(reviewGuestComparisonContextBodyVendorsMax).optional(),
+  "urls": zod.array(zod.string().url()).optional(),
+  "criteria": zod.array(zod.string().min(1).max(reviewGuestComparisonContextBodyCriteriaItemMax)).max(reviewGuestComparisonContextBodyCriteriaMax).optional()
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
+
+export const reviewGuestComparisonContextResponseComparisonValuesItemRawTextMax = 120;
+
+export const reviewGuestComparisonContextResponseComparisonValuesItemConfirmedNameMax = 120;
+
+export const reviewGuestComparisonContextResponseComparisonValuesItemCanonicalEntityIdMax = 160;
+
+
+
+export const ReviewGuestComparisonContextResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "comparisonType": zod.string(),
+  "decisionDomain": zod.string(),
+  "category": zod.string(),
+  "customerLocation": zod.string().nullable(),
+  "criteria": zod.array(zod.string()),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(reviewGuestComparisonContextResponseComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(reviewGuestComparisonContextResponseComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(reviewGuestComparisonContextResponseComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})
+
+
+/**
+ * Requires a UUID X-Request-Id and confirmed draft handoff; the response echoes draftId, draftVersion, and requestId.
  * @summary Validate supplied sources before guest research
  */
+export const PreflightGuestComparisonSourcesHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
 export const preflightGuestComparisonSourcesBodyPromptMin = 8;
 export const preflightGuestComparisonSourcesBodyPromptMax = 4000;
 
+export const preflightGuestComparisonSourcesBodyComparisonValuesItemRawTextMax = 120;
+
+export const preflightGuestComparisonSourcesBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const preflightGuestComparisonSourcesBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const preflightGuestComparisonSourcesBodyComparisonValuesMin = 2;
+export const preflightGuestComparisonSourcesBodyComparisonValuesMax = 6;
+
 export const preflightGuestComparisonSourcesBodyUrlsMax = 12;
+
+export const preflightGuestComparisonSourcesBodyVendorsItemMax = 120;
+
+export const preflightGuestComparisonSourcesBodyVendorsMin = 2;
+export const preflightGuestComparisonSourcesBodyVendorsMax = 6;
 
 
 
 export const PreflightGuestComparisonSourcesBody = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int().min(1),
   "prompt": zod.string().min(preflightGuestComparisonSourcesBodyPromptMin).max(preflightGuestComparisonSourcesBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']),
-  "urls": zod.array(zod.string().url()).min(1).max(preflightGuestComparisonSourcesBodyUrlsMax)
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Explicit selected market bound to the confirmed draft.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(preflightGuestComparisonSourcesBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(preflightGuestComparisonSourcesBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(preflightGuestComparisonSourcesBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(preflightGuestComparisonSourcesBodyComparisonValuesMin).max(preflightGuestComparisonSourcesBodyComparisonValuesMax),
+  "urls": zod.array(zod.string().url()).min(1).max(preflightGuestComparisonSourcesBodyUrlsMax),
+  "vendors": zod.array(zod.string().min(1).max(preflightGuestComparisonSourcesBodyVendorsItemMax)).min(preflightGuestComparisonSourcesBodyVendorsMin).max(preflightGuestComparisonSourcesBodyVendorsMax).optional().describe('Optional user-confirmed option names for URL relevance checks only; source URLs never define identity.')
 })
 
 export const PreflightGuestComparisonSourcesResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
   "sources": zod.array(zod.object({
   "url": zod.string().url(),
   "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
@@ -1023,11 +3184,65 @@ export const PreflightGuestComparisonSourcesResponse = zod.object({
 
 
 /**
+ * Requires a UUID X-Request-Id and confirmed draft handoff. The accepted job response echoes draftId, draftVersion, and requestId.
  * @summary Start an authenticated comparison research job
  */
+export const CreateComparisonJobHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
 export const createComparisonJobBodyPromptMin = 8;
 export const createComparisonJobBodyPromptMax = 2000;
 
+export const createComparisonJobBodyValidatedComparisonTypeMax = 80;
+
+export const createComparisonJobBodyComparisonValuesItemRawTextMax = 120;
+
+export const createComparisonJobBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const createComparisonJobBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const createComparisonJobBodyComparisonValuesMin = 2;
+export const createComparisonJobBodyComparisonValuesMax = 6;
+
+export const createComparisonJobBodyDemographicContextCountryMax = 120;
+
+export const createComparisonJobBodyDemographicContextRegionMax = 120;
+
+export const createComparisonJobBodyDemographicContextStateOrRegionMax = 120;
+
+export const createComparisonJobBodyDemographicContextCityMax = 120;
+
+export const createComparisonJobBodyDemographicContextPostcodeMax = 120;
+
+export const createComparisonJobBodyDemographicContextCustomerSegmentMax = 120;
+
+export const createComparisonJobBodyDemographicContextAgeGroupMax = 120;
+
+export const createComparisonJobBodyDemographicContextUseCaseMax = 120;
+
+export const createComparisonJobBodyDemographicContextCurrencyMax = 120;
+
+export const createComparisonJobBodyDemographicContextLanguageMax = 120;
+
+export const createComparisonJobBodyDemographicContextRegulatoryContextItemMax = 120;
+
+export const createComparisonJobBodyDemographicContextRegulatoryContextMax = 12;
+
+export const createComparisonJobBodySourceAssociationsItemOptionMax = 120;
+
+export const createComparisonJobBodySourceAssociationsMax = 12;
+
+export const createComparisonJobBodyValidatedDecisionDomainMax = 100;
+
+export const createComparisonJobBodyValidatedCategoryMax = 100;
+
+export const createComparisonJobBodyCustomerSegmentMax = 100;
+
+export const createComparisonJobBodyCustomerLocationMax = 120;
+
+export const createComparisonJobBodyIncludeClosingProductsDefault = false;
 export const createComparisonJobBodyAnnualDistanceKmMax = 500000;
 
 export const createComparisonJobBodyOwnershipPeriodYearsMin = 0.5;
@@ -1046,38 +3261,222 @@ export const createComparisonJobBodyCriteriaMax = 8;
 
 
 export const CreateComparisonJobBody = zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
   "prompt": zod.string().min(createComparisonJobBodyPromptMin).max(createComparisonJobBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(createComparisonJobBodyValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(createComparisonJobBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(createComparisonJobBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(createComparisonJobBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(createComparisonJobBodyComparisonValuesMin).max(createComparisonJobBodyComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(createComparisonJobBodyDemographicContextCountryMax),
+  "region": zod.string().max(createComparisonJobBodyDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createComparisonJobBodyDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(createComparisonJobBodyDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(createComparisonJobBodyDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createComparisonJobBodyDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createComparisonJobBodyDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createComparisonJobBodyDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createComparisonJobBodyDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(createComparisonJobBodyDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createComparisonJobBodyDemographicContextRegulatoryContextItemMax)).max(createComparisonJobBodyDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(createComparisonJobBodySourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(createComparisonJobBodySourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(createComparisonJobBodyValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(createComparisonJobBodyValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(createComparisonJobBodyCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(createComparisonJobBodyCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(createComparisonJobBodyIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
   "annualDistanceKm": zod.number().int().min(1).max(createComparisonJobBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
   "ownershipPeriodYears": zod.number().min(createComparisonJobBodyOwnershipPeriodYearsMin).max(createComparisonJobBodyOwnershipPeriodYearsMax).multipleOf(createComparisonJobBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createComparisonJobBodyVendorsItemMax)).min(createComparisonJobBodyVendorsMin).max(createComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createComparisonJobBodyCriteriaItemMax)).max(createComparisonJobBodyCriteriaMax).optional()
-})
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
 
 export const createComparisonJobResponseProgressEntitiesMin = 2;
 export const createComparisonJobResponseProgressEntitiesMax = 6;
+
+export const createComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const createComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
 
 
 
 
 export const CreateComparisonJobResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'verifying_market', 'validating_market_eligibility', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(createComparisonJobResponseProgressEntitiesMin).max(createComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
-}).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(createComparisonJobResponsePreviewDecisionCoverageMin).max(createComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(createComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.')
+}).describe('Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.')
 
 
 /**
+ * @summary List recent failed market checks that can be retried from the unchanged owned draft
+ */
+
+export const listRetryableComparisonJobsResponseItemsItemRequestPromptMin = 8;
+export const listRetryableComparisonJobsResponseItemsItemRequestPromptMax = 2000;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestValidatedComparisonTypeMax = 80;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesItemRawTextMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesItemConfirmedNameMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesMin = 2;
+export const listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesMax = 6;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCountryMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextRegionMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextStateOrRegionMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCityMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextPostcodeMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCustomerSegmentMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextAgeGroupMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextUseCaseMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCurrencyMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextLanguageMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextRegulatoryContextItemMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestDemographicContextRegulatoryContextMax = 12;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestSourceAssociationsItemOptionMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestSourceAssociationsMax = 12;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestValidatedDecisionDomainMax = 100;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestValidatedCategoryMax = 100;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestCustomerSegmentMax = 100;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestCustomerLocationMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestIncludeClosingProductsDefault = false;
+export const listRetryableComparisonJobsResponseItemsItemRequestAnnualDistanceKmMax = 500000;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestOwnershipPeriodYearsMin = 0.5;
+export const listRetryableComparisonJobsResponseItemsItemRequestOwnershipPeriodYearsMax = 30;
+export const listRetryableComparisonJobsResponseItemsItemRequestOwnershipPeriodYearsMultipleOf = 0.5;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestVendorsItemMax = 120;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestVendorsMin = 2;
+export const listRetryableComparisonJobsResponseItemsItemRequestVendorsMax = 6;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestCriteriaItemMax = 100;
+
+export const listRetryableComparisonJobsResponseItemsItemRequestCriteriaMax = 8;
+
+
+
+export const ListRetryableComparisonJobsResponse = zod.object({
+  "items": zod.array(zod.object({
+  "jobId": zod.string().uuid(),
+  "failedAt": zod.coerce.date(),
+  "request": zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
+  "prompt": zod.string().min(listRetryableComparisonJobsResponseItemsItemRequestPromptMin).max(listRetryableComparisonJobsResponseItemsItemRequestPromptMax),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesMin).max(listRetryableComparisonJobsResponseItemsItemRequestComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCountryMax),
+  "region": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextRegulatoryContextItemMax)).max(listRetryableComparisonJobsResponseItemsItemRequestDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(listRetryableComparisonJobsResponseItemsItemRequestSourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(listRetryableComparisonJobsResponseItemsItemRequestSourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(listRetryableComparisonJobsResponseItemsItemRequestCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(listRetryableComparisonJobsResponseItemsItemRequestIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
+  "annualDistanceKm": zod.number().int().min(1).max(listRetryableComparisonJobsResponseItemsItemRequestAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
+  "ownershipPeriodYears": zod.number().min(listRetryableComparisonJobsResponseItemsItemRequestOwnershipPeriodYearsMin).max(listRetryableComparisonJobsResponseItemsItemRequestOwnershipPeriodYearsMax).multipleOf(listRetryableComparisonJobsResponseItemsItemRequestOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
+  "vendors": zod.array(zod.string().min(1).max(listRetryableComparisonJobsResponseItemsItemRequestVendorsItemMax)).min(listRetryableComparisonJobsResponseItemsItemRequestVendorsMin).max(listRetryableComparisonJobsResponseItemsItemRequestVendorsMax).optional(),
+  "urls": zod.array(zod.string().url()).optional(),
+  "criteria": zod.array(zod.string().min(1).max(listRetryableComparisonJobsResponseItemsItemRequestCriteriaItemMax)).max(listRetryableComparisonJobsResponseItemsItemRequestCriteriaMax).optional()
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
+}))
+})
+
+
+/**
+ * Requires a UUID X-Request-Id and echoes the job's draftId, draftVersion, and requestId. The optional draftId and draftVersion query parameters reject a poll for the wrong confirmed draft; these optional guards are documented here to avoid generated operation-parameter type-name collisions.
  * @summary Get an authenticated comparison research job
  */
 export const GetComparisonJobParams = zod.object({
   "id": zod.coerce.string().uuid()
+})
+
+export const GetComparisonJobHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
 })
 
 export const getComparisonJobResponseProgressEntitiesMin = 2;
@@ -1086,16 +3485,60 @@ export const getComparisonJobResponseProgressEntitiesMax = 6;
 export const getComparisonJobResponseElapsedMsMin = 0;
 
 
+export const getComparisonJobResponseResultOneOneProvenanceGapCountMin = 0;
+
 export const getComparisonJobResponseResultOneOneVendorsMax = 6;
 
-export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
+export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 0;
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 6;
 
-export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
+export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 0;
 export const getComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax = 100;
@@ -1115,6 +3558,44 @@ export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax 
 export const getComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
 
 export const getComparisonJobResponseResultOneTwoWeightAdjustmentsMax = 8;
+
+export const getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const getComparisonJobResponseResultOneTwoWeightModelOneTotalWeightMax = 100;
+
+export const getComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMin = 0;
+export const getComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
 
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1154,13 +3635,99 @@ export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceConfide
 export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const getComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const getComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const getComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCityMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const getComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
+export const getComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const getComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const getComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const getComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const getComparisonJobResponseResultTwoWeightModelOneTotalWeightMax = 100;
+
+export const getComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMin = 0;
+export const getComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMax = 99;
+
 export const getComparisonJobResponseResultTwoVendorsMax = 6;
 
-export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
+export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 0;
 export const getComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 6;
 
-export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
+export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 0;
 export const getComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const getComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const getComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getComparisonJobResponseResultTwoConfirmedRecommendationScoreMin = 0;
 export const getComparisonJobResponseResultTwoConfirmedRecommendationScoreMax = 100;
@@ -1171,6 +3738,33 @@ export const getComparisonJobResponseResultTwoAlternativesItemScoreMax = 100;
 
 export const getComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMin = 0;
 export const getComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMax = 100;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
 
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1210,18 +3804,61 @@ export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceConfidence
 export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const getComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const getComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const getComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const getComparisonJobResponseResultTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextCityMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const getComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
+export const getComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const getComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
+
 
 
 export const GetComparisonJobResponse = zod.object({
-  "status": zod.enum(['processing', 'complete', 'failed']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'partial', 'failed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'verifying_market', 'validating_market_eligibility', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(getComparisonJobResponseProgressEntitiesMin).max(getComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "elapsedMs": zod.number().int().min(getComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
+  "elapsedMs": zod.number().int().min(getComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.'),
   "result": zod.union([zod.object({
+  "provenanceGapCount": zod.number().int().min(getComparisonJobResponseResultOneOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getComparisonJobResponseResultOneOneVendorsMax),
@@ -1243,9 +3880,11 @@ export const GetComparisonJobResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin).max(getComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
   "sourceAvailability": zod.array(zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
@@ -1272,11 +3911,157 @@ export const GetComparisonJobResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(getComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMin).max(getComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin).max(getComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin).max(getComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -1291,20 +4076,112 @@ export const GetComparisonJobResponse = zod.object({
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
   "criterion": zod.string().min(1).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax)
+  "mappedCriteria": zod.array(zod.string()).min(1).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
 })).max(getComparisonJobResponseResultOneTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMin).max(getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(getComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(getComparisonJobResponseResultOneTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(getComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMin).max(getComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
+  "weight": zod.number(),
   "score": zod.number().int().min(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin).max(getComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
@@ -1445,6 +4322,75 @@ export const GetComparisonJobResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(getComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(getComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(getComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(getComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(getComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -1482,6 +4428,24 @@ export const GetComparisonJobResponse = zod.object({
   "decisionGate": zod.string()
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
 })),zod.object({
+  "suppliedUrls": zod.array(zod.string()).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(getComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMin).max(getComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(getComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(getComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(getComparisonJobResponseResultTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(getComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMin).max(getComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
+  "id": zod.number().int().optional().describe('Present for a partially completed authenticated comparison only after its report has been persisted.'),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getComparisonJobResponseResultTwoVendorsMax),
   "comparisonIdentity": zod.object({
@@ -1500,6 +4464,7 @@ export const GetComparisonJobResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.'),
   "createdAt": zod.coerce.date(),
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -1528,11 +4493,92 @@ export const GetComparisonJobResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional(),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(getComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMin).max(getComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional(),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin).max(getComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getComparisonJobResponseResultTwoConfirmedRecommendationScoreMin).max(getComparisonJobResponseResultTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -1551,11 +4597,84 @@ export const GetComparisonJobResponse = zod.object({
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(getComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
+  "weight": zod.number(),
   "score": zod.number().int().min(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin).max(getComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
@@ -1696,6 +4815,75 @@ export const GetComparisonJobResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(getComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(getComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(getComparisonJobResponseResultTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(getComparisonJobResponseResultTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(getComparisonJobResponseResultTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(getComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -1732,24 +4920,54 @@ export const GetComparisonJobResponse = zod.object({
   "evidenceRequired": zod.string(),
   "decisionGate": zod.string()
 }))
-})]).optional(),
-  "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
-}).describe('Pollable state for asynchronous comparison research.')
+})]).optional().describe('Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds.'),
+  "saveStatus": zod.enum(['pending', 'saved', 'failed']).optional().describe('Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.'),
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(getComparisonJobResponsePreviewDecisionCoverageMin).max(getComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(getComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "message": zod.string().optional().describe('User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report.'),
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence', 'latency_budget_exceeded']).optional().describe('Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.')
+}).describe('Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.')
 
 
 /**
+ * Each state event contains the same correlated payload as polling. Supply the UUID as X-Request-Id, or use the requestId query parameter for EventSource clients that cannot set headers; if both are sent, they must match. Optional draftId/draftVersion query parameters bind the stream to the confirmed draft. Query alternatives are documented here rather than modeled as operation parameters to avoid generated operation-parameter type-name collisions.
+ * @summary Stream authenticated comparison job state changes
+ */
+export const StreamComparisonJobEventsParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const StreamComparisonJobEventsHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().optional().describe('UUID echoed as requestId in every event payload. EventSource clients may instead supply the same UUID in the requestId query parameter; if both are present, they must match.')
+})
+
+export const StreamComparisonJobEventsResponse = zod.unknown()
+
+
+/**
+ * Reweights the existing saved report without repeating research, validation, or discovery. The result remains under the same comparison ID and is appended as the next immutable report version.
  * @summary Recalculate a saved comparison with adjusted criterion weights
  */
 export const RegenerateComparisonParams = zod.object({
   "id": zod.coerce.number().int()
 })
 
+export const regenerateComparisonBodySuppliedUrlsMax = 12;
+
 export const regenerateComparisonBodyWeightsItemWeightMin = 0;
 export const regenerateComparisonBodyWeightsItemWeightMax = 100;
 
 export const regenerateComparisonBodyWeightsMin = 9;
-export const regenerateComparisonBodyWeightsMax = 9;
+export const regenerateComparisonBodyWeightsMax = 10;
 
 export const regenerateComparisonBodyAdditionalWeightsItemCriterionMax = 100;
 
@@ -1763,27 +4981,76 @@ export const regenerateComparisonBodyAdditionalWeightsMax = 8;
 
 
 export const RegenerateComparisonBody = zod.object({
+  "suppliedUrls": zod.array(zod.string().url()).max(regenerateComparisonBodySuppliedUrlsMax).optional().describe('Optional replacement list of user-supplied research URLs. Omitting it preserves the existing list. Changing the list does not rerun research.'),
   "weights": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable built-in criterion identifier. Optional only for older clients.'),
   "criterion": zod.string(),
   "weight": zod.number().int().min(regenerateComparisonBodyWeightsItemWeightMin).max(regenerateComparisonBodyWeightsItemWeightMax)
 })).min(regenerateComparisonBodyWeightsMin).max(regenerateComparisonBodyWeightsMax),
   "additionalWeights": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
   "criterion": zod.string().min(1).max(regenerateComparisonBodyAdditionalWeightsItemCriterionMax),
   "weight": zod.number().int().min(regenerateComparisonBodyAdditionalWeightsItemWeightMin).max(regenerateComparisonBodyAdditionalWeightsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(regenerateComparisonBodyAdditionalWeightsItemMappedCriteriaMax)
+  "mappedCriteria": zod.array(zod.string()).min(1).max(regenerateComparisonBodyAdditionalWeightsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
 })).max(regenerateComparisonBodyAdditionalWeightsMax).optional()
 })
 
+export const regenerateComparisonResponseOneProvenanceGapCountMin = 0;
+
 export const regenerateComparisonResponseOneVendorsMax = 6;
 
-export const regenerateComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const regenerateComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const regenerateComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const regenerateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const regenerateComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const regenerateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const regenerateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const regenerateComparisonResponseTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const regenerateComparisonResponseTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const regenerateComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const regenerateComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -1803,6 +5070,44 @@ export const regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100
 export const regenerateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
 
 export const regenerateComparisonResponseTwoWeightAdjustmentsMax = 8;
+
+export const regenerateComparisonResponseTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const regenerateComparisonResponseTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const regenerateComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const regenerateComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const regenerateComparisonResponseTwoWeightModelOneTotalWeightMax = 100;
+
+export const regenerateComparisonResponseTwoWeightModelOneUnallocatedWeightMin = 0;
+export const regenerateComparisonResponseTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
 
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -1842,9 +5147,43 @@ export const regenerateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMa
 export const regenerateComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const regenerateComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const regenerateComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const regenerateComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const regenerateComparisonResponseTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextCityMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const regenerateComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
 
 
 export const RegenerateComparisonResponse = zod.object({
+  "provenanceGapCount": zod.number().int().min(regenerateComparisonResponseOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(regenerateComparisonResponseOneVendorsMax),
@@ -1866,9 +5205,11 @@ export const RegenerateComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(regenerateComparisonResponseOneProviderRoleTieBreakBonusMin).max(regenerateComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
   "sourceAvailability": zod.array(zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
@@ -1895,11 +5236,157 @@ export const RegenerateComparisonResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(regenerateComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(regenerateComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(regenerateComparisonResponseTwoMarketRelevanceItemRelevanceScoreMin).max(regenerateComparisonResponseTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(regenerateComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(regenerateComparisonResponseTwoConfirmedRecommendationScoreMin).max(regenerateComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -1914,20 +5401,112 @@ export const RegenerateComparisonResponse = zod.object({
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
   "criterion": zod.string().min(1).max(regenerateComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(regenerateComparisonResponseTwoWeightAdjustmentsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(regenerateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+  "mappedCriteria": zod.array(zod.string()).min(1).max(regenerateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
 })).max(regenerateComparisonResponseTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(regenerateComparisonResponseTwoWeightModelOneCriteriaItemWeightMin).max(regenerateComparisonResponseTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(regenerateComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(regenerateComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(regenerateComparisonResponseTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(regenerateComparisonResponseTwoWeightModelOneUnallocatedWeightMin).max(regenerateComparisonResponseTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
+  "weight": zod.number(),
   "score": zod.number().int().min(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(regenerateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
@@ -2068,6 +5647,75 @@ export const RegenerateComparisonResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(regenerateComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(regenerateComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(regenerateComparisonResponseTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(regenerateComparisonResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(regenerateComparisonResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(regenerateComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(regenerateComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -2108,11 +5756,1707 @@ export const RegenerateComparisonResponse = zod.object({
 
 
 /**
+ * Explicitly repeats source checks, eligibility, research, and scoring for the saved prompt and shortlist. Appends an immutable report version; never rewrites earlier versions.
+ * @summary Re-research an owned saved comparison using current sources
+ */
+export const RefreshComparisonResearchParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const refreshComparisonResearchResponseOneProvenanceGapCountMin = 0;
+
+export const refreshComparisonResearchResponseOneVendorsMax = 6;
+
+export const refreshComparisonResearchResponseOneComparisonIdentityEntitiesMin = 0;
+export const refreshComparisonResearchResponseOneComparisonIdentityEntitiesMax = 6;
+
+export const refreshComparisonResearchResponseOneComparisonIdentityEntityCountMin = 0;
+export const refreshComparisonResearchResponseOneComparisonIdentityEntityCountMax = 6;
+
+export const refreshComparisonResearchResponseOneProviderRoleTieBreakBonusMin = 0;
+export const refreshComparisonResearchResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const refreshComparisonResearchResponseTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const refreshComparisonResearchResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
+
+export const refreshComparisonResearchResponseTwoConfirmedRecommendationScoreMin = 0;
+export const refreshComparisonResearchResponseTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const refreshComparisonResearchResponseTwoAlternativesItemScoreMin = 0;
+export const refreshComparisonResearchResponseTwoAlternativesItemScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoAlternativesItemScoreDifferenceMin = 0;
+export const refreshComparisonResearchResponseTwoAlternativesItemScoreDifferenceMax = 100;
+
+export const refreshComparisonResearchResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const refreshComparisonResearchResponseTwoWeightAdjustmentsItemWeightMin = 0;
+export const refreshComparisonResearchResponseTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const refreshComparisonResearchResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const refreshComparisonResearchResponseTwoWeightAdjustmentsMax = 8;
+
+export const refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const refreshComparisonResearchResponseTwoWeightModelOneTotalWeightMax = 100;
+
+export const refreshComparisonResearchResponseTwoWeightModelOneUnallocatedWeightMin = 0;
+export const refreshComparisonResearchResponseTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemModelScoreMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemModelScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const refreshComparisonResearchResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const refreshComparisonResearchResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
+
+export const refreshComparisonResearchResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const refreshComparisonResearchResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const refreshComparisonResearchResponseTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextCityMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const refreshComparisonResearchResponseTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
+
+
+export const RefreshComparisonResearchResponse = zod.object({
+  "provenanceGapCount": zod.number().int().min(refreshComparisonResearchResponseOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
+  "id": zod.number().int(),
+  "prompt": zod.string(),
+  "vendors": zod.array(zod.string()).max(refreshComparisonResearchResponseOneVendorsMax),
+  "comparisonIdentity": zod.object({
+  "originalQuery": zod.string(),
+  "category": zod.string(),
+  "entities": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string()
+})).min(refreshComparisonResearchResponseOneComparisonIdentityEntitiesMin).max(refreshComparisonResearchResponseOneComparisonIdentityEntitiesMax),
+  "entityCount": zod.number().int().min(refreshComparisonResearchResponseOneComparisonIdentityEntityCountMin).max(refreshComparisonResearchResponseOneComparisonIdentityEntityCountMax),
+  "comparisonType": zod.enum(['pair', 'multi_entity']),
+  "displayName": zod.string(),
+  "headline": zod.string()
+}).describe('Canonical comparison set used by every downstream label and recommendation.'),
+  "category": zod.string(),
+  "recommendation": zod.string(),
+  "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(refreshComparisonResearchResponseOneProviderRoleTieBreakBonusMin).max(refreshComparisonResearchResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
+  "createdAt": zod.coerce.date(),
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
+}).and(zod.object({
+  "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
+  "sourceAvailability": zod.array(zod.object({
+  "url": zod.string().url(),
+  "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
+})).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(refreshComparisonResearchResponseTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(refreshComparisonResearchResponseTwoMarketRelevanceItemRelevanceScoreMin).max(refreshComparisonResearchResponseTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
+  "criteria": zod.array(zod.string()),
+  "executiveSummary": zod.string(),
+  "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreMin).max(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(refreshComparisonResearchResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(refreshComparisonResearchResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(refreshComparisonResearchResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(refreshComparisonResearchResponseTwoConfirmedRecommendationScoreMin).max(refreshComparisonResearchResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(refreshComparisonResearchResponseTwoAlternativesItemScoreMin).max(refreshComparisonResearchResponseTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(refreshComparisonResearchResponseTwoAlternativesItemScoreDifferenceMin).max(refreshComparisonResearchResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
+  "weightAdjustments": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
+  "criterion": zod.string().min(1).max(refreshComparisonResearchResponseTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(refreshComparisonResearchResponseTwoWeightAdjustmentsItemWeightMin).max(refreshComparisonResearchResponseTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(refreshComparisonResearchResponseTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
+})).max(refreshComparisonResearchResponseTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemWeightMin).max(refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(refreshComparisonResearchResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(refreshComparisonResearchResponseTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(refreshComparisonResearchResponseTwoWeightModelOneUnallocatedWeightMin).max(refreshComparisonResearchResponseTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
+  "vendorScores": zod.array(zod.object({
+  "vendor": zod.string(),
+  "score": zod.number(),
+  "color": zod.string(),
+  "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(refreshComparisonResearchResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
+  "weightedScores": zod.array(zod.object({
+  "criterion": zod.string(),
+  "weight": zod.number(),
+  "score": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
+  "sampleSize": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(refreshComparisonResearchResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
+})).optional()
+})).optional(),
+  "modelScore": zod.number().min(refreshComparisonResearchResponseTwoVendorScoresItemModelScoreMin).max(refreshComparisonResearchResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(refreshComparisonResearchResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(refreshComparisonResearchResponseTwoVendorScoresItemEvidenceConfidenceMin).max(refreshComparisonResearchResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(refreshComparisonResearchResponseTwoVendorScoresItemEvidenceCoverageMin).max(refreshComparisonResearchResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
+  "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
+  "vrio": zod.object({
+  "value": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "rarity": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "imitability": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "organization": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "implication": zod.string()
+}).optional(),
+  "marketPosition": zod.object({
+  "marketShare": zod.string().describe('Latest credible market-share figure or an explicit unavailable statement.'),
+  "marketSharePeriod": zod.string(),
+  "market": zod.string(),
+  "shareValue": zod.string().describe('Public parent-company share price/value when applicable, otherwise Not applicable.'),
+  "shareValueAsOf": zod.string(),
+  "applicability": zod.string(),
+  "evidence": zod.string()
+}).optional(),
+  "marketHistory": zod.object({
+  "lookbackYears": zod.literal(5),
+  "trendSummary": zod.string(),
+  "yearlyTrends": zod.array(zod.object({
+  "year": zod.number().int(),
+  "productPerformance": zod.string(),
+  "marketPosition": zod.string(),
+  "trendDirection": zod.enum(['improving', 'stable', 'declining', 'mixed', 'unavailable']),
+  "notableEvent": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+})),
+  "ownership": zod.object({
+  "status": zod.enum(['public', 'private', 'subsidiary', 'government', 'mutual', 'unknown']),
+  "ultimateParent": zod.string(),
+  "majorShareholders": zod.array(zod.string()),
+  "asOf": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+}),
+  "transactions": zod.array(zod.object({
+  "date": zod.string(),
+  "type": zod.enum(['merger', 'acquisition', 'divestiture', 'investment', 'restructure', 'none_found']),
+  "counterparty": zod.string(),
+  "summary": zod.string(),
+  "impact": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+})),
+  "stock": zod.object({
+  "applicability": zod.enum(['listed', 'listed_parent', 'private', 'not_applicable', 'unverified']),
+  "ticker": zod.string(),
+  "exchange": zod.string(),
+  "currency": zod.string(),
+  "latestPrice": zod.number().nullable(),
+  "latestPriceAsOf": zod.string(),
+  "fiveYearChangePercent": zod.number().nullable(),
+  "yearlyCloses": zod.array(zod.object({
+  "year": zod.number().int(),
+  "price": zod.number().nullable()
+})),
+  "evidenceUrl": zod.string().url().optional()
+})
+}).optional().describe('Evidence-backed five-year performance, ownership, corporate-action, and listed-stock context for one compared option.')
+})),
+  "pricing": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "features": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "swot": zod.record(zod.string(), zod.array(zod.string())),
+  "opportunities": zod.array(zod.string()),
+  "insights": zod.array(zod.string()),
+  "nextSteps": zod.array(zod.string()),
+  "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(refreshComparisonResearchResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(refreshComparisonResearchResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(refreshComparisonResearchResponseTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(refreshComparisonResearchResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(refreshComparisonResearchResponseTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
+  "productEquivalency": zod.array(zod.object({
+  "capability": zod.string(),
+  "currentArrangement": zod.string(),
+  "targetArrangement": zod.string(),
+  "equivalency": zod.string().describe('Full'),
+  "gap": zod.string()
+})).describe('Like-for-like mapping of current and target products or services, including partial equivalence and uncovered scope.'),
+  "functionalGaps": zod.array(zod.object({
+  "capability": zod.string(),
+  "currentState": zod.string(),
+  "targetState": zod.string(),
+  "gap": zod.string(),
+  "mitigation": zod.string(),
+  "severity": zod.enum(['low', 'medium', 'high', 'critical'])
+})).describe('Required capabilities that are absent, partial, changed, or unverified in the target arrangement.'),
+  "serviceProductMap": zod.array(zod.object({
+  "businessService": zod.string(),
+  "currentProduct": zod.string(),
+  "targetProduct": zod.string(),
+  "dependencies": zod.string(),
+  "owner": zod.string()
+})).describe('Mapping between business services and the products, dependencies, and owners that enable them.'),
+  "migrationSequence": zod.array(zod.object({
+  "phase": zod.string(),
+  "objective": zod.string(),
+  "dependencies": zod.string(),
+  "exitCriteria": zod.string(),
+  "risk": zod.enum(['low', 'medium', 'high', 'critical'])
+})).describe('Ordered migration phases with dependencies, exit criteria, and risk.'),
+  "decisionGovernance": zod.array(zod.object({
+  "decision": zod.string(),
+  "owner": zod.string(),
+  "approvers": zod.string(),
+  "evidenceRequired": zod.string(),
+  "decisionGate": zod.string()
+})).describe('Decision rights, evidence requirements, approvers, and approval gates.')
+}))
+
+
+/**
+ * Returns each full report snapshot, including its version-specific weights and winner. Version 1 is the original report; owner-initiated weight changes or fresh research append later versions without changing earlier snapshots.
+ * @summary List immutable report versions for an owned comparison
+ */
+export const ListComparisonVersionsParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+
+export const listComparisonVersionsResponseVersionsItemReportOneProvenanceGapCountMin = 0;
+
+export const listComparisonVersionsResponseVersionsItemReportOneVendorsMax = 6;
+
+export const listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntitiesMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntitiesMax = 6;
+
+export const listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntityCountMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntityCountMax = 6;
+
+export const listComparisonVersionsResponseVersionsItemReportOneProviderRoleTieBreakBonusMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportOneProviderRoleTieBreakBonusMax = 2;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidencePriorityClarityMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoConfirmedRecommendationScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoConfirmedRecommendationScoreMax = 100;
+
+
+export const listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreDifferenceMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreDifferenceMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemCriterionMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemWeightMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemWeightMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsMax = 8;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneTotalWeightMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneUnallocatedWeightMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemModelScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemModelScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceConfidenceMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceCoverageMax = 100;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCityMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
+
+
+export const ListComparisonVersionsResponse = zod.object({
+  "comparisonId": zod.number().int().describe('Stable identity shared by the current comparison and every immutable report version.'),
+  "versions": zod.array(zod.object({
+  "version": zod.number().int().min(1),
+  "createdAt": zod.coerce.date().describe('Time this immutable report snapshot was created.'),
+  "report": zod.object({
+  "provenanceGapCount": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
+  "id": zod.number().int(),
+  "prompt": zod.string(),
+  "vendors": zod.array(zod.string()).max(listComparisonVersionsResponseVersionsItemReportOneVendorsMax),
+  "comparisonIdentity": zod.object({
+  "originalQuery": zod.string(),
+  "category": zod.string(),
+  "entities": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string()
+})).min(listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntitiesMin).max(listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntitiesMax),
+  "entityCount": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntityCountMin).max(listComparisonVersionsResponseVersionsItemReportOneComparisonIdentityEntityCountMax),
+  "comparisonType": zod.enum(['pair', 'multi_entity']),
+  "displayName": zod.string(),
+  "headline": zod.string()
+}).describe('Canonical comparison set used by every downstream label and recommendation.'),
+  "category": zod.string(),
+  "recommendation": zod.string(),
+  "score": zod.number().int(),
+  "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportOneProviderRoleTieBreakBonusMin).max(listComparisonVersionsResponseVersionsItemReportOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
+  "createdAt": zod.coerce.date(),
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
+}).and(zod.object({
+  "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
+  "sourceAvailability": zod.array(zod.object({
+  "url": zod.string().url(),
+  "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']).optional(),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']).optional(),
+  "checkedAt": zod.coerce.date().optional(),
+  "primaryContext": zod.boolean().optional(),
+  "restrictions": zod.array(zod.string()).optional(),
+  "registryDecision": zod.object({
+  "domain": zod.string(),
+  "decisionOrigin": zod.enum(['reviewed', 'automated']),
+  "pathScope": zod.string().optional(),
+  "sourceType": zod.enum(['publisher', 'official', 'regulator', 'standards', 'customer']),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED', 'ACCESS_UNAVAILABLE', 'PROHIBITED']),
+  "accessMethod": zod.enum(['public_web', 'customer_url', 'api', 'feed', 'upload']),
+  "robotsResult": zod.enum(['allowed', 'disallowed', 'unavailable', 'not_applicable']),
+  "licenceOrTermsNotes": zod.string().optional(),
+  "owner": zod.string().optional(),
+  "reviewedAt": zod.coerce.date(),
+  "reviewDueAt": zod.coerce.date(),
+  "allowedUses": zod.array(zod.string()),
+  "restrictions": zod.array(zod.string())
+}).optional()
+})).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemRelevanceScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
+  "criteria": zod.array(zod.string()),
+  "executiveSummary": zod.string(),
+  "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceDataCoverageMin).max(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceSourceConsistencyMin).max(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreSeparationMin).max(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidencePriorityClarityMin).max(listComparisonVersionsResponseVersionsItemReportTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
+  "confirmedRecommendation": zod.object({
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
+  "option": zod.string().nullable(),
+  "score": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoConfirmedRecommendationScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoConfirmedRecommendationScoreMax).nullable(),
+  "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
+  "rationale": zod.string()
+}),
+  "alternatives": zod.array(zod.object({
+  "option": zod.string(),
+  "rank": zod.number().int().min(1),
+  "score": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreDifferenceMin).max(listComparisonVersionsResponseVersionsItemReportTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "qualificationStatus": zod.string(),
+  "rationale": zod.string()
+})).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
+  "weightAdjustments": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
+  "criterion": zod.string().min(1).max(listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemWeightMin).max(listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
+})).max(listComparisonVersionsResponseVersionsItemReportTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemWeightMin).max(listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneUnallocatedWeightMin).max(listComparisonVersionsResponseVersionsItemReportTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
+  "vendorScores": zod.array(zod.object({
+  "vendor": zod.string(),
+  "score": zod.number(),
+  "color": zod.string(),
+  "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
+  "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
+  "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
+  "weightedScores": zod.array(zod.object({
+  "criterion": zod.string(),
+  "weight": zod.number(),
+  "score": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemScoreMax),
+  "rationale": zod.string(),
+  "evidence": zod.array(zod.object({
+  "sourceId": zod.string().regex(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
+  "sourceUrl": zod.string().url().optional(),
+  "sourceTitle": zod.string().optional(),
+  "sourcePublisher": zod.string().optional(),
+  "sourceDate": zod.coerce.date().optional(),
+  "retrievalDate": zod.coerce.date(),
+  "exactClaim": zod.string(),
+  "metricKey": zod.string().optional().describe('Stable server-controlled measure identifier shared across vendors, such as price, baas_upfront_price, usage_cost_per_km, ground_clearance, variable_interest_rate, or annual_fee.'),
+  "rawMetricValue": zod.number().optional(),
+  "rawMetricUnit": zod.string().optional(),
+  "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
+  "documentSha256": zod.string().regex(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
+  "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
+  "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
+  "sampleSize": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
+  "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
+  "confidence": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "weightedContribution": zod.number(),
+  "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
+})).optional()
+})).optional(),
+  "modelScore": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemModelScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
+  "qualificationGates": zod.array(zod.object({
+  "gate": zod.string(),
+  "status": zod.enum(['PASS', 'CONDITIONAL', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "rationale": zod.string(),
+  "evidenceSourceIds": zod.array(zod.string())
+})).optional(),
+  "dimensionScores": zod.array(zod.object({
+  "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
+  "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
+  "score": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemScoreMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemCoverageMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
+  "supportedSubcriteria": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "rationale": zod.string()
+})).optional(),
+  "evidenceConfidence": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceConfidenceMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceCoverageMin).max(listComparisonVersionsResponseVersionsItemReportTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "strengths": zod.array(zod.string()).optional(),
+  "gaps": zod.array(zod.string()).optional(),
+  "conditions": zod.array(zod.string()).optional(),
+  "limitations": zod.array(zod.string()).optional(),
+  "switchConditions": zod.array(zod.string()).optional().describe('Conditions under which this option should be preferred over the overall recommendation.'),
+  "vrio": zod.object({
+  "value": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "rarity": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "imitability": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "organization": zod.object({
+  "status": zod.enum(['strong', 'partial', 'weak', 'not_applicable']),
+  "rationale": zod.string()
+}),
+  "implication": zod.string()
+}).optional(),
+  "marketPosition": zod.object({
+  "marketShare": zod.string().describe('Latest credible market-share figure or an explicit unavailable statement.'),
+  "marketSharePeriod": zod.string(),
+  "market": zod.string(),
+  "shareValue": zod.string().describe('Public parent-company share price/value when applicable, otherwise Not applicable.'),
+  "shareValueAsOf": zod.string(),
+  "applicability": zod.string(),
+  "evidence": zod.string()
+}).optional(),
+  "marketHistory": zod.object({
+  "lookbackYears": zod.literal(5),
+  "trendSummary": zod.string(),
+  "yearlyTrends": zod.array(zod.object({
+  "year": zod.number().int(),
+  "productPerformance": zod.string(),
+  "marketPosition": zod.string(),
+  "trendDirection": zod.enum(['improving', 'stable', 'declining', 'mixed', 'unavailable']),
+  "notableEvent": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+})),
+  "ownership": zod.object({
+  "status": zod.enum(['public', 'private', 'subsidiary', 'government', 'mutual', 'unknown']),
+  "ultimateParent": zod.string(),
+  "majorShareholders": zod.array(zod.string()),
+  "asOf": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+}),
+  "transactions": zod.array(zod.object({
+  "date": zod.string(),
+  "type": zod.enum(['merger', 'acquisition', 'divestiture', 'investment', 'restructure', 'none_found']),
+  "counterparty": zod.string(),
+  "summary": zod.string(),
+  "impact": zod.string(),
+  "evidenceUrl": zod.string().url().optional()
+})),
+  "stock": zod.object({
+  "applicability": zod.enum(['listed', 'listed_parent', 'private', 'not_applicable', 'unverified']),
+  "ticker": zod.string(),
+  "exchange": zod.string(),
+  "currency": zod.string(),
+  "latestPrice": zod.number().nullable(),
+  "latestPriceAsOf": zod.string(),
+  "fiveYearChangePercent": zod.number().nullable(),
+  "yearlyCloses": zod.array(zod.object({
+  "year": zod.number().int(),
+  "price": zod.number().nullable()
+})),
+  "evidenceUrl": zod.string().url().optional()
+})
+}).optional().describe('Evidence-backed five-year performance, ownership, corporate-action, and listed-stock context for one compared option.')
+})),
+  "pricing": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "features": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "swot": zod.record(zod.string(), zod.array(zod.string())),
+  "opportunities": zod.array(zod.string()),
+  "insights": zod.array(zod.string()),
+  "nextSteps": zod.array(zod.string()),
+  "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(listComparisonVersionsResponseVersionsItemReportTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
+  "productEquivalency": zod.array(zod.object({
+  "capability": zod.string(),
+  "currentArrangement": zod.string(),
+  "targetArrangement": zod.string(),
+  "equivalency": zod.string().describe('Full'),
+  "gap": zod.string()
+})).describe('Like-for-like mapping of current and target products or services, including partial equivalence and uncovered scope.'),
+  "functionalGaps": zod.array(zod.object({
+  "capability": zod.string(),
+  "currentState": zod.string(),
+  "targetState": zod.string(),
+  "gap": zod.string(),
+  "mitigation": zod.string(),
+  "severity": zod.enum(['low', 'medium', 'high', 'critical'])
+})).describe('Required capabilities that are absent, partial, changed, or unverified in the target arrangement.'),
+  "serviceProductMap": zod.array(zod.object({
+  "businessService": zod.string(),
+  "currentProduct": zod.string(),
+  "targetProduct": zod.string(),
+  "dependencies": zod.string(),
+  "owner": zod.string()
+})).describe('Mapping between business services and the products, dependencies, and owners that enable them.'),
+  "migrationSequence": zod.array(zod.object({
+  "phase": zod.string(),
+  "objective": zod.string(),
+  "dependencies": zod.string(),
+  "exitCriteria": zod.string(),
+  "risk": zod.enum(['low', 'medium', 'high', 'critical'])
+})).describe('Ordered migration phases with dependencies, exit criteria, and risk.'),
+  "decisionGovernance": zod.array(zod.object({
+  "decision": zod.string(),
+  "owner": zod.string(),
+  "approvers": zod.string(),
+  "evidenceRequired": zod.string(),
+  "decisionGate": zod.string()
+})).describe('Decision rights, evidence requirements, approvers, and approval gates.')
+}))
+}))
+})
+
+
+/**
+ * Requires a signed-in user and returns access only for a saved comparison owned by that user.
+ * @summary Get premium verification access for a saved comparison
+ */
+export const GetComparisonVerificationAccessParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const GetComparisonVerificationAccessResponse = zod.object({
+  "access": zod.enum(['active', 'payment_required', 'not_configured']),
+  "message": zod.string().optional()
+})
+
+
+/**
+ * Requires a signed-in user and creates checkout only for a saved comparison owned by that user.
+ * @summary Create a premium verification checkout for a saved comparison
+ */
+export const CreateComparisonVerificationCheckoutParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const CreateComparisonVerificationCheckoutResponse = zod.object({
+  "purchaseUrl": zod.string().url()
+})
+
+
+/**
+ * Requires premium verification access for the saved comparison; purchase access through the verification checkout endpoint when payment is required.
+ * @summary Start an opt-in source-by-source review of a saved comparison
+ */
+export const StartComparisonEvidenceCheckParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const StartComparisonEvidenceCheckResponse = zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+})
+
+
+/**
+ * Requires a UUID X-Request-Id and confirmed draft handoff. The accepted job response echoes draftId, draftVersion, and requestId.
  * @summary Start a guest comparison research job
  */
+export const CreateGuestComparisonJobHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
+})
+
+
 export const createGuestComparisonJobBodyPromptMin = 8;
 export const createGuestComparisonJobBodyPromptMax = 2000;
 
+export const createGuestComparisonJobBodyValidatedComparisonTypeMax = 80;
+
+export const createGuestComparisonJobBodyComparisonValuesItemRawTextMax = 120;
+
+export const createGuestComparisonJobBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const createGuestComparisonJobBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const createGuestComparisonJobBodyComparisonValuesMin = 2;
+export const createGuestComparisonJobBodyComparisonValuesMax = 6;
+
+export const createGuestComparisonJobBodyDemographicContextCountryMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextRegionMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextStateOrRegionMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextCityMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextPostcodeMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextCustomerSegmentMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextAgeGroupMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextUseCaseMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextCurrencyMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextLanguageMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextRegulatoryContextItemMax = 120;
+
+export const createGuestComparisonJobBodyDemographicContextRegulatoryContextMax = 12;
+
+export const createGuestComparisonJobBodySourceAssociationsItemOptionMax = 120;
+
+export const createGuestComparisonJobBodySourceAssociationsMax = 12;
+
+export const createGuestComparisonJobBodyValidatedDecisionDomainMax = 100;
+
+export const createGuestComparisonJobBodyValidatedCategoryMax = 100;
+
+export const createGuestComparisonJobBodyCustomerSegmentMax = 100;
+
+export const createGuestComparisonJobBodyCustomerLocationMax = 120;
+
+export const createGuestComparisonJobBodyIncludeClosingProductsDefault = false;
 export const createGuestComparisonJobBodyAnnualDistanceKmMax = 500000;
 
 export const createGuestComparisonJobBodyOwnershipPeriodYearsMin = 0.5;
@@ -2131,38 +7475,98 @@ export const createGuestComparisonJobBodyCriteriaMax = 8;
 
 
 export const CreateGuestComparisonJobBody = zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
   "prompt": zod.string().min(createGuestComparisonJobBodyPromptMin).max(createGuestComparisonJobBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(createGuestComparisonJobBodyValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(createGuestComparisonJobBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(createGuestComparisonJobBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(createGuestComparisonJobBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(createGuestComparisonJobBodyComparisonValuesMin).max(createGuestComparisonJobBodyComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(createGuestComparisonJobBodyDemographicContextCountryMax),
+  "region": zod.string().max(createGuestComparisonJobBodyDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(createGuestComparisonJobBodyDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(createGuestComparisonJobBodyDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(createGuestComparisonJobBodyDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(createGuestComparisonJobBodyDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(createGuestComparisonJobBodyDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(createGuestComparisonJobBodyDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(createGuestComparisonJobBodyDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(createGuestComparisonJobBodyDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(createGuestComparisonJobBodyDemographicContextRegulatoryContextItemMax)).max(createGuestComparisonJobBodyDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(createGuestComparisonJobBodySourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(createGuestComparisonJobBodySourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(createGuestComparisonJobBodyValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(createGuestComparisonJobBodyValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(createGuestComparisonJobBodyCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(createGuestComparisonJobBodyCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(createGuestComparisonJobBodyIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
   "annualDistanceKm": zod.number().int().min(1).max(createGuestComparisonJobBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
   "ownershipPeriodYears": zod.number().min(createGuestComparisonJobBodyOwnershipPeriodYearsMin).max(createGuestComparisonJobBodyOwnershipPeriodYearsMax).multipleOf(createGuestComparisonJobBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyVendorsItemMax)).min(createGuestComparisonJobBodyVendorsMin).max(createGuestComparisonJobBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(createGuestComparisonJobBodyCriteriaItemMax)).max(createGuestComparisonJobBodyCriteriaMax).optional()
-})
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
 
 export const createGuestComparisonJobResponseProgressEntitiesMin = 2;
 export const createGuestComparisonJobResponseProgressEntitiesMax = 6;
+
+export const createGuestComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const createGuestComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
 
 
 
 
 export const CreateGuestComparisonJobResponse = zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
   "jobId": zod.string().uuid(),
   "status": zod.enum(['processing']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'verifying_market', 'validating_market_eligibility', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(createGuestComparisonJobResponseProgressEntitiesMin).max(createGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. Research continues safely when upstream services prevent the target from being met.')
-}).describe('Accepted asynchronous comparison job. The target is an operational service objective, not a hard timeout or evidence-quality waiver.')
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(createGuestComparisonJobResponsePreviewDecisionCoverageMin).max(createGuestComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(createGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a complete, partial, or failed terminal job state.')
+}).describe('Accepted asynchronous comparison job. A preliminary scored choice is published before bounded targeted research continues; the hard deadline is 20 seconds.')
 
 
 /**
+ * Requires a UUID X-Request-Id and echoes the job's draftId, draftVersion, and requestId. The optional draftId and draftVersion query parameters reject a poll for the wrong confirmed draft; these optional guards are documented here to avoid generated operation-parameter type-name collisions.
  * @summary Get a guest comparison research job
  */
 export const GetGuestComparisonJobParams = zod.object({
   "id": zod.coerce.string().uuid()
+})
+
+export const GetGuestComparisonJobHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.')
 })
 
 export const getGuestComparisonJobResponseProgressEntitiesMin = 2;
@@ -2171,16 +7575,60 @@ export const getGuestComparisonJobResponseProgressEntitiesMax = 6;
 export const getGuestComparisonJobResponseElapsedMsMin = 0;
 
 
+export const getGuestComparisonJobResponseResultOneOneProvenanceGapCountMin = 0;
+
 export const getGuestComparisonJobResponseResultOneOneVendorsMax = 6;
 
-export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 2;
+export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMin = 0;
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntitiesMax = 6;
 
-export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 2;
+export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMin = 0;
 export const getGuestComparisonJobResponseResultOneOneComparisonIdentityEntityCountMax = 6;
 
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin = 0;
 export const getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax = 2;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax = 100;
@@ -2200,6 +7648,44 @@ export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeigh
 export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
 
 export const getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsMax = 8;
+
+export const getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const getGuestComparisonJobResponseResultOneTwoWeightModelOneTotalWeightMax = 100;
+
+export const getGuestComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
 
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -2239,13 +7725,99 @@ export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCo
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const getGuestComparisonJobResponseResultOneTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCityMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
+export const getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const getGuestComparisonJobResponseResultTwoWeightModelOneTotalWeightMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMin = 0;
+export const getGuestComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMax = 99;
+
 export const getGuestComparisonJobResponseResultTwoVendorsMax = 6;
 
-export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 2;
+export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMin = 0;
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntitiesMax = 6;
 
-export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 2;
+export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMin = 0;
 export const getGuestComparisonJobResponseResultTwoComparisonIdentityEntityCountMax = 6;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMin = 0;
 export const getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMax = 100;
@@ -2256,6 +7828,33 @@ export const getGuestComparisonJobResponseResultTwoAlternativesItemScoreMax = 10
 
 export const getGuestComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMin = 0;
 export const getGuestComparisonJobResponseResultTwoAlternativesItemScoreDifferenceMax = 100;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
 
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -2295,18 +7894,61 @@ export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceConfi
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const getGuestComparisonJobResponseResultTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const getGuestComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const getGuestComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCityMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
+export const getGuestComparisonJobResponsePreviewDecisionCoverageMin = 0;
+export const getGuestComparisonJobResponsePreviewDecisionCoverageMax = 100;
+
+export const getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin = 0;
+export const getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax = 100;
+
 
 
 export const GetGuestComparisonJobResponse = zod.object({
-  "status": zod.enum(['processing', 'complete', 'failed']),
-  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'validating_comparison', 'preparing_result', 'completed']),
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int(),
+  "requestId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'partial', 'failed']),
+  "stage": zod.enum(['finding_official_sources', 'building_evidence', 'analysing_evidence', 'verifying_market', 'validating_market_eligibility', 'validating_comparison', 'preparing_result', 'completed', 'partial_result']),
   "progress": zod.object({
   "entities": zod.array(zod.string()).min(getGuestComparisonJobResponseProgressEntitiesMin).max(getGuestComparisonJobResponseProgressEntitiesMax),
   "subject": zod.string()
 }),
-  "elapsedMs": zod.number().int().min(getGuestComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds since this job was created.'),
-  "targetCompletionSeconds": zod.number().int().min(1).describe('Operational target for reaching a terminal job state. It is not an estimated percentage or a hard deadline.'),
+  "elapsedMs": zod.number().int().min(getGuestComparisonJobResponseElapsedMsMin).describe('Server-measured milliseconds from job creation to the terminal timestamp; frozen after completion or failure.'),
+  "targetCompletionSeconds": zod.number().int().min(1).describe('Hard deadline in seconds for reaching a terminal job state.'),
   "result": zod.union([zod.object({
+  "provenanceGapCount": zod.number().int().min(getGuestComparisonJobResponseResultOneOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getGuestComparisonJobResponseResultOneOneVendorsMax),
@@ -2328,9 +7970,11 @@ export const GetGuestComparisonJobResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMin).max(getGuestComparisonJobResponseResultOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
   "sourceAvailability": zod.array(zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
@@ -2357,11 +8001,157 @@ export const GetGuestComparisonJobResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMin).max(getGuestComparisonJobResponseResultOneTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMin).max(getGuestComparisonJobResponseResultOneTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMin).max(getGuestComparisonJobResponseResultOneTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -2376,20 +8166,112 @@ export const GetGuestComparisonJobResponse = zod.object({
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
   "criterion": zod.string().min(1).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMin).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax)
+  "mappedCriteria": zod.array(zod.string()).min(1).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
 })).max(getGuestComparisonJobResponseResultOneTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMin).max(getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(getGuestComparisonJobResponseResultOneTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(getGuestComparisonJobResponseResultOneTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMin).max(getGuestComparisonJobResponseResultOneTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
+  "weight": zod.number(),
   "score": zod.number().int().min(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMin).max(getGuestComparisonJobResponseResultOneTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
@@ -2530,6 +8412,75 @@ export const GetGuestComparisonJobResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(getGuestComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(getGuestComparisonJobResponseResultOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(getGuestComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(getGuestComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(getGuestComparisonJobResponseResultOneTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -2567,6 +8518,24 @@ export const GetGuestComparisonJobResponse = zod.object({
   "decisionGate": zod.string()
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
 })),zod.object({
+  "suppliedUrls": zod.array(zod.string()).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMin).max(getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(getGuestComparisonJobResponseResultTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(getGuestComparisonJobResponseResultTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(getGuestComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMin).max(getGuestComparisonJobResponseResultTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
+  "id": zod.number().int().optional().describe('Present for a partially completed authenticated comparison only after its report has been persisted.'),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getGuestComparisonJobResponseResultTwoVendorsMax),
   "comparisonIdentity": zod.object({
@@ -2585,6 +8554,7 @@ export const GetGuestComparisonJobResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.'),
   "createdAt": zod.coerce.date(),
   "urls": zod.array(zod.string()),
   "sourceAvailability": zod.array(zod.object({
@@ -2613,11 +8583,92 @@ export const GetGuestComparisonJobResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional(),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getGuestComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMin).max(getGuestComparisonJobResponseResultTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional(),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMin).max(getGuestComparisonJobResponseResultTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMin).max(getGuestComparisonJobResponseResultTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -2636,11 +8687,84 @@ export const GetGuestComparisonJobResponse = zod.object({
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
+  "weight": zod.number(),
   "score": zod.number().int().min(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMin).max(getGuestComparisonJobResponseResultTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
@@ -2781,6 +8905,75 @@ export const GetGuestComparisonJobResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(getGuestComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(getGuestComparisonJobResponseResultTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(getGuestComparisonJobResponseResultTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(getGuestComparisonJobResponseResultTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(getGuestComparisonJobResponseResultTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -2817,10 +9010,37 @@ export const GetGuestComparisonJobResponse = zod.object({
   "evidenceRequired": zod.string(),
   "decisionGate": zod.string()
 }))
-})]).optional(),
-  "message": zod.string().optional().describe('User-safe status or recovery guidance. Insufficient-evidence failures explain neutral 50/100 scores and request exact current URLs for a subsequent attempt.'),
-  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence']).optional().describe('Stable failure category. insufficient_quantitative_evidence means the options were understood but current relevant document-verified metrics could not support a reliable ranking.')
-}).describe('Pollable state for asynchronous comparison research.')
+})]).optional().describe('Completed comparison payload. Required when status is partial; in that case this is the preserved preliminary comparison. For authenticated partial jobs, an id is added only after persistence succeeds.'),
+  "saveStatus": zod.enum(['pending', 'saved', 'failed']).optional().describe('Authenticated job persistence state. Present as pending on partial publication, saved only after a persisted result ID is available, or failed if persistence rejects. Omitted for guest jobs.'),
+  "previewDecision": zod.object({
+  "winner": zod.string(),
+  "decisionType": zod.enum(['Product Selection', 'Service Selection', 'Vendor Evaluation', 'Dealership Investment', 'Franchise Opportunity', 'Market Entry', 'Technology Platform Selection']),
+  "coverage": zod.number().int().min(getGuestComparisonJobResponsePreviewDecisionCoverageMin).max(getGuestComparisonJobResponsePreviewDecisionCoverageMax),
+  "reason": zod.string(),
+  "provisional": zod.boolean(),
+  "priorities": zod.array(zod.object({
+  "lens": zod.string(),
+  "weight": zod.number().int().min(getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMin).max(getGuestComparisonJobResponsePreviewDecisionPrioritiesItemWeightMax)
+}))
+}).optional().describe('An early assumption-led starting choice, not a verified finding. Research continues after this is returned.'),
+  "message": zod.string().optional().describe('User-safe completion, partial-result, or recovery guidance. Partial states explain targeted-research failure or the 20-second deadline while preserving the preliminary report.'),
+  "errorCode": zod.enum(['research_failed', 'validation_failed', 'insufficient_quantitative_evidence', 'latency_budget_exceeded']).optional().describe('Stable terminal error or partial-result category. A partial result remains usable and includes its preliminary report.')
+}).describe('Pollable state for asynchronous comparison research. Partial results contain the preliminary comparison when targeted research fails or reaches the 20-second hard deadline.')
+
+
+/**
+ * Server-sent events named state carry the same correlated JSON payload as GET /guest/comparison-jobs/{id}; each payload includes draftId, draftVersion, and requestId. Supply the UUID as X-Request-Id, or use the requestId query parameter for EventSource clients that cannot set headers; if both are sent, they must match. Optional draftId/draftVersion query parameters bind the stream to the confirmed draft. The stream is scoped to the submitting guest. Query alternatives are documented here rather than modeled as operation parameters to avoid generated operation-parameter type-name collisions.
+ * @summary Stream guest comparison job state changes
+ */
+export const StreamGuestComparisonJobEventsParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const StreamGuestComparisonJobEventsHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().optional().describe('UUID echoed as requestId in every event payload. EventSource clients may instead supply the same UUID in the requestId query parameter; if both are present, they must match.')
+})
+
+export const StreamGuestComparisonJobEventsResponse = zod.unknown()
 
 
 /**
@@ -2830,16 +9050,60 @@ export const GetComparisonParams = zod.object({
   "id": zod.coerce.number().int()
 })
 
+export const getComparisonResponseOneProvenanceGapCountMin = 0;
+
 export const getComparisonResponseOneVendorsMax = 6;
 
-export const getComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const getComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const getComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const getComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const getComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const getComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const getComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const getComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const getComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const getComparisonResponseTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const getComparisonResponseTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const getComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const getComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -2859,6 +9123,44 @@ export const getComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
 export const getComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
 
 export const getComparisonResponseTwoWeightAdjustmentsMax = 8;
+
+export const getComparisonResponseTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const getComparisonResponseTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const getComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const getComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const getComparisonResponseTwoWeightModelOneTotalWeightMax = 100;
+
+export const getComparisonResponseTwoWeightModelOneUnallocatedWeightMin = 0;
+export const getComparisonResponseTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const getComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
 
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -2898,9 +9200,43 @@ export const getComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100
 export const getComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const getComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const getComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const getComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const getComparisonResponseTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const getComparisonResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const getComparisonResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextCityMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const getComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
 
 
 export const GetComparisonResponse = zod.object({
+  "provenanceGapCount": zod.number().int().min(getComparisonResponseOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(getComparisonResponseOneVendorsMax),
@@ -2922,9 +9258,11 @@ export const GetComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(getComparisonResponseOneProviderRoleTieBreakBonusMin).max(getComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
   "sourceAvailability": zod.array(zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
@@ -2951,11 +9289,157 @@ export const GetComparisonResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(getComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getComparisonResponseTwoMarketRelevanceItemRelevanceScoreMin).max(getComparisonResponseTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(getComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(getComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(getComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(getComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(getComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(getComparisonResponseTwoConfirmedRecommendationScoreMin).max(getComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -2970,20 +9454,112 @@ export const GetComparisonResponse = zod.object({
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
   "criterion": zod.string().min(1).max(getComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(getComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(getComparisonResponseTwoWeightAdjustmentsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(getComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+  "mappedCriteria": zod.array(zod.string()).min(1).max(getComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
 })).max(getComparisonResponseTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(getComparisonResponseTwoWeightModelOneCriteriaItemWeightMin).max(getComparisonResponseTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(getComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(getComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(getComparisonResponseTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(getComparisonResponseTwoWeightModelOneUnallocatedWeightMin).max(getComparisonResponseTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(getComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(getComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(getComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
+  "weight": zod.number(),
   "score": zod.number().int().min(getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(getComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
@@ -3124,6 +9700,75 @@ export const GetComparisonResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(getComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(getComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(getComparisonResponseTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(getComparisonResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(getComparisonResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(getComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(getComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -3174,6 +9819,148 @@ export const DeleteComparisonResponse = zod.void()
 
 
 /**
+ * @summary Read private buyer-supplied quote summaries and comparable pricing
+ */
+export const GetComparisonQuotesParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const GetComparisonQuotesResponse = zod.object({
+  "quotes": zod.array(zod.object({
+  "vendor": zod.string(),
+  "documentDate": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "validUntil": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "currency": zod.enum(['AUD', 'USD', 'EUR', 'GBP']),
+  "termMonths": zod.number().int(),
+  "licenseAnnual": zod.string(),
+  "implementationOnce": zod.string(),
+  "serviceAnnual": zod.string(),
+  "audPerUnit": zod.string(),
+  "exchangeRateDate": zod.string().optional().describe('Calendar date YYYY-MM-DD'),
+  "exchangeRateSource": zod.string().optional(),
+  "scope": zod.string(),
+  "taxBasis": zod.enum(['ex_gst', 'inc_gst']),
+  "exclusions": zod.string(),
+  "fileName": zod.string(),
+  "fileSha256": zod.string(),
+  "documentUrl": zod.string(),
+  "totalAud": zod.string()
+}).describe('Buyer-entered terms linked to a private written quote, not independently verified.')),
+  "assessment": zod.object({
+  "status": zod.enum(['ready', 'incomplete']),
+  "flags": zod.array(zod.string()),
+  "horizonMonths": zod.number().int().optional(),
+  "winner": zod.string().nullable(),
+  "rows": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "scores": zod.record(zod.string(), zod.number().int())
+})
+})
+
+
+/**
+ * Multipart form with a details JSON string and a PDF file field (maximum 8 MB). The submitted amounts remain buyer-entered.
+ * @summary Upload a private written quote and buyer-entered commercial terms
+ */
+export const UploadComparisonQuoteParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const UploadComparisonQuoteResponse = zod.object({
+  "quotes": zod.array(zod.object({
+  "vendor": zod.string(),
+  "documentDate": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "validUntil": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "currency": zod.enum(['AUD', 'USD', 'EUR', 'GBP']),
+  "termMonths": zod.number().int(),
+  "licenseAnnual": zod.string(),
+  "implementationOnce": zod.string(),
+  "serviceAnnual": zod.string(),
+  "audPerUnit": zod.string(),
+  "exchangeRateDate": zod.string().optional().describe('Calendar date YYYY-MM-DD'),
+  "exchangeRateSource": zod.string().optional(),
+  "scope": zod.string(),
+  "taxBasis": zod.enum(['ex_gst', 'inc_gst']),
+  "exclusions": zod.string(),
+  "fileName": zod.string(),
+  "fileSha256": zod.string(),
+  "documentUrl": zod.string(),
+  "totalAud": zod.string()
+}).describe('Buyer-entered terms linked to a private written quote, not independently verified.')),
+  "assessment": zod.object({
+  "status": zod.enum(['ready', 'incomplete']),
+  "flags": zod.array(zod.string()),
+  "horizonMonths": zod.number().int().optional(),
+  "winner": zod.string().nullable(),
+  "rows": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "scores": zod.record(zod.string(), zod.number().int())
+})
+})
+
+
+/**
+ * @summary Remove a private buyer quote
+ */
+export const DeleteComparisonQuoteParams = zod.object({
+  "id": zod.coerce.number().int(),
+  "vendor": zod.coerce.string()
+})
+
+export const DeleteComparisonQuoteResponse = zod.object({
+  "quotes": zod.array(zod.object({
+  "vendor": zod.string(),
+  "documentDate": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "validUntil": zod.string().describe('Calendar date YYYY-MM-DD'),
+  "currency": zod.enum(['AUD', 'USD', 'EUR', 'GBP']),
+  "termMonths": zod.number().int(),
+  "licenseAnnual": zod.string(),
+  "implementationOnce": zod.string(),
+  "serviceAnnual": zod.string(),
+  "audPerUnit": zod.string(),
+  "exchangeRateDate": zod.string().optional().describe('Calendar date YYYY-MM-DD'),
+  "exchangeRateSource": zod.string().optional(),
+  "scope": zod.string(),
+  "taxBasis": zod.enum(['ex_gst', 'inc_gst']),
+  "exclusions": zod.string(),
+  "fileName": zod.string(),
+  "fileSha256": zod.string(),
+  "documentUrl": zod.string(),
+  "totalAud": zod.string()
+}).describe('Buyer-entered terms linked to a private written quote, not independently verified.')),
+  "assessment": zod.object({
+  "status": zod.enum(['ready', 'incomplete']),
+  "flags": zod.array(zod.string()),
+  "horizonMonths": zod.number().int().optional(),
+  "winner": zod.string().nullable(),
+  "rows": zod.array(zod.object({
+  "dimension": zod.string(),
+  "values": zod.record(zod.string(), zod.string()),
+  "winner": zod.string()
+})),
+  "scores": zod.record(zod.string(), zod.number().int())
+})
+})
+
+
+/**
+ * @summary Download an owned quote document privately
+ */
+export const DownloadComparisonQuoteParams = zod.object({
+  "id": zod.coerce.number().int(),
+  "vendor": zod.coerce.string()
+})
+
+export const DownloadComparisonQuoteResponse = zod.unknown()
+
+
+/**
  * Requires an API key with the comparisons:read scope.
  * @summary List tenant comparisons
  */
@@ -3187,12 +9974,14 @@ export const ExternalListComparisonsQueryParams = zod.object({
   "cursor": zod.coerce.string().optional()
 })
 
+export const externalListComparisonsResponseProvenanceGapCountMin = 0;
+
 export const externalListComparisonsResponseVendorsMax = 6;
 
-export const externalListComparisonsResponseComparisonIdentityEntitiesMin = 2;
+export const externalListComparisonsResponseComparisonIdentityEntitiesMin = 0;
 export const externalListComparisonsResponseComparisonIdentityEntitiesMax = 6;
 
-export const externalListComparisonsResponseComparisonIdentityEntityCountMin = 2;
+export const externalListComparisonsResponseComparisonIdentityEntityCountMin = 0;
 export const externalListComparisonsResponseComparisonIdentityEntityCountMax = 6;
 
 export const externalListComparisonsResponseProviderRoleTieBreakBonusMin = 0;
@@ -3201,6 +9990,7 @@ export const externalListComparisonsResponseProviderRoleTieBreakBonusMax = 2;
 
 
 export const ExternalListComparisonsResponseItem = zod.object({
+  "provenanceGapCount": zod.number().int().min(externalListComparisonsResponseProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(externalListComparisonsResponseVendorsMax),
@@ -3222,13 +10012,14 @@ export const ExternalListComparisonsResponseItem = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(externalListComparisonsResponseProviderRoleTieBreakBonusMin).max(externalListComparisonsResponseProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 })
 export const ExternalListComparisonsResponse = zod.array(ExternalListComparisonsResponseItem)
 
 
 /**
- * Requires an API key with the comparisons:write scope and an Idempotency-Key. Only successful completed comparisons consume usage; retries with the same request are replayed.
+ * Requires an API key with the comparisons:write scope, an Idempotency-Key, and a UUID X-Request-Id. Submit a persisted, user-confirmed draft by supplying draftId, draftVersion, explicit market, and comparisonValues. The completed response echoes draftId, draftVersion, and requestId. Only successful completed comparisons consume usage; retries with the same request are replayed.
  * @summary Create a metered tenant comparison
  */
 export const externalCreateComparisonHeaderIdempotencyKeyMin = 8;
@@ -3237,12 +10028,62 @@ export const externalCreateComparisonHeaderIdempotencyKeyMax = 255;
 
 
 export const ExternalCreateComparisonHeader = zod.object({
+  "X-Request-Id": zod.string().uuid().describe('Caller-provided UUID echoed as requestId alongside draftId and draftVersion on draft-scoped responses.'),
   "Idempotency-Key": zod.string().min(externalCreateComparisonHeaderIdempotencyKeyMin).max(externalCreateComparisonHeaderIdempotencyKeyMax).describe('Unique key for this request; reusing it with a changed body returns 409.')
 })
+
 
 export const externalCreateComparisonBodyPromptMin = 8;
 export const externalCreateComparisonBodyPromptMax = 2000;
 
+export const externalCreateComparisonBodyValidatedComparisonTypeMax = 80;
+
+export const externalCreateComparisonBodyComparisonValuesItemRawTextMax = 120;
+
+export const externalCreateComparisonBodyComparisonValuesItemConfirmedNameMax = 120;
+
+export const externalCreateComparisonBodyComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const externalCreateComparisonBodyComparisonValuesMin = 2;
+export const externalCreateComparisonBodyComparisonValuesMax = 6;
+
+export const externalCreateComparisonBodyDemographicContextCountryMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextRegionMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextStateOrRegionMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextCityMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextPostcodeMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextCustomerSegmentMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextAgeGroupMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextUseCaseMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextCurrencyMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextLanguageMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextRegulatoryContextItemMax = 120;
+
+export const externalCreateComparisonBodyDemographicContextRegulatoryContextMax = 12;
+
+export const externalCreateComparisonBodySourceAssociationsItemOptionMax = 120;
+
+export const externalCreateComparisonBodySourceAssociationsMax = 12;
+
+export const externalCreateComparisonBodyValidatedDecisionDomainMax = 100;
+
+export const externalCreateComparisonBodyValidatedCategoryMax = 100;
+
+export const externalCreateComparisonBodyCustomerSegmentMax = 100;
+
+export const externalCreateComparisonBodyCustomerLocationMax = 120;
+
+export const externalCreateComparisonBodyIncludeClosingProductsDefault = false;
 export const externalCreateComparisonBodyAnnualDistanceKmMax = 500000;
 
 export const externalCreateComparisonBodyOwnershipPeriodYearsMin = 0.5;
@@ -3261,97 +10102,249 @@ export const externalCreateComparisonBodyCriteriaMax = 8;
 
 
 export const ExternalCreateComparisonBody = zod.object({
+  "draftId": zod.string().uuid().describe('Required persisted review draft whose options the user confirmed.'),
+  "draftVersion": zod.number().int().min(1).describe('Required draft version observed at confirmation; later enrichment-only versions may be compatible.'),
   "prompt": zod.string().min(externalCreateComparisonBodyPromptMin).max(externalCreateComparisonBodyPromptMax),
-  "market": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "market": zod.enum(['IN', 'AU', 'US', 'GB']).describe('Required user-selected research market. MVP coverage is limited to India, Australia, the United States, and the United Kingdom so local evidence can be validated reliably; it takes precedence over location cues inferred from the prompt.'),
+  "validatedComparisonType": zod.string().max(externalCreateComparisonBodyValidatedComparisonTypeMax).optional().describe('User-confirmed comparison type. Revalidated against identified options; supersedes the parsed type.'),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(externalCreateComparisonBodyComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(externalCreateComparisonBodyComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(externalCreateComparisonBodyComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).min(externalCreateComparisonBodyComparisonValuesMin).max(externalCreateComparisonBodyComparisonValuesMax).describe('Confirmed option values. rawText is retained verbatim and confirmedName remains authoritative downstream.'),
+  "demographicContext": zod.object({
+  "country": zod.string().max(externalCreateComparisonBodyDemographicContextCountryMax),
+  "region": zod.string().max(externalCreateComparisonBodyDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(externalCreateComparisonBodyDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(externalCreateComparisonBodyDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(externalCreateComparisonBodyDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(externalCreateComparisonBodyDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(externalCreateComparisonBodyDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(externalCreateComparisonBodyDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(externalCreateComparisonBodyDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(externalCreateComparisonBodyDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(externalCreateComparisonBodyDemographicContextRegulatoryContextItemMax)).max(externalCreateComparisonBodyDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string().min(1).max(externalCreateComparisonBodySourceAssociationsItemOptionMax).describe('Must exactly match one confirmed comparison value name.')
+})).max(externalCreateComparisonBodySourceAssociationsMax).optional().describe('Optional URL-to-confirmed-option links. A URL never resolves or changes comparison identity.'),
+  "validatedDecisionDomain": zod.string().max(externalCreateComparisonBodyValidatedDecisionDomainMax).optional().describe('User-confirmed decision domain, checked against the option identities and selected type.'),
+  "validatedCategory": zod.string().max(externalCreateComparisonBodyValidatedCategoryMax).optional().describe('User-confirmed category, checked against the option identities and selected type.'),
+  "customerSegment": zod.string().max(externalCreateComparisonBodyCustomerSegmentMax).optional().describe('Optional buyer/customer segment to apply to this decision.'),
+  "customerLocation": zod.string().max(externalCreateComparisonBodyCustomerLocationMax).optional().describe('Customer origin city or postcode for a dealer decision; never a dealer address.'),
+  "crossMarketConfirmed": zod.boolean().optional().describe('Explicit user confirmation that options with known different primary markets are intentionally being compared across countries.'),
+  "includeClosingProducts": zod.boolean().default(externalCreateComparisonBodyIncludeClosingProductsDefault).describe('Include products with verified CLOSING status in scoring; the report will retain a closing warning. Defaults to false.'),
   "annualDistanceKm": zod.number().int().min(1).max(externalCreateComparisonBodyAnnualDistanceKmMax).optional().describe('Optional annual driving distance used only for a transparent Battery-as-a-Service scenario total when ownershipPeriodYears is also supplied.'),
   "ownershipPeriodYears": zod.number().min(externalCreateComparisonBodyOwnershipPeriodYearsMin).max(externalCreateComparisonBodyOwnershipPeriodYearsMax).multipleOf(externalCreateComparisonBodyOwnershipPeriodYearsMultipleOf).optional().describe('Optional ownership period used only for a transparent Battery-as-a-Service scenario total when annualDistanceKm is also supplied.'),
   "vendors": zod.array(zod.string().min(1).max(externalCreateComparisonBodyVendorsItemMax)).min(externalCreateComparisonBodyVendorsMin).max(externalCreateComparisonBodyVendorsMax).optional(),
   "urls": zod.array(zod.string().url()).optional(),
   "criteria": zod.array(zod.string().min(1).max(externalCreateComparisonBodyCriteriaItemMax)).max(externalCreateComparisonBodyCriteriaMax).optional()
-})
+}).describe('Comparison research must use a persisted draft after user confirmation. The draft identifier and observed version bind the confirmed values and explicit market to the handoff; interpretation output alone is not a valid submission.')
 
-export const externalCreateComparisonResponseOneVendorsMax = 6;
+export const externalCreateComparisonResponseOneOneProvenanceGapCountMin = 0;
 
-export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMin = 2;
-export const externalCreateComparisonResponseOneComparisonIdentityEntitiesMax = 6;
+export const externalCreateComparisonResponseOneOneVendorsMax = 6;
 
-export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMin = 2;
-export const externalCreateComparisonResponseOneComparisonIdentityEntityCountMax = 6;
+export const externalCreateComparisonResponseOneOneComparisonIdentityEntitiesMin = 0;
+export const externalCreateComparisonResponseOneOneComparisonIdentityEntitiesMax = 6;
 
-export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
-export const externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+export const externalCreateComparisonResponseOneOneComparisonIdentityEntityCountMin = 0;
+export const externalCreateComparisonResponseOneOneComparisonIdentityEntityCountMax = 6;
 
-export const externalCreateComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
-export const externalCreateComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
+export const externalCreateComparisonResponseOneOneProviderRoleTieBreakBonusMin = 0;
+export const externalCreateComparisonResponseOneOneProviderRoleTieBreakBonusMax = 2;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const externalCreateComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMax = 100;
+
+export const externalCreateComparisonResponseOneTwoConfirmedRecommendationScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoConfirmedRecommendationScoreMax = 100;
 
 
-export const externalCreateComparisonResponseTwoAlternativesItemScoreMin = 0;
-export const externalCreateComparisonResponseTwoAlternativesItemScoreMax = 100;
+export const externalCreateComparisonResponseOneTwoAlternativesItemScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoAlternativesItemScoreMax = 100;
 
-export const externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMin = 0;
-export const externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMax = 100;
+export const externalCreateComparisonResponseOneTwoAlternativesItemScoreDifferenceMin = 0;
+export const externalCreateComparisonResponseOneTwoAlternativesItemScoreDifferenceMax = 100;
 
-export const externalCreateComparisonResponseTwoWeightAdjustmentsItemCriterionMax = 100;
+export const externalCreateComparisonResponseOneTwoWeightAdjustmentsItemCriterionMax = 100;
 
-export const externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMin = 0;
-export const externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMax = 100;
+export const externalCreateComparisonResponseOneTwoWeightAdjustmentsItemWeightMin = 0;
+export const externalCreateComparisonResponseOneTwoWeightAdjustmentsItemWeightMax = 100;
 
-export const externalCreateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
+export const externalCreateComparisonResponseOneTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
 
-export const externalCreateComparisonResponseTwoWeightAdjustmentsMax = 8;
+export const externalCreateComparisonResponseOneTwoWeightAdjustmentsMax = 8;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+export const externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
+export const externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const externalCreateComparisonResponseOneTwoWeightModelOneTotalWeightMax = 100;
+
+export const externalCreateComparisonResponseOneTwoWeightModelOneUnallocatedWeightMin = 0;
+export const externalCreateComparisonResponseOneTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
+
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp = new RegExp('^docsha256:[a-f0-9]{64}$');
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp = new RegExp('^[a-f0-9]{64}$');
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin = 0;
 
 
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin = 0;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemModelScoreMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemModelScoreMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemModelScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemModelScoreMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin = 0;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin = 0;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMax = 100;
 
-export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
-export const externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMin = 0;
+export const externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMax = 100;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const externalCreateComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCityMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const externalCreateComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
 
 
 
 export const ExternalCreateComparisonResponse = zod.object({
+  "provenanceGapCount": zod.number().int().min(externalCreateComparisonResponseOneOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
-  "vendors": zod.array(zod.string()).max(externalCreateComparisonResponseOneVendorsMax),
+  "vendors": zod.array(zod.string()).max(externalCreateComparisonResponseOneOneVendorsMax),
   "comparisonIdentity": zod.object({
   "originalQuery": zod.string(),
   "category": zod.string(),
   "entities": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string()
-})).min(externalCreateComparisonResponseOneComparisonIdentityEntitiesMin).max(externalCreateComparisonResponseOneComparisonIdentityEntitiesMax),
-  "entityCount": zod.number().int().min(externalCreateComparisonResponseOneComparisonIdentityEntityCountMin).max(externalCreateComparisonResponseOneComparisonIdentityEntityCountMax),
+})).min(externalCreateComparisonResponseOneOneComparisonIdentityEntitiesMin).max(externalCreateComparisonResponseOneOneComparisonIdentityEntitiesMax),
+  "entityCount": zod.number().int().min(externalCreateComparisonResponseOneOneComparisonIdentityEntityCountMin).max(externalCreateComparisonResponseOneOneComparisonIdentityEntityCountMax),
   "comparisonType": zod.enum(['pair', 'multi_entity']),
   "displayName": zod.string(),
   "headline": zod.string()
@@ -3360,11 +10353,13 @@ export const ExternalCreateComparisonResponse = zod.object({
   "recommendation": zod.string(),
   "score": zod.number().int(),
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
-  "providerRoleTieBreakBonus": zod.number().int().min(externalCreateComparisonResponseOneProviderRoleTieBreakBonusMin).max(externalCreateComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
+  "providerRoleTieBreakBonus": zod.number().int().min(externalCreateComparisonResponseOneOneProviderRoleTieBreakBonusMin).max(externalCreateComparisonResponseOneOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
   "sourceAvailability": zod.array(zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
@@ -3391,43 +10386,281 @@ export const ExternalCreateComparisonResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(externalCreateComparisonResponseOneTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(externalCreateComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMin).max(externalCreateComparisonResponseOneTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreMin).max(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMin).max(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMin).max(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMin).max(externalCreateComparisonResponseOneTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(externalCreateComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMin).max(externalCreateComparisonResponseOneTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
-  "score": zod.number().int().min(externalCreateComparisonResponseTwoConfirmedRecommendationScoreMin).max(externalCreateComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
+  "score": zod.number().int().min(externalCreateComparisonResponseOneTwoConfirmedRecommendationScoreMin).max(externalCreateComparisonResponseOneTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
   "rationale": zod.string()
 }),
   "alternatives": zod.array(zod.object({
   "option": zod.string(),
   "rank": zod.number().int().min(1),
-  "score": zod.number().int().min(externalCreateComparisonResponseTwoAlternativesItemScoreMin).max(externalCreateComparisonResponseTwoAlternativesItemScoreMax).nullable(),
-  "scoreDifference": zod.number().int().min(externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMin).max(externalCreateComparisonResponseTwoAlternativesItemScoreDifferenceMax).nullable(),
+  "score": zod.number().int().min(externalCreateComparisonResponseOneTwoAlternativesItemScoreMin).max(externalCreateComparisonResponseOneTwoAlternativesItemScoreMax).nullable(),
+  "scoreDifference": zod.number().int().min(externalCreateComparisonResponseOneTwoAlternativesItemScoreDifferenceMin).max(externalCreateComparisonResponseOneTwoAlternativesItemScoreDifferenceMax).nullable(),
   "qualificationStatus": zod.string(),
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
-  "criterion": zod.string().min(1).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
-  "weight": zod.number().int().min(externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(externalCreateComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
-})).max(externalCreateComparisonResponseTwoWeightAdjustmentsMax).optional(),
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
+  "criterion": zod.string().min(1).max(externalCreateComparisonResponseOneTwoWeightAdjustmentsItemCriterionMax),
+  "weight": zod.number().int().min(externalCreateComparisonResponseOneTwoWeightAdjustmentsItemWeightMin).max(externalCreateComparisonResponseOneTwoWeightAdjustmentsItemWeightMax),
+  "mappedCriteria": zod.array(zod.string()).min(1).max(externalCreateComparisonResponseOneTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
+})).max(externalCreateComparisonResponseOneTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMin).max(externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(externalCreateComparisonResponseOneTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(externalCreateComparisonResponseOneTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(externalCreateComparisonResponseOneTwoWeightModelOneUnallocatedWeightMin).max(externalCreateComparisonResponseOneTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
-  "score": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
+  "weight": zod.number(),
+  "score": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
-  "sourceId": zod.string().regex(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
+  "sourceId": zod.string().regex(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceIdRegExp).optional().describe('Application-issued identifier for validated document provenance. Never a model-supplied URL.'),
   "sourceUrl": zod.string().url().optional(),
   "sourceTitle": zod.string().optional(),
   "sourcePublisher": zod.string().optional(),
@@ -3438,22 +10671,22 @@ export const ExternalCreateComparisonResponse = zod.object({
   "rawMetricValue": zod.number().optional(),
   "rawMetricUnit": zod.string().optional(),
   "normalizationDirection": zod.enum(['higher_is_better', 'lower_is_better']).optional(),
-  "documentSha256": zod.string().regex(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
-  "sourceTextStart": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
+  "documentSha256": zod.string().regex(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemDocumentSha256RegExp).optional().describe('SHA-256 of the normalized visible text retrieved by the server. Required for evidence used in deterministic quantitative scoring.'),
+  "sourceTextStart": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSourceTextStartMin).optional().describe('Zero-based start offset of the verified claim in normalized retrieved text.'),
   "sourceTextEnd": zod.number().int().min(1).optional().describe('Exclusive end offset of the verified claim in normalized retrieved text.'),
   "metricSubject": zod.string().optional().describe('Product or provider identity derived from text structurally associated with the verified claim.'),
   "metricBasis": zod.string().optional().describe('Server-derived comparability dimensions such as test standard, capacity type, AC/DC mode, charge window, LVR and borrower type, market and period, or population and period.'),
-  "sampleSize": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
+  "sampleSize": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemSampleSizeMin).optional(),
   "evidenceKind": zod.enum(['quantitative', 'percentage', 'qualitative', 'analyst_judgment', 'unverified']),
   "supportDirection": zod.enum(['supports', 'contradicts', 'context', 'neutral']),
-  "confidence": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
-  "normalizedScore": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
-  "criterionWeight": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(externalCreateComparisonResponseTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
+  "confidence": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemConfidenceMax),
+  "normalizedScore": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemNormalizedScoreMax),
+  "criterionWeight": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemWeightedScoresItemEvidenceItemCriterionWeightMax),
   "weightedContribution": zod.number(),
   "normalizationMethod": zod.string().describe('How the score contribution was produced. Deterministic quantitative scoring requires retrieved_document_metric provenance before applying a direct or inverse comparable-metric normalization.')
 })).optional()
 })).optional(),
-  "modelScore": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemModelScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
+  "modelScore": zod.number().min(externalCreateComparisonResponseOneTwoVendorScoresItemModelScoreMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemModelScoreMax).optional().describe('Overall score from the qualification model. Absent when the option is not qualified or evidence is insufficient.'),
   "qualificationStatus": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'NOT_QUALIFIED', 'INSUFFICIENT_EVIDENCE']).optional().describe('Qualification outcome based on mandatory gates and validated evidence.'),
   "qualificationGates": zod.array(zod.object({
   "gate": zod.string(),
@@ -3465,15 +10698,15 @@ export const ExternalCreateComparisonResponse = zod.object({
   "dimensionScores": zod.array(zod.object({
   "dimension": zod.enum(['Requirements Fit', 'Price and Total Value', 'Feature and Capability Strength', 'Service, Ownership and Support', 'Evidence Confidence']),
   "weight": zod.union([zod.literal(30),zod.literal(25),zod.literal(10)]),
-  "score": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMin).max(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
-  "coverage": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMin).max(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemCoverageMax),
+  "score": zod.number().min(externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemScoreMax).optional(),
+  "coverage": zod.number().min(externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemCoverageMax),
   "coverageStatus": zod.enum(['SUPPRESSED', 'PROVISIONAL', 'LIMITED_CONFIDENCE', 'SUFFICIENTLY_SUPPORTED']),
-  "supportedSubcriteria": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
-  "totalSubcriteria": zod.number().int().min(externalCreateComparisonResponseTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
+  "supportedSubcriteria": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemSupportedSubcriteriaMin),
+  "totalSubcriteria": zod.number().int().min(externalCreateComparisonResponseOneTwoVendorScoresItemDimensionScoresItemTotalSubcriteriaMin),
   "rationale": zod.string()
 })).optional(),
-  "evidenceConfidence": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMin).max(externalCreateComparisonResponseTwoVendorScoresItemEvidenceConfidenceMax).optional(),
-  "evidenceCoverage": zod.number().min(externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMin).max(externalCreateComparisonResponseTwoVendorScoresItemEvidenceCoverageMax).optional(),
+  "evidenceConfidence": zod.number().min(externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceConfidenceMax).optional(),
+  "evidenceCoverage": zod.number().min(externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMin).max(externalCreateComparisonResponseOneTwoVendorScoresItemEvidenceCoverageMax).optional(),
   "strengths": zod.array(zod.string()).optional(),
   "gaps": zod.array(zod.string()).optional(),
   "conditions": zod.array(zod.string()).optional(),
@@ -3564,6 +10797,75 @@ export const ExternalCreateComparisonResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(externalCreateComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(externalCreateComparisonResponseOneTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(externalCreateComparisonResponseOneTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(externalCreateComparisonResponseOneTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(externalCreateComparisonResponseOneTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -3600,7 +10902,11 @@ export const ExternalCreateComparisonResponse = zod.object({
   "evidenceRequired": zod.string(),
   "decisionGate": zod.string()
 })).describe('Decision rights, evidence requirements, approvers, and approval gates.')
-}))
+})).and(zod.object({
+  "draftId": zod.string().uuid(),
+  "draftVersion": zod.number().int().min(1),
+  "requestId": zod.string().uuid()
+}).describe('Correlation tuple returned with draft-scoped operation responses.'))
 
 
 /**
@@ -3611,16 +10917,60 @@ export const ExternalGetComparisonParams = zod.object({
   "id": zod.coerce.number().int()
 })
 
+export const externalGetComparisonResponseOneProvenanceGapCountMin = 0;
+
 export const externalGetComparisonResponseOneVendorsMax = 6;
 
-export const externalGetComparisonResponseOneComparisonIdentityEntitiesMin = 2;
+export const externalGetComparisonResponseOneComparisonIdentityEntitiesMin = 0;
 export const externalGetComparisonResponseOneComparisonIdentityEntitiesMax = 6;
 
-export const externalGetComparisonResponseOneComparisonIdentityEntityCountMin = 2;
+export const externalGetComparisonResponseOneComparisonIdentityEntityCountMin = 0;
 export const externalGetComparisonResponseOneComparisonIdentityEntityCountMax = 6;
 
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMin = 0;
 export const externalGetComparisonResponseOneProviderRoleTieBreakBonusMax = 2;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketCountryMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketRegionMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketStateOrRegionMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketCityMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketPostcodeMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketCustomerSegmentMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketAgeGroupMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketUseCaseMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketCurrencyMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketLanguageMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax = 120;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextMax = 12;
+
+export const externalGetComparisonResponseTwoMarketRelevanceItemRelevanceScoreMin = 0;
+export const externalGetComparisonResponseTwoMarketRelevanceItemRelevanceScoreMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax = 100;
+
+export const externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin = 0;
+export const externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax = 100;
 
 export const externalGetComparisonResponseTwoConfirmedRecommendationScoreMin = 0;
 export const externalGetComparisonResponseTwoConfirmedRecommendationScoreMax = 100;
@@ -3640,6 +10990,44 @@ export const externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMax = 10
 export const externalGetComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax = 2;
 
 export const externalGetComparisonResponseTwoWeightAdjustmentsMax = 8;
+
+export const externalGetComparisonResponseTwoWeightModelOneCriteriaItemWeightMin = 0;
+export const externalGetComparisonResponseTwoWeightModelOneCriteriaItemWeightMax = 100;
+
+export const externalGetComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin = 0;
+export const externalGetComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax = 1;
+
+export const externalGetComparisonResponseTwoWeightModelOneTotalWeightMax = 100;
+
+export const externalGetComparisonResponseTwoWeightModelOneUnallocatedWeightMin = 0;
+export const externalGetComparisonResponseTwoWeightModelOneUnallocatedWeightMax = 99;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCityMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax = 120;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax = 12;
+
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin = 0;
+export const externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax = 100;
 
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax = 100;
@@ -3679,9 +11067,43 @@ export const externalGetComparisonResponseTwoVendorScoresItemEvidenceConfidenceM
 export const externalGetComparisonResponseTwoVendorScoresItemEvidenceCoverageMin = 0;
 export const externalGetComparisonResponseTwoVendorScoresItemEvidenceCoverageMax = 100;
 
+export const externalGetComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin = 0;
+export const externalGetComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax = 1;
+
+export const externalGetComparisonResponseTwoValidatedContextComparisonValuesItemRawTextMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax = 160;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextCountryMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextRegionMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextStateOrRegionMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextCityMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextPostcodeMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextCustomerSegmentMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextAgeGroupMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextUseCaseMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextCurrencyMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextLanguageMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax = 120;
+
+export const externalGetComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextMax = 12;
+
 
 
 export const ExternalGetComparisonResponse = zod.object({
+  "provenanceGapCount": zod.number().int().min(externalGetComparisonResponseOneProvenanceGapCountMin).optional().describe('Number of cited scorecard claims without complete document provenance; a review does not change the original citations.'),
   "id": zod.number().int(),
   "prompt": zod.string(),
   "vendors": zod.array(zod.string()).max(externalGetComparisonResponseOneVendorsMax),
@@ -3703,9 +11125,11 @@ export const ExternalGetComparisonResponse = zod.object({
   "baseScore": zod.number().int().optional().describe('Weighted score before the strategic provider-role tie-break.'),
   "providerRoleTieBreakBonus": zod.number().int().min(externalGetComparisonResponseOneProviderRoleTieBreakBonusMin).max(externalGetComparisonResponseOneProviderRoleTieBreakBonusMax).optional().describe('Two-point bonus applied only to the unique highest-precedence provider role in a top-score tie.'),
   "createdAt": zod.coerce.date(),
-  "status": zod.enum(['complete', 'processing', 'failed'])
+  "status": zod.enum(['complete', 'processing', 'failed']),
+  "researchStatus": zod.enum(['partial', 'complete']).optional().describe('Persisted targeted-research completion marker. Partial reports retain the preliminary scorecard when follow-up research failed or timed out.')
 }).and(zod.object({
   "urls": zod.array(zod.string()),
+  "suppliedUrls": zod.array(zod.string()).optional().describe('URLs explicitly supplied by the user, separate from discovered evidence sources.'),
   "sourceAvailability": zod.array(zod.object({
   "url": zod.string().url(),
   "status": zod.enum(['reachable', 'restricted', 'timed_out', 'unavailable', 'superseded']),
@@ -3732,11 +11156,157 @@ export const ExternalGetComparisonResponse = zod.object({
   "restrictions": zod.array(zod.string())
 }).optional()
 })).describe('Availability information for every source checked while producing the report. Legacy reports may return reachable entries derived from urls.'),
+  "decisionStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']).optional().describe('Participation status for the selected recommendation in its validated market and demographic context.'),
+  "marketRelevance": zod.array(zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketCountryMax),
+  "region": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketCityMax).optional(),
+  "postcode": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketCurrencyMax).optional(),
+  "language": zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(externalGetComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextItemMax)).max(externalGetComparisonResponseTwoMarketRelevanceItemMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(externalGetComparisonResponseTwoMarketRelevanceItemRelevanceScoreMin).max(externalGetComparisonResponseTwoMarketRelevanceItemRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.')).optional().describe('Per-option demographic and geographic relevance assessments.'),
   "criteria": zod.array(zod.string()),
   "executiveSummary": zod.string(),
   "recommendationReason": zod.string(),
+  "decisionAdvice": zod.object({
+  "decisionType": zod.string(),
+  "winner": zod.string(),
+  "runnerUp": zod.string(),
+  "provisional": zod.boolean(),
+  "confidence": zod.object({
+  "score": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreMax),
+  "band": zod.enum(['Low', 'Moderate', 'High']),
+  "dataCoverage": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceDataCoverageMax),
+  "sourceConsistency": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceSourceConsistencyMax),
+  "scoreSeparation": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidenceScoreSeparationMax),
+  "priorityClarity": zod.number().int().min(externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMin).max(externalGetComparisonResponseTwoDecisionAdviceConfidencePriorityClarityMax),
+  "basis": zod.string()
+}),
+  "whyItWon": zod.string(),
+  "bestFor": zod.string(),
+  "notRecommendedIf": zod.string(),
+  "tradeoffs": zod.array(zod.string()),
+  "scenarioLeaders": zod.array(zod.object({
+  "lens": zod.string(),
+  "leader": zod.string()
+}))
+}).optional().describe('Decision summary derived from the persisted scorecard. Confidence is a heuristic, not a probability.'),
+  "evidenceReview": zod.object({
+  "jobId": zod.string().uuid(),
+  "status": zod.enum(['processing', 'complete', 'failed']),
+  "startedAt": zod.coerce.date(),
+  "completedAt": zod.coerce.date().optional(),
+  "initialRecommendation": zod.string(),
+  "reviewedRecommendation": zod.string().optional(),
+  "reviewReason": zod.string().optional(),
+  "error": zod.string().optional(),
+  "checks": zod.array(zod.object({
+  "vendor": zod.string(),
+  "claim": zod.string(),
+  "criterion": zod.string().optional(),
+  "sourceUrl": zod.string(),
+  "status": zod.enum(['verified', 'contradicted', 'unavailable']),
+  "quote": zod.string().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date().optional(),
+  "sourceId": zod.string().optional(),
+  "documentSha256": zod.string().optional(),
+  "sourceTextStart": zod.number().int().optional(),
+  "sourceTextEnd": zod.number().int().optional(),
+  "retrievedAt": zod.coerce.date().optional(),
+  "accessStatus": zod.enum(['ALLOWED', 'LICENSED', 'CUSTOMER_SUPPLIED']).optional(),
+  "permissionCheckedAt": zod.coerce.date().optional()
+})),
+  "verificationScore": zod.number().nullish().describe('Percentage of completed, available checks that were verified; null when no such checks are available.'),
+  "evidenceCoverage": zod.number().nullish().describe('Percentage of checks with a conclusive verified or contradicted result; null when no checks are available.'),
+  "assumptionRegister": zod.array(zod.object({
+  "assumption": zod.string(),
+  "status": zod.enum(['unverified', 'validated', 'contradicted']),
+  "reason": zod.string(),
+  "sourceUrls": zod.array(zod.string())
+})).optional(),
+  "sourceRegister": zod.array(zod.object({
+  "url": zod.string(),
+  "availability": zod.enum(['admitted', 'restricted', 'unavailable']),
+  "freshness": zod.enum(['known', 'unknown']),
+  "publicationDate": zod.string().optional(),
+  "ageDays": zod.number().int().optional(),
+  "lastCheckedAt": zod.coerce.date(),
+  "checkCount": zod.number().int(),
+  "verifiedCount": zod.number().int(),
+  "contradictedCount": zod.number().int(),
+  "unavailableCount": zod.number().int()
+})).optional(),
+  "competitiveValidation": zod.object({
+  "status": zod.enum(['not_assessed', 'partial', 'contradiction_found']),
+  "recommendation": zod.string(),
+  "checkedCompetitors": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "riskAssessment": zod.object({
+  "level": zod.enum(['unknown', 'low', 'medium', 'high']),
+  "items": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional(),
+  "validationReport": zod.string().optional(),
+  "governanceReport": zod.string().optional(),
+  "auditTrail": zod.array(zod.object({
+  "timestamp": zod.coerce.date(),
+  "event": zod.string(),
+  "detail": zod.string()
+})).optional()
+}).optional(),
   "confirmedRecommendation": zod.object({
-  "status": zod.enum(['CONFIRMED', 'NO_CONFIRMED_RECOMMENDATION']),
+  "status": zod.enum(['CONFIRMED', 'PROVISIONAL', 'NO_CONFIRMED_RECOMMENDATION']),
   "option": zod.string().nullable(),
   "score": zod.number().int().min(externalGetComparisonResponseTwoConfirmedRecommendationScoreMin).max(externalGetComparisonResponseTwoConfirmedRecommendationScoreMax).nullable(),
   "basis": zod.enum(['QUALIFIED', 'QUALIFIED_WITH_CONDITIONS', 'EVIDENCE_LIMITED', 'NONE']),
@@ -3751,20 +11321,112 @@ export const ExternalGetComparisonResponse = zod.object({
   "rationale": zod.string()
 })).describe('Ranked alternatives drawn only from the original compared option set, excluding the confirmed recommendation.'),
   "weightAdjustments": zod.array(zod.object({
+  "criterionId": zod.string().optional().describe('Stable generated custom criterion identifier. Optional only for older clients.'),
   "criterion": zod.string().min(1).max(externalGetComparisonResponseTwoWeightAdjustmentsItemCriterionMax),
   "weight": zod.number().int().min(externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMin).max(externalGetComparisonResponseTwoWeightAdjustmentsItemWeightMax),
-  "mappedCriteria": zod.array(zod.string()).min(1).max(externalGetComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax)
+  "mappedCriteria": zod.array(zod.string()).min(1).max(externalGetComparisonResponseTwoWeightAdjustmentsItemMappedCriteriaMax),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional().describe('Explicit acknowledgement that a related built-in factor measures something distinct.'),
+  "overlapReason": zod.string().optional().describe('User\'s distinction between the custom and overlapping built-in factors.')
 })).max(externalGetComparisonResponseTwoWeightAdjustmentsMax).optional(),
+  "weightModel": zod.union([zod.object({
+  "version": zod.literal(1),
+  "criteria": zod.array(zod.object({
+  "criterionId": zod.string(),
+  "criterionLabel": zod.string(),
+  "criterionType": zod.enum(['BUILT_IN', 'CUSTOM']),
+  "weight": zod.number().int().min(externalGetComparisonResponseTwoWeightModelOneCriteriaItemWeightMin).max(externalGetComparisonResponseTwoWeightModelOneCriteriaItemWeightMax),
+  "mappedLensId": zod.string(),
+  "mappingConfidence": zod.number().min(externalGetComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMin).max(externalGetComparisonResponseTwoWeightModelOneCriteriaItemMappingConfidenceMax),
+  "validationStatus": zod.enum(['VALIDATED']),
+  "overlapResolution": zod.enum(['KEEP_SEPARATE']).optional(),
+  "overlapReason": zod.string().optional()
+})),
+  "totalWeight": zod.number().int().min(1).max(externalGetComparisonResponseTwoWeightModelOneTotalWeightMax),
+  "unallocatedWeight": zod.number().int().min(externalGetComparisonResponseTwoWeightModelOneUnallocatedWeightMin).max(externalGetComparisonResponseTwoWeightModelOneUnallocatedWeightMax)
+}).describe('Validated authoritative raw user allocations. Normalized lens weights are derived for ranking only.'),zod.null()]).optional(),
   "vendorScores": zod.array(zod.object({
   "vendor": zod.string(),
   "score": zod.number(),
   "color": zod.string(),
   "verdict": zod.string(),
+  "marketEligibility": zod.object({
+  "status": zod.enum(['ELIGIBLE', 'LIMITED', 'CLOSING', 'INELIGIBLE', 'UNKNOWN']).describe('Market/product eligibility outcome; this is independent of supporting evidence verification.'),
+  "evidenceStatus": zod.enum(['CONFIRMED', 'VERIFIED', 'INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']).optional().describe('Verification state of evidence supporting the eligibility decision.'),
+  "basis": zod.enum(['OFFICIAL_DOCUMENT', 'KNOWN_OFFERING', 'UNESTABLISHED']).optional().describe('Basis for the eligibility classification.'),
+  "newApplicationAcceptance": zod.enum(['VERIFIED', 'UNVERIFIED']).optional().describe('Whether current acceptance of new applications is verified. KNOWN_OFFERING can establish market participation while this remains UNVERIFIED.'),
+  "newCustomerStatus": zod.enum(['OPEN', 'RESTRICTED', 'CLOSING', 'CLOSED', 'UNKNOWN']).optional().describe('Current new-customer acquisition state, separate from category/market participation.'),
+  "market": zod.string(),
+  "product": zod.string(),
+  "customerSegment": zod.string().optional(),
+  "subcategory": zod.string().optional(),
+  "effectiveDate": zod.coerce.date().optional(),
+  "reason": zod.string(),
+  "checkedAt": zod.coerce.date(),
+  "sourceUrl": zod.string().url().optional(),
+  "exactClaim": zod.string().optional()
+}).optional().describe('Eligibility and new-customer acquisition status for the exact provider, product, market, customer segment, and effective date.'),
+  "marketRelevance": zod.object({
+  "optionId": zod.string(),
+  "optionName": zod.string().optional().describe('User-confirmed option display name associated with this assessment.'),
+  "market": zod.object({
+  "country": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCountryMax),
+  "region": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegionMax).optional(),
+  "stateOrRegion": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketStateOrRegionMax).optional(),
+  "city": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCityMax).optional(),
+  "postcode": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketPostcodeMax).optional(),
+  "customerSegment": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketCurrencyMax).optional(),
+  "language": zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextItemMax)).max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceMarketRegulatoryContextMax).optional()
+}).describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "availabilityStatus": zod.enum(['LOCALLY_AVAILABLE', 'ONLINE_LOCALLY_AVAILABLE', 'CROSS_BORDER_AVAILABLE', 'DIGITALLY_AVAILABLE', 'LIMITED_AVAILABILITY', 'NOT_AVAILABLE', 'NOT_VERIFIED']),
+  "demographicRelevanceStatus": zod.enum(['HIGH', 'MODERATE', 'LOW', 'NOT_RELEVANT', 'NOT_ASSESSED']),
+  "participationStatus": zod.enum(['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE', 'INELIGIBLE', 'CLARIFICATION_REQUIRED']),
+  "relevanceScore": zod.number().min(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemMarketRelevanceRelevanceScoreMax).optional(),
+  "relevantForObjective": zod.boolean().nullable(),
+  "localPhysicalPresence": zod.boolean().nullish(),
+  "localOnlinePresence": zod.boolean().nullish(),
+  "crossBorderAccess": zod.boolean().nullish(),
+  "digitalAccess": zod.boolean().nullish(),
+  "localPricingAvailable": zod.boolean().nullish(),
+  "localSupportAvailable": zod.boolean().nullish(),
+  "mandatoryGateResults": zod.array(zod.object({
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "status": zod.enum(['PASS', 'FAIL', 'CONDITIONAL', 'NOT_APPLICABLE']),
+  "mandatory": zod.boolean(),
+  "reason": zod.string(),
+  "evidenceIds": zod.array(zod.string())
+})),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "optionId": zod.string(),
+  "gate": zod.enum(['MARKET_AVAILABILITY', 'PHYSICAL_STORE_REQUIRED', 'ROUTE_SERVICEABILITY', 'ENTERPRISE_DATA_RESIDENCY', 'CUSTOMER_SEGMENT', 'REGULATORY_REQUIREMENT', 'LOCAL_RETURNS_REQUIRED']),
+  "outcome": zod.enum(['PASS', 'FAIL']),
+  "country": zod.string(),
+  "location": zod.string().optional(),
+  "accessMode": zod.enum(['PHYSICAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "sourceUrl": zod.string().url(),
+  "sourceTitle": zod.string().optional(),
+  "publisher": zod.string().optional(),
+  "exactClaim": zod.string(),
+  "retrievedAt": zod.coerce.date(),
+  "currentMarketSpecific": zod.boolean()
+})),
+  "assumptions": zod.array(zod.string()),
+  "limitations": zod.array(zod.string()),
+  "explanation": zod.string(),
+  "assessedAt": zod.coerce.date(),
+  "researchStatus": zod.enum(['COMPLETE', 'PARTIAL_TIMEOUT']).optional()
+}).optional().describe('Decision-specific geographic and demographic relevance. This is distinct from market eligibility and never inferred from a source URL.'),
   "providerRole": zod.enum(['accelerator', 'leader', 'core_provider', 'expert']).optional().describe('Strategic market role of the product, service, or brand in this decision context.'),
   "providerRoleRationale": zod.string().optional().describe('Evidence-based explanation for the assigned strategic market role.'),
   "weightedScores": zod.array(zod.object({
   "criterion": zod.string(),
-  "weight": zod.number().int(),
+  "weight": zod.number(),
   "score": zod.number().int().min(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMin).max(externalGetComparisonResponseTwoVendorScoresItemWeightedScoresItemScoreMax),
   "rationale": zod.string(),
   "evidence": zod.array(zod.object({
@@ -3905,6 +11567,75 @@ export const ExternalGetComparisonResponse = zod.object({
   "insights": zod.array(zod.string()),
   "nextSteps": zod.array(zod.string()),
   "contextAssumptions": zod.array(zod.string()).describe('Explicit assumptions made where business, regulatory, security, commercial, operating, integration, data, or maturity context was missing.'),
+  "validatedContext": zod.object({
+  "validatedUserPrompt": zod.string().optional().describe('Exact user-supplied prompt after validation; remains authoritative even if processing prompts add internal guidance.'),
+  "comparisonType": zod.string().optional(),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional(),
+  "optionClassifications": zod.array(zod.object({
+  "name": zod.string(),
+  "originalText": zod.string().optional().describe('Exact submitted option, never replaced by a research-generated label.'),
+  "canonicalEntityId": zod.string().optional(),
+  "canonicalName": zod.string().optional(),
+  "entityType": zod.string().optional(),
+  "brand": zod.string().optional(),
+  "productCategory": zod.string().optional(),
+  "classificationConfidence": zod.number().min(externalGetComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMin).max(externalGetComparisonResponseTwoValidatedContextOptionClassificationsItemClassificationConfidenceMax).optional(),
+  "resolutionStatus": zod.enum(['RESOLVED', 'AMBIGUOUS', 'CONFLICTING', 'UNRESOLVED', 'USER_CONFIRMED']).optional(),
+  "alternativeCandidates": zod.array(zod.string()).optional(),
+  "type": zod.enum(['brand', 'product', 'service', 'platform', 'dealer', 'bank', 'curriculum', 'vehicle', 'hotel', 'healthcare_provider', 'education', 'unknown']),
+  "decisionDomain": zod.string().optional(),
+  "customerSegment": zod.string().optional().describe('Canonical decision domain when the option is recognized.'),
+  "subcategory": zod.string().optional().describe('Product subtype shown for context but not required to match within one decision domain.'),
+  "primaryMarket": zod.enum(['IN', 'AU', 'US', 'GB']).optional().describe('Known primary country code. Omitted when the option\'s footprint is not established.')
+})).optional(),
+  "crossMarket": zod.boolean().optional(),
+  "comparisonLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.'),
+  "comparisonValues": zod.array(zod.object({
+  "rawText": zod.string().min(1).max(externalGetComparisonResponseTwoValidatedContextComparisonValuesItemRawTextMax).describe('Original extracted wording, preserved verbatim.'),
+  "confirmedName": zod.string().min(1).max(externalGetComparisonResponseTwoValidatedContextComparisonValuesItemConfirmedNameMax).describe('User-confirmed option name; research must not silently replace it.'),
+  "canonicalEntityId": zod.string().max(externalGetComparisonResponseTwoValidatedContextComparisonValuesItemCanonicalEntityIdMax).optional().describe('Optional identity selected by the user from contextual suggestions.'),
+  "entityLevel": zod.enum(['PRODUCT', 'SERVICE', 'BRAND', 'PROVIDER', 'MIXED']).optional().describe('Generic comparison granularity, independent of the dynamically inferred category.')
+})).optional(),
+  "demographicContext": zod.object({
+  "country": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextCountryMax),
+  "region": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextRegionMax).optional(),
+  "stateOrRegion": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextStateOrRegionMax).optional(),
+  "city": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextCityMax).optional(),
+  "postcode": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextPostcodeMax).optional(),
+  "customerSegment": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextCustomerSegmentMax).optional(),
+  "ageGroup": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextAgeGroupMax).optional(),
+  "businessOrConsumer": zod.enum(['CONSUMER', 'SMALL_BUSINESS', 'ENTERPRISE']).optional(),
+  "useCase": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextUseCaseMax).optional(),
+  "deliveryNeed": zod.enum(['LOCAL_STORE', 'LOCAL_ONLINE', 'CROSS_BORDER', 'DIGITAL']).optional(),
+  "currency": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextCurrencyMax).optional(),
+  "language": zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextLanguageMax).optional(),
+  "regulatoryContext": zod.array(zod.string().max(externalGetComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextItemMax)).max(externalGetComparisonResponseTwoValidatedContextDemographicContextRegulatoryContextMax).optional()
+}).optional().describe('Optional decision-specific market and customer context. Omit attributes not relevant to the decision.'),
+  "sourceAssociations": zod.array(zod.object({
+  "url": zod.string().url(),
+  "option": zod.string(),
+  "preflightState": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated', 'NOT_CHECKED']),
+  "preflightReason": zod.string().optional()
+})).optional().describe('Validated option ownership with preflight outcome; rejected sources do not affect option eligibility.'),
+  "sourcePreflightResults": zod.array(zod.object({
+  "url": zod.string().url(),
+  "state": zod.enum(['accepted', 'inaccessible', 'stale', 'wrong_market', 'unrelated']),
+  "reason": zod.string(),
+  "replacementUrl": zod.string().url().optional()
+})).optional().describe('URL-only preflight results. Rejected optional URLs are not evidence that their associated option is unavailable.'),
+  "decisionType": zod.string(),
+  "country": zod.string(),
+  "state": zod.string().nullable(),
+  "customerLocation": zod.string().nullable(),
+  "currency": zod.string(),
+  "productAvailability": zod.string(),
+  "industry": zod.string().nullable(),
+  "organisationSize": zod.string().nullable(),
+  "dataResidency": zod.string().nullable(),
+  "market": zod.string(),
+  "marketContext": zod.string()
+}).optional().describe('Context checked before research. Unknown buyer facts are null; product availability is not presented as verified before research.'),
   "productEquivalency": zod.array(zod.object({
   "capability": zod.string(),
   "currentArrangement": zod.string(),
@@ -4025,6 +11756,7 @@ export const ListTenantAuditResponse = zod.array(ListTenantAuditResponseItem)
 
 
 /**
+ * List key metadata for this tenant; plaintext secrets are never returned here.
  * @summary List API key metadata
  */
 export const listTenantApiKeysHeaderXTenantIdMax = 200;
@@ -4049,6 +11781,7 @@ export const ListTenantApiKeysResponse = zod.array(ListTenantApiKeysResponseItem
 
 
 /**
+ * Create a tenant-scoped key. The plaintext is returned only in this response and cannot be retrieved later.
  * @summary Create an API key (plaintext is returned once)
  */
 export const createTenantApiKeyHeaderXTenantIdMax = 200;
@@ -4084,6 +11817,7 @@ export const CreateTenantApiKeyResponse = zod.object({
 
 
 /**
+ * Revoke the selected key and create a replacement whose plaintext is returned only once.
  * @summary Revoke an API key and issue a replacement
  */
 export const RotateTenantApiKeyParams = zod.object({
@@ -4113,6 +11847,7 @@ export const RotateTenantApiKeyResponse = zod.object({
 
 
 /**
+ * Revoke a tenant API key. Revoked keys cannot authenticate future requests.
  * @summary Revoke an API key
  */
 export const RevokeTenantApiKeyParams = zod.object({
