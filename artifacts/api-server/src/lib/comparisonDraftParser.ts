@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
-import { parsePrompt } from "./analysis";
+import { aspectCriterionSuffix, parsePrompt } from "./analysis";
+import {
+  authoritativeComparisonPrompt, COMPARISON_CLAUSE_END, explicitComparisonChains,
+  hasSmartphoneContext, isCompetitorObjective, isComparisonMetadataInstruction, splitExplicitComparisonOptions,
+} from "./comparisonPromptGrammar";
 
 export type DraftOption = {
   optionId: string;
@@ -33,27 +37,24 @@ const MAX_CRITERIA = 8;
 
 // A dot ends the option clause only when it ends a sentence, not inside a
 // model version (5.6) or dotted name (example.com).
-const OPTION_CLAUSE_END = String.raw`(?=[?;]|\.(?=\s|$)|\s+\b(?:where|based\s+on|focusing\s+on|for)\b|\s+\bin\s+(?:australia|india|the united states|the us|the united kingdom|the uk)\b|,\s*\b(?:where|based\s+on|focusing\s+on)\b|$)`;
-const OPTION_SEPARATOR = /\s*(?:,|\/|\bvs\b\.?|\bversus\b|\band\b|\bor\b)\s*/i;
+const OPTION_CLAUSE_END = COMPARISON_CLAUSE_END;
 
 function comparisonClause(query: string): string | undefined {
-  return query.match(new RegExp(String.raw`\b(?:compare|comparison\s+between)\s+(.+?)${OPTION_CLAUSE_END}`, "i"))?.[1];
+  return query.match(new RegExp(String.raw`\b(?:compare|comparison\s+between)\s+(.+?)${OPTION_CLAUSE_END}`, "iu"))?.[1];
 }
 
 function optionsInPrompt(query: string): string[] {
-  const competitorPrompt = query.match(/\bcompare\s+(.+?)\s+with\s+its\s+competitors\b/i);
-  if (competitorPrompt?.[1]) {
-    const target = competitorPrompt[1].trim();
-    return [target, `Competitors of ${target}`];
-  }
-  const explicit = comparisonClause(query);
-  let names: string[] = [];
-  if (explicit) {
-    names = explicit
-      .replace(/\b(?:against|with)\s+its\s+competitors?\b.*$/i, "")
-      .split(OPTION_SEPARATOR)
-      .map((name) => name.trim().replace(/^[("'“]+|[)"'”]+$/g, "").trim())
-      .filter(Boolean);
+  query = authoritativeComparisonPrompt(query);
+  const chains = explicitComparisonChains(query);
+  const chosen = query.match(new RegExp(String.raw`\b(?:choose|include|use|shortlist)\s+(.+?)${OPTION_CLAUSE_END}`, "iu"))?.[1];
+  const chosenNames = chosen && !isComparisonMetadataInstruction(chosen)
+    && !/^(?:https?:\/\/|(?:the\s+)?(?:supplied|provided|following)\s+(?:urls?|links?|sources?))/i.test(chosen)
+    ? splitExplicitComparisonOptions(chosen) : [];
+  const between = query.match(new RegExp(String.raw`\bbetween\s+(.+?)\s+and\s+(.+?)${OPTION_CLAUSE_END}`, "iu"));
+  let names = chosenNames.length >= 2 ? chosenNames : chains[0]?.names ?? [];
+  if (between && (names.length <= 2 || chains[0]?.descriptive)) names = [between[1]!.trim(), between[2]!.trim()];
+  if (names.length === 2 && isCompetitorObjective(names[1]!)) {
+    names = [names[0]!, `Competitors of ${names[0]}`];
   }
   if (names.length < 2) {
     const contextualPair = query.match(
@@ -62,8 +63,8 @@ function optionsInPrompt(query: string): string[] {
     if (contextualPair) names = [contextualPair[1]!.trim(), contextualPair[2]!.trim()];
   }
   if (names.length < 2) {
-    const list = query.match(/^\s*(.+?)\s+(?:\bvs\b\.?|\bversus\b)\s+(.+?)(?=[?;]|\.(?=\s|$)|\s+\b(?:where|based\s+on|focusing\s+on|for)\b|$)/i);
-    if (list) names = `${list[1]} vs ${list[2]}`.split(OPTION_SEPARATOR).map((name) => name.trim());
+    const list = query.match(new RegExp(String.raw`^\s*(.+?)\s+(?:\bvs\b\.?|\bversus\b)\s+(.+?)${OPTION_CLAUSE_END}`, "iu"));
+    if (list) names = splitExplicitComparisonOptions(`${list[1]} vs ${list[2]}`);
   }
   if (names.length < 2) {
     const parsed = parsePrompt(query);
@@ -74,20 +75,20 @@ function optionsInPrompt(query: string): string[] {
 
 /** Exact, syntactically explicit pairs avoid an unnecessary model call during setup. */
 export function hasExplicitNamedPair(query: string): boolean {
+  query = authoritativeComparisonPrompt(query);
   const segment = /^\s*(?:please\s+)?(?:compare|comparison\s+between)\s+/i.test(query)
     ? comparisonClause(query)
-    : query.match(/^\s*(.+?)\s+(?:\bvs\b\.?|\bversus\b)\s+(.+?)(?=[?;]|\.(?=\s|$)|\s+\b(?:where|based on|focusing on|for)\b|$)/i)?.[0]
+    : query.match(new RegExp(String.raw`^\s*(.+?)\s+(?:\bvs\b\.?|\bversus\b)\s+(.+?)${OPTION_CLAUSE_END}`, "iu"))?.[0]
       ?? query.match(/^\s*(.+?)\s*(?:,|\/)\s*(.+?)(?=[?;]|\.(?=\s|$)|\s+\b(?:where|based on|focusing on|for|in)\b|$)/i)?.[0];
   if (!segment) return false;
-  const names = segment
-    .replace(/^(?:please\s+)?(?:compare|comparison\s+between)\s+/i, "")
-    .split(OPTION_SEPARATOR)
-    .map((name) => name.trim().replace(/^[("'“]+|[)"'”]+$/g, "").trim())
-    .filter(Boolean);
-  return names.length >= 2 && names.every((name) => name.length <= 120);
+  const names = splitExplicitComparisonOptions(segment
+    .replace(/^(?:please\s+)?(?:compare|comparison\s+between)\s+/i, ""));
+  return names.length >= 2 && names.every((name) => name.length <= 120 && !isCompetitorObjective(name));
 }
 
 function decisionObjective(query: string): string {
+  const aspect = aspectCriterionSuffix(query);
+  if (aspect) return `Find ${aspect.charAt(0).toLowerCase()}${aspect.slice(1)}`;
   const goal = query.match(/\b(?:based\s+on|focusing\s+on|for|where)\s+(.+?)(?:[?.;]|$)/i)?.[1]?.trim();
   if (!goal) return "Compare the options to support a decision";
   const normalized = goal
@@ -132,7 +133,10 @@ function contextFor(query: string, names: string[]): {
   const isDealership = /\b(?:dealers?|dealerships?|service centres?|service centers?)\b/i.test(query)
     || locationBasedDealerships;
   const isSoftware = /\b(?:software|saas|crm|cloud|platform)\b/i.test(query);
-  const isElectronics = /\b(?:phones?|laptops?|electronics?)\b/i.test(query);
+  const isSmartphone = hasSmartphoneContext(query);
+  const isElectronics = isSmartphone || /\b(?:phones?|laptops?|electronics?)\b/i.test(query);
+  const explicitShoppingContext = /\b(?:shopping|e-?commerce|online\s+(?:retail|marketplaces?)|marketplaces?)\b/i.test(query);
+  const isShopping = explicitShoppingContext || /\b(?:e bay|ebay)\b/i.test(allNames);
   const isTravel = /\b(?:hotels?|travel|airlines?)\b/i.test(query);
   const isGenericService = /\b(?:service|provider|subscription|delivery|insurance)\b/i.test(query);
 
@@ -145,9 +149,11 @@ function contextFor(query: string, names: string[]): {
               : isBanking ? "Banking"
                 : isDealership ? "Local Dealerships"
                   : isSoftware ? "Software"
-                    : isElectronics ? "Consumer Electronics"
-                      : isTravel ? "Travel" : "General";
-  const domain = isJewellery || isElectronics ? "Consumer Retail"
+                    : isSmartphone ? "Smartphones"
+                      : isShopping ? "Online Shopping"
+                        : isElectronics ? "Consumer Electronics"
+                          : isTravel ? "Travel" : "General";
+  const domain = isJewellery || isElectronics || isShopping ? "Consumer Retail"
     : isVehicle || isDealership ? "Automotive"
       : isBanking ? "Financial Services"
         : isSoftware ? "Technology"
@@ -158,6 +164,7 @@ function contextFor(query: string, names: string[]): {
   const optionKinds = names.map((name) => {
     const normalized = name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     if (isJewellery) return "BRAND";
+    if (isShopping) return normalized === "amazon" && !explicitShoppingContext ? "BRAND" : "SERVICE";
     if (isDealership) return "SERVICE";
     // The parent company is not the streaming service. Keep an unqualified
     // Amazon mention at brand level so the user can choose Prime Video.
@@ -222,7 +229,7 @@ function explicitCriteriaFromList(query: string): string[] {
 }
 
 function criteriaFor(query: string, category: string): string[] {
-  const explicit = explicitCriteriaFromList(query);
+  const explicit = [aspectCriterionSuffix(query), ...explicitCriteriaFromList(query)].filter((value): value is string => Boolean(value));
   const allKeywordMatches = EXPLICIT_CRITERION_PATTERNS
     .flatMap(([pattern, label]) => {
       const match = pattern.exec(query);
@@ -245,6 +252,8 @@ function criteriaFor(query: string, category: string): string[] {
     "Local Dealerships": ["Service quality", "Local availability", "Pricing transparency", "Customer service", "Servicing and support", "Convenience", "Value for money"],
     Software: ["Features", "Ease of use", "Integrations", "Reliability", "Security", "Support", "Pricing", "Value for money"],
     "Consumer Electronics": ["Price", "Features", "Quality", "Reliability", "Warranty", "Availability", "Support", "Value for money"],
+    Smartphones: ["Price", "Features", "Quality", "Reliability", "Warranty", "Availability", "Support", "Value for money"],
+    "Online Shopping": ["Price", "Product range", "Delivery speed", "Returns and exchanges", "Customer service", "Reliability", "Ease of use", "Value for money"],
     Travel: ["Price", "Availability", "Quality", "Convenience", "Customer service", "Flexibility", "Reliability", "Value for money"],
     General: ["Price", "Quality", "Features", "Reliability", "Ease of use", "Availability", "Customer service", "Value for money"],
   };
@@ -293,7 +302,8 @@ function draftFromOptionNames(
   },
   names: string[],
 ): DraftInterpretation {
-  const { category, domain, optionKinds } = contextFor(input.query, names);
+  const sourceQuery = authoritativeComparisonPrompt(input.query);
+  const { category, domain, optionKinds } = contextFor(sourceQuery, names);
   const comparisonLevel = optionKinds.every((kind) => kind === optionKinds[0])
     ? optionKinds[0]!
     : "MIXED";
@@ -313,11 +323,11 @@ function draftFromOptionNames(
       participationStatus: "NOT_ASSESSED",
     })),
     comparisonLevel,
-    decisionObjective: decisionObjective(input.query),
+    decisionObjective: decisionObjective(sourceQuery),
     decisionDomain: domain,
     category,
     market: { country: input.market, currency: input.currency },
-    criteria: criteriaFor(input.query, category),
+    criteria: criteriaFor(sourceQuery, category),
     enrichmentStatus: "NOT_STARTED",
     ...(input.fallback ? {
       warnings: [{
@@ -436,7 +446,12 @@ export function createOpenAIAdvancedDraftParser(): AbortAwareAdvancedParser | un
 }
 
 export function advancedInterpretationNeeded(query: string): boolean {
-  return !hasExplicitNamedPair(query);
+  query = authoritativeComparisonPrompt(query);
+  // A named anchor plus a generic objective has a deterministic discovery
+  // contract; the model's verbatim two-named-option schema cannot represent it.
+  return !hasExplicitNamedPair(query)
+    && !explicitComparisonChains(query).some(({ names }) =>
+      names.length === 2 && !isCompetitorObjective(names[0]!) && isCompetitorObjective(names[1]!));
 }
 
 function isRetryableProviderError(error: unknown): boolean {

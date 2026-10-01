@@ -1,3 +1,5 @@
+import { EXPLICIT_US_GEOGRAPHY } from "./comparisonPromptGrammar";
+
 export type GeographicMarketCode = "IN" | "AU" | "US" | "GB";
 
 export type GeographicValidation = {
@@ -32,7 +34,7 @@ const COUNTRY_NAMES: Record<GeographicMarketCode, string> = {
 const COUNTRY_PATTERNS: Array<{ country: GeographicMarketCode; pattern: RegExp }> = [
   { country: "IN", pattern: /\bindia\b/i },
   { country: "AU", pattern: /\baustralia\b/i },
-  { country: "US", pattern: /\b(?:united states|u\.s\.a?\.?)\b/i },
+  { country: "US", pattern: EXPLICIT_US_GEOGRAPHY },
   { country: "GB", pattern: /\b(?:united kingdom|great britain|britain|uk)\b/i },
 ];
 

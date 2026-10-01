@@ -1,5 +1,6 @@
 import { classifyComparisonResult, isBudgetNoMatch, validatedServerProvisionalChoiceForUnverifiedEligibility } from './comparison-result';
 import { eligibilityBlocksRecommendation, suppressUnverifiedEligibilityWinner } from './market-eligibility';
+import { comparisonOutcomeGate } from './comparison-outcome-gates';
 
 export interface DisplayedRecommendation {
   /** Option every report surface may name as the choice, or null. */
@@ -20,6 +21,7 @@ const key = (value: unknown) => String(value ?? '').trim().toLowerCase();
  */
 export function displayedRecommendation(comparison: any): DisplayedRecommendation {
   if (!comparison || typeof comparison !== 'object') return { option: null, withheld: true, reason: 'SUMMARY_WITHHELD' };
+  if (comparisonOutcomeGate(comparison)) return { option: null, withheld: true, reason: 'SUMMARY_WITHHELD' };
   if (isBudgetNoMatch(comparison)) return { option: null, withheld: true, reason: 'SUMMARY_WITHHELD' };
   const stored = String(comparison.recommendation ?? '').trim();
   const suppressed = suppressUnverifiedEligibilityWinner(comparison);

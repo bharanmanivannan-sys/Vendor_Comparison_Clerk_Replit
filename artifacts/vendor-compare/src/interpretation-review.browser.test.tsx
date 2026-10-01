@@ -31,12 +31,97 @@ for (const [name, value] of Object.entries(browserGlobals)) {
 const { cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { classifyComparisonResult } = await import('./comparison-result');
-const { ComparisonComposer, DecisionRecommendationCard, RoutedComparisonComposer, buildComparisonEvidenceDataset, compareAgain, comparisonErrorMessage, fetchComparisonWithDeadline, hasPartialResearchStatus, matchesDraftRequestCorrelation, parseOptionalSourceUrls, usableOptionalSourceUrls, pollComparisonJob, reconcilePartialComparisonSave, reconcileReportScores, runComparisonJob, streamComparisonJob, validatedPromptTitle } = await import('./App');
+const { ComparisonComposer, DecisionFirstReportPanel, DecisionRecommendationCard, ProvisionalMarketNotice, RoutedComparisonComposer, buildComparisonEvidenceDataset, compareAgain, comparisonErrorMessage, fetchComparisonWithDeadline, hasPartialResearchStatus, matchesDraftRequestCorrelation, parseOptionalSourceUrls, usableOptionalSourceUrls, pollComparisonJob, reconcilePartialComparisonSave, reconcileReportScores, runComparisonJob, streamComparisonJob, validatedPromptTitle } = await import('./App');
 
 test('customer errors hide transport identifiers and offer an actionable retry', () => {
   const text = comparisonErrorMessage({ data: { message: 'Retry with X-Request-Id abc and Idempotency-Key def' } });
   assert.doesNotMatch(text, /request.id|idempotency.key/i);
   assert.match(text, /try again/i);
+});
+
+test('market failure messages survive guest and signed-in job transport and render without reconnect or quota claims', async () => {
+  const cases = [
+    { errorCode: 'research_failed', reason: 'The evidence service was interrupted while verifying mandatory requirements for Tanishq, CaratLane.',
+      proof: 'This does not establish that these options are unsuitable.' },
+    { errorCode: 'insufficient_quantitative_evidence', reason: 'Available evidence did not establish mandatory requirements for Tanishq, CaratLane.',
+      proof: 'This does not establish that these options are unsuitable.' },
+    { errorCode: 'validation_failed', reason: 'CaratLane did not meet a mandatory requirement in the selected market.',
+      proof: 'Replace or remove the failed option and confirm again.' },
+  ] as const;
+  for (const guest of [true, false]) {
+    for (const item of cases) {
+      const data = {
+        prompt: 'Compare Tanishq vs CaratLane in India.', market: 'IN',
+        vendors: ['Tanishq', 'CaratLane'], urls: [], criteria: ['Value'],
+        draftId: 'market-failure-draft', draftVersion: 1,
+        comparisonValues: [
+          { rawText: 'Tanishq', confirmedName: 'Tanishq' },
+          { rawText: 'CaratLane', confirmedName: 'CaratLane' },
+        ],
+      };
+      const terminal = {
+        status: 'failed' as const, stage: 'verifying_market' as const,
+        errorCode: item.errorCode, progress: { entities: data.vendors, subject: 'Jewellery' },
+        message: `${item.reason} ${item.proof} Retry verification with current official sources and a new request identifier and (if supplied) a new Idempotency-Key. No comparison research or scoring has started.`,
+      };
+      let posts = 0;
+      globalThis.fetch = (async (_input, init) => {
+        posts++;
+        return new Response(JSON.stringify({
+          jobId: 'market-failure-job', status: 'processing', stage: 'verifying_market',
+          progress: terminal.progress, draftId: data.draftId, draftVersion: data.draftVersion,
+          requestId: requestIdFrom(init),
+        }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch;
+      class FailedMarketStream {
+        constructor(readonly url: string) {}
+        addEventListener(type: string, listener: (event: { data: string }) => void) {
+          if (type === 'state') queueMicrotask(() => listener({ data: JSON.stringify({
+            ...terminal, draftId: data.draftId, draftVersion: data.draftVersion,
+            requestId: new URL(this.url, 'http://localhost').searchParams.get('requestId'),
+          }) }));
+        }
+        close() {}
+      }
+      Object.defineProperty(browserWindow, 'EventSource', { configurable: true, writable: true, value: FailedMarketStream });
+      const failure = await runComparisonJob(guest, data as any, () => {}).catch((error) => error);
+      assert.equal(failure.status, 'failed');
+      assert.equal(failure.stage, 'verifying_market');
+      assert.equal(failure.errorCode, item.errorCode);
+      assert.equal(failure.data.code, item.errorCode);
+      assert.equal(failure.message, terminal.message);
+      const shown = comparisonErrorMessage(failure);
+      assert.ok(shown.includes(item.reason));
+      assert.ok(shown.includes(item.proof));
+      assert.match(shown, /No comparison research or scoring has started/);
+      assert.doesNotMatch(shown, /request.identifier|idempotency|reconnect|quota|unsuitable options/i);
+      const view = render(<ComparisonComposer pending={false} error={failure} jobState={terminal} onSubmit={() => {}} />);
+      assert.ok(view.getByRole('alert').textContent?.includes(item.reason));
+      assert.equal(view.queryByTestId('button-reconnect-comparison-job'), null);
+      view.unmount();
+      assert.equal(posts, 1, 'terminal failure must not automatically seed another job');
+      const polled = await pollComparisonJob('/api/comparison-jobs', 'market-failure-job',
+        () => {}, async () => {}, async () => terminal, 100).catch((error) => error);
+      assert.equal(polled.status, 'failed');
+      assert.equal(polled.stage, 'verifying_market');
+      assert.equal(polled.data.code, item.errorCode);
+      assert.equal(comparisonErrorMessage(polled), shown);
+      globalThis.fetch = (async (_input, init) => {
+        posts++;
+        return new Response(JSON.stringify({
+          ...terminal, jobId: 'market-failure-job',
+          draftId: data.draftId, draftVersion: data.draftVersion, requestId: requestIdFrom(init),
+        }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch;
+      const immediate = await runComparisonJob(guest, data as any, () => {}).catch((error) => error);
+      assert.equal(immediate.status, 'failed');
+      assert.equal(immediate.stage, 'verifying_market');
+      assert.equal(immediate.data.code, item.errorCode);
+      assert.equal(comparisonErrorMessage(immediate), shown);
+      assert.equal(comparisonErrorMessage(terminal), shown, 'plain terminal response shapes preserve their message too');
+      assert.equal(posts, 2, 'only the explicit retry may submit a second job');
+    }
+  }
 });
 
 test('guest and signed-in report helpers keep an over-budget policy outcome, not an invented winner', () => {
@@ -164,7 +249,152 @@ test('a missing optional suggestion leaves edited wording intact without repeate
   fireEvent.change(input, { target: { value: 'Toyota' } });
   assert.equal(input.value, 'Toyota');
   assert.equal(view.queryByTestId('button-keep-option-editable-option'), null);
-  assert.equal(lookups, 1);
+  assert.equal(lookups, 2, 'one failed suggestion and one owned-draft refresh, without a loop');
+});
+
+test('a saved-draft option ID is rebound only from the current owned draft before retrying suggestions', async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://localhost');
+    calls.push(url.pathname);
+    if (url.pathname.endsWith('/options/old-id/suggestions')) {
+      return new Response(JSON.stringify({ code: 'option_not_found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.pathname.endsWith('/comparison-drafts/owned-draft')) {
+      assert.equal(url.searchParams.get('draftVersion'), '2');
+      return new Response(JSON.stringify({
+        draftId: 'owned-draft', draftVersion: 2, requestId: requestIdFrom(init),
+        options: [{ optionId: 'new-id', originalText: 'Alpha', comparisonValue: 'Alpha' },
+          { optionId: 'other-id', originalText: 'Beta', comparisonValue: 'Beta' }],
+      }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    assert.ok(url.pathname.endsWith('/options/new-id/suggestions'));
+    assert.equal(url.searchParams.get('draftVersion'), '2');
+    return new Response(JSON.stringify({
+      draftId: 'owned-draft', draftVersion: 2, requestId: requestIdFrom(init),
+      optionId: 'new-id', suggestions: [{ canonicalEntityId: 'alpha', displayName: 'Alpha match', entityLevel: 'PRODUCT', category: 'test' }],
+    }), { headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  function Review() {
+    const [options, setOptions] = React.useState<ConfirmedOption[]>([
+      { id: 'local', serverOptionId: 'old-id', originalText: 'Alpha', value: 'Alpha', confirmed: false },
+    ]);
+    return <ComparisonOptionReview options={options} onChange={setOptions} guest={false} draftId="owned-draft" draftVersion={2} />;
+  }
+  const view = render(<Review />);
+  fireEvent.focus(view.getByTestId('input-option-local'));
+  await waitFor(() => assert.ok(view.getByText('Alpha match')));
+  assert.deepEqual(calls, [
+    '/api/comparison-drafts/owned-draft/options/old-id/suggestions',
+    '/api/comparison-drafts/owned-draft',
+    '/api/comparison-drafts/owned-draft/options/new-id/suggestions',
+  ]);
+});
+
+test('a changed draft version cannot rebind a stale option, and manual wording remains available', async () => {
+  let requests = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests += 1;
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/suggestions')) return new Response(JSON.stringify({ code: 'option_not_found' }), {
+      status: 404, headers: { 'Content-Type': 'application/json' },
+    });
+    return new Response(JSON.stringify({
+      draftId: 'owned-draft', draftVersion: 3, requestId: requestIdFrom(init),
+      options: [{ optionId: 'new-id', originalText: 'Alpha', comparisonValue: 'Alpha' }],
+    }), { headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  function Review() {
+    const [options, setOptions] = React.useState<ConfirmedOption[]>([
+      { id: 'local', serverOptionId: 'old-id', originalText: 'Alpha', value: 'Alpha', confirmed: false },
+    ]);
+    return <ComparisonOptionReview options={options} onChange={setOptions} guest={false} draftId="owned-draft" draftVersion={2} />;
+  }
+  const view = render(<Review />);
+  const input = view.getByTestId('input-option-local') as HTMLInputElement;
+  fireEvent.focus(input);
+  await waitFor(() => assert.ok(view.getByText(/No spelling suggestion is available/)));
+  fireEvent.change(input, { target: { value: 'My own wording' } });
+  assert.equal(input.value, 'My own wording');
+  assert.equal(requests, 2);
+});
+
+test('a late owned-draft refresh cannot overwrite the option ID after a newer saved version arrives', async () => {
+  let resolveOldRefresh!: (response: Response) => void;
+  const requests: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://localhost');
+    requests.push(`${url.pathname}${url.search}`);
+    if (url.pathname.endsWith('/suggestions')) {
+      if (url.pathname.includes('old-id')) return Promise.resolve(new Response(JSON.stringify({ code: 'option_not_found' }), {
+        status: 404, headers: { 'Content-Type': 'application/json' },
+      }));
+      return Promise.resolve(new Response(JSON.stringify({
+        draftId: 'owned-draft', draftVersion: 3, requestId: requestIdFrom(init),
+        optionId: 'latest-id', suggestions: [{ canonicalEntityId: 'latest', displayName: 'Latest match', entityLevel: 'PRODUCT', category: 'test' }],
+      }), { headers: { 'Content-Type': 'application/json' } }));
+    }
+    return new Promise<Response>((resolve) => { resolveOldRefresh = resolve; });
+  }) as typeof fetch;
+  const option: ConfirmedOption = { id: 'local', serverOptionId: 'old-id', originalText: 'Alpha', value: 'Alpha', confirmed: false };
+  function Review({ version, savedOption }: { version: number; savedOption: ConfirmedOption }) {
+    const [options, setOptions] = React.useState<ConfirmedOption[]>([savedOption]);
+    React.useEffect(() => setOptions([savedOption]), [savedOption]);
+    return <ComparisonOptionReview options={options} onChange={setOptions} guest={false} draftId="owned-draft" draftVersion={version} />;
+  }
+  const view = render(<Review version={2} savedOption={option} />);
+  fireEvent.focus(view.getByTestId('input-option-local'));
+  await waitFor(() => assert.equal(typeof resolveOldRefresh, 'function'));
+  view.rerender(<Review version={3} savedOption={{ ...option, serverOptionId: 'latest-id' }} />);
+  await waitFor(() => assert.ok(requests.some((request) => request.includes('/options/latest-id/suggestions'))));
+  resolveOldRefresh(new Response(JSON.stringify({
+    draftId: 'owned-draft', draftVersion: 2, requestId: 'old-request',
+    options: [{ optionId: 'incorrect-id', originalText: 'Alpha', comparisonValue: 'Alpha' }],
+  }), { headers: { 'Content-Type': 'application/json' } }));
+  await waitFor(() => assert.ok(view.getByText('Latest match')));
+  assert.ok(!requests.some((request) => request.includes('/options/incorrect-id/suggestions')));
+});
+
+test('rebinding one option preserves unsaved wording edited in another row while refresh waits', async () => {
+  let resolveRefresh!: (response: Response) => void;
+  let refreshRequestId: string | null = null;
+  const paths: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://localhost');
+    paths.push(url.pathname);
+    if (url.pathname.endsWith('/options/old-id/suggestions')) {
+      return Promise.resolve(new Response(JSON.stringify({ code: 'option_not_found' }), {
+        status: 404, headers: { 'Content-Type': 'application/json' },
+      }));
+    }
+    if (url.pathname.endsWith('/comparison-drafts/owned-draft')) {
+      refreshRequestId = requestIdFrom(init);
+      return new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    }
+    return Promise.resolve(new Response(JSON.stringify({
+      draftId: 'owned-draft', draftVersion: 2, requestId: requestIdFrom(init),
+      optionId: 'new-id', suggestions: [{ canonicalEntityId: 'alpha', displayName: 'Alpha match', entityLevel: 'PRODUCT', category: 'test' }],
+    }), { headers: { 'Content-Type': 'application/json' } }));
+  }) as typeof fetch;
+  const first: ConfirmedOption = { id: 'first', serverOptionId: 'old-id', originalText: 'Alpha', value: 'Alpha', confirmed: false };
+  const second: ConfirmedOption = { id: 'second', originalText: 'Beta', value: 'Beta', confirmed: false };
+  function Review() {
+    const [options, setOptions] = React.useState<ConfirmedOption[]>([first, second]);
+    return <ComparisonOptionReview options={options} onChange={setOptions} guest={false} draftId="owned-draft" draftVersion={2} />;
+  }
+  const view = render(<Review />);
+  fireEvent.focus(view.getByTestId('input-option-first'));
+  await waitFor(() => assert.equal(typeof resolveRefresh, 'function'));
+  fireEvent.change(view.getByTestId('input-option-second'), { target: { value: 'My unsaved Beta edit' } });
+  const refresh = paths.length;
+  resolveRefresh(new Response(JSON.stringify({
+    draftId: 'owned-draft', draftVersion: 2, requestId: refreshRequestId,
+    options: [{ optionId: 'new-id', originalText: 'Alpha', comparisonValue: 'Alpha' },
+      { optionId: 'beta-id', originalText: 'Beta', comparisonValue: 'Beta' }],
+  }), { headers: { 'Content-Type': 'application/json' } }));
+  await waitFor(() => assert.ok(view.getByText('Alpha match')));
+  assert.equal((view.getByTestId('input-option-second') as HTMLInputElement).value, 'My unsaved Beta edit');
+  assert.equal(paths.length, refresh + 1);
 });
 
 test('per-row source validation ignores late drafts and rejects an uncorrelated current response', async () => {
@@ -1640,6 +1870,46 @@ test('a stalled comparison-job submission retries with the same idempotency key 
   assert.equal(browserWindow.sessionStorage.getItem('comparison-request-user') !== null, true);
 });
 
+for (const guest of [false, true]) test(`an explicit job validation rejection releases its retry identity (${guest ? 'guest' : 'signed-in'})`, async () => {
+  const data = { prompt: 'Compare e-bay vs Amazon shopping in the US.', market: 'US', urls: [],
+    vendors: ['e-bay', 'Amazon shopping'], criteria: ['Delivery'] };
+  const keys: Array<string | null> = [];
+  globalThis.fetch = (async (_input, init) => {
+    keys.push(new Headers(init?.headers).get('Idempotency-Key'));
+    return new Response(JSON.stringify({ code: 'invalid_comparison',
+      message: 'CLARIFICATION_REQUIRED: Do you mean Amazon Prime Video or Amazon shopping delivery?' }),
+    { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const storageKey = `comparison-request-${guest ? 'guest' : 'user'}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const error = await runComparisonJob(guest, data as any, () => assert.fail('Rejected submissions have no job')).catch((error) => error);
+    assert.equal(error.status, 400);
+    assert.equal(browserWindow.sessionStorage.getItem(storageKey), null);
+    assert.equal(keys.length, attempt + 1, 'an explicit rejection is not automatically retried');
+  }
+  assert.ok(keys[0]);
+  assert.notEqual(keys[0], keys[1], 'a new confirmation after a definitive rejection is a new attempt');
+});
+
+test('an uncorrelated acceptance keeps the safe submission identity on retry', async () => {
+  const data = { prompt: 'Compare e-bay vs Amazon shopping in the US.', market: 'US', urls: [],
+    vendors: ['e-bay', 'Amazon shopping'], criteria: ['Delivery'], draftId: 'shopping-draft', draftVersion: 2 };
+  const keys: Array<string | null> = [];
+  globalThis.fetch = (async (_input, init) => {
+    keys.push(new Headers(init?.headers).get('Idempotency-Key'));
+    return new Response(JSON.stringify({ jobId: 'possibly-accepted', status: 'processing', stage: 'verifying_market',
+      progress: { entities: data.vendors, subject: 'Shopping' }, draftId: 'wrong-draft', draftVersion: 2, requestId: requestIdFrom(init) }),
+    { status: 202, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const error = await runComparisonJob(false, data as any, () => assert.fail('Uncorrelated progress must not be rendered')).catch((error) => error);
+    assert.match(error.message, /could not be matched/);
+    assert.equal(JSON.parse(browserWindow.sessionStorage.getItem('comparison-request-user')!).id, keys[0]);
+  }
+  assert.ok(keys[0]);
+  assert.equal(keys[0], keys[1], 'a mismatched success response is uncertain, not proof of rejection');
+});
+
 test('the stream deadline reconnects to the same job and accepts its terminal partial report', async () => {
   class SilentEventSource {
     closed = false;
@@ -1955,7 +2225,14 @@ test('withholds the preview winner until market eligibility is established', () 
   assert.equal(view.queryByTestId('analysis-page'), null);
 });
 
-test('renders a terminal partial report with missing-information and next-action guidance', () => {
+function assertCompactInitialResult(partial: HTMLElement) {
+  assert.equal(partial.querySelector('[data-testid="provisional-market-notice"]'), null);
+  assert.equal(partial.querySelector('[data-testid="section-market-eligibility"]'), null);
+  assert.doesNotMatch(partial.textContent || '', /Market availability unverified|Eligibility status|modelled pros and cons|What may still be missing|Trade-offs, switch conditions and next actions/i);
+  assert.ok([...partial.querySelectorAll('h4')].some((heading) => heading.textContent === 'Suggested next action'));
+}
+
+test('renders a compact terminal unscoreable partial report with next-action guidance and saved-report navigation', () => {
   const view = render(
     <ComparisonComposer
       pending={false}
@@ -1974,6 +2251,7 @@ test('renders a terminal partial report with missing-information and next-action
             { vendor: 'Beta', score: 0, qualificationStatus: 'INSUFFICIENT_EVIDENCE', weightedScores: [] },
           ],
           insights: ['Availability research is incomplete.'],
+          contextAssumptions: ['Provisional market comparison: Current market availability has not been verified.'],
           nextSteps: ['Confirm current pricing before acting.'],
           pricing: [],
           features: [],
@@ -1983,9 +2261,10 @@ test('renders a terminal partial report with missing-information and next-action
     />,
   );
   const partial = view.getByTestId('partial-decision-result');
+  assertCompactInitialResult(partial);
   assert.match(partial.textContent || '', /partial research/i);
-  assert.match(partial.textContent || '', /No definitive winner/);
-  assert.match(partial.textContent || '', /Availability research is incomplete/);
+  assert.match(partial.textContent || '', /Insufficient comparable evidence to rank these options/);
+  assert.doesNotMatch(partial.textContent || '', /Availability research is incomplete/);
   assert.match(partial.textContent || '', /Confirm current pricing/);
   assert.ok(view.getByTestId('card-recommended'));
   assert.equal((view.getByTestId('link-open-partial-report') as HTMLAnchorElement).getAttribute('href'), '/comparisons/34');
@@ -2038,6 +2317,7 @@ test('partial fallback preserves the server provisional winner with unknown elig
       },
     ],
     insights: [],
+    contextAssumptions: ['Provisional market comparison: Current market availability has not been verified.'],
     nextSteps: ['Retry the incomplete research.'],
     alternatives: [{ option: 'Beta', rank: 2, score: 70 }],
     pricing: [],
@@ -2070,16 +2350,13 @@ test('partial fallback preserves the server provisional winner with unknown elig
     />,
   );
   const partial = view.getByTestId('partial-decision-result');
-  assert.equal(partial.querySelectorAll('[data-testid="section-market-eligibility"]').length, 1);
+  assertCompactInitialResult(partial);
   assert.ok(view.getByTestId('card-recommended'));
-  assert.match(partial.textContent || '', /Market validation is incomplete/);
-  assert.match(partial.textContent || '', /does not mean a service is unavailable or eligible/i);
-  assert.match(partial.textContent || '', /Evidence Missing/);
-  assert.match(partial.textContent || '', /Evidence Timed Out/);
-  assert.match(partial.textContent || '', /timed out before current market eligibility could be established/i);
+  assert.doesNotMatch(partial.textContent || '', /Evidence Missing|Evidence Timed Out/);
   assert.match(partial.textContent || '', /Recommended option · modelled: Alpha/i);
   assert.match(partial.textContent || '', /Alpha/);
-  assert.match(view.getByTestId('market-eligibility-Alpha').textContent || '', /Unknown/);
+  assert.match(partial.textContent || '', /Retry the incomplete research/);
+  assert.equal((view.getByTestId('link-open-partial-report') as HTMLAnchorElement).getAttribute('href'), '/comparisons/36');
   assert.doesNotMatch(partial.textContent || '', /No definitive winner/);
   assert.doesNotMatch(partial.textContent || '', /Replace options/);
 
@@ -2089,6 +2366,9 @@ test('partial fallback preserves the server provisional winner with unknown elig
   assert.match(standaloneCard.textContent || '', /Provisional choice · eligibility unverified/);
   assert.match(standaloneCard.textContent || '', /Alpha/);
   assert.doesNotMatch(standaloneCard.textContent || '', /No definitive winner/);
+  assert.ok(fallbackCard.container.querySelector('[data-testid="section-market-eligibility"]'));
+  assert.match(fallbackCard.container.querySelector('[data-testid="market-eligibility-Alpha"]')?.textContent || '', /Unknown/);
+  assert.match(fallbackCard.container.textContent || '', /Evidence Missing|Evidence Timed Out/);
   fallbackCard.unmount();
 });
 
@@ -2123,6 +2403,8 @@ test('live partial view retains an unscored alphabetical tie-break independent o
       weightedScores: [],
     })),
     alternatives: [{ option: 'Zulu', rank: 2, score: null }],
+    contextAssumptions: ['Provisional market comparison: Current market availability has not been verified.'],
+    nextSteps: ['Confirm local availability before acting.'],
   };
   const resultClass = classifyComparisonResult(result);
   assert.equal(resultClass.recommendedOptionId, 'Alpha');
@@ -2135,31 +2417,38 @@ test('live partial view retains an unscored alphabetical tie-break independent o
     vendorScores: [...result.vendorScores].reverse(),
   }).recommendedOptionId, 'Alpha');
 
-  const view = render(
-    <ComparisonComposer
-      pending={false}
-      jobState={{
-        status: 'partial',
-        stage: 'completed',
-        progress: { entities: ['Zulu', 'Alpha'], subject: 'Service providers' },
-        message: 'Research reached its 20-second limit.',
-        result,
-      }}
-      onSubmit={() => {}}
-    />,
-  );
-  const partial = view.getByTestId('partial-decision-result');
-  assert.equal(partial.querySelectorAll('[data-testid="section-market-eligibility"]').length, 1);
-  assert.match(partial.textContent || '', /Unscored alphabetical tie-break · eligibility unverified/);
-  assert.match(partial.textContent || '', /display convention only, not a scored lead or evidence of market access/);
-  assert.doesNotMatch(partial.textContent || '', /reflects scored model inputs only/);
-  assert.match(partial.textContent || '', /Alpha/);
-  assert.match(partial.textContent || '', /Alphabetical tie-break only; no scoreable lead/);
-  assert.doesNotMatch(partial.textContent || '', /No definitive winner|0\/100|Scored modelled lead/i);
-  assert.match(view.getByTestId('market-eligibility-Alpha').textContent || '', /Unknown/);
+  for (const guest of [true, false]) {
+    const view = render(
+      <ComparisonComposer
+        guest={guest}
+        pending={false}
+        jobState={{
+          status: 'partial',
+          stage: 'completed',
+          progress: { entities: ['Zulu', 'Alpha'], subject: 'Service providers' },
+          message: 'Research reached its 20-second limit.',
+          result,
+        }}
+        onSubmit={() => {}}
+      />,
+    );
+    const partial = view.getByTestId('partial-decision-result');
+    assertCompactInitialResult(partial);
+    assert.ok(view.getByTestId('card-recommended'));
+    assert.equal(view.queryByTestId('decision-first-report'), null);
+    assert.match(partial.textContent || '', /Unscored alphabetical tie-break · eligibility unverified/);
+    assert.doesNotMatch(partial.textContent || '', /reflects scored model inputs only/);
+    assert.match(partial.textContent || '', /Alpha/);
+    assert.match(partial.textContent || '', /Alphabetical tie-break only; no scoreable lead/);
+    assert.doesNotMatch(partial.textContent || '', /No definitive winner|0\/100|Scored modelled lead/i);
+    assert.match(partial.textContent || '', /Confirm local availability before acting/);
+    assert.equal(view.queryByTestId('partial-save-status') === null, guest);
+    assert.equal(view.queryByTestId('link-partial-history') === null, guest);
+    view.unmount();
+  }
 });
 
-test('shows the full decision-first report for a live scoreable partial result', () => {
+test('compacts only the initial scoreable partial result while keeping the default full report panel unchanged', () => {
   const comparison: any = {
     id: 35,
     prompt: 'Compare Alpha and Beta for a family vehicle purchase.',
@@ -2176,30 +2465,54 @@ test('shows the full decision-first report for a live scoreable partial result',
       { vendor: 'Beta', score: 70, marketEligibility: { status: 'ELIGIBLE', market: 'AU', product: 'Vehicle', productCategory: 'SUV', reason: 'Eligible', checkedAt: '2026-01-01' }, weightedScores: [{ criterion: 'Meets Needs / Features', score: 70, weight: 100, evidence: [] }] },
     ],
     insights: ['Availability research is incomplete.'],
+    contextAssumptions: ['Provisional market comparison: Current market availability has not been verified.'],
     nextSteps: ['Confirm current pricing before acting.'],
     pricing: [],
     features: [],
   };
-  const view = render(
-    <ComparisonComposer
-      pending={false}
-      jobState={{
-        status: 'partial',
-        stage: 'completed',
-        progress: { entities: ['Alpha', 'Beta'], subject: 'Vehicles' },
-        message: 'Research reached its 20-second limit.',
-        result: comparison,
-      }}
-      onSubmit={() => {}}
-    />,
-  );
-  const partial = view.getByTestId('partial-decision-result');
-  assert.ok(view.getByTestId('decision-first-report'));
-  assert.match(partial.textContent || '', /Recommended option · modelled: Alpha/i);
-  assert.doesNotMatch(partial.textContent || '', /Decision summary · modelled; low confidence/);
-  assert.match(partial.textContent || '', /Ranked options · saved canonical result/);
-  assert.doesNotMatch(partial.textContent || '', /Early recommendation/);
-  assert.doesNotMatch(partial.textContent || '', /This comparison is not ready for a decision/);
+  for (const guest of [true, false]) {
+    const view = render(
+      <ComparisonComposer
+        guest={guest}
+        pending={false}
+        jobState={{
+          status: 'partial',
+          stage: 'completed',
+          progress: { entities: ['Alpha', 'Beta'], subject: 'Vehicles' },
+          message: 'Research reached its 20-second limit.',
+          result: comparison,
+        }}
+        onSubmit={() => {}}
+      />,
+    );
+    const partial = view.getByTestId('partial-decision-result');
+    assertCompactInitialResult(partial);
+    assert.ok(view.getByTestId('decision-first-report'));
+    assert.equal(view.queryByTestId('card-recommended'), null);
+    assert.match(partial.textContent || '', /Recommended option · modelled: Alpha/i);
+    assert.doesNotMatch(partial.textContent || '', /Decision summary · modelled; low confidence/);
+    assert.match(partial.textContent || '', /Ranked options · saved canonical result/);
+    assert.match(partial.textContent || '', /Decision lens scorecard/);
+    assert.ok(view.getByTestId('ranked-option-1'));
+    assert.ok(view.getByTestId('ranked-option-2'));
+    assert.ok(view.getByTestId('scroll-lens-scorecard'));
+    assert.match(partial.textContent || '', /Pricing comparison/);
+    assert.match(partial.textContent || '', /Feature and capability comparison/);
+    assert.match(partial.textContent || '', /Confirm current pricing before acting/);
+    assert.equal((view.getByTestId('link-open-partial-report') as HTMLAnchorElement).getAttribute('href'), '/comparisons/35');
+    assert.equal(view.queryByTestId('partial-save-status'), null);
+    assert.doesNotMatch(partial.textContent || '', /Availability research is incomplete|Early recommendation|This comparison is not ready for a decision/);
+    view.unmount();
+  }
+
+  const fullReport = render(<><ProvisionalMarketNotice comparison={comparison} /><DecisionFirstReportPanel comparison={comparison} /></>);
+  assert.match(fullReport.getByTestId('provisional-market-notice').textContent || '', /Market availability unverified/);
+  assert.match(fullReport.container.textContent || '', /Alpha · modelled pros and cons/);
+  assert.match(fullReport.container.textContent || '', /Beta · modelled pros and cons/);
+  assert.match(fullReport.container.textContent || '', /Trade-offs, switch conditions and next actions/);
+  assert.match(fullReport.container.textContent || '', /Switch conditions:/);
+  assert.match(fullReport.container.textContent || '', /Confirm current pricing before acting/);
+  assert.ok(fullReport.getByTestId('scroll-lens-scorecard'));
 });
 
 test('brings an authenticated partial result with pending persistence into view immediately', () => {
@@ -2249,11 +2562,26 @@ test('an unsaved partial report explains its save state and offers History inste
     saveStatus: 'pending' as const,
   };
   const view = render(<ComparisonComposer pending={false} jobState={job} onSubmit={() => {}} />);
+  assertCompactInitialResult(view.getByTestId('partial-decision-result'));
+  assert.match(view.getByTestId('partial-decision-result').textContent || '', /Confirm pricing/);
   assert.match(view.getByTestId('partial-save-status').textContent || '', /being saved/i);
   assert.equal((view.getByTestId('link-partial-history') as HTMLAnchorElement).getAttribute('href'), '/history');
   assert.equal(view.queryByTestId('link-open-partial-report'), null);
   view.rerender(<ComparisonComposer pending={false} jobState={{ ...job, saveStatus: 'failed' }} onSubmit={() => {}} />);
   assert.match(view.getByTestId('partial-save-status').textContent || '', /could not be saved/i);
+  assertCompactInitialResult(view.getByTestId('partial-decision-result'));
+  assert.equal((view.getByTestId('link-partial-history') as HTMLAnchorElement).getAttribute('href'), '/history');
+  view.rerender(<ComparisonComposer pending={false} jobState={{ ...job, saveStatus: 'unconfirmed' }} onSubmit={() => {}} />);
+  assert.match(view.getByTestId('partial-save-status').textContent || '', /Saving has not been confirmed/);
+  assertCompactInitialResult(view.getByTestId('partial-decision-result'));
+  assert.match(view.getByTestId('partial-decision-result').textContent || '', /Confirm pricing/);
+  assert.equal((view.getByTestId('link-partial-history') as HTMLAnchorElement).getAttribute('href'), '/history');
+  view.rerender(<ComparisonComposer pending={false} jobState={{ ...job, result: { ...result, id: 37 }, saveStatus: 'saved' }} onSubmit={() => {}} />);
+  assertCompactInitialResult(view.getByTestId('partial-decision-result'));
+  assert.match(view.getByTestId('partial-decision-result').textContent || '', /Confirm pricing/);
+  assert.equal(view.queryByTestId('partial-save-status'), null);
+  assert.equal(view.queryByTestId('link-partial-history'), null);
+  assert.equal((view.getByTestId('link-open-partial-report') as HTMLAnchorElement).getAttribute('href'), '/comparisons/37');
 });
 
 test('does not label a no-score deadline fallback as an early recommendation', () => {
@@ -3795,6 +4123,125 @@ test('editing an option uses one confirmation and submits only the saved identit
   assert.equal(submissions[0].draftVersion, 2);
 });
 
+for (const guest of [false, true]) test(`Amazon shopping review rejection unlocks editing and requires explicit reconfirmation (${guest ? 'guest' : 'signed-in'})`, async () => {
+  const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+  const query = 'Compare e-bay vs Amazon for shopping and delivery in the US.';
+  const parsed = validInterpretation();
+  installReviewFlowFetch(calls, { ...parsed, prompt: query, vendors: ['e-bay', 'Amazon'],
+    intent: { ...parsed.intent, options: ['e-bay', 'Amazon'] } });
+  const mockFetch = globalThis.fetch;
+  const reviews: any[] = [];
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith('/comparisons/review')) {
+      const body = JSON.parse(String(init?.body));
+      reviews.push(body);
+      if (reviews.length === 1) return new Response(JSON.stringify({ code: 'invalid_comparison',
+        message: 'CLARIFICATION_REQUIRED: Do you mean Amazon Prime Video or Amazon shopping delivery?' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }
+    return mockFetch(input, init);
+  }) as typeof fetch;
+  const submissions: any[] = [];
+  const view = render(<ComparisonComposer guest={guest} pending={false} onSubmit={(data) => submissions.push(data)} />);
+  fireEvent.change(view.getByTestId(guest ? 'input-guest-prompt' : 'input-portal-prompt'), { target: { value: query } });
+  fireEvent.change(view.getByTestId(guest ? 'select-guest-market' : 'select-portal-market'), { target: { value: 'US' } });
+  fireEvent.submit(view.getByTestId('comparison-composer'));
+  await waitFor(() => assert.ok(view.queryByTestId('interpretation-review')));
+  fireEvent.change(view.getByDisplayValue('Amazon'), { target: { value: 'Amazon shopping' } });
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.ok(view.queryByTestId('button-retry-review')));
+  await waitFor(() => assert.equal(view.queryByTestId('market-verification-status'), null));
+  assert.equal(submissions.length, 0);
+  assert.equal((view.getByTestId('review-edit-lock') as HTMLFieldSetElement).disabled, false);
+  assert.equal((view.getByTestId('button-confirm-interpretation') as HTMLButtonElement).disabled, false);
+  assert.equal(view.getByTestId('button-confirm-interpretation').textContent, 'Confirm and compare');
+  assert.equal((view.getByDisplayValue('Amazon shopping') as HTMLInputElement).value, 'Amazon shopping');
+  assert.equal(reviews[0].prompt, query.replace('Amazon', 'Amazon shopping'));
+  assert.deepEqual(reviews[0].comparisonValues.map((item: any) => item.confirmedName), ['e-bay', 'Amazon shopping']);
+
+  fireEvent.change(view.getByDisplayValue('Amazon shopping'), { target: { value: 'Amazon shopping delivery' } });
+  assert.equal((view.getByTestId('button-confirm-interpretation') as HTMLButtonElement).disabled, false);
+  assert.equal(submissions.length, 0, 'editing a rejected review must not trigger a follow-up submission');
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.equal(submissions.length, 1));
+  const expectedPrompt = query.replace('Amazon', 'Amazon shopping delivery');
+  assert.equal(reviews.length, 2, 'no reinterpretation or clarification loop');
+  assert.equal(reviews[1].prompt, expectedPrompt);
+  assert.equal(submissions[0].prompt, expectedPrompt);
+  assert.equal(submissions[0].market, 'US');
+  assert.deepEqual(submissions[0].vendors, ['e-bay', 'Amazon shopping delivery']);
+  assert.deepEqual(submissions[0].comparisonValues.map((item: any) => item.confirmedName), submissions[0].vendors);
+  assert.deepEqual(submissions[0].comparisonValues.map((item: any) => item.rawText), submissions[0].vendors);
+  assert.equal(calls.filter((call) => call.url.endsWith('/comparison-drafts/interpret')).length, 1);
+  assert.deepEqual(calls.filter((call) => call.method === 'PATCH').map((call) => call.body.options[1].name),
+    ['Amazon shopping', 'Amazon shopping delivery']);
+});
+
+for (const primaryRetry of [false, true]) test(`a rejected review only resumes after a new confirmation, even when retried without edits (${primaryRetry ? 'confirm retry' : 'validation-only retry'})`, async () => {
+  const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+  const query = 'Compare e-bay vs Amazon for shopping in the US.';
+  const parsed = validInterpretation();
+  installReviewFlowFetch(calls, { ...parsed, prompt: query, vendors: ['e-bay', 'Amazon'],
+    intent: { ...parsed.intent, options: ['e-bay', 'Amazon'] } });
+  const mockFetch = globalThis.fetch;
+  let checks = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith('/comparisons/review') && ++checks === 1) {
+      return new Response(JSON.stringify({ code: 'invalid_comparison', message: 'Please clarify Amazon shopping.' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }
+    return mockFetch(input, init);
+  }) as typeof fetch;
+  let submissions = 0;
+  const view = render(<ComparisonComposer pending={false} onSubmit={() => { submissions++; }} />);
+  await beginDraftReview(view, query);
+  fireEvent.change(view.getByDisplayValue('Amazon'), { target: { value: 'Amazon shopping' } });
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.ok(view.queryByTestId('button-retry-review')));
+  fireEvent.click(view.getByTestId(primaryRetry ? 'button-confirm-interpretation' : 'button-retry-review'));
+  await waitFor(() => assert.equal(view.getByTestId('review-validation-status').textContent, 'Options and criteria are ready'));
+  if (!primaryRetry) {
+    assert.equal(submissions, 0, 'a validation-only retry must not reuse the rejected confirmation');
+    fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  }
+  await waitFor(() => assert.equal(submissions, 1));
+  assert.equal(checks, 2);
+});
+
+test('explicit draft-save validation rejection leaves exact option wording editable with a fresh retry key', async () => {
+  const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+  const query = 'Compare e-bay vs Amazon for shopping in the US.';
+  const parsed = validInterpretation();
+  installReviewFlowFetch(calls, { ...parsed, prompt: query, vendors: ['e-bay', 'Amazon'],
+    intent: { ...parsed.intent, options: ['e-bay', 'Amazon'] } });
+  const mockFetch = globalThis.fetch;
+  const keys: Array<string | null> = [];
+  globalThis.fetch = (async (input, init) => {
+    if (init?.method === 'PATCH') {
+      keys.push(new Headers(init.headers).get('Idempotency-Key'));
+      if (keys.length === 1) return new Response(JSON.stringify({ code: 'invalid_comparison',
+        message: 'Clarify the exact Amazon shopping service.' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }
+    return mockFetch(input, init);
+  }) as typeof fetch;
+  let submissions = 0;
+  const view = render(<ComparisonComposer pending={false} onSubmit={() => { submissions++; }} />);
+  await beginDraftReview(view, query);
+  fireEvent.change(view.getByDisplayValue('Amazon'), { target: { value: 'Amazon shopping' } });
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.equal(view.getByTestId('button-confirm-interpretation').textContent, 'Confirm and compare'));
+  assert.equal((view.getByTestId('review-edit-lock') as HTMLFieldSetElement).disabled, false);
+  assert.equal(view.queryByTestId('button-reload-option-draft'), null);
+  assert.equal(view.queryByTestId('market-verification-status'), null);
+  assert.equal((view.getByDisplayValue('Amazon shopping') as HTMLInputElement).value, 'Amazon shopping');
+  assert.equal(submissions, 0);
+  fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+  await waitFor(() => assert.equal(submissions, 1));
+  assert.ok(keys[0]);
+  assert.notEqual(keys[0], keys[1]);
+});
+
 test('an authored eighth criterion is saved verbatim without a mandatory priority or ninth default', async () => {
   const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
   const query = 'Compare Pepper Money vs Westpac for home loans';
@@ -4052,6 +4499,108 @@ for (const guest of [false, true]) {
     browserWindow.sessionStorage.setItem(storageKey, 'terminal-key');
     fireEvent.click(view.getByTestId('button-retry-market-verification'));
     assert.equal(browserWindow.sessionStorage.getItem(storageKey), null, 'a terminal retry starts with a fresh key');
+  });
+}
+
+for (const guest of [false, true]) {
+  test(`${guest ? 'guest' : 'signed-in'} explicit comparison-type rejection returns to the query with its explanation`, async () => {
+    const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+    const query = 'Compare Pepper Money and Westpac home loans in Australia, prioritizing cost.';
+    installReviewFlowFetch(calls, homeLoanInterpretation(query));
+    let resets = 0;
+    const props = { guest, pending: false, onSubmit: () => {}, onReset: () => { resets += 1; } };
+    const view = render(<ComparisonComposer {...props} />);
+    await beginDraftReview(view, query, guest);
+    fireEvent.change(view.getByTestId('input-optional-urls'), { target: { value: 'https://example.com/source' } });
+    const priorResets = resets;
+    const error = { status: 400, data: { code: 'COMPARISON_TYPE_MISMATCH', message: 'Choose options in the same decision domain.' } };
+    view.rerender(<ComparisonComposer {...props} error={error} />);
+    await waitFor(() => assert.equal(view.queryByTestId('interpretation-review'), null));
+    assert.equal(resets, priorResets + 1);
+    assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /Choose options in the same decision domain/);
+    assert.equal((view.getByTestId(guest ? 'input-guest-prompt' : 'input-portal-prompt') as HTMLTextAreaElement).value, query);
+    assert.equal((view.getByTestId('input-optional-urls') as HTMLTextAreaElement).value, 'https://example.com/source');
+    view.rerender(<ComparisonComposer {...props} />);
+    assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /Choose options in the same decision domain/);
+  });
+
+  test(`${guest ? 'guest' : 'signed-in'} async NOT_COMPARABLE redirects but missing market proof stays in review`, async () => {
+    const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+    const query = 'Compare Pepper Money and Westpac home loans in Australia, prioritizing cost.';
+    installReviewFlowFetch(calls, homeLoanInterpretation(query));
+    let submitted: any;
+    let resets = 0;
+    const props = { guest, pending: false, onSubmit: (data: any) => { submitted = data; }, onReset: () => { resets += 1; } };
+    const view = render(<ComparisonComposer {...props} />);
+    await beginDraftReview(view, query, guest);
+    fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+    await waitFor(() => assert.ok(submitted));
+    const priorResets = resets;
+    const failed = {
+      status: 'failed' as const, stage: 'verifying_market' as const,
+      draftId: submitted.draftId, draftVersion: submitted.draftVersion,
+      progress: { entities: [], subject: 'Home loans' },
+      errorCode: 'validation_failed' as const, message: 'Market evidence is missing.',
+    };
+    view.rerender(<ComparisonComposer {...props} jobState={failed} />);
+    assert.ok(view.getByTestId('button-edit-failed-market-query'));
+    assert.ok(view.getByTestId('interpretation-review'));
+    assert.equal(resets, priorResets);
+    assert.equal((view.getByTestId('select-review-market') as HTMLSelectElement).value, 'AU');
+    view.rerender(<ComparisonComposer {...props} jobState={{
+      ...failed, errorCode: 'NOT_COMPARABLE', message: 'These products have incompatible decision types.',
+    }} />);
+    await waitFor(() => assert.equal(view.queryByTestId('interpretation-review'), null));
+    assert.equal(resets, priorResets + 1);
+    assert.match(view.getByTestId('status-comparison-validation-error').textContent || '', /incompatible decision types/);
+  });
+
+  test(`${guest ? 'guest' : 'signed-in'} market validation offers edit query without losing supporting inputs`, async () => {
+    const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+    const query = 'Compare Pepper Money and Westpac home loans in Australia, prioritizing cost.';
+    installReviewFlowFetch(calls, homeLoanInterpretation(query));
+    const props = { guest, pending: false, onSubmit: () => {}, onReset: () => {} };
+    const view = render(<ComparisonComposer {...props} />);
+    await beginDraftReview(view, query, guest);
+    fireEvent.change(view.getByTestId('input-optional-urls'), { target: { value: 'https://example.com/evidence' } });
+    const failed = {
+      status: 'failed' as const, stage: 'verifying_market' as const,
+      progress: { entities: [], subject: 'Home loans' },
+      errorCode: 'validation_failed' as const, message: 'Market proof is missing.',
+    };
+    // The failed job must refer to this saved review.
+    const review = view.getByTestId('interpretation-review');
+    assert.ok(review);
+    let submitted: any;
+    view.rerender(<ComparisonComposer {...props} onSubmit={(data) => { submitted = data; }} />);
+    fireEvent.click(view.getByTestId('button-confirm-interpretation'));
+    await waitFor(() => assert.ok(submitted));
+    view.rerender(<ComparisonComposer {...props} jobState={{
+      ...failed, draftId: submitted.draftId, draftVersion: submitted.draftVersion,
+    }} />);
+    fireEvent.click(view.getByTestId('button-edit-failed-market-query'));
+    await waitFor(() => assert.equal(view.queryByTestId('interpretation-review'), null));
+    assert.equal((view.getByTestId(guest ? 'input-guest-prompt' : 'input-portal-prompt') as HTMLTextAreaElement).value, query);
+    assert.equal((view.getByTestId(guest ? 'select-guest-market' : 'select-portal-market') as HTMLSelectElement).value, 'AU');
+    assert.equal((view.getByTestId('input-optional-urls') as HTMLTextAreaElement).value, 'https://example.com/evidence');
+  });
+
+  test(`${guest ? 'guest' : 'signed-in'} generic comparison validation and context conflict do not discard review`, async () => {
+    const calls: Array<{ url: string; method: string; body: any; requestId: string | null; idempotencyKey: string | null }> = [];
+    const query = 'Compare Pepper Money and Westpac home loans in Australia, prioritizing cost.';
+    installReviewFlowFetch(calls, homeLoanInterpretation(query));
+    let resets = 0;
+    const props = { guest, pending: false, onSubmit: () => {}, onReset: () => { resets += 1; } };
+    const view = render(<ComparisonComposer {...props} />);
+    await beginDraftReview(view, query, guest);
+    const priorResets = resets;
+    for (const code of ['invalid_comparison', 'CONTEXT_CONFLICT']) {
+      view.rerender(<ComparisonComposer {...props} error={{
+        status: 400, data: { code, message: 'Review the comparison context.' },
+      }} />);
+      assert.ok(view.getByTestId('interpretation-review'));
+      assert.equal(resets, priorResets);
+    }
   });
 }
 

@@ -2,6 +2,8 @@
  * SearchAPI's DuckDuckGo Light endpoint is used for URL discovery only.
  * Neither its snippets nor its knowledge graph are admissible evidence.
  */
+import { researchCapacityAlerts } from "./researchCapacityAlerts";
+
 export function searchApiConfigured(): boolean {
   return Boolean(process.env.SEARCHAPI_API_KEY?.trim());
 }
@@ -225,7 +227,7 @@ export async function searchDuckDuckGoLight(
     const results = body && typeof body === "object"
       ? (body as { organic_results?: unknown }).organic_results : undefined;
     if (!Array.isArray(results)) throw new Error("SearchAPI response contains no organic results array");
-    return [...new Set(results.slice(0, 12).flatMap((item: unknown) => {
+    const urls = [...new Set(results.slice(0, 12).flatMap((item: unknown) => {
       const link = item && typeof item === "object" ? (item as { link?: unknown }).link : undefined;
       if (typeof link !== "string") return [];
       try {
@@ -235,6 +237,8 @@ export async function searchDuckDuckGoLight(
         return [];
       }
     }))];
+    researchCapacityAlerts.httpSuccess("searchapi");
+    return urls;
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
@@ -268,6 +272,12 @@ export async function discoverSearchApiSources(
   let failures = 0;
   const failureCodes = new Set<string>();
   let queryCooldownFailureCode: "rate_limited" | "capacity_exhausted" | undefined;
+  let capacityObserved = false;
+  const observeCapacity = (reason: "rate_limited" | "capacity_exhausted") => {
+    // One observation per discovery attempt, not one per concurrently queried option.
+    if (!capacityObserved) researchCapacityAlerts.failure("searchapi", reason);
+    capacityObserved = true;
+  };
   for (let offset = 0; offset < queries.length; offset += 3) {
     const sharedCooldown = search === searchDuckDuckGoLight ? searchApiCooldownStatus() : undefined;
     const blockedByCooldown = queryCooldownFailureCode
@@ -275,6 +285,7 @@ export async function discoverSearchApiSources(
         ? sharedCooldown.failureCode === "capacity_exhausted" ? "capacity_exhausted" : "rate_limited"
         : undefined);
     if (blockedByCooldown) {
+      observeCapacity(blockedByCooldown);
       failures += queries.length - offset;
       failureCodes.add(blockedByCooldown === "capacity_exhausted" ? "capacity_exhausted" : "http_429");
       break;
@@ -287,6 +298,7 @@ export async function discoverSearchApiSources(
       const error = result.reason as { status?: unknown; message?: unknown; name?: unknown } | null;
       const classification = searchApiFailureCode(error);
       if (classification === "rate_limited" || classification === "capacity_exhausted") {
+        observeCapacity(classification);
         queryCooldownFailureCode ??= classification;
         failureCodes.add(classification === "capacity_exhausted" ? "capacity_exhausted" : "http_429");
         continue;

@@ -1,7 +1,7 @@
 /** Presentation-only rules. A modelled fit score is not a researched product fact. */
 export const NOT_RESEARCHED_NOTE = 'This dimension was not researched during this comparison.';
 
-const missing = /^(?:not assessed|not established|not applicable|research unavailable|unavailable|unknown|unverified|no (?:comparable|supported|specific|reliable|verified|source-based|decision-grade|market-position|evidence)|validate (?:with|for|the)|assess (?:the|target))/i;
+const missing = /^(?:not assessed|not researched|not established|not applicable|research unavailable|unavailable|unknown|unverified|no (?:comparable|supported|specific|reliable|verified|source-based|decision-grade|market-position|evidence)|validate (?:with|for|the)|assess (?:the|target))/i;
 const citation = /https?:\/\/[^\s)<>|]+/i;
 
 export function isMissingReportValue(value: unknown): boolean {
@@ -73,10 +73,32 @@ export function researchedFrameworkEntries(entries: [string, string[]][]): [stri
   ] as [string, string[]]).filter(([, findings]) => findings.length > 0);
 }
 
+/** Stored decision-model findings can be shown without a citation, but never as verified facts. */
+export function modelledFrameworkEntries(entries: [string, string[]][]): [string, string[]][] {
+  return entries.map(([name, findings]) => [
+    name, (Array.isArray(findings) ? findings : []).filter((finding) =>
+      typeof finding === 'string'
+      && !isMissingReportValue(finding)
+      && !/^(?:no option-specific evidence|no specific adherence assessment|identify|define|assess|validate)\b/i.test(finding.replace(/^.*?\s*(?::|—)\s*/, '').trim())
+      && !/\b(?:planning fallback|evidence is not verified|not independently verified|no verified evidence)\b/i.test(finding)),
+  ] as [string, string[]]).filter(([, findings]) => findings.length > 0);
+}
+
 export function researchedVrioCriteria(assessment: any): Array<[string, any]> {
   return (['value', 'rarity', 'imitability', 'organization'] as const)
     .flatMap((key) => hasResearchedCitation(assessment?.[key]?.rationale)
       ? [[key, assessment[key]] as [string, any]] : []);
+}
+
+export function modelledVrioCriteria(assessment: any): Array<[string, any]> {
+  return (['value', 'rarity', 'imitability', 'organization'] as const)
+    .flatMap((key) => {
+      const item = assessment?.[key];
+      return item && !isMissingReportValue(item.rationale)
+        && !/^(?:identify|define|assess|validate)\b/i.test(String(item.rationale).trim())
+        && !/\b(?:planning fallback|evidence is not verified|not independently verified|no verified evidence)\b/i.test(String(item.rationale))
+        ? [[key, item] as [string, any]] : [];
+    });
 }
 
 export function hasResearchedMarketPosition(position: any): boolean {

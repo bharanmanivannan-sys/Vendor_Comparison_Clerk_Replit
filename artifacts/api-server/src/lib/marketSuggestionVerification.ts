@@ -92,6 +92,8 @@ export type VerifiedAlternativesResult = {
 };
 
 export type MarketVerificationDependencies = {
+  /** Internal diagnostic only: lack of matching evidence does not invoke this. */
+  onVerificationFailure?: (optionName: string) => void;
   discover?: (
     candidate: MarketSuggestionCandidate,
     context: DemographicContext,
@@ -592,6 +594,7 @@ async function discoverWithFallback(
     }
   };
 
+  let primaryFailed = configured && coolingDown;
   if (configured && !coolingDown) {
     try {
       const urls = await primary(candidate, context, objective, signal);
@@ -601,10 +604,13 @@ async function discoverWithFallback(
       // A caller cancellation or exhausted verification deadline must not spawn
       // another provider request. Ordinary provider failures may use fallback.
       if (signal.aborted) throw error;
+      primaryFailed = true;
     }
   }
 
-  return cachedThenFirecrawl();
+  const fallback = await cachedThenFirecrawl();
+  if (!fallback.length && primaryFailed) deps.onVerificationFailure?.(candidate.displayName);
+  return fallback;
 }
 
 async function retrieveDefault(urls: string[], _signal: AbortSignal, timeoutMs: number) {
@@ -766,6 +772,7 @@ async function verifyOne(
 ): Promise<VerifiedMarketSuggestion> {
   const base = { ...candidate, evidence: [] as MarketSuggestionEvidence[] };
   if (signal.aborted) {
+    deps.onVerificationFailure?.(candidate.displayName);
     return { ...base, marketStatus: "VERIFICATION_TIMEOUT", reason: "Market verification exceeded its deadline or was cancelled." };
   }
   if (["streaming services", "video streaming services"].includes(normalize(candidate.category))
@@ -783,6 +790,7 @@ async function verifyOne(
          candidate, request.context, request.objective, signal, deps,
        ), signal);
     if (signal.aborted) {
+      deps.onVerificationFailure?.(candidate.displayName);
       return { ...base, marketStatus: "VERIFICATION_TIMEOUT", reason: "Market verification exceeded its deadline or was cancelled." };
     }
     const urls = [...new Set(discoveredUrls.filter((url) => {
@@ -838,6 +846,7 @@ async function verifyOne(
     return { ...base, evidence, marketStatus: "VERIFIED_CONDITIONAL", availabilityMode: requestedModeEvidence.at(-1)?.accessMode,
       verifiedAt, assessment, reason: "Market access is supported, but one or more objective-scoped mandatory gates remain unresolved." };
   } catch (error) {
+    deps.onVerificationFailure?.(candidate.displayName);
     return {
       ...base,
       marketStatus: isTimeout(signal, error) ? "VERIFICATION_TIMEOUT" : "NOT_VERIFIED",

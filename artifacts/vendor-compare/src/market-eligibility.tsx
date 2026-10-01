@@ -1,4 +1,5 @@
 import React from 'react';
+import { isUnverifiedMarketDecisionMode } from './comparison-outcome-gates';
 
 export type MarketEligibilityStatus = 'ELIGIBLE' | 'LIMITED' | 'CLOSING' | 'INELIGIBLE' | 'UNKNOWN';
 type MarketEligibilityEvidenceStatus = 'CONFIRMED' | 'INCOMPLETE' | 'MISSING' | 'CONFLICTING' | 'TIMED_OUT' | 'VERIFIED';
@@ -79,10 +80,22 @@ export function closingProductsWereIncluded(comparison: any): boolean {
 
 export function marketEligibilityScoreable(vendor: any, comparison: any): boolean {
   const participation = String(vendor?.marketRelevance?.participationStatus || '').toUpperCase();
+  const status = marketEligibilityFor(vendor)?.status;
+  const unavailable = ['NOT_AVAILABLE', 'NOT_ELIGIBLE', 'NOT_OFFERED', 'CLOSED', 'UNAVAILABLE', 'INELIGIBLE'].includes(
+    String(vendor?.marketRelevance?.availabilityStatus || '').toUpperCase());
+  if (unavailable) return false;
+  const modelledUnknown = isUnverifiedMarketDecisionMode(comparison)
+    && (participation === 'UNKNOWN' || status === 'UNKNOWN')
+    && (!participation || ['UNKNOWN', 'ELIGIBLE', 'CONDITIONALLY_ELIGIBLE'].includes(participation))
+    && (!status || !['INELIGIBLE', 'CLOSING'].includes(status))
+    && !['NOT_QUALIFIED', 'DISQUALIFIED'].includes(String(vendor?.qualificationStatus || '').toUpperCase())
+    && ![...(vendor?.qualificationGates || []), ...(vendor?.marketRelevance?.mandatoryGateResults || [])]
+      .some((gate: any) => gate?.mandatory && gate?.status === 'FAIL');
+  if (modelledUnknown) return true; // Scoreable in the model only; not verified market access.
   if (participation) {
     if (!['ELIGIBLE', 'CONDITIONALLY_ELIGIBLE'].includes(participation)) return false;
     // Affirmatively verified ineligible/closing products remain excluded.
-    const legacy = marketEligibilityFor(vendor)?.status;
+    const legacy = status;
     return legacy !== 'INELIGIBLE' && (legacy !== 'CLOSING' || closingProductsWereIncluded(comparison));
   }
   const eligibility = marketEligibilityFor(vendor);
@@ -112,7 +125,7 @@ export function eligibilityBlocksRecommendation(comparison: any): boolean {
   // The demographic contract explicitly permits one remaining scoreable
   // option after mandatory market gates exclude the others. Legacy reports
   // without participation assessments keep the two-option safety threshold.
-  if (vendors.some((vendor) => vendor?.marketRelevance?.participationStatus)) {
+  if (isUnverifiedMarketDecisionMode(comparison) || vendors.some((vendor) => vendor?.marketRelevance?.participationStatus)) {
     return scoreableMarketOptionNames(comparison).length < 1;
   }
   // Legacy market reports have no trustworthy per-option eligibility and
@@ -388,8 +401,9 @@ export function EligibilityStatusSection({ comparison, compact = false }: { comp
         </article>;
       })}
     </div>
-     {eligibilityBlocksRecommendation(comparison) && <p className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#fff0e9] p-3 text-xs font-semibold leading-5 text-[#9a3e38]" role="status" data-testid="eligibility-recommendation-warning">
-       {rows.some(({ eligibility }) => !eligibility || eligibility.status === 'UNKNOWN')
+     {(eligibilityBlocksRecommendation(comparison) || isUnverifiedMarketDecisionMode(comparison) && vendors.some((vendor) =>
+       marketEligibilityFor(vendor)?.status === 'UNKNOWN' || String(vendor?.marketRelevance?.participationStatus || '').toUpperCase() === 'UNKNOWN')) && <p className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#fff0e9] p-3 text-xs font-semibold leading-5 text-[#9a3e38]" role="status" data-testid="eligibility-recommendation-warning">
+        {rows.some(({ eligibility }) => !eligibility || eligibility.status === 'UNKNOWN')
           ? `Market validation is incomplete for one or more options. This does not mean a service is unavailable or eligible. ${hasAlphabeticalUnscoredTieBreakContract(comparison)
             ? 'The alphabetical provisional tie-break is a display convention only, not a scored lead or evidence of market access.'
             : 'Any provisional comparison lead reflects scored model inputs only, not confirmed market access.'}`
@@ -407,7 +421,7 @@ export function EligibilityStatusSection({ comparison, compact = false }: { comp
          return warning ? `${name}: ${warning}` : null;
        }).filter(Boolean).join(' ')}
     </p>}
-    {!eligibilityBlocksRecommendation(comparison) && rows.some(({ eligibility }) =>
+     {!eligibilityBlocksRecommendation(comparison) && !isUnverifiedMarketDecisionMode(comparison) && rows.some(({ eligibility }) =>
       eligibility?.status === 'UNKNOWN' || eligibility?.status === 'INELIGIBLE'
       || eligibility?.status === 'CLOSING' && !closingProductsWereIncluded(comparison)) && <p className="mt-3 text-xs font-semibold leading-5 text-[#765b20]" role="status" data-testid="eligibility-excluded-options-warning">
        Unverified eligibility does not mean an option is unavailable; it remains outside scoring and ranking until eligibility is established. Confirmed ineligible or non-opted-in closing options are also excluded.
@@ -451,7 +465,11 @@ export function eligibilitySummaryForExport(comparison: any): Array<Record<strin
       sourceUrl: eligibility?.sourceUrl || null,
       exactClaim: eligibility?.exactClaim || null,
       warning: [
-        warning,
+        isUnverifiedMarketDecisionMode(comparison) && (eligibility?.status === 'UNKNOWN'
+          || vendors.some((vendor) => String(vendor?.vendor || '').toLowerCase() === name.toLowerCase()
+            && String(vendor?.marketRelevance?.participationStatus || '').toUpperCase() === 'UNKNOWN'))
+          ? 'Decision Mode: market availability not verified. Modelled ranking does not establish current market access; confirm availability directly before acting.'
+          : warning,
         evidenceStatusWarning(evidenceStatusFor(vendors.find((vendor) => String(vendor?.vendor || '').toLowerCase() === name.toLowerCase())), eligibility?.status),
       ].filter(Boolean).join(' ') || null,
     };

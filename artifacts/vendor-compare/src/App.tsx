@@ -34,6 +34,8 @@ import {
   hasResearchedMarketHistory,
   hasResearchedMarketPosition,
   isMissingReportValue,
+  modelledFrameworkEntries,
+  modelledVrioCriteria,
   researchedFrameworkEntries,
   researchedLensRows,
   researchedVrioCriteria,
@@ -62,9 +64,12 @@ import {
   type WeightCriterion,
 } from './weight-model';
 import RecommendationContinuityPanel from './RecommendationContinuityPanel';
-import ReportAtAGlance, { ReportDisclosure } from './ReportAtAGlance';
+import ReportAtAGlance, { ReportDisclosure, glanceWinner } from './ReportAtAGlance';
+import RequirementsScoreView, { requirementsChartData } from './RequirementsScoreView';
+import { appendExpandedAnalysis } from './expanded-pdf';
 import { displayedRecommendation } from './displayed-recommendation';
 import { decisionOutcome } from './decision-outcome';
+import { comparisonOutcomeGate } from './comparison-outcome-gates';
 import {
   EligibilityStatusSection,
   closingProductsWereIncluded,
@@ -207,10 +212,18 @@ function modelledReportLensRows(comparison: any, criterion: string, label: strin
   }];
 }
 
-export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
+export async function buildComparisonPdf(comparison: any, format: 'summary' | 'expanded' = 'summary'): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+  const { createPdfAccessibility } = await import('./pdf-accessibility');
   comparison = reconcileReportScores(comparison);
-  const unverifiedEligibilityChoice = validatedServerProvisionalChoiceForUnverifiedEligibility(comparison);
+  // Same authority as the browser: an explicit outcome (not comparable, not
+  // relevant, clarification) or a failed/unknown mandatory gate withholds any
+  // saved or confirmed winner from every PDF branch.
+  const pdfOutcomeGate = comparisonOutcomeGate(comparison);
+  const pdfDisplayed = displayedRecommendation(comparison);
+  const pdfWithheld = pdfDisplayed.withheld && !isBudgetNoMatch(comparison);
+  const pdfOutcome = decisionOutcome(comparison);
+  const unverifiedEligibilityChoice = pdfWithheld ? null : validatedServerProvisionalChoiceForUnverifiedEligibility(comparison);
   const pdfVersionNumber = Number(comparison.reportVersion) || 1;
   const pdfWeightModel = reportWeightModelSummary(comparison);
   const pdfWeights = pdfWeightModel
@@ -243,6 +256,15 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const pdfEligibilitySummary = eligibilitySummaryForExport(comparison)
     .map((row) => `${row.option}: Product category ${row.productCategory || row.product || 'Not established'}; Market ${row.market || 'Not established'}${row.customerSegment ? `; Customer segment ${row.customerSegment}` : ''}; Eligibility ${row.status}; ${row.evidenceStatusLabel || 'Evidence Not established'}${row.evidenceBasisLabel ? ` (${row.evidenceBasisLabel})` : ''}${row.warning ? ` — ${row.warning}` : ''}${row.checkedAt ? ` Retrieved ${row.checkedAt}` : ''}${row.sourceUrl ? ` Source ${row.sourceUrl}` : ''}`)
     .join(' | ') || 'Legacy / unverified — no market eligibility assessment was stored.';
+  const pdfEligibilityRows = eligibilitySummaryForExport(comparison);
+  const pdfEligibilityUnverified = pdfEligibilityRows
+    .filter((row) => row.status !== 'Eligible' || !/verified/i.test(String(row.evidenceStatusLabel || '')) || /not verified|unverified/i.test(String(row.evidenceStatusLabel || '')))
+    .map((row) => String(row.option ?? "").trim());
+  const pdfEligibilityWarning = !pdfEligibilityRows.length
+    ? 'Market eligibility was not assessed for this saved comparison. Full detail appears in the eligibility section.'
+    : pdfEligibilityUnverified.length
+      ? `Market eligibility not fully verified for ${pdfEligibilityUnverified.join(', ')}. Full detail appears in the eligibility section.`
+      : '';
   const pdfMarketRelevance = (comparison.vendorScores || [])
     .filter((row: any) => row.marketRelevance)
     .map((row: any) => `${row.vendor}: Availability ${row.marketRelevance.availabilityStatus || 'NOT_VERIFIED'}; Relevance ${row.marketRelevance.demographicRelevanceStatus || 'NOT_ASSESSED'}; Participation ${row.marketRelevance.participationStatus || 'CLARIFICATION_REQUIRED'}${row.marketRelevance.explanation ? ` — ${row.marketRelevance.explanation}` : ''}`)
@@ -250,6 +272,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   const exportResult = classifyComparisonResult(comparison);
   const pdfVersionSummary = `Report version ${pdfVersionNumber} | User-supplied sources: ${(comparison.suppliedUrls || []).length} URLs | ${isBudgetNoMatch(comparison) ? 'Outcome' : 'Winner'}: ${
     isBudgetNoMatch(comparison) ? 'No budget match'
+    : pdfOutcomeGate ? `Withheld — ${decisionOutcomeLabel(comparison as unknown as Record<string, unknown>)}`
     : eligibilityBlocksRecommendation(comparison) && !unverifiedEligibilityChoice
       ? (comparison.vendorScores || []).some((row: any) => row.marketRelevance?.participationStatus)
         ? decisionOutcomeLabel(comparison as unknown as Record<string, unknown>)
@@ -261,12 +284,13 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       : /^(?:No definitive winner|No qualified option)$/i.test(String(comparison.recommendation))
       ? decisionOutcomeLabel(comparison as unknown as Record<string, unknown>) : comparison.recommendation
   }${
-    comparison.previousWinner && comparison.previousWinner !== comparison.recommendation
+    comparison.previousWinner && comparison.previousWinner !== comparison.recommendation && !pdfOutcomeGate
       ? ` | Previous winner: ${comparison.previousWinner}` : ''
   }${pdfChangedCriteria ? ` | Changed criteria: ${pdfChangedCriteria}` : ''}`;
   const indicativeDxp = isIndicativeDxpReport(comparison);
   const lensRows = presentedDxpLensRows(comparison);
   const pdf = await PDFDocument.create();
+  const accessibility = createPdfAccessibility(pdf);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const navy = rgb(0.125, 0.157, 0.251);
@@ -300,11 +324,11 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     && qualificationDecisionUsable(comparison) && vehicleReady;
   const provisionalLensUsable = decisionQuality.decision !== 'FAIL'
     && provisionalLensDecisionUsable(comparison);
-  const policyModelledChoice = hasMarketEligibilityAssessment(comparison)
+  const policyModelledChoice = !pdfWithheld && hasMarketEligibilityAssessment(comparison)
     && Boolean(result.recommendedOptionId)
     && (result.recommendationType === 'PRELIMINARY_MODELLED' || result.recommendationType === 'FINAL_RESEARCHED')
     && Boolean(result.recommendedOptionId);
-  const decisionVisible = !isBudgetNoMatch(comparison) && (Boolean(unverifiedEligibilityChoice) || provisionalChoice || (contractConfirmed && vehicleReady) || decisionUsable || provisionalLensUsable
+  const decisionVisible = !isBudgetNoMatch(comparison) && !pdfWithheld && (Boolean(unverifiedEligibilityChoice) || provisionalChoice || (contractConfirmed && vehicleReady) || decisionUsable || provisionalLensUsable
     || policyModelledChoice && vehicleReady);
   const reportQuality = classifyReportQuality(comparison, decisionVisible);
   const factorSummary = classifyReportFactorStatus(comparison);
@@ -358,8 +382,34 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     const size = options.size ?? 9;
     const lineHeight = options.lineHeight ?? size * 1.35;
     const lines = wrap(text, size, options.maxWidth ?? contentWidth, options.font ?? regular, options.preserveText).slice(0, options.maxLines);
-    lines.forEach((line, index) => page.drawText(line, { x, y: y - index * lineHeight, size, font: options.font ?? regular, color: options.color ?? navy }));
+    accessibility.paragraph(page, () => lines.forEach((line, index) => page.drawText(line, { x, y: y - index * lineHeight, size, font: options.font ?? regular, color: options.color ?? navy })));
     return y - lines.length * lineHeight;
+  };
+  const finishExport = async () => {
+    if (format === 'expanded') appendExpandedAnalysis({
+      pdf, accessibility, regular, bold, comparison,
+      chart: requirementsChartData(scoreChartVendors(comparison.vendorScores || [])),
+      frameworks: (() => {
+        const data = strategicFrameworkData(comparison);
+        return {
+          ...data,
+          presented: {
+            soar: presentedFrameworkEntries(data.soar, data.vendors, true).optionEntries,
+            swot: presentedFrameworkEntries(data.swot, data.vendors).optionEntries,
+            pestle: presentedFrameworkEntries(data.pestle, data.vendors).optionEntries,
+          },
+        };
+      })(),
+      vrio: vrioFindings(comparison.vendorScores || []).map((finding) => ({
+        ...finding,
+        implication: !isMissingReportValue(finding.vendor.vrio?.implication)
+          && hasOptionSpecificFrameworkEvidence(finding.vendor.vrio.implication)
+          ? finding.vendor.vrio.implication : null,
+      })),
+    });
+    accessibility.finish(validatedPromptTitle(comparison));
+    pdf.setCreator('DecisionIntel');
+    return pdf.save({ useObjectStreams: false });
   };
   const drawDecisionLines = (page: any, text: unknown, x: number, y: number, options: { size?: number; maxWidth?: number; lineHeight?: number; color?: any; maxLines?: number } = {}) => {
     const value = String(text ?? '');
@@ -378,16 +428,22 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     return nextY;
   };
   const addHeader = (page: any, title: string, subtitle: string) => {
-    page.drawRectangle({ x: 0, y: pageSize[1] - 84, width: pageSize[0], height: 84, color: navy });
-    page.drawText('DECISIONINTEL', { x: margin, y: pageSize[1] - 34, size: 9, font: bold, color: lime });
-    page.drawText(title, { x: margin, y: pageSize[1] - 58, size: 18, font: bold, color: cream });
-    page.drawText(subtitle, { x: margin, y: pageSize[1] - 74, size: 8, font: regular, color: rgb(0.78, 0.82, 0.88) });
+    accessibility.artifact(page, () => {
+      page.drawRectangle({ x: 0, y: pageSize[1] - 84, width: pageSize[0], height: 84, color: navy });
+      page.drawText('DECISIONINTEL', { x: margin, y: pageSize[1] - 34, size: 9, font: bold, color: lime });
+    });
+    if (pdf.getPageCount() === 1) {
+      accessibility.heading(page, 1, () => page.drawText(title, { x: margin, y: pageSize[1] - 58, size: 18, font: bold, color: cream }));
+    } else {
+      accessibility.heading(page, 2, () => page.drawText(title, { x: margin, y: pageSize[1] - 58, size: 18, font: bold, color: cream }));
+    }
+    accessibility.artifact(page, () => page.drawText(subtitle, { x: margin, y: pageSize[1] - 74, size: 8, font: regular, color: rgb(0.78, 0.82, 0.88) }));
     return pageSize[1] - 108;
   };
   const drawValidatedContext = (page: any, startY: number) => {
     const context = comparison.validatedContext;
     if (!context) return startY;
-    page.drawText('VALIDATED COMPARISON CONTEXT', { x: margin, y: startY, size: 9, font: bold, color: teal });
+    accessibility.heading(page, 2, () => page.drawText('VALIDATED COMPARISON CONTEXT', { x: margin, y: startY, size: 9, font: bold, color: teal }));
     let rowY = startY - 17;
     const columnWidth = (contentWidth - 14) / 2;
     for (let index = 0; index < CONTEXT_METADATA_FIELDS.length; index += 2) {
@@ -406,7 +462,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     .join(' | ');
   const drawDecisionInputOverview = (page: any, startY: number) => {
     const { counts, researchCompletionPercent, evidenceValidation } = factorSummary;
-    page.drawText('DECISION INPUTS: SCORES VS EVIDENCE', { x: margin, y: startY, size: 9, font: bold, color: teal });
+    accessibility.heading(page, 2, () => page.drawText('DECISION INPUTS: SCORES VS EVIDENCE', { x: margin, y: startY, size: 9, font: bold, color: teal }));
     let currentY = drawLines(page,
       `Research-backed: ${counts.RESEARCH_BACKED} | Modelled: ${counts.MODELLED_SCORE} | Partial: ${counts.PARTIAL} | Missing: ${counts.NOT_ASSESSED}. Research completion: ${researchCompletionPercent}%.`,
       margin, startY - 16, { size: 7.8, lineHeight: 10 }) - 2;
@@ -431,6 +487,215 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       }
     }
   };
+  // Shared vector graphics for every PDF branch, drawn from the same saved data
+  // as the browser "At a glance" and weighted-model sections. Nothing is
+  // estimated: missing or neutral-fallback values are drawn as missing.
+  const glanceStatusFill: Record<string, any> = {
+    RESEARCH_BACKED: teal,
+    PARTIAL: rgb(0.62, 0.81, 0.765),
+    MODELLED_SCORE: rgb(0.937, 0.89, 0.706),
+    NOT_ASSESSED: cream,
+  };
+  const glanceStatusLabel: Record<string, string> = {
+    RESEARCH_BACKED: 'Research-backed', PARTIAL: 'Partial evidence', MODELLED_SCORE: 'Modelled, unverified', NOT_ASSESSED: 'Missing',
+  };
+  const drawHatch = (page: any, x: number, y: number, width: number, height: number) => {
+    for (let offset = 4; offset < width + height; offset += 6) {
+      const x1 = x + Math.max(0, offset - height);
+      const x2 = x + Math.min(width, offset);
+      if (x2 - x1 < 0.5) continue;
+      page.drawLine({
+        start: { x: x1, y: y + Math.min(height, offset - (x1 - x)) },
+        end: { x: x2, y: y + Math.max(0, offset - (x2 - x)) },
+        thickness: 0.8, color: cream, opacity: 0.45,
+      });
+    }
+  };
+  const drawSectionKicker = (page: any, kicker: string, title: string, x: number, startY: number) => {
+    accessibility.artifact(page, () => page.drawText(kicker.toUpperCase(), { x, y: startY, size: 7.5, font: bold, color: teal }));
+    accessibility.heading(page, 2, () => page.drawText(clean(title), { x, y: startY - 17, size: 13, font: bold, color: navy }));
+    return startY - 30;
+  };
+  const glanceRanked = [...result.optionScores].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999)).slice(0, 6);
+  const glanceShownWinner = glanceWinner(comparison);
+  const drawGlanceGraphic = (page: any, startY: number, options: { winner?: string | null } = {}) => {
+    const shown = options.winner === undefined ? glanceShownWinner : options.winner;
+    let y = drawSectionKicker(page, 'At a glance', 'Scores and evidence, side by side', margin, startY);
+    y = drawLines(page, result.resultState === 'RESEARCH_BACKED'
+      ? 'Bars show saved weighted scores. Research-backed where marked.'
+      : 'Bars show saved weighted scores. Scores are modelled and not independently verified.',
+    margin, y, { size: 7.5, lineHeight: 10, color: grey }) - 8;
+    const chartAlt = `Scores and evidence for ${glanceRanked.map((option) => {
+      const score = option.researchBackedScore ?? option.modelledScore;
+      return `${option.optionId}: ${score == null ? 'no usable score' : `${Math.round(Number(score))} out of 100, ${option.researchBackedScore != null ? 'research-backed' : 'modelled, unverified'}`}`;
+    }).join('; ')}. Modelled coverage ${result.modelledCoverage} percent; validated research coverage ${result.researchCoverage} percent. ${shown ? `Shown choice: ${shown}.` : 'No choice is shown.'} Criteria evidence map: ${factorSummary.factors.slice(0, 10).map((factor) =>
+      `${factor.factor}: ${glanceRanked.map((option) => {
+        const cell = factor.vendors.find((item) => item.vendor === option.optionId);
+        return `${option.optionId} ${glanceStatusLabel[cell?.status ?? 'NOT_ASSESSED'] || 'Missing'}${cell?.score == null ? '' : ` ${Math.round(cell.score)} out of 100`}`;
+      }).join(', ')}`).join('; ') || 'No criteria recorded'}. ${factorSummary.factors.length > 10 ? `The remaining ${factorSummary.factors.length - 10} criteria appear in Decision inputs.` : ''}`;
+    let chartBottom = y;
+    accessibility.figure(page, chartAlt, () => {
+    const gap = 18;
+    const leftWidth = factorSummary.factors.length ? Math.round(contentWidth * 0.5) : contentWidth;
+    const rightX = margin + leftWidth + gap;
+    const rightWidth = contentWidth - leftWidth - gap;
+    const topY = y;
+    page.drawText('WEIGHTED SCORE / 100', { x: margin, y, size: 7, font: bold, color: grey });
+    let leftY = y - 14;
+    for (const option of glanceRanked) {
+      const score = option.researchBackedScore ?? option.modelledScore;
+      const basis = option.researchBackedScore != null ? 'Research-backed' : option.modelledScore != null ? 'Modelled' : null;
+      const isShown = Boolean(shown) && option.optionId === shown;
+      const label = `${option.rank ? `${option.rank}. ` : ''}${option.optionId}: ${basis ? `${basis} score ${Math.round(Number(score))}/100` : 'N/A - no usable score'}${isShown ? ' (shown choice)' : ''}`;
+      leftY = drawLines(page, label, margin, leftY, { size: 7.4, lineHeight: 9, maxWidth: leftWidth, maxLines: 2, font: isShown ? bold : regular, color: isShown ? teal : navy }) - 1;
+      page.drawRectangle({ x: margin, y: leftY - 2, width: leftWidth, height: 8, color: rgb(0.89, 0.867, 0.812) });
+      if (score != null) {
+        const barWidth = leftWidth * Math.max(2, Math.min(100, Number(score))) / 100;
+        page.drawRectangle({ x: margin, y: leftY - 2, width: barWidth, height: 8, color: isShown ? teal : navy });
+        if (option.researchBackedScore == null) drawHatch(page, margin, leftY - 2, barWidth, 8);
+      }
+      leftY -= 15;
+    }
+    if (result.roundedTieBreak) {
+      leftY = drawLines(page, `Close result: ${result.roundedTieBreak.winnerScore} vs ${result.roundedTieBreak.runnerUpScore} after rounding.`,
+        margin, leftY, { size: 7.2, lineHeight: 9, maxWidth: leftWidth, color: red }) - 4;
+    }
+    const meterWidth = (leftWidth - 10) / 2;
+    ([['Modelled coverage', result.modelledCoverage, navy], ['Validated research coverage', result.researchCoverage, teal]] as const)
+      .forEach(([label, value, tone], index) => {
+        const x = margin + index * (meterWidth + 10);
+        const pct = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+        page.drawText(`${label} ${pct}%`, { x, y: leftY, size: 6.8, font: bold, color: grey });
+        page.drawRectangle({ x, y: leftY - 9, width: meterWidth, height: 5, color: rgb(0.89, 0.867, 0.812) });
+        if (pct > 0) page.drawRectangle({ x, y: leftY - 9, width: meterWidth * pct / 100, height: 5, color: tone });
+      });
+    leftY -= 20;
+    let rightY = topY;
+    if (factorSummary.factors.length) {
+      page.drawText('CRITERIA EVIDENCE MAP', { x: rightX, y: rightY, size: 7, font: bold, color: grey });
+      rightY -= 12;
+      const labelWidth = Math.min(92, rightWidth * 0.42);
+      const cols = Math.max(1, glanceRanked.length);
+      const cellGap = 2;
+      const cellWidth = Math.max(14, (rightWidth - labelWidth - cellGap * cols) / cols);
+      glanceRanked.forEach((option, index) => {
+        const x = rightX + labelWidth + index * (cellWidth + cellGap);
+        page.drawText(String(option.rank ?? index + 1), { x: x + cellWidth / 2 - 2, y: rightY, size: 7, font: bold, color: navy });
+      });
+      rightY -= 5;
+      const rows = factorSummary.factors.slice(0, 10);
+      for (const factor of rows) {
+        const cellHeight = 13;
+        const rowTop = rightY;
+        drawLines(page, factor.factor, rightX, rowTop - 8, { size: 6.6, lineHeight: 7, maxWidth: labelWidth - 4, maxLines: 1, color: grey });
+        glanceRanked.forEach((option, index) => {
+          const cell = factor.vendors.find((item) => item.vendor === option.optionId);
+          const status = cell?.status ?? 'NOT_ASSESSED';
+          const x = rightX + labelWidth + index * (cellWidth + cellGap);
+          page.drawRectangle({
+            x, y: rowTop - cellHeight, width: cellWidth, height: cellHeight - 1,
+            color: glanceStatusFill[status] ?? cream,
+            borderColor: status === 'NOT_ASSESSED' ? rgb(0.79, 0.757, 0.682) : undefined,
+            borderWidth: status === 'NOT_ASSESSED' ? 0.6 : 0,
+          });
+          const value = cell?.score != null ? String(Math.round(cell.score)) : '-';
+          page.drawText(value, {
+            x: x + cellWidth / 2 - regular.widthOfTextAtSize(value, 6.6) / 2, y: rowTop - cellHeight + 3.5,
+            size: 6.6, font: bold, color: status === 'RESEARCH_BACKED' ? cream : navy,
+          });
+        });
+        rightY -= cellHeight + 1;
+      }
+      if (factorSummary.factors.length > rows.length) {
+        rightY = drawLines(page, `${factorSummary.factors.length - rows.length} further criteria appear in Decision inputs.`, rightX, rightY - 3,
+          { size: 6.6, lineHeight: 8, maxWidth: rightWidth, color: grey });
+      }
+      rightY -= 6;
+      const legend = (Object.keys(glanceStatusLabel) as Array<keyof typeof factorSummary.counts>)
+        .map((key) => ({ key, text: `${glanceStatusLabel[key]} (${factorSummary.counts[key]})` }));
+      legend.forEach((entry, index) => {
+        const x = rightX + (index % 2) * (rightWidth / 2);
+        const ly = rightY - Math.floor(index / 2) * 10;
+        page.drawRectangle({ x, y: ly - 1, width: 6, height: 6, color: glanceStatusFill[entry.key] ?? cream,
+          borderColor: entry.key === 'NOT_ASSESSED' ? grey : undefined, borderWidth: entry.key === 'NOT_ASSESSED' ? 0.5 : 0 });
+        page.drawText(entry.text, { x: x + 9, y: ly, size: 6.4, font: regular, color: grey });
+      });
+      rightY -= Math.ceil(legend.length / 2) * 10 + 2;
+      rightY = drawLines(page, 'Columns follow the rank numbers on the left.', rightX, rightY, { size: 6.4, lineHeight: 8, maxWidth: rightWidth, color: grey });
+    }
+    chartBottom = Math.min(leftY, rightY) - 8;
+    });
+    return chartBottom;
+  };
+  const needsCriterionValid = (row: any) => row && !isFallbackNeutralCriterion(row)
+    && Number.isFinite(Number(row.score)) && Number(row.score) >= 0 && Number(row.score) <= 100
+    && Number.isFinite(Number(row.weight)) && Number(row.weight) > 0 && Number(row.weight) <= 100;
+  // Mirrors the browser ScoreCharts: rows are criteria present in the saved
+  // weighted model; per option the bar is the saved score, with its
+  // contribution (score x weight / 100). Unscored or neutral cells read N/A.
+  const drawNeedsChart = (
+    getPage: () => { page: any; y: number },
+    setY: (y: number) => void,
+    newPage: () => { page: any; y: number },
+    options: { label?: 'modelled' | 'weighted'; lensNames?: string[] } = {},
+  ) => {
+    const scoreVendors = glanceRanked
+      .map((option) => toArray<any>(comparison.vendorScores).find((row: any) => row.vendor === option.optionId))
+      .filter(Boolean);
+    const vendors = scoreVendors.length ? scoreVendors : toArray<any>(comparison.vendorScores).slice(0, 6);
+    const lenses = options.lensNames ?? [...new Set(vendors.flatMap((vendor: any) =>
+      toArray<any>(vendor.weightedScores).filter((item: any) => Number(item.weight) > 0).map((item: any) => clean(item.criterion))))];
+    if (!lenses.length) return false;
+    let { page, y } = getPage();
+    y = drawSectionKicker(page, 'Weighted decision model', 'How the options score against your needs', margin, y);
+    y = drawLines(page, 'Each bar is the saved criterion score out of 100; points show its weighted contribution. Missing or neutral fallback scores are shown as N/A and are not plotted.',
+      margin, y, { size: 7.5, lineHeight: 10, color: grey }) - 6;
+    const labelWidth = 150;
+    const barX = margin + labelWidth + 8;
+    const valueWidth = 120;
+    const barWidth = contentWidth - labelWidth - 8 - valueWidth - 6;
+    for (const lens of lenses) {
+      const rowHeight = 14 + vendors.length * 11;
+      if (y - rowHeight < 48) {
+        const next = newPage();
+        page = next.page; y = next.y;
+      }
+      const weight = toArray<any>(vendors[0]?.weightedScores).find((item: any) => clean(item.criterion) === lens)?.weight;
+      const chartAlt = `${lens}, ${Number(weight) || 0} percent weight. ${vendors.map((vendor: any) => {
+        const item = toArray<any>(vendor.weightedScores).find((candidate: any) => clean(candidate.criterion) === lens);
+        return `${clean(vendor.vendor)}: ${needsCriterionValid(item) ? `${Math.round(Number(item.score))} out of 100, ${(Number(item.score) * Number(item.weight) / 100).toFixed(1)} weighted points${options.label === 'modelled' ? ', modelled' : ''}` : 'N/A, no usable score'}`;
+      }).join('; ')}.`;
+      let figureY = y;
+      accessibility.figure(page, chartAlt, () => {
+      figureY = drawLines(page, `${lens} (${Number(weight) || 0}% weight)`, margin, figureY, { size: 8, font: bold, lineHeight: 10, maxWidth: contentWidth }) - 2;
+      for (const vendor of vendors) {
+        const item = toArray<any>(vendor.weightedScores).find((candidate: any) => clean(candidate.criterion) === lens);
+        const usable = needsCriterionValid(item);
+        const score = usable ? Math.round(Number(item.score)) : null;
+        const isShown = Boolean(glanceShownWinner) && vendor.vendor === glanceShownWinner;
+        const label = options.label === 'modelled'
+          ? `${clean(vendor.vendor)}: ${score === null ? 'N/A' : `Modelled ${score}/100`}`
+          : clean(vendor.vendor);
+        const nextY = drawLines(page, label, margin + 8, figureY, { size: 7, lineHeight: 8, maxWidth: labelWidth - 8, maxLines: 2, font: isShown ? bold : regular, color: isShown ? teal : navy });
+        page.drawRectangle({ x: barX, y: figureY - 1.5, width: barWidth, height: 6, color: rgb(0.89, 0.867, 0.812) });
+        if (score !== null) {
+          const width = barWidth * Math.max(1, score) / 100;
+          page.drawRectangle({ x: barX, y: figureY - 1.5, width, height: 6, color: isShown ? teal : navy });
+          if (options.label === 'modelled') drawHatch(page, barX, figureY - 1.5, width, 6);
+        }
+        const value = score === null ? 'N/A'
+          : options.label === 'modelled' ? `${(Number(item.score) * Number(item.weight) / 100).toFixed(1)} of ${Number(item.weight)} pts`
+            : `${score}/100 - ${(Number(item.score) * Number(item.weight) / 100).toFixed(1)} of ${Number(item.weight)} pts`;
+        drawLines(page, value, barX + barWidth + 6, figureY, { size: 7, lineHeight: 8, maxWidth: valueWidth, maxLines: 1, font: bold });
+        figureY = Math.min(figureY, nextY + 8);
+        figureY -= 11;
+      }
+      });
+      y = figureY - 5;
+    }
+    setY(y);
+    return true;
+  };
   const preliminaryDecisionMarker = Boolean(unverifiedEligibilityChoice)
     || comparison.researchStatus === 'partial'
     || comparison.confirmedRecommendation?.basis === 'EVIDENCE_LIMITED'
@@ -438,7 +703,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     || (Array.isArray(comparison.contextAssumptions)
       && comparison.contextAssumptions.some((item: unknown) => typeof item === 'string'
         && /preliminary Decision Mode scorecard|all comparative scores.*modelled assumptions/i.test(item)));
-  const useModelledDecisionPages = result.resultState === 'MODELLED_PARTIAL' && result.recommendedOptionId
+  const useModelledDecisionPages = !pdfWithheld && result.resultState === 'MODELLED_PARTIAL' && result.recommendedOptionId
     && vehicleReady
     && (Boolean(unverifiedEligibilityChoice)
       || recommendationNeedsModelledFallback(comparison)
@@ -452,8 +717,10 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
         y = drawLines(page, `${pdfVersionSummary}. ${pdfWeightDetails}`, margin, y,
           { size: 8, lineHeight: 12 }) - 6;
       }
-      y = drawLines(page, `MARKET ELIGIBILITY STATUS — ${pdfEligibilitySummary}`, margin, y,
-        { size: 7.8, lineHeight: 11 }) - 8;
+      if (title === 'Decision Summary' && pdfEligibilityWarning) {
+        y = drawLines(page, `ELIGIBILITY WARNING — ${pdfEligibilityWarning}`, margin, y,
+          { size: 7.8, lineHeight: 11, font: bold, color: red, maxLines: 3 }) - 8;
+      }
       return { page, y, title, currentSection: '' };
     };
     const preliminaryBottom = 40;
@@ -465,7 +732,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
           state.y = next.y;
           state.currentSection = '';
         }
-        state.page.drawText(title.toUpperCase(), { x: margin, y: state.y, size: 8.5, font: bold, color: teal });
+        accessibility.heading(state.page, 2, () => state.page.drawText(title.toUpperCase(), { x: margin, y: state.y, size: 8.5, font: bold, color: teal }));
         state.y -= 14;
         state.currentSection = title;
       }
@@ -547,31 +814,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
         ? `${result.recommendedOptionId} is the server-declared alphabetical tie-break among valid options. No usable score or eligibility was established, so this is not a modelled lead.`
         : `${result.recommendedOptionId} leads the saved weighted scorecard. This is a modelled preference, not a verified product advantage.`),
     );
-    decision.page.drawText(unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
-      ? 'COMPARED OPTIONS · UNRANKED'
-      : 'WEIGHTED OPTION SCORES · MODELLED', {
-      x: margin, y: decision.y, size: 8.5, font: bold, color: teal,
-    });
-    decision.y -= 17;
-    for (const option of [...result.optionScores].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999)).slice(0, 6)) {
-      drawLines(decision.page, `${option.rank ?? '—'}. ${option.optionId}`, margin, decision.y + 3,
-        { size: 7.5, lineHeight: 8.5, font: bold, maxWidth: 130, maxLines: 2 });
-      const barX = margin + 138;
-      const barWidth = contentWidth - 161;
-      decision.page.drawRectangle({ x: barX, y: decision.y - 1, width: barWidth, height: 7, color: grey, opacity: 0.18 });
-      if (option.modelledScore !== null) {
-        decision.page.drawRectangle({
-          x: barX, y: decision.y - 1,
-          width: barWidth * Math.max(0, Math.min(100, option.modelledScore)) / 100,
-          height: 7, color: option.optionId === result.recommendedOptionId ? teal : red,
-        });
-      }
-      decision.page.drawText(option.modelledScore === null ? 'N/A' : `${option.modelledScore}/100`, {
-        x: pageSize[0] - margin - 38, y: decision.y, size: 8, font: bold, color: navy,
-      });
-      decision.y -= 17;
-    }
-    decision.y -= 3;
+    // Option score bars live once, in At a glance on the next page.
     drawPreliminarySection(decision, unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
       ? 'Other options · unranked' : 'Trade-offs to weigh',
       unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
@@ -603,47 +846,41 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
         ? 'No usable saved scores · no ranking' : 'Saved weighted inputs · not verified product facts',
     );
-    scorecard.page.drawText(unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
-      ? 'SCORES · NOT AVAILABLE'
-      : 'OVERALL MODELLED OPTION SCORES', { x: margin, y: scorecard.y, size: 9, font: bold, color: teal });
-    scorecard.y -= 18;
-    for (const option of result.optionScores.slice(0, 6)) {
-      scorecard.y = drawLines(scorecard.page,
-        `${option.optionId}: ${option.modelledScore === null ? 'N/A — no usable modelled score' : `Modelled score ${option.modelledScore}/100`}${option.optionId === result.closestAlternative ? ' · closest alternative' : ''}`,
-        margin, scorecard.y, { size: 9, lineHeight: 12 }) - 4;
-    }
-    scorecard.y = drawLines(scorecard.page,
-      `Modelled decision coverage: ${result.modelledCoverage}% · Validated research coverage: ${result.researchCoverage}% · Research status: ${result.researchStatus}`,
-      margin, scorecard.y - 5, { size: 8, lineHeight: 11, maxLines: 2 }) - 16;
-    scorecard.page.drawText(unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
-      ? 'WEIGHTED LENS SCORES · NONE RECORDED'
-      : 'WEIGHTED LENS SCORES', { x: margin, y: scorecard.y, size: 9, font: bold, color: teal });
-    scorecard.y -= 18;
     const scoreVendors = toArray<any>(comparison.vendorScores).slice(0, 6);
     const lensNames = [...new Set(scoreVendors.flatMap((vendor: any) =>
       toArray<any>(vendor.weightedScores).filter((item: any) => Number(item.weight) > 0)
         .map((item: any) => clean(item.criterion))))];
-    for (const lens of lensNames) {
-      if (scorecard.y < 95) {
-        const continuation = preliminaryPage('Modelled Scorecard continued');
-        scorecard.page = continuation.page;
-        scorecard.y = continuation.y;
+    if (unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED') {
+      scorecard.page.drawText('SCORES · NOT AVAILABLE', { x: margin, y: scorecard.y, size: 9, font: bold, color: teal });
+      scorecard.y -= 18;
+      for (const option of result.optionScores.slice(0, 6)) {
+        scorecard.y = drawLines(scorecard.page,
+          `${option.optionId}: ${option.modelledScore === null ? 'N/A — no usable modelled score' : `Modelled score ${formatReportScore(option.modelledScore)}/100`}`,
+          margin, scorecard.y, { size: 9, lineHeight: 12 }) - 4;
       }
-      const vendorScores = scoreVendors.map((vendor: any) => {
-        const item = toArray<any>(vendor.weightedScores).find((candidate: any) => clean(candidate.criterion) === lens);
-        const value = item?.score;
-        const hasModelledScore = Number(item?.weight) > 0
-          && !isFallbackNeutralCriterion(item)
-          && value !== null && value !== undefined && Number.isFinite(Number(value))
-          && Number(value) >= 0 && Number(value) <= 100;
-        return `${clean(vendor.vendor)}: ${hasModelledScore ? `Modelled ${Math.round(Number(value))}/100` : 'N/A'}`;
-      });
-      const weight = toArray<any>(scoreVendors[0]?.weightedScores)
-        .find((item: any) => clean(item.criterion) === lens)?.weight;
-      scorecard.y = drawLines(scorecard.page, `${lens} (${Number(weight) || 0}% weight)`,
-        margin, scorecard.y, { size: 8.5, font: bold, lineHeight: 11 }) - 2;
-      scorecard.y = drawLines(scorecard.page, vendorScores.join('  |  '),
-        margin + 8, scorecard.y, { size: 8, lineHeight: 10, maxLines: 2 }) - 7;
+    } else {
+      // Scores and evidence side by side, then the weighted model graphic.
+      scorecard.y = drawGlanceGraphic(scorecard.page, scorecard.y,
+        { winner: unverifiedEligibilityChoice?.option ?? result.recommendedOptionId });
+    }
+    scorecard.y = drawLines(scorecard.page,
+      `Modelled decision coverage: ${result.modelledCoverage}% · Validated research coverage: ${result.researchCoverage}% · Research status: ${result.researchStatus}${result.closestAlternative ? ` · Closest alternative: ${result.closestAlternative}` : ''}`,
+      margin, scorecard.y - 2, { size: 8, lineHeight: 11, maxLines: 2 }) - 14;
+    if (unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED') {
+      scorecard.page.drawText('WEIGHTED LENS SCORES · NONE RECORDED', { x: margin, y: scorecard.y, size: 9, font: bold, color: teal });
+      scorecard.y -= 18;
+    } else {
+      drawNeedsChart(
+        () => ({ page: scorecard.page, y: scorecard.y }),
+        (nextY) => { scorecard.y = nextY; },
+        () => {
+          const continuation = preliminaryPage('Modelled Scorecard continued');
+          scorecard.page = continuation.page;
+          scorecard.y = continuation.y;
+          return continuation;
+        },
+        { label: 'modelled', lensNames },
+      );
     }
     if (scorecard.y < 62) {
       const continuation = preliminaryPage('Modelled Scorecard continued');
@@ -720,7 +957,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
       .map((option) => unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
         ? `${option.optionId} — unranked; no usable score and eligibility is unverified.`
-        : `${option.rank ?? '—'}. ${option.optionId} — ${option.modelledScore === null ? 'score unknown' : `modelled ${option.modelledScore}/100`}; not selected under the current weighted priorities.`)
+        : `${option.rank ?? '—'}. ${option.optionId} — ${option.modelledScore === null ? 'score unknown' : `modelled ${formatReportScore(option.modelledScore)}/100`}; not selected under the current weighted priorities.`)
       .join(' ') || (unverifiedEligibilityChoice?.kind === 'ALPHABETICAL_UNSCORED'
         ? 'No alternative option was recorded.'
         : 'No alternative option was recorded.'));
@@ -788,6 +1025,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     const sources = toArray<any>(comparison.sourceAvailability).filter(isVisibleSourceInList);
     const claimSources = [...new Set(evidenceClaims.map((entry: any) => entry.source))];
     const sourcePage = preliminaryPage('Assumptions, Limitations and Sources', 'Basis and provenance for this preliminary report');
+    drawPreliminarySection(sourcePage, 'Market eligibility status', pdfEligibilitySummary, { size: 7.8, lineHeight: 10.5 });
     drawPreliminarySection(sourcePage, 'Assumptions to verify',
       assumptions.join(' ') || 'No additional user-supplied context assumptions were recorded. Treat all unsourced modelled scores and rationale as assumptions.',
     );
@@ -808,12 +1046,10 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       }
     }
     pdf.getPages().forEach((reportPage, index) => reportPage.drawText(
-      `DecisionIntel  |  Modelled decision report  |  Page ${index + 1} of ${pdf.getPageCount()}`,
+      `DecisionIntel  |  Modelled decision report  |  Page ${index + 1}${format === 'expanded' ? ' - expanded analysis follows' : ` of ${pdf.getPageCount()}`}`,
       { x: margin, y: 14, size: 6.8, font: regular, color: grey },
     ));
-    pdf.setTitle(validatedPromptTitle(comparison));
-    pdf.setCreator('DecisionIntel');
-    return pdf.save({ useObjectStreams: false });
+    return finishExport();
   }
   if (hasRecommendationContinuityContract(comparison)
     ? result.resultState === 'INSUFFICIENT_TO_SCORE'
@@ -827,17 +1063,17 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       { size: 8, lineHeight: 11 }) - 12;
     page.drawText('DECISION STATUS  |  INSUFFICIENT DATA', { x: margin, y: exceptionY, size: 10, font: bold, color: red });
     exceptionY -= 27;
-    page.drawText('WHY THE COMPARISON STOPPED', { x: margin, y: exceptionY, size: 9, font: bold, color: teal });
+    accessibility.heading(page, 2, () => page.drawText('WHY THE COMPARISON STOPPED', { x: margin, y: exceptionY, size: 9, font: bold, color: teal }));
     exceptionY = drawLines(page, reportQuality.reason, margin, exceptionY - 17, { size: 10, lineHeight: 14, maxLines: 3 }) - 18;
-    page.drawText('MISSING EVIDENCE', { x: margin, y: exceptionY, size: 9, font: bold, color: teal });
+    accessibility.heading(page, 2, () => page.drawText('MISSING EVIDENCE', { x: margin, y: exceptionY, size: 9, font: bold, color: teal }));
     exceptionY -= 17;
     reportQuality.optionCoverage.slice(0, 6).forEach((row) => {
       exceptionY = drawLines(page, `${row.option}: ${row.evidence} validated decision lens${row.evidence === 1 ? '' : 'es'}.`, margin, exceptionY, { size: 9, lineHeight: 13, maxLines: 2 }) - 3;
     });
     exceptionY -= 13;
-    page.drawText('MISSING DIMENSIONS', { x: margin, y: exceptionY, size: 9, font: bold, color: teal });
+    accessibility.heading(page, 2, () => page.drawText('MISSING DIMENSIONS', { x: margin, y: exceptionY, size: 9, font: bold, color: teal }));
     exceptionY = drawLines(page, reportQuality.missingDimensions.join(', ') || 'No common source-backed decision lens.', margin, exceptionY - 18, { size: 9, lineHeight: 13, maxLines: 3 }) - 22;
-    page.drawText('RECOMMENDED NEXT STEPS', { x: margin, y: exceptionY, size: 9, font: bold, color: teal });
+    accessibility.heading(page, 2, () => page.drawText('RECOMMENDED NEXT STEPS', { x: margin, y: exceptionY, size: 9, font: bold, color: teal }));
     exceptionY -= 18;
     ['Confirm the exact decision context and shortlist.', 'Provide the same decision criteria for every option.',
       'Retrieve publisher-permitted, comparable evidence for every option before scoring.'].forEach((action, index) => {
@@ -849,22 +1085,22 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       appendFactorContinuation();
     }
     drawValidatedContext(page, exceptionY - 12);
-    pdf.getPages().forEach((reportPage, index) => reportPage.drawText(`DecisionIntel  |  Decision exception  |  Page ${index + 1} of ${pdf.getPageCount()}`, { x: margin, y: 14, size: 6.8, font: regular, color: grey }));
-    pdf.setTitle(validatedPromptTitle(comparison));
-    pdf.setCreator('DecisionIntel');
-    return pdf.save({ useObjectStreams: false });
+    pdf.getPages().forEach((reportPage, index) => reportPage.drawText(`DecisionIntel  |  Decision exception  |  Page ${index + 1}${format === 'expanded' ? ' - expanded analysis follows' : ` of ${pdf.getPageCount()}`}`, { x: margin, y: 14, size: 6.8, font: regular, color: grey }));
+    return finishExport();
   }
   const summary = pdf.addPage(pageSize);
-  let y = addHeader(summary, vehicleReport ? 'Vehicle Purchase Decision' : 'C-Suite Decision Summary', comparisonTypeLabel(comparison));
+  let y = addHeader(summary, vehicleReport ? 'Vehicle Purchase Decision' : 'Decision Summary', comparisonTypeLabel(comparison));
   y = drawLines(summary, `${pdfVersionSummary}. ${pdfWeightDetails}`,
     margin, y, { size: 8, lineHeight: 12 }) - 6;
   y = drawLines(summary, validatedPromptTitle(comparison), margin, y, { size: 15, lineHeight: 18, font: bold, maxLines: 3, preserveText: true });
   y -= 10;
-  summary.drawText('MARKET ELIGIBILITY STATUS', { x: margin, y, size: 8, font: bold, color: teal });
-  y = drawLines(summary, `${pdfEligibilitySummary}${pdfMarketRelevance ? ` | Market relevance: ${pdfMarketRelevance}` : ''}`, margin + 16, y - 15,
-    { size: 8, lineHeight: 11, maxLines: 6, color: grey }) - 10;
+  if (pdfEligibilityWarning) {
+    y = drawLines(summary, `ELIGIBILITY WARNING — ${pdfEligibilityWarning}`, margin, y,
+      { size: 8, lineHeight: 11, maxLines: 3, font: bold, color: red }) - 8;
+  }
   summary.drawRectangle({ x: margin, y: y - 83, width: contentWidth, height: 83, color: teal });
-  summary.drawText(policyModelledChoice
+  summary.drawText(pdfWithheld ? 'DECISION WITHHELD · NO OPTION RECOMMENDED'
+    : policyModelledChoice
     ? result.recommendationType === 'FINAL_RESEARCHED' ? 'RESEARCH-BACKED RECOMMENDATION' : 'PRELIMINARY RECOMMENDATION · RECOMMENDED OPTION · LOW CONFIDENCE'
     : reportQuality.state === 'PARTIAL' ? 'WINNER SO FAR - PARTIAL DECISION'
       : provisionalChoice ? 'PROVISIONAL RECOMMENDATION'
@@ -872,55 +1108,24 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     x: margin + 16, y: y - 21, size: 8, font: bold, color: cream,
   });
   summary.drawText(clean(decisionVisible ? visibleRecommendation : vehicleReport && !(comparison.vendorScores || []).some((row: any) => row.marketRelevance?.participationStatus) ? 'Decision on hold' : decisionOutcomeLabel(comparison as unknown as Record<string, unknown>)), { x: margin + 16, y: y - 48, size: 21, font: bold, color: lime });
-  const decisionScoreForPdf = policyModelledChoice
+  const decisionScoreForPdf = !decisionVisible ? null : policyModelledChoice
     ? result.optionScores.find((option) => option.optionId === result.recommendedOptionId)?.modelledScore
     : decisionUsable && !provisionalChoice ? Math.round(Number(comparison.score) || 0) : null;
   if (decisionScoreForPdf !== null && decisionScoreForPdf !== undefined) summary.drawText(`${Math.round(decisionScoreForPdf)}/100`, { x: pageSize[0] - margin - 75, y: y - 48, size: 20, font: bold, color: cream });
   y -= 105;
-  summary.drawText('EXECUTIVE RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
+  summary.drawText('BUSINESS RATIONALE', { x: margin, y, size: 8, font: bold, color: teal });
    y = drawDecisionLines(summary,
-      vehicleReport && !vehicleReady && !provisionalChoice
+      pdfWithheld
+       ? `${pdfOutcome.outcome} ${pdfOutcome.nextAction}`
+       : vehicleReport && !vehicleReady && !provisionalChoice
        ? 'Only a limited evidence lead may be established; no purchase-ready winner or overall fit score is supported. Verify local availability, like-for-like on-road prices, safety, service costs and the exact variant before choosing.'
        : evidenceSafeExecutiveSummary(comparison),
      margin, y - 16, { size: 9.5, lineHeight: 13.5, maxLines: 7, color: grey });
   y -= 8;
-  summary.drawText(indicativeDxp || assumptionScorecard ? 'ASSUMPTION-BASED FIT SCORES' : 'WEIGHTED OPTION SCORES', { x: margin, y, size: 8, font: bold, color: teal });
-  y -= 19;
-  const canonicalPdfScores = (result.optionScores || [])
-    .slice()
-    .sort((left: any, right: any) => (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER));
-  const rankedPdfRows = canonicalPdfScores.length
-    ? canonicalPdfScores.slice(0, 6).map((option: any) => ({
-      rank: option.rank,
-      optionId: option.optionId,
-      canonicalScore: option.modelledScore,
-      vendor: toArray<any>(comparison.vendorScores).find((row: any) => row.vendor === option.optionId),
-    }))
-    : toArray<any>(comparison.vendorScores).slice(0, 6).map((vendor: any, index: number) => ({
-      rank: index + 1,
-      optionId: vendor.vendor,
-      canonicalScore: vendor.score,
-      vendor,
-    }));
-  rankedPdfRows.forEach(({ rank, optionId, canonicalScore, vendor }: any) => {
-    if (!vendor) return;
-    const scoreEligible = pdfScoreEligible(vendor);
-    const modelledScore = evidenceLimitedModelScore(vendor);
-    const estimate = indicativeDxp && marketEligibilityScoreable(vendor, comparison)
-      ? indicativeFitScore(comparison, optionId) : null;
-    const score = Number.isFinite(canonicalScore)
-      ? Math.max(0, Math.min(100, Number(canonicalScore)))
-      : estimate ?? Math.max(0, Math.min(100, Number(vendor.score) || 0));
-    summary.drawText(`${rank ? `#${rank}` : 'Unranked'} ${clean(optionId)}`, { x: margin, y, size: 8.5, font: bold, color: navy });
-    summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290, height: 9, color: rgb(0.88, 0.86, 0.8) });
-    if (scoreEligible || estimate !== null || modelledScore !== null || Number.isFinite(canonicalScore)) summary.drawRectangle({ x: margin + 128, y: y - 1, width: 290 * score / 100, height: 9, color: estimate !== null || decisionUsable && optionId === comparison.recommendation ? teal : red });
-    summary.drawText(estimate !== null ? `Est. ${score}/100` : Number.isFinite(canonicalScore) ? `${Math.round(score)}/100` : scoreEligible ? `${Math.round(score)}` : modelledScore !== null ? `Modelled ${modelledScore}` : 'Not scored', { x: margin + 428, y, size: 8.5, font: bold, color: navy });
-    y -= 21;
-  });
-  y -= 3;
+  // Option totals are drawn once, in the At a glance page that follows.
   const keyRisk = comparison.functionalGaps?.find((gap: any) => ['critical', 'high'].includes(String(gap.severity).toLowerCase())) ?? comparison.functionalGaps?.[0];
   const firstGate = comparison.decisionGovernance?.[0];
-  const leadScorecard = toArray<any>(comparison.vendorScores).find((row: any) => row.vendor === visibleRecommendation);
+  const leadScorecard = decisionVisible ? toArray<any>(comparison.vendorScores).find((row: any) => row.vendor === visibleRecommendation) : undefined;
   const activeLenses = toArray<any>(leadScorecard?.weightedScores).filter((row: any) => Number(row.weight) > 0)
     .map((row: any) => `${clean(row.criterion)} ${row.weight}%`).join(' | ');
   const tradeOff = toTextList(leadScorecard?.switchConditions).find((item) => !isMissingReportValue(item));
@@ -961,26 +1166,40 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   y -= 15;
   actions.forEach((action: string, index: number) => { y = drawLines(summary, `${index + 1}. ${action}`, margin, y, { size: 8.5, lineHeight: 11.5, maxLines: 2 }); y -= 3; });
   summary.drawText(vehicleReport ? 'Decision conditions, comparison evidence and sources follow.' : 'Available findings, decision lenses and sources follow.', { x: margin, y: 24, size: 7.5, font: regular, color: grey });
+  // Page two: scores and evidence side by side, then the weighted model.
+  if (pdfOutcomeGate !== 'NOT_COMPARABLE' && pdfOutcomeGate !== 'CLARIFICATION_REQUIRED') {
+    let glancePage = pdf.addPage(pageSize);
+    let glanceY = addHeader(glancePage, 'At a Glance and Weighted Model', comparisonTypeLabel(comparison));
+    glanceY = drawGlanceGraphic(glancePage, glanceY);
+    drawNeedsChart(
+      () => ({ page: glancePage, y: glanceY }),
+      (nextY) => { glanceY = nextY; },
+      () => {
+        glancePage = pdf.addPage(pageSize);
+        glanceY = addHeader(glancePage, 'Weighted model continued', comparisonTypeLabel(comparison));
+        return { page: glancePage, y: glanceY };
+      },
+      { label: indicativeDxp || assumptionScorecard || result.resultState !== 'RESEARCH_BACKED' ? 'modelled' : 'weighted' },
+    );
+  }
   if (reportQuality.state === 'PARTIAL') {
     const statusPage = pdf.addPage(pageSize);
     let statusY = addHeader(statusPage, 'Partial research status', 'Only supported dimensions are reported');
-    statusPage.drawText('EVIDENCE STILL NEEDED', { x: margin, y: statusY, size: 9, font: bold, color: teal });
+    accessibility.heading(statusPage, 2, () => statusPage.drawText('EVIDENCE STILL NEEDED', { x: margin, y: statusY, size: 9, font: bold, color: teal }));
     statusY = drawLines(statusPage, reportQuality.reason, margin, statusY - 18, { size: 9.5, lineHeight: 13 }) - 18;
     reportQuality.optionCoverage.slice(0, 6).forEach((row) => {
       statusY = drawLines(statusPage, `${row.option}: ${row.evidence} validated decision lens${row.evidence === 1 ? '' : 'es'}.`, margin, statusY, { size: 9, lineHeight: 13, maxLines: 2 }) - 5;
     });
     statusY -= 12;
-    statusPage.drawText('MISSING DIMENSIONS', { x: margin, y: statusY, size: 9, font: bold, color: teal });
+    accessibility.heading(statusPage, 2, () => statusPage.drawText('MISSING DIMENSIONS', { x: margin, y: statusY, size: 9, font: bold, color: teal }));
     statusY = drawLines(statusPage, reportQuality.missingDimensions.join(', ') || 'At least three comparable differentiators are needed.', margin, statusY - 18, { size: 9, lineHeight: 13, maxLines: 3 }) - 22;
-    statusPage.drawText('NEXT VALIDATION', { x: margin, y: statusY, size: 9, font: bold, color: teal });
+    accessibility.heading(statusPage, 2, () => statusPage.drawText('NEXT VALIDATION', { x: margin, y: statusY, size: 9, font: bold, color: teal }));
     statusY = drawLines(statusPage, 'Confirm each option against the same criteria and validate the missing evidence before making a commitment.', margin, statusY - 18, { size: 9, lineHeight: 13 });
     statusY = drawDecisionInputOverview(statusPage, statusY - 22);
     drawValidatedContext(statusPage, statusY - 17);
     appendFactorContinuation();
-    pdf.getPages().forEach((page, index) => page.drawText(`DecisionIntel  |  Partial decision  |  Page ${index + 1} of ${pdf.getPageCount()}`, { x: margin, y: 14, size: 6.8, font: regular, color: grey }));
-    pdf.setTitle(validatedPromptTitle(comparison));
-    pdf.setCreator('DecisionIntel');
-    return pdf.save({ useObjectStreams: false });
+    pdf.getPages().forEach((page, index) => page.drawText(`DecisionIntel  |  Partial decision  |  Page ${index + 1}${format === 'expanded' ? ' - expanded analysis follows' : ` of ${pdf.getPageCount()}`}`, { x: margin, y: 14, size: 6.8, font: regular, color: grey }));
+    return finishExport();
   }
 
   let appendixPage: any;
@@ -997,7 +1216,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       fields.some(([, key]) => !isMissingReportValue(row?.[key])));
     if (!rows.length) return;
     ensureSpace(46, title);
-    appendixPage.drawText(title.toUpperCase(), { x: margin, y: appendixY, size: 10, font: bold, color: teal });
+    accessibility.heading(appendixPage, 2, () => appendixPage.drawText(title.toUpperCase(), { x: margin, y: appendixY, size: 10, font: bold, color: teal }));
     appendixY -= 20;
     rows.forEach((row, index) => {
       const presentFields = fields.filter(([, key]) => !isMissingReportValue(row?.[key]));
@@ -1021,6 +1240,45 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       [['Item', 'item']],
     );
   };
+  // Decision lenses first (pricing, features, pros and cons); evidence and
+  // methodology detail follow as compact appendix sections.
+  const formatValues = (values: Record<string, unknown> | undefined) => Object.entries(values && typeof values === 'object' && !Array.isArray(values) ? values : {})
+    .filter(([, value]) => !isMissingReportValue(value))
+    .map(([vendor, value]) => `${vendor}: ${clean(value)}`)
+    .join(' | ');
+  drawSection(
+    'Pricing analysis',
+    researchedLensRows(lensRows.pricing).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
+  );
+  if (comparison.quoteBundle?.quotes?.length) {
+    drawSection(
+      'Buyer-supplied written quotes (separate from estimated value fit)',
+      [
+        { dimension: 'Comparability', values: comparison.quoteBundle.assessment.status === 'ready'
+          ? `Aligned over ${comparison.quoteBundle.assessment.horizonMonths} months, ${comparison.quoteBundle.quotes[0]?.taxBasis}; buyer-entered amounts, not independently verified against PDFs.`
+          : `Not comparable: ${comparison.quoteBundle.assessment.flags.join(' ')}`, winner: 'Not an overall recommendation' },
+        ...comparison.quoteBundle.assessment.rows.map((row: any) => ({
+          dimension: row.dimension, values: formatValues(row.values), winner: row.winner,
+        })),
+      ],
+      [['Dimension', 'dimension'], ['AUD values / provenance', 'values'], ['Lowest quoted cost', 'winner']],
+    );
+  }
+  drawSection(
+    'Feature and capability analysis',
+    researchedLensRows(lensRows.features).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
+    [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
+  );
+  drawSection(
+    'Evidence-based pros and cons',
+    evidenceBasedProsCons(comparison).map((row) => ({
+      option: row.option,
+      pros: row.pros.join(' | ') || 'No source-backed comparative strength established.',
+      cons: row.cons.join(' | ') || 'No source-backed comparative limitation established.',
+    })),
+    [['Option', 'option'], ['Pros (modelled differences)', 'pros'], ['Cons (modelled differences)', 'cons']],
+  );
   drawSection('Market eligibility status', eligibilitySummaryForExport(comparison).map((row) => ({
     option: row.option,
     status: `Eligibility ${row.status} · ${row.evidenceStatusLabel || 'Evidence Not established'}`,
@@ -1037,27 +1295,13 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     ['Option', 'option'], ['Status', 'status'], ['Market', 'market'], ['Product', 'product'], ['Customer segment', 'customerSegment'],
     ['Reason', 'reason'], ['Warning', 'warning'], ['Retrieved', 'retrieved'], ['Source', 'sourceUrl'], ['Exact claim', 'exactClaim'],
   ]);
-  const formatValues = (values: Record<string, unknown> | undefined) => Object.entries(values && typeof values === 'object' && !Array.isArray(values) ? values : {})
-    .filter(([, value]) => !isMissingReportValue(value))
-    .map(([vendor, value]) => `${vendor}: ${clean(value)}`)
-    .join(' | ');
+  ensureSpace(60, 'Market eligibility detail');
+  appendixY = drawLines(appendixPage, `Eligibility detail: ${pdfEligibilitySummary}${pdfMarketRelevance ? ` | Market relevance: ${pdfMarketRelevance}` : ''}`,
+    margin, appendixY - 4, { size: 7.5, lineHeight: 10, color: grey }) - 12;
   const drawDetailedScoreCharts = () => {
-    newAppendixPage(assumptionScorecard ? 'Assumption-based decision scorecard' : 'Scorecard and weighted decision model');
-    appendixPage.drawText(indicativeDxp || assumptionScorecard ? 'ASSUMPTION-BASED FIT (NOT VERIFIED FACTS)' : 'OVERALL WEIGHTED SCORES', { x: margin, y: appendixY, size: 10, font: bold, color: teal });
-    appendixY -= 24;
-    toArray<any>(comparison.vendorScores).slice(0, 6).forEach((vendor: any) => {
-      const scoreEligible = pdfScoreEligible(vendor);
-      const modelledScore = evidenceLimitedModelScore(vendor);
-      const estimate = indicativeDxp ? indicativeFitScore(comparison, vendor.vendor) : null;
-      const score = estimate ?? Math.max(0, Math.min(100, Number(vendor.score) || 0));
-      ensureSpace(48, 'Scorecard and weighted decision model');
-      appendixPage.drawText(clean(vendor.vendor), { x: margin, y: appendixY, size: 9, font: bold, color: navy });
-      appendixPage.drawText(estimate !== null ? `Est. ${estimate}/100` : scoreEligible ? `${Math.round(score)}/100` : modelledScore !== null ? `Modelled ${modelledScore}` : 'Not scored', { x: pageSize[0] - margin - 72, y: appendixY, size: 9, font: bold, color: navy });
-      appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth, height: 10, color: rgb(0.88, 0.86, 0.8) });
-      if (scoreEligible || estimate !== null || modelledScore !== null) appendixPage.drawRectangle({ x: margin, y: appendixY - 17, width: contentWidth * score / 100, height: 10, color: estimate !== null || decisionUsable && vendor.vendor === comparison.recommendation ? teal : red });
-       appendixY = drawLines(appendixPage, vendorVerdictPresentation(vendor), margin, appendixY - 31, { size: 8, lineHeight: 10.5, color: grey, maxLines: 2 });
-      appendixY -= 12;
-    });
+    ensureSpace(80, 'Methodology · weighted criteria detail');
+    appendixPage.drawText(indicativeDxp || assumptionScorecard ? 'WEIGHTED CRITERIA DETAIL · ASSUMPTION-BASED FIT (NOT VERIFIED FACTS)' : 'WEIGHTED CRITERIA DETAIL', { x: margin, y: appendixY, size: 10, font: bold, color: teal });
+    appendixY -= 22;
     toArray<any>(comparison.vendorScores).forEach((vendor: any) => {
       ensureSpace(70, 'Weighted criteria');
       appendixPage.drawText(clean(vendor.vendor).toUpperCase(), { x: margin, y: appendixY, size: 10, font: bold, color: teal });
@@ -1101,7 +1345,6 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       if (toTextList(vendor.switchConditions).length) drawListSection(`When the recommendation could switch from ${vendor.vendor}`, vendor.switchConditions);
     });
   };
-  drawDetailedScoreCharts();
   drawSection('Decision inputs: model scores and research evidence', factorSummary.factors.map((factor) => ({
     factor: factor.factor,
     lens: factor.mappedLens ?? 'No matching score lens',
@@ -1113,15 +1356,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     ensureSpace(220, 'Validated comparison context');
     appendixY = drawValidatedContext(appendixPage, appendixY - 9) - 12;
   }
-  drawSection(
-    'Evidence-based pros and cons',
-    evidenceBasedProsCons(comparison).map((row) => ({
-      option: row.option,
-      pros: row.pros.join(' | ') || 'No source-backed comparative strength established.',
-      cons: row.cons.join(' | ') || 'No source-backed comparative limitation established.',
-    })),
-    [['Option', 'option'], ['Pros (modelled differences)', 'pros'], ['Cons (modelled differences)', 'cons']],
-  );
+  drawDetailedScoreCharts();
   const pdfEligibleScores = toArray<any>(comparison.vendorScores).filter((vendor: any) => Number.isFinite(Number(vendor.score))
     && pdfScoreEligible(vendor));
   const pdfTopScore = pdfEligibleScores.length ? Math.max(...pdfEligibleScores.map((vendor: any) => Number(vendor.score))) : null;
@@ -1152,6 +1387,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     extendedVendorRows,
     [['Option', 'vendor'], ['Overall score difference', 'difference'], ['Qualification status', 'qualification'], ['Qualification gates', 'gates'], ['Dimension scores', 'dimensions'], ['Evidence confidence and coverage', 'evidence'], ['Strengths', 'strengths'], ['Gaps', 'gaps'], ['Conditions', 'conditions'], ['Limitations', 'limitations']],
   );
+
   if (smallerOrganisationSuggestions(comparison).length) drawListSection(
     'Alternative suggestions to evaluate for speed and cost - not shortlisted winners',
     smallerOrganisationSuggestions(comparison).map((name) =>
@@ -1177,30 +1413,6 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
     vehicleReport ? 'Vehicle verdicts' : 'Vendor verdicts',
     pdfVendorVerdicts,
     [['Option', 'vendor'], [assumptionScorecard ? 'Assumption-based fit' : 'Weighted score', 'score'], ...(assumptionScorecard ? [] : [[vehicleReport ? 'Role' : 'Strategic role', 'providerRole'], ['Role rationale', 'providerRoleRationale']] as [string, string][]), ['Verdict', 'verdict']],
-  );
-  drawSection(
-    'Pricing analysis',
-    researchedLensRows(lensRows.pricing).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
-    [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
-  );
-  if (comparison.quoteBundle?.quotes?.length) {
-    drawSection(
-      'Buyer-supplied written quotes (separate from estimated value fit)',
-      [
-        { dimension: 'Comparability', values: comparison.quoteBundle.assessment.status === 'ready'
-          ? `Aligned over ${comparison.quoteBundle.assessment.horizonMonths} months, ${comparison.quoteBundle.quotes[0]?.taxBasis}; buyer-entered amounts, not independently verified against PDFs.`
-          : `Not comparable: ${comparison.quoteBundle.assessment.flags.join(' ')}`, winner: 'Not an overall recommendation' },
-        ...comparison.quoteBundle.assessment.rows.map((row: any) => ({
-          dimension: row.dimension, values: formatValues(row.values), winner: row.winner,
-        })),
-      ],
-      [['Dimension', 'dimension'], ['AUD values / provenance', 'values'], ['Lowest quoted cost', 'winner']],
-    );
-  }
-  drawSection(
-    'Feature and capability analysis',
-    researchedLensRows(lensRows.features).map((row: any) => ({ dimension: row.dimension, values: formatValues(row.values), winner: row.winner })),
-    [['Dimension', 'dimension'], ['Compared evidence', 'values'], ['Best-supported option', 'winner']],
   );
   const rawStrategicEntries = Object.entries(comparison.swot && typeof comparison.swot === 'object' && !Array.isArray(comparison.swot) ? comparison.swot : {}) as [string, string[]][];
   const pdfStrategicEntries = researchedFrameworkEntries(rawStrategicEntries);
@@ -1286,7 +1498,7 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
   );
   const pages = pdf.getPages();
   pages.forEach((page, index) => {
-    page.drawText(`DecisionIntel  |  ${index === 0 ? 'Executive summary' : 'Complete decision analysis'}  |  Page ${index + 1} of ${pages.length}`, {
+    page.drawText(`DecisionIntel  |  ${index === 0 ? 'Executive summary' : 'Complete decision analysis'}  |  Page ${index + 1}${format === 'expanded' ? ' - expanded analysis follows' : ` of ${pages.length}`}`, {
       x: margin,
       y: 14,
       size: 6.8,
@@ -1294,20 +1506,18 @@ export async function buildComparisonPdf(comparison: any): Promise<Uint8Array> {
       color: grey,
     });
   });
-  pdf.setTitle(validatedPromptTitle(comparison));
   pdf.setSubject(validatedPromptTitle(comparison));
-  pdf.setCreator('DecisionIntel');
-  return pdf.save({ useObjectStreams: false });
+  return finishExport();
 }
 
-async function downloadComparisonPdf(comparison: any) {
-  const pdfBytes = await buildComparisonPdf(comparison);
+async function downloadComparisonPdf(comparison: any, format: 'summary' | 'expanded' = 'summary') {
+  const pdfBytes = await buildComparisonPdf(comparison, format);
   const pdfBuffer = pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength) as ArrayBuffer;
   const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = href;
-  anchor.download = `${comparisonReportFilenameCategory(comparison)}-complete-decision-report.pdf`;
+  anchor.download = `${comparisonReportFilenameCategory(comparison)}-${format === 'expanded' ? 'expanded-decision-report' : 'complete-decision-report'}.pdf`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -2682,9 +2892,9 @@ export function DecisionRecommendationCard({ comparison, hideEligibility = false
     <p className="mt-2 text-xs leading-5 text-[#687083]">{decisionVisible ? 'These are the next-ranked products, services, or brands from the same evaluated set.' : 'No unique recommendation was confirmed, so every original option remains under consideration.'}</p>
     <ol className="mt-4 space-y-3">
       {alternatives.map((alternative) => <li key={alternative.option} className="rounded-xl border border-[#e1dacb] bg-white p-3" data-testid={`compared-alternative-${alternative.option.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>
-        <div className="flex items-start justify-between gap-3">
-          <div><p className="text-sm font-bold text-[#202840]">{alternative.rank}. {alternative.option}</p><p className="mt-1 text-[11px] leading-5 text-[#687083]">{alternative.rationale}</p></div>
-           <div className="shrink-0 text-right"><p className="mono text-xs font-bold text-[#0f766e]">{provisionalChoice && indicativeFitScore(comparison, alternative.option) !== null ? `Indicative ${indicativeFitScore(comparison, alternative.option)}/100` : `Decision Score: ${result.optionScores.find((option) => option.optionId === alternative.option)?.modelledScore ?? alternative.score ?? 'Not scored'}${result.optionScores.find((option) => option.optionId === alternative.option)?.modelledScore != null || alternative.score != null ? '/100' : ''}`}</p>{alternative.scoreDifference !== null && <p className="mt-1 text-[9px] text-[#85877f]">{alternative.scoreDifference} pts behind</p>}</div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+          <div className="min-w-0"><p className="break-words text-sm font-bold text-[#202840]">{alternative.rank}. {alternative.option}</p><p className="mt-1 text-[11px] leading-5 text-[#687083]">{alternative.rationale}</p></div>
+           <div className="min-w-0 sm:shrink-0 sm:text-right" data-testid="alternative-score"><p className="mono break-words text-xs font-bold text-[#0f766e]">{provisionalChoice && indicativeFitScore(comparison, alternative.option) !== null ? `Indicative ${formatReportScore(indicativeFitScore(comparison, alternative.option))}/100` : `Decision Score: ${formatReportScore(result.optionScores.find((option) => option.optionId === alternative.option)?.modelledScore ?? alternative.score) ?? 'Not scored'}${result.optionScores.find((option) => option.optionId === alternative.option)?.modelledScore != null || alternative.score != null ? '/100' : ''}`}</p>{alternative.scoreDifference !== null && <p className="mt-1 text-[9px] text-[#85877f]">{formatReportScore(alternative.scoreDifference)} pts behind</p>}</div>
         </div>
          {(() => {
            const option = comparison.vendorScores?.find((row: any) => row.vendor === alternative.option);
@@ -2694,8 +2904,8 @@ export function DecisionRecommendationCard({ comparison, hideEligibility = false
            const strongest = [...lenses].sort((a: any, b: any) => b.score * b.weight - a.score * a.weight)[0];
            const tradeoff = lenses.find((lens: any) => Number(lens.score) < Number(winner?.weightedScores?.find((row: any) => row.criterion === lens.criterion)?.score));
            return <div className="mt-3 grid gap-1 text-[11px] leading-5 text-[#566074]">
-             <p><strong>Strengths:</strong> {strongest ? `${strongest.criterion} (${strongest.score}/100 model score)` : alternative.rationale}</p>
-             <p><strong>Trade-offs:</strong> {tradeoff ? `Trails on ${tradeoff.criterion} (${tradeoff.score}/100 model score)` : 'No scored lens shows a clear disadvantage.'}</p>
+             <p><strong>Strengths:</strong> {strongest ? `${strongest.criterion} (${formatReportScore(strongest.score)}/100 model score)` : alternative.rationale}</p>
+             <p><strong>Trade-offs:</strong> {tradeoff ? `Trails on ${tradeoff.criterion} (${formatReportScore(tradeoff.score)}/100 model score)` : 'No scored lens shows a clear disadvantage.'}</p>
              <p><strong>Reason not selected:</strong> {scored !== null && decisionScore !== null ? `${Math.round(Number(scored))}/100 versus ${Math.round(decisionScore)}/100 under the selected priorities.` : alternative.rationale}</p>
              {scored === null && <p className="text-[9px] uppercase tracking-wider text-[#85877f]">{alternative.qualificationStatus.replaceAll('_', ' ')}</p>}
            </div>;
@@ -2755,7 +2965,15 @@ export function ProvisionalMarketNotice({ comparison }: { comparison: any }) {
   </p>;
 }
 
-export function DecisionFirstReportPanel({ comparison }: { comparison: any }) {
+/** Scores shown to people: at most one decimal, no float noise; null when not numeric. */
+export function formatReportScore(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return String(Math.round(number * 10) / 10);
+}
+
+export function DecisionFirstReportPanel({ comparison, part = 'all', compactInitialResult = false }: { comparison: any; part?: 'all' | 'lenses' | 'details'; compactInitialResult?: boolean }) {
   const result = classifyComparisonResult(comparison);
   if (!result.recommendedOptionId || result.resultState === 'INSUFFICIENT_TO_SCORE') {
     const hasWeightModel = reportWeightModelSummary(comparison) || reportWeightModelValidationError(comparison);
@@ -2813,8 +3031,10 @@ export function DecisionFirstReportPanel({ comparison }: { comparison: any }) {
     .slice(0, 4);
   const assumptions: string[] = (Array.isArray(comparison.contextAssumptions) ? comparison.contextAssumptions : [])
     .filter((item: string) => typeof item === 'string' && !/^Preliminary Decision Mode scorecard/i.test(item));
-  return <section className="mt-6 space-y-5" data-testid="decision-first-report">
-    <ReportWeightModelPanel comparison={comparison} />
+  const showDetails = part !== 'lenses';
+  const showLenses = part !== 'details';
+  return <section className="mt-6 space-y-5" data-testid={part === 'lenses' ? 'decision-first-lenses' : 'decision-first-report'}>
+    {showDetails && <><ReportWeightModelPanel comparison={comparison} />
     <section className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" aria-label="Ranked options">
       <h2 className="display text-xl font-bold text-[#202840]">Ranked options · saved canonical result</h2>
       <ol className="mt-3 space-y-2">{ranked.map((option) => {
@@ -2828,9 +3048,9 @@ export function DecisionFirstReportPanel({ comparison }: { comparison: any }) {
         </li>;
       })}</ol>
     </section>
-    <section className="overflow-x-auto rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" aria-label="Decision lens scorecard">
+    <section className="min-w-0 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" aria-label="Decision lens scorecard">
       <h2 className="display text-xl font-bold text-[#202840]">Decision lens scorecard</h2>
-      <table className="mt-3 w-full min-w-[620px] text-left text-xs"><thead><tr className="border-b border-[#d5cebd] text-[10px] uppercase text-[#687083]"><th className="p-2">Lens · weight</th>{ranked.map((option) => <th className="p-2" key={option.optionId}>{option.optionId}</th>)}</tr></thead>
+      <div className="mt-3 max-w-full overflow-x-auto" data-testid="scroll-lens-scorecard"><table className="w-full min-w-[620px] text-left text-xs"><thead><tr className="border-b border-[#d5cebd] text-[10px] uppercase text-[#687083]"><th className="p-2">Lens · weight</th>{ranked.map((option) => <th className="p-2" key={option.optionId}>{option.optionId}</th>)}</tr></thead>
         <tbody>{lensRows.map((lens: string) => {
           const first = scoreFor(leader, lens);
           const rowWeight = Number(first?.weight || 0);
@@ -2843,9 +3063,9 @@ export function DecisionFirstReportPanel({ comparison }: { comparison: any }) {
             return <td className="p-2 align-top" key={option.optionId}><span className="font-bold">{scoreValue === null ? 'Unknown' : `${scoreValue}/100`}</span><span className="block text-[10px] text-[#687083]">{lensStatus(lens, cell)}</span><span className="block text-[10px] text-[#687083]">Contribution {scoreValue === null ? '—' : `${(scoreValue * normalized / 100).toFixed(1)} pts`}</span></td>;
           })}</tr>;
         })}</tbody>
-      </table>
-    </section>
-    {([
+      </table></div>
+    </section></>}
+    {showLenses && ([
       ['Pricing comparison', pricing.length ? pricing : fallbackPricing, 'No source-qualified exact prices or comparable pricing details are saved. Price is unknown; no amount is inferred.'],
       ['Feature and capability comparison', features.length ? features : fallbackFeatures, 'No source-qualified feature facts are available here. Unreported specifications remain unknown, not assumed.'],
     ] as const).map(([title, dataRows, empty]) => <section key={title} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5">
@@ -2853,7 +3073,7 @@ export function DecisionFirstReportPanel({ comparison }: { comparison: any }) {
       {dataRows.length ? <div className="mt-3 space-y-2">{dataRows.map((row, index) => <article key={`${row.dimension}-${index}`} className="break-words rounded-xl border border-[#e3ddcf] bg-white p-3 text-xs"><strong>{row.dimension}</strong><p className="mt-1 text-[#566074]">{row.values}</p>{row.source && <a href={row.source} target="_blank" rel="noreferrer" className="mt-1 block break-all text-[#0f766e] underline">{row.source}</a>}</article>)}</div>
         : <p className="mt-2 text-xs leading-5 text-[#687083]">{empty}</p>}
     </section>)}
-    <section className="grid gap-4 md:grid-cols-2">
+    {showDetails && !compactInitialResult && <><section className="grid gap-4 md:grid-cols-2">
       {ranked.map((option) => {
         const vendor = rows.find((row: any) => row.vendor === option.optionId);
         const pros = lensAdvantages(vendor, true);
@@ -2873,7 +3093,7 @@ export function DecisionFirstReportPanel({ comparison }: { comparison: any }) {
       {runnerUp && <p className="mt-3 text-xs leading-5 text-[#566074]"><strong>Shortlist alternative:</strong> {runnerUp.vendor} ranks {result.optionScores.find((item) => item.optionId === runnerUp.vendor)?.rank ?? '—'} with {result.optionScores.find((item) => item.optionId === runnerUp.vendor)?.modelledScore ?? 'unknown'}/100; it may suit users who prefer its stronger lens scores.</p>}
       <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-[#566074]">{(actions.length ? actions : ['Verify the exact option, current offer and any mandatory requirements before committing.', 'Rerun the model if priorities or weight allocation changes.']).map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ol>
       <p className="mt-3 text-[10px] leading-4 text-[#687083]"><strong>Assumptions:</strong> {assumptions.join(' ') || 'No explicit context assumptions were recorded; modelled scores and unsourced details remain assumptions.'} Decision coverage {result.modelledCoverage}%; validated research coverage {result.researchCoverage}%. Price/specification facts not present in source-qualified rows remain unknown.</p>
-    </section>
+    </section></>}
   </section>;
 }
 
@@ -2921,6 +3141,17 @@ export function weightedCriterionImpact(score: unknown, weight: unknown): number
   return Number((normalizedScore * normalizedWeight / 100).toFixed(1));
 }
 
+export function scoreChartVendors(vendorScores: any[]) {
+  const valid = (row: any) => row && !isFallbackNeutralCriterion(row)
+    && typeof row.criterion === 'string' && row.criterion.trim()
+    && typeof row.score === 'number' && Number.isFinite(row.score) && row.score >= 0 && row.score <= 100
+    && typeof row.weight === 'number' && Number.isFinite(row.weight) && row.weight > 0 && row.weight <= 100;
+  return vendorScores.filter((vendor) => typeof vendor?.vendor === 'string').map((vendor) => ({
+    vendor: vendor.vendor,
+    weightedScores: (Array.isArray(vendor.weightedScores) ? vendor.weightedScores : []).filter(valid),
+  }));
+}
+
 export function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
   const vendors = vendorScores.filter((vendor) => typeof vendor?.vendor === 'string');
   const valid = (row: any) => row && !isFallbackNeutralCriterion(row)
@@ -2931,8 +3162,10 @@ export function ScoreCharts({ vendorScores = [] }: { vendorScores?: any[] }) {
       .filter(valid).map((row: any) => String(row.criterion || '').trim()).filter(Boolean)))];
   if (!criteria.length) return null;
   return <section className="mt-8 min-w-0 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-4 text-[#202840] sm:p-6" aria-labelledby="contribution-heading" data-testid="section-score-charts">
-    <h2 id="contribution-heading" className="display text-xl font-bold">Where priorities contribute</h2>
-    <p className="mt-2 text-xs leading-5 text-[#566074]">Each bar shows a criterion's modelled contribution: score × saved weight ÷ 100, out of that criterion's weight. These are not independently verified ratings. Missing or neutral fallback scores are not plotted.</p>
+    <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Weighted decision model</p><h2 id="contribution-heading" className="display mt-1 text-xl font-bold">How the options score against your needs</h2>
+    <p className="mt-2 text-xs leading-5 text-[#566074]">Compare each option against your saved requirements and priority weights. These are modelled ratings, not independently verified findings. Missing or neutral fallback scores are not plotted.</p>
+    <RequirementsScoreView vendors={scoreChartVendors(vendorScores)} />
+    <p className="mt-5 text-xs leading-5 text-[#566074]">Criterion contributions below show score × saved weight ÷ 100, out of each criterion's weight.</p>
     <div className="mt-5 max-w-full overflow-x-auto" tabIndex={0} aria-label="Scroll to see all option contributions">
       <table className="w-full min-w-[520px] border-separate border-spacing-y-2 text-left text-xs" data-testid="chart-priority-contributions">
         <thead><tr><th scope="col" className="w-[24%] pr-3">Criterion</th>{vendors.map((vendor) => <th scope="col" className="px-2" key={vendor.vendor}>{vendor.vendor}</th>)}</tr></thead>
@@ -4585,7 +4818,7 @@ export function HeadToHead({ comparison }: { comparison: any }) {
   });
   const stronger = rows.filter((row: any) => row.delta > 0).sort((a: any, b: any) => b.delta - a.delta);
   const underlyingScoresIdentical = rows.every((row: any) => row.recommendedRaw === row.challengerRaw);
-  return <section className="mt-14 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 sm:p-7" data-testid="section-head-to-head">
+  return <section className="mt-14 min-w-0 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5 sm:p-7" data-testid="section-head-to-head">
     <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
       <div><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#b94d45]">Decision switch</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">What changes the decision?</h2><p className="mt-2 max-w-2xl text-xs leading-5 text-[#687083]">{adjustedTie ? underlyingScoresIdentical ? `Compare the tied options directly. The table shows weighted contribution, while new differentiated evidence is needed to establish a winner.` : `Compare the tied options directly. Their criterion scores differ, so changing the allocation can separate the current weighted tie.` : `Pick any shortlisted option to compare directly with ${recommendation.vendor}. This does not change the evidence—it shows which preferences could change the recommendation.`}</p></div>
       <label className="text-xs font-bold text-[#556075]">Compare {recommendation.vendor} with
@@ -4594,21 +4827,26 @@ export function HeadToHead({ comparison }: { comparison: any }) {
         </select>
       </label>
     </div>
-       <div className="mt-7 grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
+       <div className="mt-7 grid gap-5 lg:grid-cols-[.8fr_1.2fr] [&>*]:min-w-0">
        <div className="rounded-xl bg-[#202840] p-5 text-[#f8f4e8]"><p className="mono text-[9px] uppercase tracking-[.15em] text-[#bde3d8]">Prefer {selected.vendor} when</p><ul className="mt-4 space-y-3">{switchConditions.map((condition: string) => <li className="flex gap-2 text-xs leading-5 text-[#d6dbe5]" key={condition}><Check size={14} className="mt-0.5 shrink-0 text-[#d9ef66]" />{condition}</li>)}</ul>{!switchConditions.length && <p className="mt-4 text-xs text-[#a8b0c2]">No specific switch condition was supported by the available evidence.</p>}</div>
-      <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-left text-xs"><thead><tr className="border-b border-[#ddd5c5] text-[10px] uppercase tracking-[.1em] text-[#85877f]"><th className="pb-3">Criterion / active weight</th><th className="pb-3">{recommendation.vendor}</th><th className="pb-3">{selected.vendor}</th><th className="pb-3">Weighted difference</th></tr></thead><tbody>{rows.map((row: any) => <tr className="border-b border-[#ece6d9] last:border-0" key={row.criterion}><td className="py-3 font-bold text-[#202840]">{row.criterion}<span className="ml-2 text-[9px] font-normal text-[#85877f]">{row.weight}%</span></td><td className="py-3 text-[#687083]">{row.recommended.toFixed(1)} pts</td><td className="py-3 text-[#687083]">{row.challenger.toFixed(1)} pts</td><td className={`py-3 font-bold ${row.delta > 0 ? 'text-[#0f766e]' : row.delta < 0 ? 'text-[#b94d45]' : 'text-[#85877f]'}`}>{row.delta > 0 ? '+' : ''}{row.delta.toFixed(1)}</td></tr>)}</tbody></table></div>
+      <div className="max-w-full overflow-x-auto" data-testid="scroll-head-to-head"><table className="w-full min-w-[520px] text-left text-xs"><thead><tr className="border-b border-[#ddd5c5] text-[10px] uppercase tracking-[.1em] text-[#85877f]"><th className="pb-3">Criterion / active weight</th><th className="pb-3">{recommendation.vendor}</th><th className="pb-3">{selected.vendor}</th><th className="pb-3">Weighted difference</th></tr></thead><tbody>{rows.map((row: any) => <tr className="border-b border-[#ece6d9] last:border-0" key={row.criterion}><td className="py-3 font-bold text-[#202840]">{row.criterion}<span className="ml-2 text-[9px] font-normal text-[#85877f]">{row.weight}%</span></td><td className="py-3 text-[#687083]">{row.recommended.toFixed(1)} pts</td><td className="py-3 text-[#687083]">{row.challenger.toFixed(1)} pts</td><td className={`py-3 font-bold ${row.delta > 0 ? 'text-[#0f766e]' : row.delta < 0 ? 'text-[#b94d45]' : 'text-[#85877f]'}`}>{row.delta > 0 ? '+' : ''}{row.delta.toFixed(1)}</td></tr>)}</tbody></table></div>
      </div>
      <p className="mt-5 text-xs leading-5 text-[#687083]">{adjustedTie ? underlyingScoresIdentical ? `${recommendation.vendor} and ${selected.vendor} remain tied under the adjusted model. Changing weights alone cannot separate options with identical underlying scores.` : `${recommendation.vendor} and ${selected.vendor} remain tied under this allocation. Their underlying criterion scores differ, so a different valid weighting can separate them.` : stronger.length ? `${selected.vendor} scores higher on ${stronger.map((row: any) => row.criterion).join(', ')}. Use the weight editor above to give those factors more influence if they are non-negotiable.` : `${recommendation.vendor} remains stronger across the current weighted criteria. Choose ${selected.vendor} only when its specific operating conditions matter more than the aggregate score.`}</p>
   </section>;
 }
 
 export function VrioSection({ vendorScores = [] }: { vendorScores?: any[] }) {
-  if (vendorScores.some(hasVendorScoreExtension)) return null;
   const dimensions = [['value', 'Value'], ['rarity', 'Rarity'], ['imitability', 'Imitability'], ['organization', 'Organization']];
-  const researched = vendorScores.filter((vendor) => researchedVrioCriteria(vendor.vrio)
-    .some(([, item]) => hasOptionSpecificFrameworkEvidence(item.rationale)));
-  if (!researched.length) return null;
-  return <section className="mt-14" data-testid="section-vrio"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Strategic advantage</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">VRIO framework across the shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Only researched dimensions with a source are shown.</p><div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{researched.map((vendor) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor}><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3><div className="mt-5 grid gap-3 sm:grid-cols-2">{dimensions.filter(([key]) => researchedVrioCriteria(vendor.vrio).some(([name, item]) => name === key && hasOptionSpecificFrameworkEvidence(item.rationale))).map(([key, label]) => { const item = vendor.vrio[key]; return <div className="rounded-xl bg-[#e7e2d4] p-3" key={key}><div className="flex items-center justify-between"><p className="text-xs font-bold text-[#202840]">{label}</p><span className="rounded-full bg-[#f8f4e8] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(item.status).replace('_', ' ')}</span></div><p className="mt-2 text-[11px] leading-5 text-[#687083]">{item.rationale}</p></div>; })}</div>{!isMissingReportValue(vendor.vrio?.implication) && hasOptionSpecificFrameworkEvidence(vendor.vrio.implication) && <p className="mt-4 border-t border-[#e3ddcf] pt-4 text-xs leading-5 text-[#556075]"><strong>Implication:</strong> {vendor.vrio.implication}</p>}</article>)}</div></section>;
+  const findings = vrioFindings(vendorScores);
+  return <section className="mt-14" data-testid="section-vrio"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">04 / Strategic advantage</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">VRIO framework across the shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">Stored VRIO assessments are modelled, not independently verified. Source-linked rationale is retained where available; missing dimensions are not inferred.</p>{findings.length ? <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{findings.map(({ vendor, criteria }) => <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor.vendor}><h3 className="display text-xl font-bold text-[#202840]">{vendor.vendor}</h3><div className="mt-5 grid gap-3 sm:grid-cols-2">{dimensions.filter(([key]) => criteria.some(([name]) => name === key)).map(([key, label]) => { const item = vendor.vrio[key]; return <div className="rounded-xl bg-[#e7e2d4] p-3" key={key}><div className="flex items-center justify-between"><p className="text-xs font-bold text-[#202840]">{label}</p><span className="rounded-full bg-[#f8f4e8] px-2 py-1 text-[9px] font-bold uppercase text-[#0f766e]">{String(item.status || 'Modelled').replace('_', ' ')}</span></div><p className="mt-2 text-[11px] leading-5 text-[#687083]">{item.rationale}</p></div>; })}</div>{!isMissingReportValue(vendor.vrio?.implication) && hasOptionSpecificFrameworkEvidence(vendor.vrio.implication) && <p className="mt-4 border-t border-[#e3ddcf] pt-4 text-xs leading-5 text-[#556075]"><strong>Implication:</strong> {vendor.vrio.implication}</p>}</article>)}</div> : <p className="mt-4 text-xs text-[#687083]">No substantive VRIO assessment is available for this report.</p>}</section>;
+}
+
+export function vrioFindings(vendorScores: any[]) {
+  return vendorScores.map((vendor) => ({
+    vendor,
+    criteria: modelledVrioCriteria(vendor.vrio)
+      .filter(([, item]) => hasOptionSpecificFrameworkEvidence(item.rationale)),
+  })).filter(({ criteria }) => criteria.length > 0);
 }
 
 export function MarketPositionSection({ vendorScores = [] }: { vendorScores?: any[] }) {
@@ -4764,19 +5002,19 @@ export function actionableSoarEntries(
   ]);
 }
 
-export function StrategicFrameworkSection({ title, eyebrow, description, entries, vendors = [], testId }: { title: string; eyebrow: string; description: string; entries: [string, string[]][]; vendors?: string[]; testId: string }) {
-  if (!entries.length) return null;
+export function presentedFrameworkEntries(entries: [string, string[]][], vendors: string[], scoreDerived = false) {
+  const usable = (text: string) => hasOptionSpecificFrameworkEvidence(text)
+    || (scoreDerived && /^(?:Current advantage|Decision opportunity|Best-fit future state|Acceptance test)\s*[—-]/i.test(text));
   const optionSpecificEntries = entries.flatMap(([dimension, values]) => values
     .map((value) => ({ dimension, parsed: parseFrameworkOptionEntry(value, vendors) }))
-    .filter((entry): entry is { dimension: string; parsed: { vendor: string; text: string } } => Boolean(entry.parsed && hasOptionSpecificFrameworkEvidence(entry.parsed.text))));
-  if (vendors.length > 0 && optionSpecificEntries.length === 0) return null;
+    .filter((entry): entry is { dimension: string; parsed: { vendor: string; text: string } } => Boolean(entry.parsed && usable(entry.parsed.text))));
   const showByOption = vendors.length > 0;
   const optionEntries = showByOption ? vendors.map((vendor) => ({
     vendor,
     entries: entries.flatMap(([dimension, values]) => {
       return values
         .map((value) => parseFrameworkOptionEntry(value, vendors))
-        .filter((item) => item?.vendor.toLowerCase() === vendor.toLowerCase() && hasOptionSpecificFrameworkEvidence(item.text))
+        .filter((item) => item?.vendor.toLowerCase() === vendor.toLowerCase() && usable(item.text))
         .map((item) => ({ dimension, text: item!.text }));
     }),
   })) : [];
@@ -4794,13 +5032,28 @@ export function StrategicFrameworkSection({ title, eyebrow, description, entries
   const sharedEvidenceGaps = [...entryCounts.entries()]
     .filter(([, count]) => count > 1)
     .map(([key]) => key);
+  return {
+    optionSpecificEntries,
+    sharedEvidenceGaps,
+    optionEntries: optionEntries.map(({ vendor, entries: vendorEntries }) => ({
+      vendor,
+      entries: vendorEntries.filter(({ text }) => !isGenericFallback(text) || !sharedEvidenceGaps.includes(normalizedEntry(text))),
+    })),
+  };
+}
+
+export function StrategicFrameworkSection({ title, eyebrow, description, entries, vendors = [], testId, scoreDerived = false }: { title: string; eyebrow: string; description: string; entries: [string, string[]][]; vendors?: string[]; testId: string; scoreDerived?: boolean }) {
+  if (!entries.length) return null;
+  const { optionSpecificEntries, sharedEvidenceGaps, optionEntries } = presentedFrameworkEntries(entries, vendors, scoreDerived);
+  if (vendors.length > 0 && optionSpecificEntries.length === 0) return null;
+  const showByOption = vendors.length > 0;
   return <section className="mt-14" data-testid={testId}>
     <p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">{eyebrow}</p>
     <h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">{title}</h2>
     <p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">{description}</p>
     {showByOption
       ? <>{sharedEvidenceGaps.length > 0 && <div className="mt-5 rounded-xl border border-[#d7c47b] bg-[#f5edc8] px-4 py-3 text-xs leading-5 text-[#715d16]" data-testid={`${testId}-shared-evidence-gap`}><strong>Shared evidence gap:</strong> Repeated fallback findings were consolidated because no distinct option-specific evidence was available for those dimensions. Validate the options against the same source-linked checks before deciding.</div>}<div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{optionEntries.map(({ vendor, entries: vendorEntries }) => {
-        const visibleEntries = vendorEntries.filter(({ text }) => !isGenericFallback(text) || !sharedEvidenceGaps.includes(normalizedEntry(text)));
+        const visibleEntries = vendorEntries;
         if (!visibleEntries.length) return null;
         return <article className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" key={vendor} data-testid={`${testId}-${vendor.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><h3 className="display text-xl font-bold text-[#202840]">{vendor}</h3><div className="mt-5 space-y-3">{visibleEntries.map(({ dimension, text }) => <div className="rounded-xl bg-[#e7e2d4] p-3" key={`${vendor}-${dimension}`}><p className="mono text-[9px] font-bold uppercase tracking-[.12em] text-[#b94d45]">{dimension}</p><p className="mt-2 text-xs leading-5 text-[#626b7b]">{text}</p></div>)}</div></article>;
       })}</div>
@@ -5388,7 +5641,7 @@ function CompareAgainActions({ comparison, guest = false }: { comparison: any; g
   };
   return <details className="relative shrink-0" data-testid={`compare-again-${comparison?.id ?? 'report'}`}>
     <summary className="focus-ring cursor-pointer list-none rounded-lg border border-[#b9ae91] px-3 py-2 text-[10px] font-bold text-[#0f766e] hover:bg-[#eef6f1]">Compare Again</summary>
-    <div className="absolute right-0 z-30 mt-2 grid min-w-48 gap-1 rounded-xl border border-[#d5cebd] bg-[#f8f4e8] p-2 shadow-xl">
+    <div className="absolute left-0 right-auto z-30 mt-2 grid w-[min(12rem,calc(100vw-2.5rem))] min-w-0 sm:left-auto sm:right-0 sm:w-auto sm:min-w-48 gap-1 rounded-xl border border-[#d5cebd] bg-[#f8f4e8] p-2 shadow-xl">
       <button type="button" disabled={loadingAction} onClick={() => void launch('same')} className="rounded-lg px-3 py-2 text-left text-[11px] font-semibold text-[#202840] hover:bg-[#e7e2d4] disabled:opacity-50">{loadingAction ? 'Loading template…' : 'Rerun same comparison'}</button>
       <button type="button" disabled={loadingAction} onClick={() => void launch('criteria')} className="rounded-lg px-3 py-2 text-left text-[11px] font-semibold text-[#202840] hover:bg-[#e7e2d4] disabled:opacity-50">Edit criteria</button>
       <button type="button" disabled={loadingAction} onClick={() => void launch('priorities')} className="rounded-lg px-3 py-2 text-left text-[11px] font-semibold text-[#202840] hover:bg-[#e7e2d4] disabled:opacity-50">Change priorities</button>
@@ -5534,7 +5787,8 @@ export function comparisonErrorMessage(error: unknown) {
       errors?: Array<{ field?: string; code?: string; message?: string }>;
     };
   } | null)?.data;
-  const message = error instanceof Error ? error.message.replace(/^HTTP \d+\s*[^:]*:\s*/, '') : '';
+  const rawMessage = (error as { message?: unknown } | null)?.message;
+  const message = typeof rawMessage === 'string' ? rawMessage.replace(/^HTTP \d+\s*[^:]*:\s*/, '') : '';
   if (Array.isArray(data?.errors) && data.errors.length) {
     const fieldLabels: Record<string, string> = {
       query: 'Query',
@@ -5558,20 +5812,46 @@ export function comparisonErrorMessage(error: unknown) {
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return 'The research server could not be reached. Retry to reconnect to the same request; a new comparison will not be started if the first one is still running.';
   }
-  const detail = data?.error || data?.message || message || 'The comparison research could not be completed. Please try again.';
+  const detail = data?.message || data?.error || message || 'The comparison research could not be completed. Please try again.';
   return safeCustomerError(detail.replace(/^COMPARISON_TYPE_MISMATCH:\s*/, 'Decision Domain Validation: '));
 }
 
 function safeCustomerError(message: string): string {
-  return /\b(?:request[\s-]*id|idempotency[\s-]*key|x-request-id|uuid)\b/i.test(message)
-    ? 'The comparison could not be completed. Please try again; an interrupted request will reconnect to the same job.'
-    : message;
+  const transportTerms = /\b(?:request[\s-]*id(?:entifier)?|idempotency[\s-]*key|x-request-id|uuid)\b/i;
+  if (!transportTerms.test(message)) return message;
+  // Remove transport instructions, not the service/validation explanation.
+  // A terminal market failure is not a dropped browser connection and must not
+  // be relabelled as a reconnectable request.
+  const explanation = (message.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [])
+    .filter((sentence) => !transportTerms.test(sentence))
+    .join('').trim();
+  return explanation
+    ? `${explanation} Please try again.`
+    : 'The comparison could not be completed. Please try again.';
 }
 
 function isInvalidComparisonError(error: unknown): boolean {
   const responseError = error as { status?: number; data?: { code?: string } } | null;
   return responseError?.status === 400
     && (responseError.data?.code === 'invalid_comparison' || responseError.data?.code === 'CONTEXT_CONFLICT');
+}
+
+function isDefinitiveComparisonRejection(error: unknown): boolean {
+  const response = error as { status?: number; data?: { code?: string } } | null;
+  // A validation/auth/admission rejection is not a lost acceptance response.
+  // Timeouts and an explicitly in-progress request still need the original key.
+  return typeof response?.status === 'number' && response.status >= 400 && response.status < 500
+    && response.status !== 408 && response.data?.code !== 'idempotency_in_progress';
+}
+
+function isComparisonTypeRejection(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const details = value as { code?: unknown; errorCode?: unknown; decisionStatus?: unknown; data?: unknown; error?: unknown };
+  if ([details.code, details.errorCode, details.decisionStatus].some(
+    (code) => code === 'COMPARISON_TYPE_MISMATCH' || code === 'NOT_COMPARABLE',
+  )) return true;
+  return (details.data !== value && isComparisonTypeRejection(details.data))
+    || (details.error !== value && isComparisonTypeRejection(details.error));
 }
 
 type ComparisonJobState = {
@@ -5592,7 +5872,7 @@ type ComparisonJobState = {
   };
   result?: Comparison;
   message?: string;
-  errorCode?: 'research_failed' | 'validation_failed' | 'insufficient_quantitative_evidence' | 'latency_budget_exceeded';
+  errorCode?: 'research_failed' | 'validation_failed' | 'insufficient_quantitative_evidence' | 'latency_budget_exceeded' | 'COMPARISON_TYPE_MISMATCH' | 'NOT_COMPARABLE';
   connectionInterrupted?: boolean;
 };
 
@@ -5635,9 +5915,16 @@ function priorityChoicesForPrompt(prompt: string): Array<{ id: string; label: st
 }
 
 class ComparisonJobError extends Error {
-  constructor(message: string, readonly errorCode?: ComparisonJobState['errorCode']) {
+  readonly status?: ComparisonJobState['status'];
+  readonly stage?: ComparisonJobState['stage'];
+  readonly data: { message: string; code?: ComparisonJobState['errorCode']; status?: ComparisonJobState['status']; stage?: ComparisonJobState['stage'] };
+  constructor(message: string, readonly errorCode?: ComparisonJobState['errorCode'],
+    state?: Pick<ComparisonJobState, 'status' | 'stage'>) {
     super(message);
     this.name = 'ComparisonJobError';
+    this.status = state?.status;
+    this.stage = state?.stage;
+    this.data = { message, code: errorCode, status: this.status, stage: this.stage };
   }
 }
 
@@ -6152,13 +6439,15 @@ export async function runComparisonJob(
       }, startRequestTimeoutMs, 'The research server did not respond while starting this comparison. Retry to reconnect to the same request.');
       break;
     } catch (error) {
+      if (isDefinitiveComparisonRejection(error)) window.sessionStorage.removeItem(storageKey);
       if (!isTransientComparisonConnectionError(error) || attempt === 1) throw error;
       await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
   if (!created) throw new Error('The research job could not be started. Please try again.');
   if (draftIdentity && !matchesDraftIdentity(created, draftIdentity, createRequestId)) {
-    window.sessionStorage.removeItem(storageKey);
+    // An uncorrelated success may still have admitted this request. Reconnect
+    // with its key rather than starting duplicate work after a malformed reply.
     throw new Error('The comparison job response could not be matched to this saved draft. Please retry.');
   }
   const jobCorrelation = draftIdentity ? { ...draftIdentity, requestId: createRequestId } : undefined;
@@ -6170,7 +6459,7 @@ export async function runComparisonJob(
   reportProgress(created as ComparisonJobState);
   if (created.status === 'failed') {
     window.sessionStorage.removeItem(storageKey);
-    throw new ComparisonJobError(created.message || 'Market verification failed.', created.errorCode);
+    throw new ComparisonJobError(created.message || 'Market verification failed.', created.errorCode, created);
   }
   const initialDeadlineMs = created.stage === 'verifying_market'
     ? COMPARISON_JOB_MARKET_VERIFICATION_DEADLINE_MS
@@ -6345,7 +6634,7 @@ export function streamComparisonJob(
         if ((state.status === 'partial' || state.status === 'complete') && state.result) {
           finish(() => resolve(state.result!));
         } else if (state.status === 'failed') {
-          finish(() => reject(new ComparisonJobError(state.message || 'Product research could not be completed.', state.errorCode)));
+          finish(() => reject(new ComparisonJobError(state.message || 'Product research could not be completed.', state.errorCode, state)));
         }
       } catch {
         finish(() => reject(new ComparisonJobStreamError('The live comparison update was unreadable.')));
@@ -6418,7 +6707,7 @@ export async function pollComparisonJob(
     onProgress(lastJob);
     if ((lastJob.status === 'partial' || lastJob.status === 'complete') && lastJob.result) return lastJob.result;
     if (job.status === 'failed') {
-      throw new ComparisonJobError(job.message || 'Product research could not be completed.', job.errorCode);
+      throw new ComparisonJobError(job.message || 'Product research could not be completed.', job.errorCode, job);
     }
     if (finalCheck) {
       throw new ComparisonJobError('The decision reached its 20-second time limit before a partial report was available.', job.errorCode);
@@ -6582,6 +6871,8 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
   const [useCase, setUseCase] = useState('');
   const [sourceError, setSourceError] = useState('');
   const [dismissedResearchError, setDismissedResearchError] = useState(false);
+  const [typeCorrectionMessage, setTypeCorrectionMessage] = useState('');
+  const handledTypeRejection = useRef<unknown>(null);
   const isBaasScenario = /\b(?:baas|battery[- ]as(?:[- ]a)?[- ]service)\b/i.test(prompt);
   const researchErrorMessage = error ? comparisonErrorMessage(error) : '';
   const blockingValidationError = !dismissedResearchError && isInvalidComparisonError(error);
@@ -6599,7 +6890,7 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         : ownershipPeriodYears && (ownershipPeriod < 0.5 || ownershipPeriod > 30 || !Number.isInteger(ownershipPeriod * 2))
           ? 'Ownership period must be from 0.5 to 30 years in half-year increments.'
           : '';
-  const actionableValidationMessage = interpretationError
+  const actionableValidationMessage = typeCorrectionMessage || interpretationError
     || (blockingValidationError ? researchErrorMessage : '')
     || promptLengthError;
   useEffect(() => {
@@ -6611,6 +6902,20 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
   useEffect(() => {
     setDismissedResearchError(false);
   }, [error]);
+  useEffect(() => {
+    const rejection = isComparisonTypeRejection(error) ? error
+      : jobState?.status === 'failed' && isComparisonTypeRejection(jobState) ? jobState : null;
+    if (!rejection || handledTypeRejection.current === rejection) return;
+    handledTypeRejection.current = rejection;
+    // Keep the server's explanation before the parent mutation clears its error.
+    setTypeCorrectionMessage(error && isComparisonTypeRejection(error)
+      ? comparisonErrorMessage(error)
+      : safeCustomerError(jobState?.message || 'These options cannot be compared. Edit your query and try again.'));
+    const supportingUrls = sourceText || sourceRows.map((row) => row.url).filter(Boolean).join('\n');
+    resetDraftScopedState();
+    setSourceText(supportingUrls);
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
+  }, [error, jobState]);
   useEffect(() => {
     if (jobState?.status !== 'partial' || !jobState.result) {
       if (jobState?.status !== 'partial') partialResultWasRevealed.current = false;
@@ -7290,12 +7595,14 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
   const trimmedInterpretedVendors = interpretedVendors.map((vendor) => vendor.trim());
   useEffect(() => {
     // A lost create response has no job state; a terminal failure needs an
-    // intentional retry. Neither should leave the confirmation action latched.
-    if (!pending && (error || jobState?.status === 'failed')) {
+    // intentional retry. A rejected review never started a job at all. None
+    // should leave confirmation latched or resume handoff without a new click.
+    if (!pending && (error || jobState?.status === 'failed'
+      || reviewValidation?.key === reviewKey && reviewValidation.status === 'error')) {
       handoffStarted.current = false;
       setConfirmationRequested(false);
     }
-  }, [pending, error, jobState?.status]);
+  }, [pending, error, jobState?.status, reviewValidation, reviewKey]);
   useEffect(() => {
      if (confirmationRequested && !handoffStarted.current && interpretation && activeDraftCorrelation
        && reviewIsValid && !criteriaInputError && draftCriteria.length <= 8
@@ -7561,6 +7868,20 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         persistedUrlRows,
         nextClosingProducts,
       ));
+      if (updatedRequestForEditedOptions) {
+        // Saving changes the server's raw option text. Carry the rewritten brief
+        // forward now, before that old-to-new mapping disappears, so review and
+        // submission cannot reinterpret a stale "Amazon" over confirmed shopping.
+        const nextBrief = updatedRequestForEditedOptions;
+        setPrompt(nextBrief);
+        setInterpretationSourcePrompt(nextBrief);
+        setInterpretationPrompt(nextBrief);
+        if (phrasedPrompt.trim() === phrasedPromptBaseline) {
+          const nextPhrasedPrompt = phraseComparisonPrompt(nextBrief);
+          setPhrasedPrompt(nextPhrasedPrompt);
+          setPhrasedPromptBaseline(nextPhrasedPrompt);
+        }
+      }
       setInterpretation((current) => {
         if (!current || (current as ParsedComparison & { draftId?: string }).draftId !== draftId) return current;
         const names = nextOptions.map((option) => option.value);
@@ -7573,6 +7894,7 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
         }));
         return {
           ...current,
+          ...(updatedRequestForEditedOptions ? { prompt: updatedRequestForEditedOptions } : {}),
           vendors: names,
           intent: { ...current.intent, options: names },
           comparisonValues: patchedValues,
@@ -7596,8 +7918,10 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
       if (sequence !== optionPatchSequence.current || controller.signal.aborted) return false;
       setOptionPersistenceStatus('error');
       setOptionPersistenceMessage(comparisonErrorMessage(patchError));
-      setOptionPatchUncertain(true);
-      setUncertainPatchRequiresOptions(persistOptions);
+      const uncertain = !isDefinitiveComparisonRejection(patchError);
+      setOptionPatchUncertain(uncertain);
+      setUncertainPatchRequiresOptions(uncertain && persistOptions);
+      if (!uncertain) optionPatchIdempotency.current = null;
        setConfirmationRequested(false);
       return false;
     } finally {
@@ -7649,7 +7973,13 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
       return;
     }
     if (confirmationRequested || baasValidationError || !activeDraftCorrelation) return;
-    if (!reviewIsValid && !reviewChangesNeedSave) return;
+    if (!reviewIsValid && !reviewChangesNeedSave) {
+      if (reviewValidation?.key === reviewKey && reviewValidation.status === 'error') {
+        setReviewRetryCount((count) => count + 1);
+        setConfirmationRequested(true);
+      }
+      return;
+    }
     const confirmedForClick = confirmedOptions.map((option) => ({ ...option, confirmed: true }));
     updateReviewedOptions(confirmedForClick);
     handoffStarted.current = false;
@@ -7678,6 +8008,12 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
     const editedPrompt = phrasedPrompt;
     resetDraftScopedState(false);
     setPrompt(editedPrompt);
+    window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
+  };
+  const editFailedMarketQuery = () => {
+    const supportingUrls = sourceText || sourceRows.map((row) => row.url).filter(Boolean).join('\n');
+    resetDraftScopedState();
+    setSourceText(supportingUrls);
     window.setTimeout(() => document.getElementById(guest ? 'guest-comparison-prompt' : 'comparison-composer-prompt')?.focus(), 0);
   };
   const livePartialResult = jobState?.status === 'partial' ? jobState.result : undefined;
@@ -7735,6 +8071,7 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
           onChange={(event) => {
             const urlsInProgress = sourceText;
             setPrompt(event.target.value);
+            setTypeCorrectionMessage('');
             resetDraftScopedState();
             setSourceText(urlsInProgress);
           }}
@@ -7955,6 +8292,9 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
                   {marketVerificationFailed && !reviewChangesNeedSave && <button type="button" onClick={retryMarketVerification}
                     className="mt-2 rounded border border-current/30 px-3 py-1.5 font-bold"
                     data-testid="button-retry-market-verification">Retry market verification</button>}
+                  {marketVerificationFailed && <button type="button" onClick={editFailedMarketQuery}
+                    className="ml-2 mt-2 rounded border border-current/30 px-3 py-1.5 font-bold"
+                    data-testid="button-edit-failed-market-query">Edit query</button>}
                 </div>
               )}
             </section>
@@ -8021,7 +8361,11 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
             <AlertDialogFooter className="mt-3">
               {Boolean(error) && !pending && !jobState && (
                 <p role="alert" className="w-full text-xs font-bold text-[#b94d45]">
-                  {comparisonErrorMessage(error)} You can reconnect using the same request, or edit your comparison.
+                  {comparisonErrorMessage(error)} {(error as { status?: unknown })?.status === 'failed'
+                    ? 'Review the reason above before retrying or editing your comparison.'
+                    : isDefinitiveComparisonRejection(error)
+                      ? 'Edit the options or request, then confirm again. No comparison was started.'
+                      : 'You can reconnect using the same request, or edit your comparison.'}
                 </p>
               )}
               {(interpretation.context.valid || reviewIsValid || optionPatchCanStart || interpretationCriteriaError || optionalUrlValidationError || reviewChangesNeedSave) && (
@@ -8031,7 +8375,8 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
                       ? phrasedPrompt.trim().length < 8 || phrasedPrompt.trim().length > 2000
                       : !interpretationConfirmable && !optionPatchUncertain && !interpretationCriteriaError
                         && !optionalUrlValidationError && !interpretationOptionError
-                        && !reviewChangesNeedSave && !(crossMarket && !crossMarketAcknowledged))}
+                        && !reviewChangesNeedSave && !(crossMarket && !crossMarketAcknowledged)
+                        && !(reviewValidation?.key === reviewKey && reviewValidation.status === 'error'))}
                   onClick={confirmInterpretation}
                   className="focus-ring rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="button-confirm-interpretation">
@@ -8125,7 +8470,7 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
           </p>
           {actionableValidationMessage ? (
             <div className="flex flex-wrap gap-2">
-              {interpretationError && failedInterpretation.current && (
+              {interpretationError && failedInterpretation.current && !typeCorrectionMessage && (
                 <button
                   type="button"
                   onClick={retryInterpretation}
@@ -8136,7 +8481,7 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
                   Try again
                 </button>
               )}
-              <button type="button" onClick={focusPromptForEdit} className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-xs font-bold ${guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : 'bg-[#b94d45] text-white hover:bg-[#a4423b]'}`} data-testid="button-edit-prompt-action">
+              <button type="button" onClick={() => { setTypeCorrectionMessage(''); focusPromptForEdit(); }} className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-xs font-bold ${guest ? 'bg-[#d9ef66] text-[#202840] shadow-[3px_3px_0_#0f766e]' : 'bg-[#b94d45] text-white hover:bg-[#a4423b]'}`} data-testid="button-edit-prompt-action">
                 Edit prompt
               </button>
             </div>
@@ -8157,7 +8502,7 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
           )}
         </div>
 
-        {Boolean(error) && !blockingValidationError && (
+        {Boolean(error) && !blockingValidationError && !isComparisonTypeRejection(error) && (
           <div className="mt-4 rounded-lg border border-[#e3b6ac] bg-[#f7e4df] px-4 py-3 text-xs font-bold text-[#8d5650]" role="alert">
             {researchErrorMessage}
             {jobState?.status === 'processing' && !pending && (
@@ -8197,19 +8542,10 @@ export function ComparisonComposer({ initialPrompt = '', initialTemplate, guest 
               {jobState.message || 'The research reached its 20-second limit. This is the best available partial result; its modelled scores are not verified facts.'}
             </p>
           </div>
-          <ProvisionalMarketNotice comparison={jobState.result} />
-          {livePartialScoreable && <EligibilityStatusSection comparison={jobState.result} />}
           {livePartialScoreable
-            ? <DecisionFirstReportPanel comparison={jobState.result} />
-            : <DecisionRecommendationCard comparison={jobState.result} />}
-          <div className={`grid gap-4 border-t pt-4 sm:grid-cols-2 ${guest ? 'border-[#53627f]' : 'border-[#d5dfbf]'}`}>
-            <div>
-              <h4 className="text-xs font-bold">What may still be missing</h4>
-              <p className={`mt-1 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
-                {jobState.result.insights?.find((insight) => /missing|not established|incomplete|unavailable|timed out/i.test(insight))
-                  || 'Some targeted research did not finish. Treat unreported details and time-sensitive facts as unknown.'}
-              </p>
-            </div>
+            ? <DecisionFirstReportPanel comparison={jobState.result} compactInitialResult />
+            : <DecisionRecommendationCard comparison={jobState.result} hideEligibility />}
+          <div className={`border-t pt-4 ${guest ? 'border-[#53627f]' : 'border-[#d5dfbf]'}`}>
             <div>
               <h4 className="text-xs font-bold">Suggested next action</h4>
               <p className={`mt-1 text-xs leading-5 ${guest ? 'text-[#c9cfdb]' : 'text-[#566074]'}`}>
@@ -8526,8 +8862,8 @@ function LegacyHistoryPage() {
   return <AppShell><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><p className="mono text-[10px] font-bold uppercase tracking-[.2em] text-[#0f766e]">Archive / 30 days</p><h1 className="display mt-3 text-4xl font-bold tracking-[-.055em] text-[#202840]">Your decision trail.</h1><p className="mt-3 text-sm text-[#687083]">A rolling view of the calls your team has been thinking through.</p></div><Link href="/user-portal" className="focus-ring inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-4 py-3 text-xs font-bold text-[#f8f4e8]" data-testid="link-new-comparison"><Plus size={15} /> New comparison</Link></div><div className="mt-10 flex flex-col gap-3 sm:flex-row"><div className="relative max-w-md flex-1"><Search className="absolute left-3 top-3 text-[#929389]" size={16} /><input className="focus-ring w-full rounded-xl border border-[#cfc7b6] bg-[#f8f4e8] py-2.5 pl-10 pr-4 text-sm text-[#202840] placeholder:text-[#9a9a90]" placeholder="Search your history..." value={filter} onChange={(event) => setFilter(event.target.value)} data-testid="input-history-search" /></div><button className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#cfc7b6] px-4 py-2.5 text-xs font-bold text-[#687083]" data-testid="button-history-filter"><Filter size={15} /> Last 30 days <ChevronDown size={14} /></button></div><div className="mt-6 overflow-hidden rounded-2xl border border-[#d5cebd] bg-[#f8f4e8]">{recent.map((item, index) => <ComparisonRow key={item.id} item={item} index={index} onDelete={deleteItem} />)}{!recent.length && <div className="p-14 text-center"><Clock3 className="mx-auto text-[#0f766e]" size={24} /><p className="mt-4 text-sm font-bold text-[#202840]">{filter ? 'No matches in the last 30 days.' : 'No comparisons in the last 30 days.'}</p><p className="mt-2 text-xs text-[#7b7e7b]">Start a new comparison to begin your trail.</p></div>}</div><p className="mt-4 flex items-center gap-2 text-[11px] text-[#8b8b83]"><ShieldCheck size={13} /> History is automatically limited to the most recent 30 days.</p></div></AppShell>;
 }
 
-export function ReportProsAndCons({ comparison }: { comparison: any }) {
-  return <ReportDisclosure title="Pros and cons, with evidence" hint="Source-backed strengths and limitations per option" testId="details-pros-cons">
+export function ReportProsAndCons({ comparison, defaultOpen = false }: { comparison: any; defaultOpen?: boolean }) {
+  return <ReportDisclosure title="Pros and cons, with evidence" hint="Source-backed strengths and limitations per option" testId="details-pros-cons" defaultOpen={defaultOpen}>
     <section data-testid="section-evidence-pros-cons">
       <p className="text-xs leading-5 text-[#687083]">Relative scores describe this decision model; the linked claims support the underlying criteria, not an independent head-to-head test.</p>
       <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{evidenceBasedProsCons(comparison).map((row) => <article key={row.option} className="rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5">
@@ -8542,30 +8878,58 @@ export function ReportProsAndCons({ comparison }: { comparison: any }) {
   </ReportDisclosure>;
 }
 
-export function ReportStrategicAnalysis({ comparison }: { comparison: any }) {
+export function strategicFrameworkData(comparison: any) {
   const vendors: string[] = comparison.vendors || comparison.vendorScores?.map((vendor: any) => vendor.vendor) || [];
   const entries = Object.entries(comparison.swot || {}) as [string, string[]][];
   const researched = researchedFrameworkEntries(entries)
     .map(([key, values]) => [key, values.filter((value) => {
       const parsed = parseFrameworkOptionEntry(value, vendors);
-      return parsed && hasOptionSpecificFrameworkEvidence(parsed.text);
+      return parsed && !isMissingReportValue(parsed.text) && hasOptionSpecificFrameworkEvidence(parsed.text);
     })] as [string, string[]])
     .filter(([, values]) => values.length > 0);
-  const swot = researched.filter(([key]) => /^(?:strengths|weaknesses|opportunities|threats)$/i.test(key));
-  const pestle = researched.filter(([key]) => key.startsWith('PESTLE — ')).map(([key, values]) => [key.slice('PESTLE — '.length), values] as [string, string[]]);
+  const stored = modelledFrameworkEntries(entries)
+    .map(([key, values]) => [key, values.filter((value) => {
+      const parsed = parseFrameworkOptionEntry(value, vendors);
+      return parsed && !isMissingReportValue(parsed.text) && hasOptionSpecificFrameworkEvidence(parsed.text);
+    })] as [string, string[]])
+    .filter(([, values]) => values.length > 0);
+  const swot = stored.filter(([key]) => /^(?:strengths|weaknesses|opportunities|threats)$/i.test(key));
+  const pestle = stored.filter(([key]) => /^PESTLE\s*[—-]\s*/i.test(key))
+    .map(([key, values]) => [key.replace(/^PESTLE\s*[—-]\s*/i, ''), values] as [string, string[]]);
+  const storedSoar = stored.filter(([key]) => /^SOAR\s*[—-]\s*(?:strengths|opportunities|aspirations|results)$/i.test(key))
+    .map(([key, values]) => [key.replace(/^SOAR\s*[—-]\s*/i, ''), values] as [string, string[]]);
+  const scoreBacked = (comparison.vendorScores || []).some((vendor: any) =>
+    qualificationAllowsScore(vendor)
+    && !hasVendorScoreExtension(vendor)
+    && !vendor.qualificationGates?.some((gate: any) => gate.mandatory && gate.status === 'FAIL')
+    && vendor.weightedScores?.some((criterion: any) =>
+      Number.isFinite(criterion.score) && !isFallbackNeutralCriterion(criterion)
+      && criterion.criterion !== 'Strategic Provider Role'));
+  const soar = scoreBacked
+    ? actionableSoarEntries(comparison, storedSoar)
+      .map(([dimension, values]) => [dimension, values.filter((value) => {
+        const parsed = parseFrameworkOptionEntry(value, vendors);
+        const vendor = comparison.vendorScores?.find((item: any) => item.vendor === parsed?.vendor);
+        return parsed && (storedSoar.some(([key, findings]) =>
+          key.toLowerCase() === dimension.toLowerCase() && findings.includes(value))
+          || (vendor && qualificationAllowsScore(vendor) && !hasVendorScoreExtension(vendor)
+            && !vendor.qualificationGates?.some((gate: any) => gate.mandatory && gate.status === 'FAIL')
+            && vendor.weightedScores?.some((criterion: any) => Number.isFinite(criterion.score) && !isFallbackNeutralCriterion(criterion))));
+      })] as [string, string[]]).filter(([, values]) => values.length > 0)
+    : storedSoar;
   const tows = researched.filter(([key]) => /^TOWS\s*[—-]\s*(?:SO|ST|WO|WT)\b/i.test(key))
     .map(([key, values]) => [key.replace(/^TOWS\s*[—-]\s*/i, ''), values] as [string, string[]]);
   const porter = researched.filter(([key]) => /^(?:Porter['’]?s? Five Forces|Five Forces)\s*[—-]\s*/i.test(key))
     .map(([key, values]) => [key.replace(/^(?:Porter['’]?s? Five Forces|Five Forces)\s*[—-]\s*/i, ''), values] as [string, string[]]);
-  const vrio = (comparison.vendorScores || []).some((vendor: any) => researchedVrioCriteria(vendor.vrio)
-    .some(([, item]) => hasOptionSpecificFrameworkEvidence(item.rationale)))
-    && !(comparison.vendorScores || []).some(hasVendorScoreExtension);
-  const market = (comparison.vendorScores || []).some((vendor: any) =>
-    hasResearchedMarketPosition(vendor.marketPosition) || (hasResearchedMarketHistory(vendor.marketHistory) && shouldDisplayMarketHistory([vendor])));
-  if (!swot.length && !pestle.length && !tows.length && !porter.length && !vrio && !market) return null;
-  return <ReportDisclosure title="Strategic analysis" hint="Source-linked frameworks and market context where researched" testId="details-strategic-analysis">
-    {swot.length > 0 && <StrategicFrameworkSection title="SWOT by option" eyebrow="Strategic read" description="Source-linked strengths, weaknesses, opportunities and threats for each researched option." entries={swot} vendors={vendors} testId="section-swot" />}
-    {pestle.length > 0 && <StrategicFrameworkSection title="PESTLE by option" eyebrow="Macro environment" description="Source-linked political, economic, social, technological, legal and environmental findings for researched options." entries={pestle} vendors={vendors} testId="section-pestle" />}
+  return { vendors, soar, swot, pestle, porter, tows };
+}
+
+export function ReportStrategicAnalysis({ comparison }: { comparison: any }) {
+  const { vendors, soar, swot, pestle, porter, tows } = strategicFrameworkData(comparison);
+  return <ReportDisclosure title="Strategic analysis · SOAR, SWOT, PESTLE, VRIO" hint="Modelled, not independently verified; source-linked findings retained where available" testId="details-strategic-analysis">
+    {soar.length ? <StrategicFrameworkSection title="SOAR by option" eyebrow="Strengths-led strategy" description="Score-derived decision actions and stored findings are modelled, not independently verified. Check the underlying criteria before acting." entries={soar} vendors={vendors} testId="section-soar" scoreDerived /> : <section className="mt-14" data-testid="section-soar"><h2 className="display text-2xl font-bold text-[#202840]">SOAR by option</h2><p className="mt-2 text-xs text-[#687083]">No substantive SOAR findings or eligible criterion scores are available for this report.</p></section>}
+    {swot.length ? <StrategicFrameworkSection title="SWOT by option" eyebrow="Strategic read" description="Stored option-specific SWOT findings are modelled, not independently verified. Source links are retained where available." entries={swot} vendors={vendors} testId="section-swot" /> : <section className="mt-14" data-testid="section-swot"><h2 className="display text-2xl font-bold text-[#202840]">SWOT by option</h2><p className="mt-2 text-xs text-[#687083]">No substantive SWOT findings are available for this report.</p></section>}
+    {pestle.length ? <StrategicFrameworkSection title="PESTLE by option" eyebrow="Macro environment" description="Stored option-specific PESTLE findings are modelled, not independently verified. Source links are retained where available." entries={pestle} vendors={vendors} testId="section-pestle" /> : <section className="mt-14" data-testid="section-pestle"><h2 className="display text-2xl font-bold text-[#202840]">PESTLE by option</h2><p className="mt-2 text-xs text-[#687083]">No substantive PESTLE findings are available for this report.</p></section>}
     {porter.length > 0 && <StrategicFrameworkSection title="Porter's Five Forces by option" eyebrow="Competitive forces" description="Source-linked competitive-force findings for researched options." entries={porter} vendors={vendors} testId="section-porter" />}
     {tows.length > 0 && <StrategicFrameworkSection title="TOWS by option" eyebrow="Strategic actions" description="Source-linked strategic actions for researched options." entries={tows} vendors={vendors} testId="section-tows" />}
     <VrioSection vendorScores={comparison.vendorScores} />
@@ -8577,6 +8941,7 @@ export function ReportStrategicAnalysis({ comparison }: { comparison: any }) {
 function AnalysisPage() {
   const [location, setLocation] = useLocation();
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
+  const [pdfFormat, setPdfFormat] = useState<'summary' | 'expanded'>('summary');
   const [quoteBundle, setQuoteBundle] = useState<QuoteBundle | null>(null);
   const onQuoteChanged = useCallback((next: QuoteBundle | null) => setQuoteBundle(next), []);
   const [jsonStatus, setJsonStatus] = useState<'idle' | 'exporting' | 'failed'>('idle');
@@ -8637,14 +9002,17 @@ function AnalysisPage() {
   const allEligibleResearchTimedOut = allEligibleScoredOptionsTimedOut(comparison, comparisonResult);
   const isPartialReport = hasPartialResearchStatus(comparison as Comparison & { researchStatus?: string });
   const decisionQuality = computeDecisionQuality(comparison);
-  const exportPdf = async () => {
+  const exportPdf = async (format: 'summary' | 'expanded' = 'summary') => {
     if (pdfStatus === 'exporting') return;
+    setPdfFormat(format);
     setPdfStatus('exporting');
     try {
-      await downloadComparisonPdf({ ...comparison, quoteBundle: guest ? null : quoteBundle });
+      await downloadComparisonPdf({ ...comparison, quoteBundle: guest ? null : quoteBundle }, format);
       setPdfStatus('idle');
     } catch (error) {
-      console.error('PDF export failed', error);
+      // Report text and URLs can appear in exception messages and stacks.
+      // Log only a fixed code; never emit the report or the thrown object.
+      console.error(`PDF export failed (${format}; ${error instanceof Error && error.name === 'RangeError' ? 'range' : error instanceof Error && error.name === 'TypeError' ? 'type' : 'generation'})`);
       setPdfStatus('failed');
     }
   };
@@ -8754,7 +9122,8 @@ function AnalysisPage() {
           ? `${unverifiedEligibilityChoice.kind === 'ALPHABETICAL_UNSCORED' ? 'Unscored alphabetical tie-break' : 'Provisional modelled choice'} · eligibility unverified: ${unverifiedEligibilityChoice.option}`
           : continuity && partial ? `${comparisonResult.roundedTieBreak ? 'Preliminary tie-break' : 'Preliminary recommendation'}: ${comparisonResult.recommendedOptionId}` : partial ? 'A winner so far, not a finished comparison' : 'This comparison is not ready for a decision'}</p>
       <div className="mt-6 flex flex-wrap gap-3">
-        <button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring rounded-xl bg-[#202840] px-5 py-3 text-xs font-bold text-[#f8f4e8]" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? 'Preparing report…' : `Download ${partial && continuity ? 'preliminary' : partial ? 'partial' : 'exception'} report`}</button>
+        <button type="button" onClick={() => exportPdf()} disabled={pdfStatus === 'exporting'} className="focus-ring rounded-xl bg-[#202840] px-5 py-3 text-xs font-bold text-[#f8f4e8]" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? 'Preparing report…' : `Download ${partial && continuity ? 'preliminary' : partial ? 'partial' : 'exception'} report`}</button>
+        <button type="button" onClick={() => exportPdf('expanded')} disabled={pdfStatus === 'exporting'} className="focus-ring rounded-xl border border-[#202840] px-5 py-3 text-xs font-bold text-[#202840] disabled:opacity-70" data-testid="button-download-expanded-pdf">{pdfStatus === 'exporting' && pdfFormat === 'expanded' ? 'Preparing expanded report…' : 'Download expanded report'}</button>
         <button type="button" onClick={exportJson} disabled={jsonStatus === 'exporting'} className="focus-ring rounded-xl border border-[#202840] px-5 py-3 text-xs font-bold text-[#202840]" data-testid="button-download-evidence-json">Download evidence JSON</button>
       </div>
        <section className="mt-4 rounded-xl border border-[#b7d9cb] bg-[#eef6f1] p-4 text-[#202840]" data-testid="report-decision-outcome"><p className="text-sm font-bold">{decisionOutcome(comparison).outcome}</p><p className="mt-1 text-xs leading-5">Next action: {decisionOutcome(comparison).nextAction}</p></section>
@@ -8763,7 +9132,14 @@ function AnalysisPage() {
         <CompareAgainActions comparison={comparison} guest={guest} />
       </div>
       {continuity && partial && !winnerWithheld && <div className="mt-6"><RecommendationContinuityPanel comparison={comparison} /></div>}
+      {isPartialReport && <p className="mt-4 rounded-xl border border-[#e2cf93] bg-[#fff8df] px-4 py-3 text-xs leading-5 text-[#765b20]" role="status" data-testid="partial-report-status"><strong>Research incomplete.</strong> Modelled scores are not independently verified; unreported and time-sensitive details remain unknown.</p>}
       {partial && <ReportAtAGlance comparison={comparison} winner={winnerWithheld ? null : unverifiedEligibilityChoice?.option} />}
+      {partial && <ScoreCharts vendorScores={comparison.vendorScores} />}
+      {partial && (researchedPricing.length > 0 || researchedFeatures.length > 0) && <section className="mt-8 grid gap-7" data-testid="section-researched-lenses">{researchedPricing.length > 0 && <AnalysisTable title="Pricing lens" rows={researchedPricing} indicative={isIndicativeDxpReport(comparison)} />}{researchedFeatures.length > 0 && <AnalysisTable title="Feature lens" rows={researchedFeatures} indicative={isIndicativeDxpReport(comparison)} />}</section>}
+      <ReportProsAndCons comparison={comparison} defaultOpen={partial} />
+      <ProvisionalMarketNotice comparison={comparison} />
+      <div className="mt-6"><EligibilityStatusSection comparison={comparison} /><ReportMarketRelevance comparison={comparison as unknown as Record<string, unknown>} /></div>
+      <div className="mt-8" data-testid="report-details-heading"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Details</p><h2 className="display mt-1 text-xl font-bold tracking-[-.03em] text-[#202840]">Evidence, methodology and working detail</h2></div>
       {versionTimeline}
       <section className="mt-7 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-6" aria-label="Comparison research status">
         <h2 className="text-base font-bold text-[#202840]">Research status</h2>
@@ -8790,45 +9166,48 @@ function AnalysisPage() {
         <h2 className="text-sm font-bold text-[#202840]">What to do next</h2>
         <p className="mt-2 text-xs leading-5 text-[#39435a]">{isBudgetNoMatch(comparison) ? decisionOutcome(comparison).nextAction : 'Confirm the decision context, then gather publisher-permitted, comparable evidence for each shortlisted option against the same criteria. Retry when the gaps are resolved.'}</p>
       </section>
-      <ReportProsAndCons comparison={comparison} />
-      {isPartialReport && <p className="mt-4 text-xs leading-5 text-[#765b20]" role="status" data-testid="partial-report-status"><strong>Research incomplete.</strong> Modelled scores are not independently verified; unreported and time-sensitive details remain unknown.</p>}
-      <ProvisionalMarketNotice comparison={comparison} />
-      <div className="mt-6"><EligibilityStatusSection comparison={comparison} /><ReportMarketRelevance comparison={comparison as unknown as Record<string, unknown>} /></div>
       <ReportStrategicAnalysis comparison={comparison} />
       {(pdfStatus === 'failed' || jsonStatus === 'failed') && <p className="mt-3 text-xs font-bold text-[#b94d45]" role="alert">The export could not be generated. Please try again.</p>}
     </main></AppShell>;
   }
-  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid gap-7 lg:grid-cols-[1fr_310px]"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 line-clamp-3 max-w-3xl text-base leading-7 text-[#687083]" title={evidenceSafeExecutiveSummary(comparison)} data-testid="text-report-summary">{evidenceSafeExecutiveSummary(comparison)}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div>{guest ? <div className="mt-7 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="guest-verify-guidance"><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Verification for saved decisions</p><p className="mt-2 text-sm leading-6 text-[#39435a]">This guest result is not saved. Sign in and create a saved comparison to access its dedicated verification page. Signing in does not automatically save this guest result.</p><Link href="/sign-in" className="focus-ring mt-4 inline-flex rounded-xl bg-[#202840] px-4 py-2.5 text-xs font-bold text-[#f8f4e8]" data-testid="link-guest-verify-sign-in">Sign in to save future decisions <ArrowRight size={14} className="ml-2" /></Link></div> : <Link href={`/verify/${id}`} className="focus-ring mt-7 inline-flex items-center gap-3 rounded-xl bg-[#0f766e] px-5 py-3.5 text-sm font-bold text-[#f8f4e8] transition-colors hover:bg-[#095e58]" data-testid="link-verify-decision"><ShieldCheck size={18} /> Verify this decision <ArrowRight size={16} /></Link>}</div>
+  return <AppShell guest={guest}><div className="mx-auto max-w-7xl px-5 py-10 lg:px-10 lg:py-14"><Link href={guest ? "/guest" : "/user-portal"} className="focus-ring inline-flex items-center gap-2 text-xs font-bold text-[#0f766e] hover:underline" data-testid="link-analysis-back"><ArrowLeft size={14} /> {guest ? 'Back to guest mode' : 'Back to workspace'}</Link><div className="mt-8 grid min-w-0 gap-7 lg:grid-cols-[1fr_310px] [&>*]:min-w-0"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#dcefe9] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#0f766e]">{comparison.category || 'Comparison'}</span><span className="rounded-full bg-[#e7e2d4] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#73766f]">{comparison.status}</span>{guest && <span className="rounded-full bg-[#e8f2bd] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#4b654f]">Unsaved guest result</span>}</div><h1 className="display mt-5 max-w-4xl text-4xl font-bold leading-[.96] tracking-[-.06em] text-[#202840] sm:text-6xl">{comparison.comparisonIdentity?.headline || comparison.prompt}</h1><p className="mt-5 line-clamp-3 max-w-3xl text-base leading-7 text-[#687083]" title={evidenceSafeExecutiveSummary(comparison)} data-testid="text-report-summary">{evidenceSafeExecutiveSummary(comparison)}</p><div className="mt-6"><p className="mono text-[9px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Compared options</p><div className="mt-2 flex flex-wrap gap-2" data-testid="list-compared-options">{comparison.vendors?.map((vendor: string) => <span key={vendor} className="rounded-full bg-[#202840] px-3 py-1.5 text-xs font-bold text-[#f8f4e8]">{vendor}</span>)}</div></div><div className="mt-5 flex flex-wrap gap-2">{comparison.criteria?.map((criterion: string) => <span key={criterion} className="rounded-lg border border-[#d0c8b7] px-3 py-2 text-xs font-semibold text-[#667083]">{criterion}</span>)}</div></div>{guest ? <div className="mt-7 rounded-2xl border border-[#d5cebd] bg-[#f8f4e8] p-5" data-testid="guest-verify-guidance"><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#0f766e]">Verification for saved decisions</p><p className="mt-2 text-sm leading-6 text-[#39435a]">This guest result is not saved. Sign in and create a saved comparison to access its dedicated verification page. Signing in does not automatically save this guest result.</p><Link href="/sign-in" className="focus-ring mt-4 inline-flex rounded-xl bg-[#202840] px-4 py-2.5 text-xs font-bold text-[#f8f4e8]" data-testid="link-guest-verify-sign-in">Sign in to save future decisions <ArrowRight size={14} className="ml-2" /></Link></div> : <Link href={`/verify/${id}`} className="focus-ring mt-7 inline-flex items-center gap-3 rounded-xl bg-[#0f766e] px-5 py-3.5 text-sm font-bold text-[#f8f4e8] transition-colors hover:bg-[#095e58]" data-testid="link-verify-decision"><ShieldCheck size={18} /> Verify this decision <ArrowRight size={16} /></Link>}</div>
           <section className="mt-2 flex flex-col gap-4 lg:col-span-2 lg:flex-row lg:items-start lg:justify-between" data-testid="report-recommendation-and-download">
             <div className="min-w-0 flex-1"><DecisionRecommendationCard comparison={comparison} hideEligibility /></div>
-            <div className="flex flex-col gap-2 lg:mt-6 lg:shrink-0"><button type="button" onClick={exportPdf} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' ? 'Preparing summary' : 'Download Summary'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
+            <div className="flex flex-col gap-2 lg:mt-6 lg:shrink-0"><button type="button" onClick={() => exportPdf()} disabled={pdfStatus === 'exporting'} className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-[#202840] px-5 py-3 text-sm font-bold text-[#f8f4e8] hover:bg-[#0f766e] disabled:cursor-wait disabled:opacity-70" data-testid="button-download-pdf">{pdfStatus === 'exporting' && pdfFormat === 'summary' ? <LoaderCircle className="animate-spin" size={16} /> : <Download size={16} />} {pdfStatus === 'exporting' && pdfFormat === 'summary' ? 'Preparing summary' : 'Download Summary'}</button><button type="button" onClick={() => exportPdf('expanded')} disabled={pdfStatus === 'exporting'} className="focus-ring rounded-xl border border-[#202840] px-5 py-3 text-sm font-bold text-[#202840] disabled:opacity-70" data-testid="button-download-expanded-pdf">{pdfStatus === 'exporting' && pdfFormat === 'expanded' ? 'Preparing expanded report…' : 'Download expanded report'}</button>{pdfStatus === 'failed' && <p className="text-xs font-bold text-[#b94d45]" role="alert">The PDF could not be generated. Please try again.</p>}</div>
           </section>
           <section className="rounded-xl border border-[#b7d9cb] bg-[#eef6f1] p-4 text-[#202840] lg:col-span-2" data-testid="report-decision-outcome"><p className="text-sm font-bold">{decisionOutcome(comparison).outcome}</p><p className="mt-1 text-xs leading-5">Next action: {decisionOutcome(comparison).nextAction}</p></section>
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#d5cebd] bg-[#f8f4e8] p-4 lg:col-span-2">
             <p className="text-xs font-bold text-[#0f766e]" data-testid="report-comparison-type">Comparison type · {comparisonTypeLabel(comparison)}</p>
             <CompareAgainActions comparison={comparison} guest={guest} />
           </div>
-          {versionTimeline}
+          {isPartialReport && <p className="rounded-xl border border-[#e2cf93] bg-[#fff8df] px-4 py-3 text-xs leading-5 text-[#765b20] lg:col-span-2" role="status" data-testid="partial-report-status"><strong>Research incomplete.</strong> Modelled scores are not independently verified; unreported and time-sensitive details remain unknown.</p>}
+          {shouldShowVehicleDecisionReadiness(comparison, comparisonResult) && <section className="rounded-2xl border border-[#d6a39f] bg-[#fff0e9] p-5 lg:col-span-2" data-testid="vehicle-decision-readiness" role="status"><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#9a3e38]">Purchase decision on hold</p><p className="mt-2 text-sm leading-6 text-[#39435a]">No canonical scoreable recommendation is available while local availability and like-for-like buying evidence remain unverified. Confirm the exact current variants, written on-road prices, safety, warranty and local service costs before choosing.</p></section>}
        <ReportAtAGlance comparison={comparison} />
        <div className="lg:col-span-2"><ScoreCharts vendorScores={comparison.vendorScores} /></div>
-       <VendorScoreExtensionSection vendorScores={comparison.vendorScores} comparison={comparison} />
-       <ReportBasisSummary comparison={comparison} sourceLinkedCount={verifiedEvidenceCount} />
        {continuity && comparisonResult.resultState === 'MODELLED_PARTIAL'
-         && <div className="lg:col-span-2"><DecisionFirstReportPanel comparison={comparison} /></div>}
+         ? <div className="lg:col-span-2"><DecisionFirstReportPanel comparison={comparison} part="lenses" /></div>
+         : (researchedPricing.length > 0 || researchedFeatures.length > 0) && <section className="mt-8 grid min-w-0 gap-7 lg:col-span-2 lg:grid-cols-2 [&>*]:min-w-0" data-testid="section-researched-lenses">{researchedPricing.length > 0 && <AnalysisTable title="Pricing lens" rows={researchedPricing} indicative={isIndicativeDxpReport(comparison)} />}{researchedFeatures.length > 0 && <AnalysisTable title="Feature lens" rows={researchedFeatures} indicative={isIndicativeDxpReport(comparison)} />}</section>}
+     {!guest && <div className="lg:col-span-2"><QuotePanel id={id} vendors={comparison.vendors || []} onChanged={onQuoteChanged} /></div>}
+    <ReportProsAndCons comparison={comparison} defaultOpen />
+    <div className="lg:col-span-2"><ProvisionalMarketNotice comparison={comparison} /></div>
+    <div className="mt-6 lg:col-span-2"><EligibilityStatusSection comparison={comparison} /><ReportMarketRelevance comparison={comparison as unknown as Record<string, unknown>} /></div>
+       <div className="mt-8 lg:col-span-2" data-testid="report-details-heading"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Details</p><h2 className="display mt-1 text-xl font-bold tracking-[-.03em] text-[#202840]">Evidence, methodology and working detail</h2></div>
+       {continuity && comparisonResult.resultState === 'MODELLED_PARTIAL'
+         ? <ReportDisclosure title="Scorecard detail, weights and trade-offs" hint="Lens-by-lens scores, raw and normalized weights, modelled pros and cons, switch conditions" testId="details-decision-brief"><DecisionFirstReportPanel comparison={comparison} part="details" /></ReportDisclosure>
+         : <ReportDisclosure title="Full rationale and decision strategy" hint="Detailed reasoning, trade-offs and switching guidance" testId="details-decision-brief">
+         <ExecutiveDecisionBrief comparison={comparison} />
+         <DecisionStrategySection comparison={comparison} hideSwitch />
+       </ReportDisclosure>}
+       <ReportDisclosure title="Evidence basis and qualification" hint="What is research-backed, what is modelled, and per-option qualification detail" testId="details-report-basis">
+         <VendorScoreExtensionSection vendorScores={comparison.vendorScores} comparison={comparison} />
+         <ReportBasisSummary comparison={comparison} sourceLinkedCount={verifiedEvidenceCount} />
+       </ReportDisclosure>
            <ReportDisclosure title="Decision inputs and context" hint="Per-criterion scores, evidence status and validated context" testId="details-decision-inputs">
              <DecisionInputsPanel comparison={comparison} />
              <ValidatedContextPanel context={comparison.validatedContext} />
            </ReportDisclosure>
-       {!(continuity && comparisonResult.resultState === 'MODELLED_PARTIAL') && <ReportDisclosure title="Full rationale and decision strategy" hint="Detailed reasoning, trade-offs and switching guidance" testId="details-decision-brief">
-         <ExecutiveDecisionBrief comparison={comparison} />
-         <DecisionStrategySection comparison={comparison} hideSwitch />
-       </ReportDisclosure>}
-            {shouldShowVehicleDecisionReadiness(comparison, comparisonResult) && <section className="mt-6 rounded-2xl border border-[#d6a39f] bg-[#fff0e9] p-5" data-testid="vehicle-decision-readiness" role="status"><p className="mono text-[10px] font-bold uppercase tracking-[.16em] text-[#9a3e38]">Purchase decision on hold</p><p className="mt-2 text-sm leading-6 text-[#39435a]">No canonical scoreable recommendation is available while local availability and like-for-like buying evidence remain unverified. Confirm the exact current variants, written on-road prices, safety, warranty and local service costs before choosing.</p></section>}
-       <div className="mt-6 flex justify-end"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> {isVehiclePurchaseReport(comparison) ? 'Open vehicle buying checks' : 'Open equivalency, gaps, migration, and governance'}</Link></div>
-    <ReportProsAndCons comparison={comparison} />
-    {isPartialReport && <p className="mt-4 text-xs leading-5 text-[#765b20] lg:col-span-2" role="status" data-testid="partial-report-status"><strong>Research incomplete.</strong> Modelled scores are not independently verified; unreported and time-sensitive details remain unknown.</p>}
-    <div className="lg:col-span-2"><ProvisionalMarketNotice comparison={comparison} /></div>
-    <div className="mt-6"><EligibilityStatusSection comparison={comparison} /><ReportMarketRelevance comparison={comparison as unknown as Record<string, unknown>} /></div>
+          <div className="lg:col-span-2">{versionTimeline}</div>
+       <div className="mt-6 flex justify-end lg:col-span-2"><Link href={guest ? "/guest/decision-plan" : `/comparisons/${comparison.id}/decision-plan`} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-[#0f766e] bg-[#dcefe9] px-5 py-3 text-sm font-bold text-[#0f766e]" data-testid="link-decision-plan"><FileSearch size={16} /> {isVehiclePurchaseReport(comparison) ? 'Open vehicle buying checks' : 'Open equivalency, gaps, migration, and governance'}</Link></div>
     {smallerOrganisationSuggestions(comparison).length > 0 && <section className="mt-8 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-5" data-testid="section-smaller-organisation-alternatives">
       <h2 className="display text-xl font-bold text-[#202840]">Alternative suggestions to evaluate for speed and cost</h2>
       <p className="mt-2 text-xs leading-5 text-[#566074]">These are outside your shortlist, not ranked winners. Their price, implementation speed, and suitability have not been verified here.</p>
@@ -8836,8 +9215,6 @@ function AnalysisPage() {
     </section>}
             {latestVersion && <WeightEditor comparison={comparison} guest={guest} onUpdated={onWeightReportUpdated} />}
     {!comparison.vendorScores?.some(hasVendorScoreExtension) && <HeadToHead comparison={comparison} />}
-     {!guest && <QuotePanel id={id} vendors={comparison.vendors || []} onChanged={onQuoteChanged} />}
-      {(researchedPricing.length > 0 || researchedFeatures.length > 0) && <section className="mt-14 grid gap-7 lg:grid-cols-2" data-testid="section-researched-lenses">{researchedPricing.length > 0 && <AnalysisTable title="Pricing analysis" rows={researchedPricing} indicative={isIndicativeDxpReport(comparison)} />}{researchedFeatures.length > 0 && <AnalysisTable title="Feature analysis" rows={researchedFeatures} indicative={isIndicativeDxpReport(comparison)} />}</section>}
      <ReportStrategicAnalysis comparison={comparison} />
       {alternativeInsights.length > 0 && <section className="mt-14 rounded-2xl border border-[#b7c9a6] bg-[#eef4d8] p-6" data-testid="section-alternative-insights"><p className="mono text-[10px] font-bold uppercase tracking-[.18em] text-[#0f766e]">Alternative path</p><h2 className="display mt-2 text-2xl font-bold tracking-[-.04em] text-[#202840]">Alternatives outside your shortlist</h2><p className="mt-2 max-w-3xl text-xs leading-5 text-[#687083]">These options were not included in the weighted ranking. Add an alternative to every option in the current shortlist and rerun the same decision context and criteria. Comparisons are limited to {MAX_COMPARISON_OPTIONS} options.</p>{alternativeError && <p className="mt-3 rounded-lg border border-[#d6a39f] bg-[#f7dfdc] px-3 py-2 text-xs font-bold text-[#9a3e38]" role="alert" data-testid="status-alternative-limit">{alternativeError}</p>}<ul className="mt-5 space-y-4">{alternativeInsights.map((item: string) => { const alternative = item.replace('Alternative outside comparison — ', '').split(':')[0]?.trim(); const atLimit = !canAddAlternativeToComparison(comparison, alternative); return <li className="flex flex-col gap-3 rounded-xl border border-[#cfdbb9] bg-[#f8f4e8] p-4 text-sm leading-6 text-[#39435a] sm:flex-row sm:items-start sm:justify-between" key={item}><div className="flex gap-3"><Compass size={17} className="mt-1 shrink-0 text-[#0f766e]" /><AlternativeExplanation insight={item} /></div><button type="button" onClick={() => compareAlternative(item)} disabled={atLimit} className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0f766e] px-4 py-2 text-xs font-bold text-[#f8f4e8] disabled:cursor-not-allowed disabled:bg-[#87918b]" data-testid={`button-compare-alternative-${item.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}><ArrowRight size={14} /> {atLimit ? `${MAX_COMPARISON_OPTIONS}-option limit` : 'Add to comparison'}</button></li>; })}</ul></section>}
       <ReportDisclosure title="Opportunities, insights and next steps" testId="details-insights"><section className="grid gap-7 lg:grid-cols-3"><InsightList title="Opportunities" items={comparison.opportunities} accent="teal" /><InsightList title="Key insights" items={coreInsights} accent="yellow" /><InsightList title="Next steps" items={(comparison.nextSteps || []).filter((step: string) => !step.startsWith('Decision strategy — '))} accent="red" /></section></ReportDisclosure>

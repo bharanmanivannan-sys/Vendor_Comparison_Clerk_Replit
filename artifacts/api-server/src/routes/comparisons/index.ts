@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { getAuth } from "@clerk/express";
 import { and, desc, eq, gte, or, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
+import { researchCapacityAlerts } from "../../lib/researchCapacityAlerts";
 import { draftMatchesConfirmedRequest, draftOwnerForComparison, loadConfirmedDraftGateEvidence } from "../../services/draftGateReuse";
 import { COUNTRY_NAMES, draftAccessModeFor, draftCandidateForOption } from "../../services/draftGateIdentity";
 import {
@@ -1952,7 +1953,8 @@ function deterministicSharedScoreWinner(
 
 export function insufficientDataWithoutWinner(analysis: AnalysisPayload): AnalysisPayload {
   const allowsUnknownMarketRanking = (analysis.contextAssumptions ?? []).some((assumption) =>
-    /Identity-resolved comparable options remain rankable while market availability is NOT_ASSESSED/i.test(assumption));
+    /Identity-resolved comparable options remain rankable while market availability is NOT_ASSESSED/i.test(assumption))
+    || (analysis.contextAssumptions ?? []).includes("Decision Mode: market availability not verified");
   const ranked = rankEligibleScoredOptions(analysis, allowsUnknownMarketRanking);
   if (ranked) return ranked;
   if (allowsUnknownMarketRanking && analysis.recommendation
@@ -2006,7 +2008,7 @@ function rankEligibleScoredOptions(analysis: AnalysisPayload, allowUnknownMarket
       && (weightedModelScore || explicitModelScore);
   });
   if (scored.length < 2) return undefined;
-  const ranking = rankEligibleModelledScores(scored);
+  const ranking = rankEligibleModelledScores(scored, allowUnknownMarketEligibility);
   const ranked = ranking.ranked;
   const winner = ranked[0]!;
   const tied = ranking.tied;
@@ -2324,14 +2326,15 @@ export async function buildSynchronousDecisionModeReport(
       reduceConfidenceForUnknownDecisionGates(initial);
     }
     const partialFallback = eligibilityRequired
-      ? stopForUnestablishedMarketEligibility(
+      ? labelDecisionModeMarketUncertainty(stopForUnestablishedMarketEligibility(
         initial,
         input.prompt,
         input.vendors,
         input.market,
         input.criteria,
         input.validatedCategory,
-      )
+        input.vendors,
+      ), { country: inferResearchMarket(input.prompt, input.vendors, input.market).country }, input.prompt)
       : initialPreview ? initial : insufficientDataWithoutWinner(initial);
     if (controller.signal.aborted) {
       return { analysis: analysisWithResearchStatus(partialFallback, "partial"), researchStatus: "partial" };
@@ -2347,8 +2350,12 @@ export async function buildSynchronousDecisionModeReport(
       deadlineAt - Date.now(),
     );
     let analysis = settlement.result;
-    const eligibilityEstablished = !eligibilityRequired || hasScoreableMarketCandidate(analysis, input.vendors, input.prompt);
-    const finalPreview = eligibilityEstablished
+    if (eligibilityRequired) {
+      analysis = labelDecisionModeMarketUncertainty(stopForUnestablishedMarketEligibility(
+        analysis, input.prompt, input.vendors, input.market, input.criteria, input.validatedCategory, input.vendors,
+      ), { country: inferResearchMarket(input.prompt, input.vendors, input.market).country }, input.prompt);
+    }
+    const finalPreview = !eligibilityRequired
       ? previewDecisionFromAnalysis(analysis, input.prompt, input.vendors, input.criteria)
       : undefined;
     if (finalPreview) {
@@ -2356,9 +2363,12 @@ export async function buildSynchronousDecisionModeReport(
       analysis.recommendationReason = finalPreview.reason;
       reduceConfidenceForUnknownDecisionGates(analysis);
     } else {
-      analysis = eligibilityRequired
-        ? stopForUnestablishedMarketEligibility(analysis, input.prompt, input.vendors, input.market, input.criteria, input.validatedCategory)
-        : insufficientDataWithoutWinner(analysis);
+      analysis = insufficientDataWithoutWinner(analysis);
+    }
+    if (eligibilityRequired) {
+      analysis = labelDecisionModeMarketUncertainty(
+        analysis, { country: inferResearchMarket(input.prompt, input.vendors, input.market).country }, input.prompt,
+      );
     }
     const agentResearchStatus = researchStatusFromContextAssumptions(analysis.contextAssumptions);
     const partial = settlement.status === "partial"
@@ -2723,6 +2733,15 @@ export function comparisonWorkaroundPrompt(prompt: string, vendors: string[]): s
 
 export function comparisonFailureMessage(error: unknown, prompt: string, vendors: string[]): string {
   const message = error instanceof Error ? error.message : "";
+  // Terminal comparison blockage is distinct from the provider observation counted at the HTTP boundary.
+  // Never include the request, provider error, or comparison identity in this event.
+  if (/MODEL_SCORING_GEMINI_HTTP_429/.test(message))
+    researchCapacityAlerts.comparisonBlocked("gemini", "rate_limited");
+  else if (/MODEL_SCORING_GROQ_HTTP_429/.test(message))
+    researchCapacityAlerts.comparisonBlocked("groq", "rate_limited");
+  else if (/MODEL_SCORING_(?:CREDITS_EXHAUSTED|RATE_LIMITED)/.test(message))
+    researchCapacityAlerts.comparisonBlocked("openai",
+      /CREDITS_EXHAUSTED/.test(message) ? "capacity_exhausted" : "rate_limited");
   if (/MODEL_SCORING_GEMINI_NOT_CONFIGURED/.test(message)) {
     return "The primary comparison model was unavailable and the backup scoring provider is not configured. No score or winner was produced. Contact the app owner to configure the backup provider.";
   }
@@ -2809,12 +2828,24 @@ function labelProvisionalMarketAnalysis(
         evidence: evidence[row.vendor] ?? [],
       }),
     }),
-    contextAssumptions: [...new Set([...(analysis.contextAssumptions ?? []), notice])],
+    contextAssumptions: [...new Set([...(analysis.contextAssumptions ?? []), "Decision Mode: market availability not verified", notice])],
     executiveSummary: analysis.executiveSummary.includes(notice)
       ? analysis.executiveSummary : `${analysis.executiveSummary} ${notice}`,
     recommendationReason: analysis.recommendationReason.includes(notice)
       ? analysis.recommendationReason : `${analysis.recommendationReason} ${notice}`,
   };
+}
+
+function labelDecisionModeMarketUncertainty(
+  analysis: AnalysisPayload,
+  context: DemographicContext,
+  objective: string,
+): AnalysisPayload {
+  const unresolved = analysis.vendorScores.filter((row) =>
+    row.marketEligibility && (row.marketEligibility.status === "UNKNOWN"
+      || !marketEligibilityEvidenceConfirmed(row.marketEligibility.evidenceStatus))
+  ).map((row) => row.vendor);
+  return labelProvisionalMarketAnalysis(analysis, unresolved, context, objective, {});
 }
 
 /**
@@ -2832,7 +2863,9 @@ export async function proceedAfterConfirmedDraftGates<T>(input: {
   const notRelevant: string[] = [];
   const notVerified: string[] = [];
   const provisional: string[] = [];
-  if (input.optionNames.length < 2 || new Set(input.optionNames).size !== input.optionNames.length) {
+  if (input.optionNames.length < 2 || input.optionNames.length > 6
+    || input.optionNames.some((name) => !name.trim())
+    || new Set(input.optionNames.map((name) => name.trim().toLocaleLowerCase())).size !== input.optionNames.length) {
     return { status: "BLOCKED", notRelevant, notVerified: ["The confirmed option set is incomplete."] };
   }
   for (const optionName of input.optionNames) {
@@ -2846,21 +2879,18 @@ export async function proceedAfterConfirmedDraftGates<T>(input: {
     const failedGates = mandatory.filter(({ status }) => status === "FAIL").map(({ gate }) => gate);
     const unresolvedGates = mandatory.filter(({ status }) => status !== "PASS" && status !== "FAIL").map(({ gate }) => gate);
     if (failedGates.length) notRelevant.push(`${optionName} (${failedGates.join(", ")})`);
-    if (unresolvedGates.length || mandatory.length === 0) {
-      if (input.allowProvisionalMarketOnly && !input.context.deliveryNeed
-        && !failedGates.length && mandatory.length > 0
-        && unresolvedGates.length === 1 && unresolvedGates[0] === "MARKET_AVAILABILITY") {
-        provisional.push(optionName);
-      } else {
-        notVerified.push(`${optionName} (${unresolvedGates.length ? unresolvedGates.join(", ") : "mandatory gates missing"})`);
-      }
+    const blockingUnresolved = input.allowProvisionalMarketOnly
+      ? unresolvedGates.filter((gate) => gate !== "MARKET_AVAILABILITY")
+      : unresolvedGates;
+    if (blockingUnresolved.length || mandatory.length === 0) {
+      notVerified.push(`${optionName} (${blockingUnresolved.length ? blockingUnresolved.join(", ") : "mandatory gates missing"})`);
     }
+    if (input.allowProvisionalMarketOnly && unresolvedGates.includes("MARKET_AVAILABILITY")) provisional.push(optionName);
   }
   if (notRelevant.length || notVerified.length) {
     return { status: "BLOCKED", notRelevant, notVerified };
   }
-  return { status: "PROCEED", value: await proceed(),
-    ...(provisional.length ? { provisional } : {}) };
+  return { status: "PROCEED", value: await proceed(), ...(provisional.length ? { provisional } : {}) };
 }
 
 export async function verifyConfirmedDraftMarketEvidence(input: {
@@ -3116,10 +3146,7 @@ export async function requireConfirmedDraftHandoff(
     },
     objective: [validated.input.prompt, ...validated.criteria].join("\n"),
     freshEvidence: evidence,
-    allowProvisionalMarketOnly: draftAccessModeFor(
-      validated.input.prompt,
-      validated.validatedContext.decisionDomain ?? "",
-    ) === "MARKET_ONLY",
+    allowProvisionalMarketOnly: true,
   }, async () => undefined);
   if (gateOutcome.status === "PROCEED") return true;
   if (gateOutcome.notRelevant.length) {
@@ -3691,6 +3718,7 @@ function startComparisonJob(options: {
         const failMarketVerification = async (
           message: string,
           snapshot: Record<string, unknown>,
+          errorCode: "validation_failed" | "research_failed" | "insufficient_quantitative_evidence" = "validation_failed",
         ): Promise<void> => {
           await completeDurableComparisonJobUnit(id, marketUnit, snapshot);
           const endedAt = Date.now();
@@ -3700,7 +3728,7 @@ function startComparisonJob(options: {
             status: "failed",
             stage: "verifying_market",
             progress: { entities: options.vendors, subject: options.subject },
-            errorCode: "validation_failed",
+            errorCode,
             message,
             startedAt,
             endedAt,
@@ -3731,25 +3759,26 @@ function startComparisonJob(options: {
           };
         });
         const optionNames = options.input.comparisonValues?.map(({ confirmedName }) => confirmedName) ?? [];
-        try {
-          verifiedRelevanceEvidence = await verifyConfirmedDraftMarketEvidence({
-            candidates,
-            market: options.input.market!,
-            context: marketContext,
-            objective,
-            accessMode,
-            deadlineMs: Math.max(250, Math.min(20_000, deadlineAt - Date.now())),
-            signal: deadlineController.signal,
-          });
-        } catch {
-          // No proof is manufactured on provider errors; they become per-option unverified gates below.
-        }
+        // Decision Mode consumes only evidence already collected for the
+        // confirmed draft. Fresh availability retrieval belongs to Verify,
+        // not to the research/scoring critical path.
+        verifiedRelevanceEvidence = await loadConfirmedDraftGateEvidence({
+          prompt: options.input.prompt,
+          market: options.input.market,
+          draftId,
+          draftVersion,
+          comparisonValues: options.input.comparisonValues,
+          criteria: options.criteria,
+          demographicContext: options.input.demographicContext,
+          customerLocation: options.validatedContext.customerLocation ?? undefined,
+          customerSegment: options.validatedContext.customerSegment ?? undefined,
+        }, options.draftOwner!);
         const outcome = await proceedAfterConfirmedDraftGates({
           optionNames,
           context: marketContext,
           objective,
           freshEvidence: verifiedRelevanceEvidence,
-          allowProvisionalMarketOnly: accessMode === "MARKET_ONLY",
+          allowProvisionalMarketOnly: true,
         }, async () => undefined);
         const notRelevant = outcome.status === "BLOCKED" ? outcome.notRelevant : [];
         const notVerified = outcome.status === "BLOCKED" ? outcome.notVerified : [];
@@ -3771,10 +3800,10 @@ function startComparisonJob(options: {
           ));
           const message = outcome.notRelevant.length
             ? `${readableOptions.join(", ")} did not meet a mandatory requirement in the selected market. Replace or remove each failed option, reconfirm the draft, and retry with a new request identifier and (if supplied) a new Idempotency-Key.`
-            : `Fresh market evidence could not verify mandatory requirements for ${readableOptions.join(", ")}. Retry verification with a new request identifier and (if supplied) a new Idempotency-Key, or replace the unresolved option before comparing.`;
+            : `Available evidence did not establish mandatory non-market requirements for ${readableOptions.join(", ")}. This does not establish that these options are unsuitable. Confirm the requirements and retry with a new request identifier and (if supplied) a new Idempotency-Key. No comparison research or scoring has started.`;
           await failMarketVerification(message, snapshotFor(candidates, verifiedRelevanceEvidence, {
             status: "BLOCKED", notRelevant: outcome.notRelevant, notVerified: outcome.notVerified,
-          }));
+          }), outcome.notRelevant.length ? "validation_failed" : "insufficient_quantitative_evidence");
           return;
         }
         provisionalMarketOptions = outcome.provisional ?? [];
@@ -3800,7 +3829,7 @@ function startComparisonJob(options: {
           options.input.market,
           options.criteria,
           options.input.validatedCategory,
-          provisionalMarketOptions.length ? options.vendors : [],
+          options.vendors,
         )
         : deadlineInitial, provisionalMarketOptions, reportMarketContext, reportMarketObjective, verifiedRelevanceEvidence);
       if (options.draftOwner && options.resumeContext?.next !== "finalize") updateStage("analysing_evidence");
@@ -3864,7 +3893,7 @@ function startComparisonJob(options: {
             options.input.market,
             options.criteria,
             options.input.validatedCategory,
-            provisionalMarketOptions.length ? options.vendors : [],
+            options.vendors,
           )
           : previewDecision ? initialAnalysis : insufficientDataWithoutWinner(initialAnalysis);
         partialFallback = labelProvisionalMarketAnalysis(
@@ -3906,7 +3935,7 @@ function startComparisonJob(options: {
             options.input.market,
             options.criteria,
             options.input.validatedCategory,
-            provisionalMarketOptions.length ? options.vendors : [],
+            options.vendors,
           )
           : previewDecision
             ? initialAnalysis
@@ -3982,9 +4011,13 @@ function startComparisonJob(options: {
       publishableAnalysis = labelProvisionalMarketAnalysis(
         analysis, provisionalMarketOptions, reportMarketContext, reportMarketObjective, verifiedRelevanceEvidence,
       );
-      const eligibilityEstablished = !eligibilityRequired
-        || hasScoreableMarketCandidate(analysis, options.vendors, options.input.prompt);
-      const finalPreview = eligibilityEstablished
+      if (eligibilityRequired) {
+        analysis = stopForUnestablishedMarketEligibility(
+          analysis, options.input.prompt, options.vendors, options.input.market,
+          options.criteria, options.input.validatedCategory, options.vendors,
+        );
+      }
+      const finalPreview = !eligibilityRequired
         ? previewDecisionFromAnalysis(analysis, options.input.prompt, options.vendors, options.criteria)
         : undefined;
       if (finalPreview) {
@@ -3994,21 +4027,14 @@ function startComparisonJob(options: {
         }
         reduceConfidenceForUnknownDecisionGates(analysis);
       } else {
-        analysis = eligibilityRequired && !eligibilityEstablished
-          ? stopForUnestablishedMarketEligibility(
-            analysis,
-            options.input.prompt,
-            options.vendors,
-            options.input.market,
-            options.criteria,
-            options.input.validatedCategory,
-            provisionalMarketOptions.length ? options.vendors : [],
-          )
-          : insufficientDataWithoutWinner(analysis);
+        analysis = insufficientDataWithoutWinner(analysis);
       }
       analysis = labelProvisionalMarketAnalysis(
         analysis, provisionalMarketOptions, reportMarketContext, reportMarketObjective, verifiedRelevanceEvidence,
       );
+      if (eligibilityRequired) {
+        analysis = labelDecisionModeMarketUncertainty(analysis, reportMarketContext, reportMarketObjective);
+      }
       publishableAnalysis = analysis;
       if (options.resumeContext?.next !== "finalize") {
         const researchedFallbackReport = guestReportFor(analysis, "partial");
@@ -4814,9 +4840,13 @@ export function comparisonParseResult(
   const market = inferResearchMarket(prompt, parsed.vendors, selectedMarket);
   const preflight = discovered
     ?? comparisonPreflightClassification(parsed.vendors, market.countryCode, undefined, prompt);
+  const concreteComparisonLevel = inferGenericComparisonLevel(preflight.optionClassifications
+    .filter(({ name }) => !isObjectivePhraseVendor(name))
+    .map(({ type }) => genericEntityLevel(type)));
   const comparisonValues = parsed.vendors.map((rawText, index) => {
     const classification = preflight.optionClassifications[index];
-    const entityLevel = genericEntityLevel(classification?.type);
+    const entityLevel = isObjectivePhraseVendor(rawText)
+      ? concreteComparisonLevel ?? "MIXED" : genericEntityLevel(classification?.type);
     return {
       rawText,
       confirmedName: rawText,
@@ -4859,10 +4889,10 @@ export function comparisonParseResult(
     : knownType === "dealer" ? "Automotive Retail"
       : exactType === "Mixed Comparison" ? "General market"
         : isPromptGrounded(parsed.intent.useCase) ? parsed.intent.useCase : "General market";
-  const safeSubject = knownType === "curriculum" ? "School curriculum"
+  const safeSubject = preflight.category ?? (knownType === "curriculum" ? "School curriculum"
     : knownType === "dealer" ? "Dealer evaluation"
       : exactType === "Mixed Comparison" ? "Mixed granularity options"
-        : isPromptGrounded(parsed.intent.subject) ? parsed.intent.subject : "Comparison";
+        : isPromptGrounded(parsed.intent.subject) ? parsed.intent.subject : "Comparison");
   const baseMessage = deterministicSegment
     ? `Comparing options in ${segment}.`
     : `Comparing the named options${isPromptGrounded(parsed.context.industry) ? ` for ${industry}` : ""}.`;
@@ -5144,7 +5174,8 @@ export async function validateComparisonInput(
   }
   const mismatch = inferredComparabilityError(preflight.optionClassifications);
   if (mismatch) return { error: mismatch } as const;
-  const comparisonLevel = inferGenericComparisonLevel(preflight.optionClassifications.map(({ type }) => (
+  const comparisonLevel = inferGenericComparisonLevel(preflight.optionClassifications
+    .filter(({ name }) => !isObjectivePhraseVendor(name)).map(({ type }) => (
     genericEntityLevel(type)
   )));
   const allDealers = preflight.optionClassifications.every(({ type }) => type === "dealer");

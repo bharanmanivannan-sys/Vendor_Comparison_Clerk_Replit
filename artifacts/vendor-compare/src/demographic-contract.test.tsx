@@ -44,7 +44,7 @@ test('no demographic participant blocks a winner but status describes the requir
     { vendor: 'B', marketRelevance: { participationStatus: 'CLARIFICATION_REQUIRED' } },
   ], recommendation: 'A' };
   assert.equal(eligibilityBlocksRecommendation(comparison), true);
-  assert.equal(decisionOutcomeLabel(comparison), 'No eligible options for this requirement');
+  assert.equal(decisionOutcomeLabel(comparison), 'Needs market proof — no recommendation yet');
   assert.equal(suppressUnverifiedEligibilityWinner(comparison).recommendation, null);
 });
 

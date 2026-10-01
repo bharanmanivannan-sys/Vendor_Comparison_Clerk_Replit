@@ -1,3 +1,5 @@
+import { hasSmartphoneContext } from "./comparisonPromptGrammar";
+
 /**
  * Stable identity for known comparison options. Keep display names separate:
  * a user's original spelling is still used in titles and saved report rows.
@@ -20,6 +22,11 @@ const knownEntities: Record<string, string[]> = {
   "hdfc bank": ["HDFC Bank", "HDFC"],
   "icici bank": ["ICICI Bank", "ICICI"],
   "sbi bank": ["SBI Bank", "SBI", "State Bank of India"],
+  "amazon-shopping": [
+    "Amazon shopping and delivery services", "Amazon shopping", "Amazon shopping services",
+    "Amazon ecommerce", "Amazon e-commerce", "Amazon online marketplace", "Amazon online shopping", "Amazon online retail",
+  ],
+  "ebay-shopping": ["eBay", "e-bay", "eBay shopping", "eBay marketplace"],
 };
 
 export type EntityResolutionStatus = "RESOLVED" | "RESOLVED_BY_ALIAS" | "AMBIGUOUS" | "UNRESOLVED";
@@ -70,6 +77,14 @@ interface EntityFamilyRecord {
 const STREAMING_DOMAIN = "Entertainment Services";
 const STREAMING_CATEGORY = "Video Streaming Services";
 const STREAMING_SUBCATEGORY = "Subscription Video on Demand";
+const SHOPPING_DOMAIN = "Shopping Services";
+const SHOPPING_CATEGORY = "Online Marketplaces";
+const SHOPPING_SUBCATEGORY = "Online Shopping";
+const SMARTPHONE_BRANDS: Record<string, string> = {
+  apple: "Apple", samsung: "Samsung", google: "Google", motorola: "Motorola",
+  nokia: "Nokia", xiaomi: "Xiaomi", oneplus: "OnePlus", oppo: "OPPO",
+  vivo: "Vivo", sony: "Sony", huawei: "Huawei", honor: "Honor", realme: "Realme",
+};
 
 // A small, explicit family catalog permits safe contextual aliases without
 // turning broad parent brands into inferred products.
@@ -214,6 +229,53 @@ export function resolveEntityIdentity(input: EntityIdentityResolutionInput): Res
   });
   const streamingContext = STREAMING_CONTEXT.test(query);
   const deliveryContext = DELIVERY_CONTEXT.test(query);
+  const shoppingContext = /\b(?:shopping|e-?commerce|online\s+(?:retail|marketplaces?)|marketplaces?)\b/i.test(query);
+
+  // Explicit business identities outrank broad parent-brand ambiguity and
+  // contextual streaming cues. An eBay counterpart alone does not resolve Amazon.
+  const explicitAmazonShopping = /^amazon\s+(?:shopping(?:\s+(?:services?|and delivery services?))?|e commerce|ecommerce|online\s+(?:shopping|retail|marketplace))$/i.test(normalized);
+  if (explicitAmazonShopping || normalized === "amazon" && shoppingContext && !streamingContext) {
+    return {
+      ...base,
+      canonicalEntityId: "amazon-shopping",
+      canonicalName: "Amazon shopping and delivery services",
+      parentEntity: "Amazon",
+      entityType: "service",
+      decisionDomain: SHOPPING_DOMAIN,
+      category: SHOPPING_CATEGORY,
+      subCategory: SHOPPING_SUBCATEGORY,
+      resolutionStatus: explicitAmazonShopping ? "RESOLVED" : "RESOLVED_BY_ALIAS",
+      confidence: explicitAmazonShopping ? 0.98 : 0.9,
+      resolutionReason: "The explicit shopping or ecommerce identity identifies Amazon's online marketplace, not Prime Video",
+    };
+  }
+  if (/^(?:e bay|ebay)(?:\s+(?:shopping|marketplace))?$/.test(normalized)) {
+    return {
+      ...base,
+      canonicalEntityId: "ebay-shopping",
+      canonicalName: "eBay",
+      entityType: "service",
+      decisionDomain: SHOPPING_DOMAIN,
+      category: SHOPPING_CATEGORY,
+      subCategory: SHOPPING_SUBCATEGORY,
+      resolutionStatus: "RESOLVED",
+      confidence: 0.98,
+      resolutionReason: "The supplied eBay alias identifies the online marketplace",
+    };
+  }
+  if (SMARTPHONE_BRANDS[normalized] && hasSmartphoneContext(query) && !streamingContext) {
+    return {
+      ...base,
+      canonicalName: SMARTPHONE_BRANDS[normalized]!,
+      entityType: "brand",
+      decisionDomain: "Smartphones",
+      category: "Smartphones",
+      subCategory: "Smartphone Brands",
+      resolutionStatus: "RESOLVED",
+      confidence: 0.96,
+      resolutionReason: "The explicitly requested smartphone segment scopes the named brand; no phone model has been selected",
+    };
+  }
 
   if (/^(?:amazon prime|prime membership)$/i.test(normalized)) {
     if (deliveryContext) {

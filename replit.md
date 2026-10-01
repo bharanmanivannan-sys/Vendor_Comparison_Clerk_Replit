@@ -9,6 +9,7 @@ Vendor Compare helps teams turn open-ended buying questions into structured, evi
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- For managed PostgreSQL, Publish applies the development-to-production schema diff. Check the new table in Publish's schema review and keep existing production data; never push schema from startup or deployment build. Additive SQL in `lib/db/migrations/` documents the intended change; the Drizzle schema and development database are the source for Publish's diff.
 - Required env: `DATABASE_URL` — Postgres connection string
 
 ## Stack

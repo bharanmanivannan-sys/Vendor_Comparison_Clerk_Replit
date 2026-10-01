@@ -1944,7 +1944,7 @@ test("confirmed draft gate guard requires affirmative exact-market evidence befo
   assert.equal(researchInvocations, 1, "missing or timed-out evidence must remain NOT_VERIFIED and block research");
 });
 
-test("market-only uncertainty can proceed provisionally without passing a missing or failed gate", async () => {
+test("Decision Mode permits only unresolved market availability, never known failure or other mandatory gaps", async () => {
   let started = 0;
   const proceed = async () => { started++; return "research started"; };
   const input = {
@@ -1987,6 +1987,38 @@ test("market-only uncertainty can proceed provisionally without passing a missin
     context: { country: "Australia", customerSegment: "family buyers" },
   }, proceed);
   assert.equal(otherMandatory.status, "BLOCKED");
+  assert.equal(started, 1);
+});
+
+test("confirmed gate guard rejects a seventh, blank or duplicate option before research", async () => {
+  let started = 0;
+  for (const names of [
+    ["Alpha", " alpha "], ["Alpha", ""],
+    ["A", "B", "C", "D", "E", "F", "G"],
+  ]) {
+    const outcome = await proceedAfterConfirmedDraftGates({
+      optionNames: names, context: { country: "Australia" },
+      objective: "Compare providers", freshEvidence: {},
+    }, async () => { started++; });
+    assert.equal(outcome.status, "BLOCKED");
+    if (outcome.status === "BLOCKED") {
+      assert.deepEqual(outcome.notRelevant, []);
+      assert.deepEqual(outcome.notVerified, ["The confirmed option set is incomplete."]);
+    }
+  }
+  assert.equal(started, 0);
+  const names = ["A", "B", "C", "D", "E", "F"];
+  const six = await proceedAfterConfirmedDraftGates({
+    optionNames: names, context: { country: "Australia" }, objective: "Compare providers",
+    freshEvidence: Object.fromEntries(names.map((optionId) => [optionId, [{
+      id: `${optionId}-au`, optionId, gate: "MARKET_AVAILABILITY" as const,
+      outcome: "PASS" as const, country: "Australia",
+      sourceUrl: `https://${optionId.toLowerCase()}.example/au`,
+      exactClaim: "Available to Australian customers.",
+      retrievedAt: new Date().toISOString(), currentMarketSpecific: true,
+    }]])),
+  }, async () => { started++; });
+  assert.equal(six.status, "PROCEED");
   assert.equal(started, 1);
 });
 
@@ -2425,6 +2457,65 @@ test("saved Decision Mode reports project Budget Lens only to Value for Money", 
   assert.equal(savedApiDetail.recommendation, "Pepper");
   assert.ok(savedApiDetail.score > 0);
   assert.equal(savedApiDetail.vendorScores.find((vendor) => vendor.vendor === "Pepper")?.qualificationStatus, "QUALIFIED_WITH_CONDITIONS");
+});
+
+test("saved vehicle Decision Mode scorecards project corresponding named lenses without new research", () => {
+  // A saved partial-research report has real modelled lens rows but no
+  // canonical editor rows; zeroing Budget Lens used to produce HTTP 400.
+  const source = {
+    recommendation: "Mahindra XUV700",
+    score: 85,
+    contextAssumptions: [
+      "All comparative scores and rationales are modelled assumptions, not verified product facts.",
+      "Decision Mode research status: partial",
+    ],
+    vendorScores: [
+      { vendor: "Mahindra XUV700", score: 85, scores: [80, 85, 75, 85, 90] },
+      { vendor: "Tata Safari diesel automatic", score: 81, scores: [75, 80, 80, 80, 85] },
+    ].map(({ vendor, score, scores }) => ({
+      vendor, score,
+      weightedScores: ["Budget Lens", "Feature Lens", "Reliability Lens", "Safety Lens", "Family suitability and practical fit"]
+        .map((criterion, index) => ({
+          criterion, weight: 20, score: scores[index]!,
+          rationale: `Assumption-based modelled fit for ${criterion}; not a verified product fact.`,
+          evidence: [],
+        })),
+    })),
+  } as unknown as AnalysisPayload;
+  const allocations = WEIGHTED_CRITERIA.map(({ criterion }) => ({
+    criterion,
+    weight: ({
+      "Meets Needs / Features": 35,
+      "Quality & Reliability": 25,
+      "Safety & Security": 40,
+    } as Record<string, number>)[criterion] ?? 0,
+  }));
+
+  const result = reweightAnalysis(source, allocations);
+  assert.equal(result.recommendation, "Mahindra XUV700");
+  assert.equal(result.weightModel?.criteria.find((entry) => entry.criterionId === "SAFETY_SECURITY")?.weight, 40);
+  assert.deepEqual(result.vendorScores.map((vendor) =>
+    ["Meets Needs / Features", "Quality & Reliability", "Safety & Security"].map((criterion) =>
+      vendor.weightedScores?.find((entry) => entry.criterion === criterion)?.score)),
+    [[85, 75, 85], [80, 80, 80]]);
+  assert.match(result.vendorScores[0]!.weightedScores!.find((entry) =>
+    entry.criterion === "Safety & Security")!.rationale, /projection from Safety Lens; not verified/i);
+  assert.deepEqual(result.vendorScores.map((vendor) => vendor.weightedScores?.find((entry) =>
+    entry.criterion === "Family suitability and practical fit")?.score), [90, 85]);
+  assert.equal(result.vendorScores[0]!.weightedScores?.find((entry) =>
+    entry.criterion === "Brand Reputation")?.score, 50);
+  assert.equal(reweightAnalysis(result, allocations).recommendation, "Mahindra XUV700");
+  assert.deepEqual(source.vendorScores.map((vendor) => vendor.weightedScores?.length), [5, 5]);
+
+  const incomplete = structuredClone(source);
+  incomplete.vendorScores[1]!.weightedScores = incomplete.vendorScores[1]!.weightedScores!.filter((entry) =>
+    entry.criterion !== "Safety Lens");
+  const partial = reweightAnalysis(incomplete, allocations);
+  assert.deepEqual(partial.vendorScores.map((vendor) => vendor.weightedScores?.find((entry) =>
+    entry.criterion === "Safety & Security")?.score), [50, 50]);
+  assert.throws(() => reweightAnalysis(incomplete, allocations.map((entry) => ({
+    ...entry, weight: entry.criterion === "Safety & Security" ? 100 : 0,
+  }))), /At least one active criterion must have comparable modelled scores across every option/);
 });
 
 test("Decision Mode regeneration rejects a weight model with no comparable active scores", () => {
@@ -2931,7 +3022,7 @@ test("validated user URLs remain attached to a market-unspecified comparison job
   assert.equal(researchInput.market, undefined);
 });
 
-test("synchronous Decision Mode does not score before market eligibility is established", async () => {
+test("synchronous Decision Mode researches and retains modelled scores without fresh market proof", async () => {
   const urls = ["https://alpha.example/product", "https://beta.example/product"];
   const input = {
     prompt: "Compare Alpha and Beta software",
@@ -2945,6 +3036,9 @@ test("synchronous Decision Mode does not score before market eligibility is esta
     recommendation: "Alpha",
     score: 72,
     recommendationReason: "Preliminary scenario fit.",
+    executiveSummary: "Preliminary scenario fit.",
+    insights: [],
+    contextAssumptions: [],
     vendorScores: [
       {
         vendor: "Alpha",
@@ -2991,12 +3085,13 @@ test("synchronous Decision Mode does not score before market eligibility is esta
       };
     },
   });
-  assert.equal(preliminaryCalls, 0);
+  assert.equal(preliminaryCalls, 1);
   assert.deepEqual(researchInput?.urls, urls);
   assert.equal(researchInput?.market, undefined);
   assert.match(researchInput?.prompt ?? "", /Validation notice: market confirmed/);
   assert.equal(result.researchStatus, "complete");
   assert.equal(result.analysis.recommendation, "Alpha");
+  assert.ok(result.analysis.contextAssumptions?.includes("Decision Mode: market availability not verified"));
 });
 
 test("validated refined prompts retain original eligibility intent after retrieval failure", async () => {
@@ -3563,21 +3658,35 @@ test("unresolved market participation remains UNKNOWN even when model scores are
     deadlineMs: 100,
     buildPreliminary: async (brief) => {
       preliminaryCalls += 1;
-      return createDecisionModeAnalysis(brief, {
+      const preliminary = createDecisionModeAnalysis(brief, {
         lenses: [{ criterion: "Reliability", scores: { Alpha: 75, Beta: 60 } }],
       });
+      preliminary.vendorScores = preliminary.vendorScores.map((row) => ({
+        ...row,
+        score: row.vendor === "Alpha" ? 75 : 60,
+        weightedScores: [{
+          criterion: "Reliability", weight: 100, score: row.vendor === "Alpha" ? 75 : 60,
+          rationale: "Fixture modelled reliability assessment.", evidence: [],
+        }],
+      }));
+      preliminary.recommendation = "Alpha";
+      preliminary.score = 75;
+      return preliminary;
     },
     buildResearch: async () => new Promise<AnalysisPayload>(() => {}),
   });
   assert.equal(preliminaryCalls, 1);
   assert.equal(result.researchStatus, "partial");
-  assert.equal(result.analysis.recommendation, "INSUFFICIENT_DATA");
-  assert.match(result.analysis.executiveSummary, /MARKET ELIGIBILITY NOT ESTABLISHED/);
+  assert.equal(result.analysis.recommendation, "Alpha");
+  assert.ok(result.analysis.contextAssumptions?.includes("Decision Mode: market availability not verified"));
+  assert.match(result.analysis.executiveSummary, /market availability.*not verified/i);
   assert.ok(result.analysis.vendorScores.every((vendor) => (
-    vendor.score === 0
-    && (vendor.weightedScores ?? []).length === 0
+    vendor.score > 0
+    && (vendor.weightedScores ?? []).length > 0
     && vendor.marketEligibility?.status === "UNKNOWN"
-  )));
+  )), JSON.stringify(result.analysis.vendorScores.map(({ vendor, score, weightedScores, marketEligibility }) => ({
+    vendor, score, weightedScores, marketEligibility,
+  }))));
 });
 
 test("a hard research deadline keeps one honest provisional choice among known eligible participants", async () => {
@@ -4609,6 +4718,87 @@ test("known mixed granularity is rejected before research despite client confirm
     assert.equal(matching.input.validatedCategory, "Vehicles");
     assert.deepEqual(matching.optionClassifications.map(({ type }) => type), ["vehicle", "vehicle"]);
     assert.equal(matching.validatedContext.validatedUserPrompt, matching.input.prompt);
+  }
+});
+
+test("smartphone brand prompts agree between parse review and execution without live discovery", async () => {
+  const offlineParse: typeof parsePromptWithIntent = (prompt, _extractor, options) =>
+    parsePromptWithIntent(prompt, async () => null, options);
+  const offlineDomain = async (vendors: string[], prompt: string, selectedMarket?: "IN" | "AU" | "US" | "GB") =>
+    comparisonPreflightClassification(vendors, selectedMarket, undefined, prompt);
+  for (const [prompt, vendors] of [
+    ["Compare Samsung with it's competitors in the Smartphone segment", ["Samsung", "it's competitors"]],
+    ["Compare Samsung against Apple in the Smartpone segment in US markets", ["Samsung", "Apple"]],
+  ] as const) {
+    const parsed = await offlineParse(prompt, undefined, { market: "US" });
+    const review = comparisonParseResult(parsed, prompt, "US");
+    assert.deepEqual(review.vendors, vendors);
+    assert.equal(review.comparisonLevel, "BRAND");
+    assert.equal(review.context.segment, "Smartphones");
+    assert.equal(review.intent.subject, "Smartphones");
+    assert.equal(review.context.valid, true);
+    assert.ok(ParseComparisonPromptResponse.safeParse(review).success);
+    const validated = await validateComparisonInput({
+      prompt, market: "US", draftId: randomUUID(), draftVersion: 1,
+      comparisonValues: review.comparisonValues,
+    }, offlineParse, offlineDomain);
+    assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+    if (!("error" in validated)) {
+      assert.deepEqual(validated.vendors, vendors);
+      assert.equal(validated.input.comparisonLevel, "BRAND");
+      assert.equal(validated.input.validatedCategory, "Smartphones");
+      assert.equal(validated.input.prompt, prompt);
+    }
+  }
+  const conflict = await validateComparisonInput({
+    prompt: "Compare Samsung against Apple in the Smartpone segment in US markets", market: "AU",
+    draftId: randomUUID(), draftVersion: 1,
+    comparisonValues: ["Samsung", "Apple"].map((name) => ({ rawText: name, confirmedName: name, entityLevel: "BRAND" })),
+  }, offlineParse, offlineDomain);
+  assert.ok("error" in conflict);
+});
+
+test("shopping clarification resolves an explicit edited Amazon identity but not the bare parent", async () => {
+  const offlineParse: typeof parsePromptWithIntent = (prompt, _extractor, options) =>
+    parsePromptWithIntent(prompt, async () => null, options);
+  const offlineDomain = async (vendors: string[], prompt: string, selectedMarket?: "IN" | "AU" | "US" | "GB") =>
+    comparisonPreflightClassification(vendors, selectedMarket, undefined, prompt);
+  for (const ebay of ["e-bay", "eBay"]) {
+    const original = `Compare ${ebay} vs Amazon`;
+    const unresolved = await validateComparisonInput({
+      prompt: original, market: "AU", draftId: randomUUID(), draftVersion: 1,
+      comparisonValues: [ebay, "Amazon"].map((name) => ({ rawText: name, confirmedName: name, entityLevel: "SERVICE" })),
+    }, offlineParse, offlineDomain);
+    assert.ok("error" in unresolved);
+    if ("error" in unresolved) assert.match(String(unresolved.error), /^CLARIFICATION_REQUIRED:/);
+    for (const amazon of ["Amazon shopping", "Amazon ecommerce", "Amazon shopping and delivery services"]) {
+      const editedPrompt = `Compare ${ebay} vs ${amazon}`;
+      const review = comparisonParseResult(await offlineParse(editedPrompt, undefined, { market: "AU" }), editedPrompt, "AU");
+      assert.equal(review.context.valid, true);
+      assert.deepEqual(review.vendors, [ebay, amazon]);
+      for (const request of [
+        { prompt: editedPrompt, market: "AU", comparisonValues: [ebay, amazon].map((name) =>
+          ({ rawText: name, confirmedName: name, entityLevel: "SERVICE" })) },
+        { prompt: original, market: "AU", vendors: [ebay, amazon], comparisonValues: [
+          { rawText: ebay, confirmedName: ebay, entityLevel: "SERVICE" },
+          { rawText: "Amazon", confirmedName: amazon, entityLevel: "SERVICE" },
+        ] },
+        { prompt: original, market: "AU", comparisonValues: [
+          { rawText: ebay, confirmedName: ebay, entityLevel: "SERVICE" },
+          { rawText: "Amazon", confirmedName: amazon, entityLevel: "SERVICE" },
+        ] },
+      ]) {
+        const validated = await validateComparisonInput({
+          ...request, draftId: randomUUID(), draftVersion: 1,
+        }, offlineParse, offlineDomain);
+        assert.ok(!("error" in validated), "error" in validated ? validated.error : undefined);
+        if (!("error" in validated)) {
+          assert.deepEqual(validated.vendors, [ebay, amazon]);
+          assert.equal(validated.input.validatedCategory, "Online Marketplaces");
+          assert.equal(validated.input.comparisonLevel, "SERVICE");
+        }
+      }
+    }
   }
 });
 

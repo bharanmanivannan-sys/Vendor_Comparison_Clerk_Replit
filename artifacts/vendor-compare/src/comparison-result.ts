@@ -1,5 +1,6 @@
 import { classifyReportFactorStatus, isNeutralFallback } from './report-factor-status';
 import { classifyReportQuality } from './report-quality';
+import { comparisonOutcomeGate, isUnverifiedMarketDecisionMode } from './comparison-outcome-gates';
 import { BUILT_IN_BY_ID, validateReportWeightModel } from './weight-model';
 import {
   eligibilityBlocksRecommendation,
@@ -258,7 +259,7 @@ export function classifyComparisonResult(comparison: any): ComparisonResult {
     ? validatedServerProvisionalChoiceForUnverifiedEligibility(comparison) : null;
   const summary = classifyReportFactorStatus(comparison);
   const rows: any[] = Array.isArray(comparison?.vendorScores) ? comparison.vendorScores : [];
-  const validationBlocked = hasIncomparableMarketHistory(rows);
+  const validationBlocked = Boolean(comparisonOutcomeGate(comparison)) || hasIncomparableMarketHistory(rows);
   const names: string[] = Array.isArray(comparison?.vendors) && comparison.vendors.length === rows.length
     && comparison.vendors.every((name: unknown) => rows.some((row) => key(row.vendor) === key(name)))
     ? comparison.vendors.map(String)
@@ -440,7 +441,10 @@ export function classifyComparisonResult(comparison: any): ComparisonResult {
     scoringNames.some((name) => key(name) === key(row.vendor))
     && ['INCOMPLETE', 'MISSING', 'CONFLICTING', 'TIMED_OUT']
       .includes(String(row.marketEligibility?.evidenceStatus || '').toUpperCase()));
-  const researchBacked = chosen && !demographicSole && !eligibilityBlocked && !hasUnverifiedOfferingEvidence && researchStatus === 'COMPLETE'
+  const unresolvedMarkedMarket = isUnverifiedMarketDecisionMode(comparison) && rows.some((row) =>
+    String(row?.marketEligibility?.status || '').toUpperCase() === 'UNKNOWN'
+    || String(row?.marketRelevance?.participationStatus || '').toUpperCase() === 'UNKNOWN');
+  const researchBacked = chosen && !unresolvedMarkedMarket && !demographicSole && !eligibilityBlocked && !hasUnverifiedOfferingEvidence && researchStatus === 'COMPLETE'
     && classifyReportQuality(comparison, true).state === 'RESEARCH_BACKED';
   const resultState: ComparisonResultState = researchBacked ? 'RESEARCH_BACKED'
     : chosen ? 'MODELLED_PARTIAL' : 'INSUFFICIENT_TO_SCORE';
@@ -461,7 +465,7 @@ export function classifyComparisonResult(comparison: any): ComparisonResult {
   const deciding = differences[0];
   const confidence = researchBacked ? score(comparison?.decisionAdvice?.winner === chosen
     ? comparison.decisionAdvice?.confidence?.score : null) : null;
-  const confidenceBand = chosen && (demographicSole || hasUnverifiedOfferingEvidence || Boolean(validatedServerChoiceWithUnverifiedEligibility))
+  const confidenceBand = chosen && (unresolvedMarkedMarket || demographicSole || hasUnverifiedOfferingEvidence || Boolean(validatedServerChoiceWithUnverifiedEligibility))
     ? 'LOW'
     : chosen && !researchBacked
      ? (roundedTieBreak || technicalTieBreak || deterministicTieBreak || researchCoverage === 0 ? 'LOW' : 'MODERATE')

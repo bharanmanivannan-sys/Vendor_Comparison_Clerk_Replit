@@ -44,7 +44,7 @@ test('outcome names only the stored validated recommendation and supplies a next
   assert.match(overBudget.outcome, /No shortlisted option meets the stated budget/);
   assert.match(overBudget.nextAction, /closest alternative/);
   const incomparable = decisionOutcome({ ...eligible, recommendation: null, vendorScores: [] });
-  assert.match(incomparable.outcome, /Not comparable/);
+  assert.match(incomparable.outcome, /Insufficient comparable evidence/);
   assert.match(incomparable.nextAction, /comparable ratings/);
 });
 

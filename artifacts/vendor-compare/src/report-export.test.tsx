@@ -13,9 +13,14 @@ test('saved report places recommendation and summary download first, then glance
     'data-testid="button-download-pdf"',
     '<ReportAtAGlance comparison={comparison} />',
     '<ScoreCharts vendorScores={comparison.vendorScores} />',
-    '<ReportProsAndCons comparison={comparison} />',
+    '<DecisionFirstReportPanel comparison={comparison} part="lenses" />',
+    'data-testid="section-researched-lenses"',
+    '<ReportProsAndCons comparison={comparison} defaultOpen />',
     '<EligibilityStatusSection comparison={comparison} />',
     '<ReportMarketRelevance comparison={comparison as unknown as Record<string, unknown>} />',
+    'data-testid="report-details-heading"',
+    'testId="details-decision-brief"',
+    'testId="details-decision-inputs"',
     'data-testid="tile-evidence-dataset"',
     '<ComparisonSourcesOnDemand comparison={comparison} />',
   ];
@@ -35,8 +40,10 @@ test('partial guest and saved reports position eligibility and market relevance 
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
   const partial = source.slice(source.indexOf('if (isBudgetNoMatch(comparison)'));
   const path = partial.slice(partial.indexOf('return <AppShell guest={guest}><main'), partial.indexOf('return <AppShell guest={guest}><div'));
-  const sections = ['data-testid="button-download-pdf"', '<ReportAtAGlance', '<ReportProsAndCons comparison={comparison} />',
-    '<EligibilityStatusSection comparison={comparison} />', '<ReportMarketRelevance comparison={comparison as unknown as Record<string, unknown>} />'];
+  const sections = ['data-testid="button-download-pdf"', '<RecommendationContinuityPanel', 'data-testid="partial-report-status"', '<ReportAtAGlance', '<ScoreCharts',
+    'data-testid="section-researched-lenses"', '<ReportProsAndCons comparison={comparison} defaultOpen={partial} />',
+    '<EligibilityStatusSection comparison={comparison} />', '<ReportMarketRelevance comparison={comparison as unknown as Record<string, unknown>} />',
+    'data-testid="report-details-heading"', 'aria-label="Comparison research status"', 'testId="details-decision-inputs"'];
   let position = -1;
   for (const section of sections) {
     const next = path.indexOf(section);
@@ -47,6 +54,18 @@ test('partial guest and saved reports position eligibility and market relevance 
   assert.doesNotMatch(path, /Partial decision report · research reached its time limit|Provisional comparison · market availability unverified|Refresh this decision with current research/);
   assert.match(path, /Research incomplete/);
   assert.match(path, /The export could not be generated/);
+});
+
+test('both report branches expose a separate expanded download without renaming the concise file', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+  const partial = source.slice(source.indexOf('return <AppShell guest={guest}><main'), source.indexOf('return <AppShell guest={guest}><div'));
+  const full = source.slice(source.indexOf('return <AppShell guest={guest}><div className="mx-auto max-w-7xl'));
+  for (const branch of [partial, full]) {
+    assert.equal(branch.split('data-testid="button-download-expanded-pdf"').length - 1, 1);
+    assert.match(branch, /exportPdf\('expanded'\)/);
+  }
+  assert.match(full, /Download Summary/);
+  assert.match(source, /'expanded-decision-report' : 'complete-decision-report'/);
 });
 import { BUILT_IN_CRITERIA, makeReportWeightModel } from './weight-model';
 import {
@@ -64,6 +83,8 @@ import {
   DecisionFirstReportPanel,
   ProvisionalMarketNotice,
   ScoreCharts,
+  scoreChartVendors,
+  strategicFrameworkData,
   DecisionRecommendationCard,
   DecisionStrategySection,
   displayedVendorScore,
@@ -95,11 +116,13 @@ import {
   weightedCriterionImpact,
   VendorScoreExtensionSection,
   VrioSection,
+  vrioFindings,
   weightsBeforeAdditional,
   weightsIncludingAdditional,
   weightTotalValidationMessage,
   weightModelChangedCriteria,
 } from './App';
+import { requirementsChartData } from './RequirementsScoreView';
 
 test('provisional market notice names unresolved options without claiming availability', () => {
   const notice = 'Provisional market comparison: current market availability for Tesla, Toyota in Australia was not verified at submission. This comparison does not establish that these options can be purchased there; confirm availability before acting.';
@@ -136,12 +159,13 @@ test('priority contribution chart plots only real numeric weighted scores and la
 });
 import { EligibilityStatusSection } from './market-eligibility';
 import { classifyComparisonResult } from './comparison-result';
+import { UNVERIFIED_MARKET_DECISION_MODE } from './comparison-outcome-gates';
 import { researchedFrameworkEntries, researchedLensRows } from './report-visibility';
 import { classifyReportQuality } from './report-quality';
 import DecisionInputsPanel from './DecisionInputsPanel';
 import RecommendationContinuityPanel from './RecommendationContinuityPanel';
 
-test('strategic report renders only source-linked per-option SWOT, PESTLE and VRIO content', () => {
+test('strategic report retains source-linked findings and labels modelled frameworks', () => {
   const url = 'https://example.org/research';
   const comparison = {
     vendors: ['Alpha', 'Beta', 'Gamma'],
@@ -161,7 +185,8 @@ test('strategic report renders only source-linked per-option SWOT, PESTLE and VR
     ],
   };
   const html = renderToStaticMarkup(<ReportStrategicAnalysis comparison={comparison} />);
-  for (const name of ['section-swot', 'section-pestle', 'section-vrio']) assert.match(html, new RegExp(`data-testid="${name}"`));
+  for (const name of ['section-soar', 'section-swot', 'section-pestle', 'section-vrio']) assert.match(html, new RegExp(`data-testid="${name}"`));
+  assert.match(html, /Modelled, not independently verified/);
   assert.match(html, /Certified rollout cut deployment time/);
   assert.match(html, /manual mapping/);
   assert.match(html, /separate data processing agreement/);
@@ -170,7 +195,7 @@ test('strategic report renders only source-linked per-option SWOT, PESTLE and VR
   assert.doesNotMatch(html, /Porter.s Five Forces|TOWS/);
 });
 
-test('partial frameworks preserve researched options and missing frameworks disappear entirely', () => {
+test('partial frameworks preserve researched options and show honest empty framework states', () => {
   const comparison = {
     vendors: ['Alpha', 'Beta'],
     swot: {
@@ -183,11 +208,15 @@ test('partial frameworks preserve researched options and missing frameworks disa
   };
   const partial = renderToStaticMarkup(<ReportStrategicAnalysis comparison={comparison} />);
   assert.match(partial, /section-swot/);
-  assert.doesNotMatch(partial, /section-pestle|section-vrio|section-swot-beta|Political/);
+  assert.match(partial, /No substantive PESTLE findings/);
+  assert.match(partial, /No substantive VRIO assessment/);
+  assert.doesNotMatch(partial, /section-swot-beta|Assess policy exposure/);
   const missing = renderToStaticMarkup(<ReportStrategicAnalysis comparison={{
     ...comparison, swot: { Strengths: [], 'PESTLE — Political': ['No evidence (https://example.org/a).'] },
   }} />);
-  assert.equal(missing, '');
+  assert.match(missing, /No substantive SWOT findings/);
+  assert.match(missing, /No substantive SOAR findings/);
+  assert.doesNotMatch(missing, /No evidence \(https:\/\/example.org\/a\)/);
 });
 
 test('TOWS and Porter forces appear only for meaningful option-specific findings', () => {
@@ -661,7 +690,7 @@ test('legacy target-market service reports keep the unverified warning but withh
   assert.match(html, /no eligibility assessment was stored/i);
   assert.match(html, /Market validation is incomplete/);
   assert.match(html, /This does not mean a service is unavailable/);
-  assert.match(html, /No definitive winner/);
+  assert.match(html, /Insufficient comparable evidence to rank these options/);
   assert.doesNotMatch(html, /92\/100|Best fit under your selected priorities/);
   assert.doesNotMatch(html, /Alpha has the strongest|Recommended choice[^<]*Alpha/);
 
@@ -1057,7 +1086,8 @@ test('replaces vague SOAR instructions with option-specific product and buyer de
   assert.doesNotMatch(pdfText, /Identify the evidence-backed capability/i);
   assert.match(pdfText, /RECOMMENDED OPTION · LOW CONFIDENCE/i);
   assert.match(pdfText, /Alpha/);
-  assert.match(pdfText, /WEIGHTED OPTION SCORES/i);
+  assert.doesNotMatch(pdfText, /WEIGHTED OPTION SCORES/i);
+  assert.match(pdfText, /SCORES AND EVIDENCE, SIDE BY SIDE/i);
   assert.match(pdfText, /BUYER DECISION GATES/i);
   assert.doesNotMatch(pdfText, /SWOT, PESTLE, AND SOAR|Product-manager use/i);
 });
@@ -1542,6 +1572,14 @@ test('modelled-partial PDF leads with a decision, then separates modelled lenses
 
   const text = extractPdfText(await buildComparisonPdf(comparison));
   assert.ok(text.indexOf('Decision Summary') < text.indexOf('Modelled Scorecard and Decision Lenses'));
+  const pdfOrder = ['Decision Summary', 'SCORES AND EVIDENCE, SIDE BY SIDE'.toUpperCase(), 'CRITERIA EVIDENCE MAP', 'How the options score against your needs',
+    'Pricing and value', 'Feature and capability', 'Differentiated pros and cons', 'Decision Inputs: Scores vs Evidence', 'Assumptions, Limitations and Sources'];
+  let pdfCursor = -1;
+  for (const marker of pdfOrder) {
+    const at = text.toUpperCase().indexOf(marker.toUpperCase(), pdfCursor + 1);
+    assert.ok(at > pdfCursor, `${marker} should follow the preceding PDF section`);
+    pdfCursor = at;
+  }
   assert.match(text, /RECOMMENDED OPTION · LOW CONFIDENCE/);
   assert.match(text, /Preliminary Recommendation: Alpha/);
   assert.match(text, /Confidence: LOW|Confidence: MODERATE/);
@@ -1937,6 +1975,202 @@ function extractPdfText(bytes: Uint8Array): string {
   return texts.join(' ');
 }
 
+async function assertAccessiblePdfStructure(bytes: Uint8Array, expectFigure: boolean) {
+  const { PDFDocument, PDFArray, PDFDict, PDFName, PDFNumber, PDFHexString, PDFString } = await import('pdf-lib');
+  const pdf = await PDFDocument.load(bytes);
+  const n = (key: string) => PDFName.of(key);
+  const root = pdf.catalog.lookup(n('StructTreeRoot'), PDFDict);
+  const order = root.lookup(n('K'), PDFArray);
+  const parentTree = root.lookup(n('ParentTree'), PDFDict).lookup(n('Nums'), PDFArray);
+  const markInfo = pdf.catalog.lookup(n('MarkInfo'), PDFDict);
+  assert.equal(markInfo.get(n('Marked'))?.toString(), 'true');
+  assert.equal(pdf.catalog.lookup(n('Lang'), PDFString).decodeText(), 'en');
+  assert.equal(pdf.catalog.getOrCreateViewerPreferences().DisplayDocTitle()?.toString(), 'true');
+  assert.ok(pdf.getTitle()?.length);
+  assert.equal(parentTree.size(), pdf.getPageCount() * 2);
+  assert.equal(pdf.getPages().length > 0, true);
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (let pageIndex = 0; pageIndex < pdf.getPageCount(); pageIndex++) {
+    const page = pdf.getPage(pageIndex);
+    assert.equal(page.node.lookup(n('StructParents'), PDFNumber).asNumber(), pageIndex);
+    assert.equal(page.node.lookup(n('Tabs'), PDFName).toString(), '/S');
+    assert.equal(parentTree.lookup(pageIndex * 2, PDFNumber).asNumber(), pageIndex);
+    const children = parentTree.lookup(pageIndex * 2 + 1, PDFArray);
+    for (let mcid = 0; mcid < children.size(); mcid++) {
+      const ref = children.get(mcid);
+      const node = children.lookup(mcid, PDFDict);
+      const tag = node.lookup(n('S'), PDFName).toString().slice(1);
+      tags.push(tag);
+      assert.equal(node.lookup(n('K'), PDFNumber).asNumber(), mcid);
+      assert.equal(node.get(n('Pg'))?.toString(), page.ref.toString());
+      assert.equal(node.get(n('P'))?.toString(), pdf.catalog.get(n('StructTreeRoot'))?.toString());
+      if (tag === 'Figure') assert.ok(node.lookup(n('Alt'), PDFHexString).decodeText().length > 30);
+      seen.add(ref.toString());
+    }
+  }
+  assert.ok(tags.includes('H1') && tags.includes('H2') && tags.includes('P'));
+  assert.equal(tags.includes('Figure'), expectFigure);
+  assert.equal(order.size(), seen.size, 'logical order must contain each marked element exactly once');
+  const pageOrder = Array.from({ length: pdf.getPageCount() }, (_, index) =>
+    parentTree.lookup(index * 2 + 1, PDFArray).asArray().map((ref) => ref.toString())).flat();
+  assert.deepEqual(order.asArray().map((ref) => ref.toString()), pageOrder,
+    'structure reading order follows pages and MCIDs in drawing order');
+
+  // Independently inspect decoded content streams: every MCID has one parent
+  // and each parent has one BDC/EMC marked-content pair.
+  const source = Buffer.from(bytes).toString('latin1');
+  const streamMcids: number[] = [];
+  let artifacts = 0;
+  for (const match of source.matchAll(/<<([^<>]*)>>\s*stream\r?\n/g)) {
+    const dictionary = match[1] ?? '';
+    const length = Number(dictionary.match(/\/Length\s+(\d+)/)?.[1]);
+    if (!Number.isFinite(length)) continue;
+    let data = Buffer.from(source.slice(match.index! + match[0].length, match.index! + match[0].length + length), 'latin1');
+    if (/\/FlateDecode/.test(dictionary)) {
+      try { data = inflateSync(data); } catch { continue; }
+    }
+    const content = data.toString('latin1');
+    streamMcids.push(...[...content.matchAll(/\/(?:H1|H2|H3|P|Figure)\s*<<\s*\/MCID\s+(\d+)\s*>>\s*BDC/g)].map((item) => Number(item[1])));
+    artifacts += [...content.matchAll(/\/Artifact\s+BMC/g)].length;
+  }
+  assert.equal(streamMcids.length, seen.size, 'content-stream MCIDs must resolve through ParentTree');
+  assert.ok(artifacts >= pdf.getPageCount(), 'running headers and footers must be artifacts');
+  return tags;
+}
+
+test('PDF accessibility structure survives researched, modelled, partial and withheld outcomes', async () => {
+  const researched = comparisonFixture() as any;
+  const researchedBytes = await buildComparisonPdf(researched);
+  const researchedTags = await assertAccessiblePdfStructure(researchedBytes, true);
+  assert.ok(researchedTags.filter((tag) => tag === 'Figure').length >= 2);
+  const modelled = comparisonFixture() as any;
+  modelled.researchStatus = 'partial';
+  modelled.confirmedRecommendation = { status: 'CONFIRMED', option: 'Alpha', score: 92, basis: 'EVIDENCE_LIMITED' };
+  modelled.contextAssumptions = ['All comparative scores are modelled assumptions'];
+  for (const vendor of modelled.vendorScores) {
+    vendor.qualificationStatus = 'INSUFFICIENT_EVIDENCE';
+    for (const criterion of vendor.weightedScores) criterion.evidence = [];
+  }
+  const modelledBytes = await buildComparisonPdf(modelled);
+  assert.match(extractPdfText(modelledBytes), /MODELLED LEADER · NOT VERIFIED/);
+  await assertAccessiblePdfStructure(modelledBytes, true);
+  const partial = comparisonFixture() as any;
+  for (const vendor of partial.vendorScores) {
+    vendor.weightedScores[1].evidence = [];
+    vendor.weightedScores[2].evidence = [];
+  }
+  const partialBytes = await buildComparisonPdf(partial);
+  assert.match(extractPdfText(partialBytes), /PARTIAL RESEARCH STATUS/i);
+  await assertAccessiblePdfStructure(partialBytes, true);
+  const withheld = comparisonFixture() as any;
+  withheld.decisionStatus = 'CLARIFICATION_REQUIRED';
+  withheld.recommendation = 'No definitive winner';
+  await assertAccessiblePdfStructure(await buildComparisonPdf(withheld), false);
+  const blocked = comparisonFixture() as any;
+  blocked.vendorScores = blocked.vendorScores.map((vendor: any) => ({
+    ...vendor, score: 0, qualificationStatus: 'INSUFFICIENT_EVIDENCE', weightedScores: [],
+  }));
+  blocked.recommendation = 'No definitive winner';
+  await assertAccessiblePdfStructure(await buildComparisonPdf(blocked), false);
+});
+
+test('expanded export uses browser chart and framework datasets, leaving concise output untouched', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.swot = {
+    Strengths: ['Alpha: Implementation fit is the stronger saved decision criterion; validate with a pilot.'],
+    'PESTLE — Legal': ['Beta: Contract terms need buyer review before signature.'],
+    'SOAR — Results': ['Alpha: Pilot acceptance requires a recorded implementation target.'],
+  };
+  comparison.vendorScores[0].vrio = { value: { status: 'strong', rationale: 'The saved model identifies implementation fit for validation.' } };
+  comparison.vendorScores[0].weightedScores[1].score = null;
+  const chart = requirementsChartData(scoreChartVendors(comparison.vendorScores));
+  assert.equal(chart.options[0]?.ratings.length, 2);
+  assert.equal(chart.options[0]?.complete, false);
+  assert.equal(chart.options[1]?.ratings.length, 3);
+  const strategic = strategicFrameworkData(comparison);
+  assert.ok(strategic.swot.some(([, values]) => values.some((value) => value.includes('Implementation fit'))));
+  assert.ok(strategic.pestle.some(([dimension]) => dimension === 'Legal'));
+  assert.ok(vrioFindings(comparison.vendorScores).some(({ vendor }) => vendor.vendor === 'Alpha'));
+  const concise = await buildComparisonPdf(comparison);
+  const explicitConcise = await buildComparisonPdf(comparison, 'summary');
+  assert.equal(extractPdfText(concise), extractPdfText(explicitConcise));
+  const expanded = await buildComparisonPdf(comparison, 'expanded');
+  const text = extractPdfText(expanded);
+  assert.match(text, /Requirements profile and weighted totals/);
+  assert.match(text, /Weighted total \/ 100/);
+  assert.match(text, /partial.*incomplete totals are not comparable/i);
+  assert.match(text, /N\/A - not scored/);
+  assert.match(text, /SOAR by option/);
+  assert.match(text, /SWOT by option/);
+  assert.match(text, /PESTLE by option/);
+  assert.match(text, /VRIO framework across the shortlist/);
+  assert.match(text, /Contract terms need buyer review/);
+  assert.doesNotMatch(extractPdfText(concise), /Requirements profile and weighted totals/);
+  const tags = await assertAccessiblePdfStructure(expanded, true);
+  assert.ok(tags.filter((tag) => tag === 'Figure').length >= 3);
+});
+
+test('expanded exception PDF reports honest empty framework and unscored requirements states', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.decisionStatus = 'CLARIFICATION_REQUIRED';
+  comparison.recommendation = 'No definitive winner';
+  comparison.vendorScores = comparison.vendorScores.map((vendor: any) => ({ ...vendor, weightedScores: [], vrio: {} }));
+  comparison.swot = {};
+  const bytes = await buildComparisonPdf(comparison, 'expanded');
+  const text = extractPdfText(bytes);
+  assert.match(text, /No substantive saved requirement ratings/);
+  assert.match(text, /No substantive SWOT findings/);
+  assert.match(text, /No substantive VRIO assessment/);
+  await assertAccessiblePdfStructure(bytes, false);
+});
+
+test('saved conditional-eligibility comparison exports summary and expanded formats', async () => {
+  // Shape observed for saved reports 242/243: two rows, three scored lenses
+  // each, unknown eligibility, conditional market relevance and VRIO objects.
+  // No customer names, prompts, evidence or URLs are copied into this fixture.
+  const comparison = comparisonFixture() as any;
+  comparison.validatedContext = {
+    validatedUserPrompt: 'Compare two options for a local buyer',
+    comparisonType: 'Product comparison',
+    decisionType: 'Purchase',
+    country: 'AU',
+  };
+  for (const vendor of comparison.vendorScores) {
+    vendor.marketEligibility.status = 'UNKNOWN';
+    vendor.marketRelevance = {
+      availabilityStatus: 'NOT_VERIFIED',
+      demographicRelevanceStatus: 'NOT_ASSESSED',
+      participationStatus: 'CONDITIONALLY_ELIGIBLE',
+      researchStatus: 'COMPLETE',
+      mandatoryGateResults: [],
+      evidence: [],
+    };
+    vendor.vrio = {
+      value: { status: 'unknown', rationale: 'Not verified' },
+      rarity: { status: 'unknown', rationale: 'Not verified' },
+      imitability: { status: 'unknown', rationale: 'Not verified' },
+      organization: { status: 'unknown', rationale: 'Not verified' },
+      implication: 'Not verified',
+    };
+  }
+  // Warm the test runner's dynamic import hooks before removing Buffer.
+  await buildComparisonPdf(comparison);
+  for (const format of ['summary', 'expanded'] as const) {
+    // A browser has no Node Buffer. The PDF generator must not require it.
+    const buffer = globalThis.Buffer;
+    let bytes: Uint8Array;
+    try {
+      (globalThis as { Buffer?: typeof Buffer }).Buffer = undefined;
+      bytes = await buildComparisonPdf(comparison, format);
+    } finally {
+      globalThis.Buffer = buffer;
+    }
+    assert.match(Buffer.from(bytes.subarray(0, 8)).toString('ascii'), /^%PDF-/);
+    await assertAccessiblePdfStructure(bytes, true);
+  }
+});
+
 test('regenerated PDF identifies its version, weights, winner and changed previous winner', async () => {
   const comparison: any = comparisonFixture();
   comparison.reportVersion = 2;
@@ -2019,7 +2253,7 @@ test('failed release-quality gate renders no definitive winner without closest-a
 
   assert.equal(quality.decision, 'FAIL');
   assert.match(quality.reasons.join(' '), /Historical series definitions or windows differ/);
-  assert.match(html, /No definitive winner/);
+  assert.match(html, /Insufficient comparable evidence to rank these options/);
   assert.doesNotMatch(html, /Closest alternative/);
   assert.doesNotMatch(html, /score-ring-92/);
 });
@@ -2077,11 +2311,11 @@ test('does not show an unverified provisional lens leader or score from legacy m
   const briefHtml = renderToStaticMarkup(<ExecutiveDecisionBrief comparison={comparison} />);
 
   assert.match(recommendedHtml, /Decision pending/);
-  assert.match(recommendedHtml, /No definitive winner/);
+  assert.match(recommendedHtml, /Insufficient comparable evidence to rank these options/);
   assert.match(recommendedHtml, /No option has a scoreable lead under the current requirements/);
   assert.doesNotMatch(recommendedHtml, /Best overall fit/);
   assert.doesNotMatch(recommendedHtml, /score-ring-50/);
-  assert.match(briefHtml, /No definitive winner/);
+  assert.match(briefHtml, /Insufficient comparable evidence to rank these options/);
 });
 
 test('suppresses unsupported leader roles for new and legacy insufficient-evidence reports in browser and PDF', async () => {
@@ -2305,7 +2539,7 @@ test('does not export an unscored provisional brand preference as a recommendati
     <ExecutiveDecisionBrief comparison={comparison} />
   </>);
   const pdfText = extractPdfText(await buildComparisonPdf(comparison));
-  assert.match(html, /Provisional recommendation/);
+  assert.match(html, /Provisional decision/);
   assert.match(html, /Mahindra/);
   assert.match(html, /no verified differentiator/);
   assert.doesNotMatch(html, /Mahindra.*0\/100|No definitive winner/);
@@ -2725,7 +2959,7 @@ test('hides legacy fallback 50s and keeps a tied CRM comparison unscored', async
     <ExecutiveDecisionBrief comparison={comparison} />
   </>);
   const pdfText = extractPdfText(await buildComparisonPdf(comparison));
-  assert.match(html, /No definitive winner/);
+  assert.match(html, /Insufficient comparable evidence to rank these options/);
   assert.match(html, /Not scored/);
   assert.doesNotMatch(html, /No definitive winner is the recommended option/i);
   assert.doesNotMatch(html, /Microsoft Dynamics 365 is the recommended option/i);
@@ -2857,7 +3091,7 @@ test('renders the optional qualification and coverage extension in browser and P
     qualificationGates: [{
       gate: 'Security review',
       status: 'CONDITIONAL',
-      mandatory: true,
+      mandatory: false,
       rationale: 'Complete the pending control review.',
       evidenceSourceIds: ['src-alpha-1'],
     }],
@@ -2885,6 +3119,10 @@ test('renders the optional qualification and coverage extension in browser and P
   assert.match(pdfText, /QUALIFIED WITH CONDITIONS/);
   assert.match(pdfText, /Suppressed/);
   assert.match(pdfText, /src-alpha-1/);
+  // An unresolved mandatory gate is an explicit block: no winner in either surface.
+  comparison.vendorScores[0].qualificationGates[0].mandatory = true;
+  const blockedPdf = extractPdfText(await buildComparisonPdf(comparison));
+  assert.doesNotMatch(blockedPdf, /Recommendation: Alpha|RECOMMENDED OPTION ·/);
 });
 
 test('does not expose a legacy neutral score for an evidence-limited modeled option', () => {
@@ -2911,7 +3149,7 @@ test('uses eligible overall score differences for advantage labels', () => {
   assert.equal(scoreDifferenceLabel(7), 'Clear advantage');
 });
 
-test('suppresses evidence-empty CRM dimensions in browser and PDF without suppressing the decision', async () => {
+test('labels evidence-empty CRM browser frameworks while PDF still omits unresearched dimensions', async () => {
   const comparison = comparisonFixture() as any;
   comparison.category = 'CRM';
   comparison.contextAssumptions = ['Preliminary Decision Mode scorecard; all comparative scores are modelled assumptions.'];
@@ -2938,7 +3176,11 @@ test('suppresses evidence-empty CRM dimensions in browser and PDF without suppre
   assert.deepEqual(researchedLensRows(comparison.pricing), []);
   assert.deepEqual(researchedLensRows(comparison.features), []);
   assert.deepEqual(researchedFrameworkEntries(Object.entries(comparison.swot) as [string, string[]][]), []);
-  assert.equal(renderToStaticMarkup(<VrioSection vendorScores={comparison.vendorScores} />), '');
+  assert.match(renderToStaticMarkup(<VrioSection vendorScores={comparison.vendorScores} />), /No substantive VRIO assessment/);
+  const strategic = renderToStaticMarkup(<ReportStrategicAnalysis comparison={comparison} />);
+  assert.match(strategic, /No substantive SWOT findings/);
+  assert.match(strategic, /No substantive PESTLE findings/);
+  assert.match(strategic, /modelled, not independently verified/);
   assert.equal(renderToStaticMarkup(<MarketPositionSection vendorScores={comparison.vendorScores} />), '');
   const basis = renderToStaticMarkup(<ReportBasisSummary comparison={comparison} sourceLinkedCount={0} />);
   assert.match(basis, /Cited claims/);
@@ -3295,4 +3537,111 @@ test('saved unscored alphabetical tie-break remains explicit in reports and PDF 
     assert.equal(classifyComparisonResult(blocked).recommendedOptionId, null);
     assert.equal(reconcileReportScores(blocked).recommendation, null);
   }
+});
+test('writes example layout PDFs for visual inspection when REPORT_PDF_EXAMPLE_DIR is set', { skip: !process.env.REPORT_PDF_EXAMPLE_DIR }, async () => {
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const dir = String(process.env.REPORT_PDF_EXAMPLE_DIR);
+  mkdirSync(dir, { recursive: true });
+  const scored = comparisonFixture() as any;
+  writeFileSync(`${dir}/example-scored.pdf`, await buildComparisonPdf(scored));
+  const modelled = comparisonFixture() as any;
+  modelled.researchStatus = 'partial';
+  modelled.contextAssumptions = ['Preliminary Decision Mode scorecard; all comparative scores are modelled assumptions.'];
+  for (const vendor of modelled.vendorScores) {
+    vendor.qualificationStatus = 'EVIDENCE_LIMITED';
+    vendor.weightedScores.forEach((criterion: any) => { criterion.evidence = []; });
+  }
+  writeFileSync(`${dir}/example-modelled-partial.pdf`, await buildComparisonPdf(modelled));
+});
+
+test('report scores are formatted to one decimal and narrow layouts keep wide tables and menus inside the viewport', async () => {
+  const { formatReportScore } = await import('./App');
+  assert.equal(formatReportScore(83.44999999999999), '83.4');
+  assert.equal(formatReportScore(83.46), '83.5');
+  assert.equal(formatReportScore(90), '90');
+  assert.equal(formatReportScore(null), null);
+  assert.equal(formatReportScore('n/a'), null);
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+  assert.match(source, /data-testid="scroll-lens-scorecard"><table className="w-full min-w-\[620px\]/);
+  assert.match(source, /className="max-w-full overflow-x-auto" data-testid="scroll-head-to-head"><table className="w-full min-w-\[520px\]/);
+  assert.match(source, /absolute left-0 right-auto[^"]*sm:left-auto sm:right-0/);
+  assert.match(source, /className="min-w-0 sm:shrink-0 sm:text-right" data-testid="alternative-score"/);
+  assert.match(source, /lg:grid-cols-\[1fr_310px\] \[&>\*\]:min-w-0/);
+  assert.doesNotMatch(source, /<div className="shrink-0 text-right"><p className="mono text-xs font-bold text-\[#0f766e\]">\{provisionalChoice/);
+});
+
+const blockedWinnerCases: Array<[string, (comparison: any) => void]> = [
+  ['explicit NOT_COMPARABLE outcome', (comparison) => { comparison.decisionStatus = 'NOT_COMPARABLE'; }],
+  ['explicit CLARIFICATION_REQUIRED outcome', (comparison) => { comparison.decisionStatus = 'CLARIFICATION_REQUIRED'; }],
+  ['explicit mandatory gate FAIL', (comparison) => {
+    comparison.vendorScores[0].qualificationGates = [{ gate: 'Mandatory: licence in market', mandatory: true, status: 'FAIL' }];
+  }],
+  ['explicit mandatory gate UNKNOWN', (comparison) => {
+    comparison.vendorScores[0].qualificationGates = [{ gate: 'Mandatory: licence in market', mandatory: true, status: 'UNKNOWN' }];
+  }],
+];
+for (const [label, block] of blockedWinnerCases) {
+  for (const partial of [false, true]) {
+    test(`PDF withholds a previously confirmed winner after ${label}${partial ? ' (modelled partial)' : ''}, matching the browser`, async () => {
+      const comparison = comparisonFixture() as any;
+      comparison.confirmedRecommendation = { status: 'CONFIRMED', option: 'Alpha', score: 92, basis: 'QUALIFIED' };
+      if (partial) {
+        comparison.researchStatus = 'partial';
+        comparison.contextAssumptions = ['Preliminary Decision Mode scorecard; all comparative scores are modelled assumptions.'];
+        for (const vendor of comparison.vendorScores) vendor.qualificationStatus = 'EVIDENCE_LIMITED';
+      }
+      block(comparison);
+      const html = renderToStaticMarkup(<DecisionRecommendationCard comparison={comparison} />);
+      assert.doesNotMatch(html, /card-recommended[\s\S]*?>Alpha</);
+      const text = extractPdfText(await buildComparisonPdf(comparison));
+      assert.doesNotMatch(text, /(?:Recommendation|Winner|choice|RECOMMENDED OPTION|LEADER)[^|]{0,40}:\s*Alpha/i);
+      assert.doesNotMatch(text, /Preliminary Recommendation: Alpha|Research-backed Recommendation: Alpha|Previous winner/);
+      assert.doesNotMatch(text, /PRELIMINARY RECOMMENDATION|RESEARCH-BACKED RECOMMENDATION|RECOMMENDED OPTION ·|WINNER SO FAR|Why this option leads/);
+      assert.doesNotMatch(text, /\(shown choice\)/);
+      assert.doesNotMatch(text, /(?<!Modelled score )(?<!Modelled )\b92\/100/);
+    });
+  }
+}
+
+test('control: the same confirmed winner is named in the PDF when no outcome or mandatory gate blocks it', async () => {
+  const comparison = comparisonFixture() as any;
+  comparison.confirmedRecommendation = { status: 'CONFIRMED', option: 'Alpha', score: 92, basis: 'QUALIFIED' };
+  const text = extractPdfText(await buildComparisonPdf(comparison));
+  assert.match(text, /Recommendation: Alpha/);
+  assert.match(text, /92\/100/);
+  assert.match(text, /shown choice/);
+});
+
+test('marked Decision Mode market uncertainty names the modelled lead in browser and PDF, but a failed gate withholds it', async () => {
+  const comparison: any = comparisonFixture();
+  comparison.researchStatus = 'partial';
+  comparison.decisionStatus = 'MARKET_ELIGIBILITY_NOT_ESTABLISHED';
+  comparison.contextAssumptions = [UNVERIFIED_MARKET_DECISION_MODE];
+  comparison.confirmedRecommendation = { status: 'CONFIRMED', option: 'Alpha', score: 80, basis: 'EVIDENCE_LIMITED' };
+  comparison.score = 80;
+  comparison.vendorScores.forEach((row: any, index: number) => {
+    row.score = index ? 70 : 80;
+    row.marketEligibility = { status: 'UNKNOWN', market: 'Australia', product: 'Service provider', reason: 'Availability unverified', evidenceStatus: 'MISSING' };
+    row.qualificationGates = [{ gate: 'Market availability', mandatory: true, status: 'UNKNOWN' }];
+    row.weightedScores = [{ criterion: 'Customer Advocacy / NPS', weight: 100, score: row.score, evidence: [] }];
+  });
+  const html = renderToStaticMarkup(<>
+    <DecisionRecommendationCard comparison={comparison} />
+    <EligibilityStatusSection comparison={comparison} />
+  </>);
+  assert.match(html, /Alpha/);
+  assert.match(html, /Preliminary|Provisional/i);
+  assert.match(html, /Market validation is incomplete/);
+  const pdf = extractPdfText(await buildComparisonPdf(comparison));
+  assert.match(pdf, /Preliminary Recommendation: Alpha/);
+  assert.match(pdf, /Market availability not verified|market availability not verified/i);
+  assert.match(pdf, /Eligibility Unknown/);
+  assert.doesNotMatch(pdf, /Research-backed Recommendation: Alpha/);
+  const failed = structuredClone(comparison);
+  failed.vendorScores[0].qualificationGates[0].status = 'FAIL';
+  assert.equal(classifyComparisonResult(failed).recommendedOptionId, null);
+  const failedHtml = renderToStaticMarkup(<DecisionRecommendationCard comparison={failed} />);
+  assert.doesNotMatch(failedHtml, /card-recommended[\s\S]*?>Alpha</);
+  const failedPdf = extractPdfText(await buildComparisonPdf(failed));
+  assert.doesNotMatch(failedPdf, /Preliminary Recommendation: Alpha|Research-backed Recommendation: Alpha/);
 });

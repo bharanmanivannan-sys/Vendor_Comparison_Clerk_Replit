@@ -93,8 +93,26 @@ export const validSourceUrl = (url: string) => {
   } catch { return false; }
 };
 
-function OptionCombobox({ option, onChange, guest, enrichment, draftId, draftVersion }: {
+export function currentOwnedOptionId(
+  options: Array<{ optionId?: string; originalText?: string; comparisonValue?: string }>,
+  option: ConfirmedOption,
+): string | undefined {
+  const current = options.find((row) => row.optionId === option.serverOptionId);
+  if (current?.optionId) return current.optionId;
+  const original = option.originalText.trim().toLocaleLowerCase();
+  const value = option.value.trim().toLocaleLowerCase();
+  const matches = options.filter((row) => {
+    const names = [row.originalText, row.comparisonValue]
+      .map((name) => name?.trim().toLocaleLowerCase()).filter(Boolean);
+    return names.includes(original) || names.includes(value);
+  });
+  // A name is only a safe rebinding key if it identifies exactly one saved option.
+  return matches.length === 1 ? matches[0]?.optionId : undefined;
+}
+
+function OptionCombobox({ option, onChange, onRebind, guest, enrichment, draftId, draftVersion }: {
   option: ConfirmedOption; onChange: (value: ConfirmedOption) => void;
+  onRebind: (serverOptionId: string) => void;
   guest: boolean;
   enrichment?: OptionEnrichment; draftId?: string; draftVersion?: number;
 }) {
@@ -124,7 +142,7 @@ function OptionCombobox({ option, onChange, guest, enrichment, draftId, draftVer
       return () => controller.abort();
     }
     setChecking(true);
-    const path = `/api/comparison-drafts/${encodeURIComponent(draftId)}/options/${encodeURIComponent(option.serverOptionId)}/suggestions?typedText=${encodeURIComponent(text)}`;
+    const path = `/api/comparison-drafts/${encodeURIComponent(draftId)}/options/${encodeURIComponent(option.serverOptionId)}/suggestions?draftVersion=${draftVersion}&typedText=${encodeURIComponent(text)}`;
     void customFetch<{ draftId?: string; draftVersion?: number; requestId?: string; optionId?: string; suggestions?: EntitySuggestion[] }>(
       path,
       { method: 'GET', headers: requestHeaders(requestId), signal: controller.signal },
@@ -139,11 +157,32 @@ function OptionCombobox({ option, onChange, guest, enrichment, draftId, draftVer
         return;
       }
       setSuggestions(result.suggestions);
-    }).catch((error) => {
+    }).catch(async (error) => {
       if (!controller.signal.aborted && suggestionRequestSequence.current === sequence) {
         if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404) {
+          try {
+            const refreshId = clientRequestId();
+            const current = await customFetch<{
+              draftId?: string; draftVersion?: number; requestId?: string;
+              options?: Array<{ optionId?: string; originalText?: string; comparisonValue?: string }>;
+            }>(`/api/comparison-drafts/${encodeURIComponent(draftId)}?draftVersion=${draftVersion}`, {
+              method: 'GET', headers: requestHeaders(refreshId), signal: controller.signal,
+            });
+            if (controller.signal.aborted || suggestionRequestSequence.current !== sequence) return;
+            if (matchesOptionDraftCorrelation(current, { draftId, draftVersion: draftVersion!, requestId: refreshId })
+              && Array.isArray(current.options)) {
+              const currentId = currentOwnedOptionId(current.options, option);
+              if (currentId && currentId !== option.serverOptionId) {
+                onRebind(currentId);
+                return;
+              }
+            }
+          } catch {
+            if (controller.signal.aborted || suggestionRequestSequence.current !== sequence) return;
+          }
+          if (controller.signal.aborted || suggestionRequestSequence.current !== sequence) return;
           setSuggestionsUnavailable(true);
-           setIssue('No spelling suggestion is available. Your text will be used as entered.');
+          setIssue('No spelling suggestion is available. Your text will be used as entered.');
         } else {
           setIssue(error instanceof Error ? error.message : 'Could not load contextual suggestions.');
         }
@@ -236,7 +275,18 @@ export function ComparisonOptionReview({ options, onChange, guest, relevance, en
   fullQuery?: string; objective?: string; market?: string; relevance?: Array<Record<string, unknown>>; customerContext?: Record<string, string>;
   enrichmentByOption?: Record<string, OptionEnrichment>; draftId?: string; draftVersion?: number;
 }) {
-  const edit = (id: string, option: ConfirmedOption) => onChange(options.map((current) => current.id === id ? option : current));
+  const latestOptions = useRef(options);
+  latestOptions.current = options;
+  const edit = (id: string, option: ConfirmedOption) => {
+    const next = latestOptions.current.map((current) => current.id === id ? option : current);
+    latestOptions.current = next;
+    onChange(next);
+  };
+  const rebind = (option: ConfirmedOption, serverOptionId: string) => {
+    const current = latestOptions.current.find((row) => row.id === option.id);
+    if (!current || current.serverOptionId !== option.serverOptionId || current.value !== option.value) return;
+    edit(option.id, { ...current, serverOptionId });
+  };
   return <div className="mt-3 space-y-3" data-testid="review-options">
     <h4 className="text-xs font-bold">What would you like to compare?</h4>
     {options.map((option, index) => {
@@ -261,7 +311,8 @@ export function ComparisonOptionReview({ options, onChange, guest, relevance, en
             <button type="button" onClick={() => onChange(options.filter((item) => item.id !== option.id))} className="text-xs font-bold underline" data-testid={`button-remove-option-${option.id}`}>Remove</button>
           </div></div>
          {option.originalText && option.originalText !== option.value && <p className="mb-3 text-[11px] opacity-75">From your request: <strong>{option.originalText}</strong></p>}
-         <OptionCombobox option={option} onChange={(value) => edit(option.id, value)}
+          <OptionCombobox option={option} onChange={(value) => edit(option.id, value)}
+            onRebind={(serverOptionId) => rebind(option, serverOptionId)}
            guest={guest} enrichment={enrichmentByOption?.[option.id]} draftId={draftId} draftVersion={draftVersion} />
       </section>;
     })}

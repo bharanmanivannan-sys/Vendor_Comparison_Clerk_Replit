@@ -1,4 +1,5 @@
 /** Direct Google AI Studio generateContent fallback (not a proxy). */
+import { researchCapacityAlerts } from "./researchCapacityAlerts";
 export const GEMINI_SCORING_MODEL = "gemini-2.5-flash-lite";
 export const OPENAI_SCORING_MODEL = () => process.env.DECISION_MODEL || "gpt-4.1-mini";
 /** Available via Groq's authenticated models endpoint; JSON-object chat completions. */
@@ -75,12 +76,17 @@ export async function scoreWithGeminiFallback<T>(
           });
           const raw = await Promise.race([primary(primaryController.signal, budget), timeout, cancelled]);
           assertActive();
+           // A null result can be returned without calling HTTP when the primary client is unavailable.
+           if (raw !== null && raw !== undefined) researchCapacityAlerts.httpSuccess("openai");
           const valid = validate(raw);
           if (valid !== null) return { output: valid, provider: "openai", model: primaryModel };
         } catch (error) {
           assertActive();
-          if (!eligibleScoringFallback(error)) throw error;
           const failure = error as { status?: unknown; code?: unknown };
+          if (failure.status === 402) researchCapacityAlerts.failure("openai", "capacity_exhausted");
+          if (!eligibleScoringFallback(error)) throw error;
+           if (failure.status === 429) researchCapacityAlerts.failure("openai",
+             failure.code === "credit_balance_exhausted" ? "capacity_exhausted" : "rate_limited");
           if (failure.status === 429 && failure.code === "credit_balance_exhausted") {
             exhaustedUntil.set(primaryModel, Date.now() + CREDIT_COOLDOWN_MS);
             console.info("decision_mode_primary_scoring_cooldown", { model: primaryModel, reason: "credits_exhausted", durationMs: CREDIT_COOLDOWN_MS });
@@ -92,6 +98,7 @@ export async function scoreWithGeminiFallback<T>(
         }
       }
     } else {
+      researchCapacityAlerts.failure("openai", "capacity_exhausted");
       console.info("decision_mode_primary_scoring_skipped", { model: primaryModel, reason: "credits_exhausted_cooldown" });
     }
     let geminiFailure: Error = new Error("MODEL_SCORING_GEMINI_NOT_CONFIGURED");
@@ -130,10 +137,15 @@ export async function scoreWithGeminiFallback<T>(
                signal: geminiController.signal,
             },
           ), abortPromise]);
-          if (!response.ok) throw new Error(`MODEL_SCORING_GEMINI_HTTP_${response.status}`);
+           if (!response.ok) {
+             if (response.status === 429 || response.status === 402)
+               researchCapacityAlerts.failure("gemini", response.status === 402 ? "capacity_exhausted" : "rate_limited");
+             throw new Error(`MODEL_SCORING_GEMINI_HTTP_${response.status}`);
+           }
           if (options.signal?.aborted) throw new Error("MODEL_SCORING_CANCELLED");
           if (timedOut) throw new Error("MODEL_SCORING_GEMINI_TIMEOUT");
           assertActive();
+           researchCapacityAlerts.httpSuccess("gemini");
           const body = await Promise.race([response.json(), abortPromise]) as {
             promptFeedback?: { blockReason?: string };
             candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>;
@@ -199,10 +211,15 @@ export async function scoreWithGeminiFallback<T>(
           signal: groqController.signal,
         },
       ), abortPromise]);
-      if (!response.ok) throw new Error(`MODEL_SCORING_GROQ_HTTP_${response.status}`);
+       if (!response.ok) {
+         if (response.status === 429 || response.status === 402)
+           researchCapacityAlerts.failure("groq", response.status === 402 ? "capacity_exhausted" : "rate_limited");
+         throw new Error(`MODEL_SCORING_GROQ_HTTP_${response.status}`);
+       }
       if (options.signal?.aborted) throw new Error("MODEL_SCORING_CANCELLED");
       if (timedOut) throw new Error("MODEL_SCORING_GROQ_TIMEOUT");
       assertActive();
+       researchCapacityAlerts.httpSuccess("groq");
       const body = await Promise.race([response.json(), abortPromise]) as {
         choices?: Array<{ finish_reason?: string; message?: { content?: string | null } }>;
       };

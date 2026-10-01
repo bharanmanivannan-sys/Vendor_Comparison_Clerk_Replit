@@ -3,6 +3,7 @@
  * highlights, and snippets are never admissible evidence.
  */
 import { ReplitConnectors } from "@replit/connectors-sdk";
+import { researchCapacityAlerts, type CapacityReason } from "./researchCapacityAlerts";
 
 const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const MAX_RATE_LIMIT_COOLDOWN_MS = 60 * 60_000;
@@ -180,11 +181,13 @@ export function createFirecrawlSearcher(
   now: () => number = Date.now,
 ): FirecrawlSearcher {
   let cooldownUntil = 0;
+  let cooldownReason: CapacityReason = "rate_limited";
   let requestQueue = Promise.resolve();
 
   return async (vendors, category, countryCode, country, criteria, signal) => {
     const remainingMs = cooldownUntil - now();
     if (remainingMs > 0) {
+      researchCapacityAlerts.failure("firecrawl", cooldownReason);
       throw new FirecrawlDiscoveryError("Firecrawl discovery returned HTTP 429", [], 429);
     }
     cooldownUntil = 0;
@@ -223,6 +226,7 @@ export function createFirecrawlSearcher(
           if (response.status === 429) {
             const cooldownMs = retryAfterCooldownMs(response.headers.get("Retry-After"), now());
             cooldownUntil = Math.max(cooldownUntil, now() + cooldownMs);
+             cooldownReason = "rate_limited";
             throw new FirecrawlHttpError(429, cooldownMs);
           }
           if (!response.ok) throw new FirecrawlHttpError(response.status);
@@ -234,6 +238,7 @@ export function createFirecrawlSearcher(
           const results = data && typeof data === "object" && Array.isArray(data.web)
             ? data.web
             : [];
+           researchCapacityAlerts.httpSuccess("firecrawl");
           const optionUrls: string[] = [];
           for (const result of results.slice(0, MAX_RESULTS_PER_OPTION)) {
             if (!result || typeof result !== "object") continue;
@@ -248,6 +253,9 @@ export function createFirecrawlSearcher(
         if (signal?.aborted) break;
         const discoveredUrls = interleaveNovelUrls(candidateLists);
         if (error instanceof FirecrawlHttpError) {
+           if (error.status === 429 || error.status === 402) {
+             researchCapacityAlerts.failure("firecrawl", error.status === 402 ? "capacity_exhausted" : cooldownReason);
+           }
           throw new FirecrawlDiscoveryError(error.message, discoveredUrls, error.status);
         }
         if (controller.signal.aborted) {

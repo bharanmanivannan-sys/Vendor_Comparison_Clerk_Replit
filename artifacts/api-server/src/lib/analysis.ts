@@ -15,6 +15,11 @@ import {
 } from "./entityIdentity";
 import { classifyComparisonOption, comparisonPreflightClassification, KNOWN_VEHICLE_MODEL_OFFERINGS } from "./comparisonClassification";
 import {
+  COMPARISON_CLAUSE_END, EXPLICIT_US_MARKET,
+  authoritativeComparisonPrompt, explicitComparisonChains, hasSmartphoneContext, isCompetitorObjective,
+  isComparisonMetadataInstruction, normalizeComparisonSubjectContext, splitExplicitComparisonOptions,
+} from "./comparisonPromptGrammar";
+import {
   forgetSoftwareIdentity, priorSoftwareIdentity, rememberSoftwareIdentity,
   softwareDomainForCategory, softwareIdentityFromDocument, type SoftwareIdentityProof,
 } from "./softwareIdentity";
@@ -2014,15 +2019,15 @@ export function reweightAnalysis(
       && !/\b(?:neutral|no comparable|unavailable)\b/i.test(entry.rationale)
       ? entry : undefined;
   };
-  // Decision Mode's named lenses are modelled assumptions rather than canonical
-  // evidence. Budget Lens is a deterministic proxy for Value for Money only;
-  // never map it to Brand Reputation or describe it as verified.
-  const budgetProjectionScores = decisionModeScoredComparison
-    ? new Map(originalVendorScores.flatMap((vendor) => {
-      const budget = usableRetainedScore(vendor, "Budget Lens");
-      return budget ? [[normalizedLabel(vendor.vendor), budget.score] as const] : [];
-    }))
-    : new Map<string, number>();
+  // Older Decision Mode scorecards use named modelled lenses, not the editor's
+  // canonical criteria. Only these narrowly corresponding lenses can be
+  // projected; an absent lens (e.g. Brand Reputation) is still unscored.
+  const decisionLensProjections: Record<string, string> = {
+    "Value for Money": "Budget Lens",
+    "Meets Needs / Features": "Feature Lens",
+    "Quality & Reliability": "Reliability Lens",
+    "Safety & Security": "Safety Lens",
+  };
   const qualifiedModel = originalVendorScores.some((vendor) => Boolean(vendor.qualificationStatus));
   const failedMandatoryGate = originalVendorScores.some((vendor) =>
     vendor.qualificationGates?.some((gate) => gate.mandatory && gate.status === "FAIL"));
@@ -2031,6 +2036,14 @@ export function reweightAnalysis(
     && canonicalOptionKeys.every(Boolean)
     && new Set(canonicalOptionKeys).size === canonicalOptionKeys.length;
   const scoringVendorScores = originalVendorScores.filter((vendor) => !unavailableForNewCustomers(vendor));
+  const projectedScore = (vendor: typeof originalVendorScores[number], criterion: string) => {
+    const lens = decisionModeScoredComparison ? decisionLensProjections[criterion] : undefined;
+    // Never give one option a projected advantage when its peer has no score
+    // for the same source lens.
+    return lens && scoringVendorScores.length > 0
+      && scoringVendorScores.every((option) => usableRetainedScore(option, lens))
+      ? usableRetainedScore(vendor, lens) : undefined;
+  };
   const hasComparableRetainedScores = WEIGHTED_CRITERIA.some(({ criterion }) => {
     const documented = documentedScores.get(criterion);
     if (documented?.length === scoringVendorScores.length && scoringVendorScores.length > 0) return true;
@@ -2061,10 +2074,7 @@ export function reweightAnalysis(
     const documented = documentedScores.get(criterion);
     if (documented?.length === scoringVendorScores.length && scoringVendorScores.length > 0) return true;
     return scoringVendorScores.length > 0 && scoringVendorScores.every((vendor) => {
-      const existing = usableRetainedScore(vendor, criterion)
-        ?? (criterion === "Value for Money" && budgetProjectionScores.has(normalizedLabel(vendor.vendor))
-          ? { score: budgetProjectionScores.get(normalizedLabel(vendor.vendor))!, rationale: "Modelled, not verified." }
-          : undefined);
+      const existing = usableRetainedScore(vendor, criterion) ?? projectedScore(vendor, criterion);
       return existing && Number.isFinite(existing.score) && existing.score >= 0 && existing.score <= 100
         && !/\b(?:neutral|no comparable|unavailable)\b/i.test(existing.rationale);
     });
@@ -2102,16 +2112,14 @@ export function reweightAnalysis(
       const existing = vendor.weightedScores?.find((entry) => entry.criterion.toLowerCase() === criterion.toLowerCase());
       const documentedScore = documentedScores.get(criterion)?.find((entry) => entry.vendor === vendor.vendor)?.score;
       const retainedScore = usableRetainedScore(vendor, criterion);
-      const projectedBudgetScore = criterion === "Value for Money"
-        ? budgetProjectionScores.get(normalizedLabel(vendor.vendor))
-        : undefined;
+      const projected = projectedScore(vendor, criterion);
       const originalScore = existing?.score;
-      const score = Math.max(0, Math.min(100, documentedScore ?? retainedScore?.score ?? projectedBudgetScore ?? originalScore ?? 50));
+      const score = Math.max(0, Math.min(100, documentedScore ?? retainedScore?.score ?? projected?.score ?? originalScore ?? 50));
       const weight = weights.get(criterion) ?? 0;
       const rationale = documentedScore !== undefined
         ? "Recalculated from the original comparable documented metric evidence."
-        : projectedBudgetScore !== undefined && !retainedScore
-          ? "Deterministic modelled projection from Budget Lens; not verified and not a direct Value for Money score."
+        : projected && !retainedScore
+          ? `Deterministic modelled projection from ${decisionLensProjections[criterion]}; not verified and not a direct ${criterion} score.`
           : retainedScore?.rationale
             ?? (originalScore === undefined
               ? "No comparable verified metric or retained raw lens score is available; this criterion remains neutral."
@@ -2867,13 +2875,17 @@ export function inferResearchMarket(
     };
   }
   const normalized = `${prompt} ${vendors.join(" ")}`.toLowerCase();
+  const explicitMarkets = explicitPromptMarketCodes(prompt);
+  if (explicitMarkets.length === 1) {
+    return { ...RESEARCH_MARKETS[explicitMarkets[0]!], inferredFrom: "explicit query location or currency" };
+  }
   if (/\b(?:india|indian|inr|rupees?|₹|mahindra|tata motors?|jsw mg|cardekho(?:\.com)?)\b/.test(normalized)) {
     return { country: "India", countryCode: "IN", currency: "INR", timezone: "Asia/Kolkata", inferredFrom: "query location, currency, or strong local product cues" };
   }
   if (/\b(?:united kingdom|britain|british|uk|gbp|pounds?|£)\b/.test(normalized)) {
     return { country: "United Kingdom", countryCode: "GB", currency: "GBP", timezone: "Europe/London", inferredFrom: "query location or currency" };
   }
-  if (/\b(?:united states|usa|u\.s\.|usd|us dollars?)\b/.test(normalized)) {
+  if (EXPLICIT_US_MARKET.test(normalized)) {
     return { country: "United States", countryCode: "US", currency: "USD", timezone: "America/New_York", inferredFrom: "query location or currency" };
   }
   return { country: "Australia", countryCode: "AU", currency: "AUD", timezone: "Australia/Sydney", inferredFrom: "application default or Australian query cues" };
@@ -2909,7 +2921,7 @@ function explicitPromptMarketCodes(prompt: string): ResearchMarketCode[] {
   return ([
     ["IN", /\b(?:india|indian|inr|rupees?|₹)\b/],
     ["AU", /\b(?:australia|australian|aud|a\$)\b/],
-    ["US", /\b(?:united states|usa|u\.s\.|usd|us dollars?)\b/],
+    ["US", EXPLICIT_US_MARKET],
     ["GB", /\b(?:united kingdom|britain|british|uk|gbp|pounds?|£)\b/],
   ] as const).filter(([, pattern]) => pattern.test(normalized)).map(([code]) => code);
 }
@@ -3395,7 +3407,7 @@ export function isObjectivePhraseVendor(value: string): boolean {
   return isPlaceholderVendor(value)
     || /^(?:\d+|two|three|four|five|six|seven|eight|nine|ten)\s+(?:other\s+|additional\s+)?(?:competitors?|alternatives?|options?|providers?|products?)$/.test(normalized)
     || /^mahindra\s+xuv$/i.test(value.trim())
-    || /^(?:(?:it(?:'|’)?s|its|their|the|other|main|top|leading)\s+)?competitors?$/.test(normalized)
+    || isCompetitorObjective(value)
     || /^(?:other|main|top|leading|strongest|best)\s+(?:(?:e-?commerce|watch)\s+)?(?:sites?|platforms?|marketplaces?|providers?|services?|brands?|electric\s+vehicles?|electric\s+cars?|ev\s+vehicles?|ev\s+(?:brand\s+)?cars?|evs?|cars?)$/.test(normalized)
     || /^(?:other|alternative|competing)\s+card[- ]management\s+(?:systems?|platforms?|services?)$/.test(normalized)
     || /^let\s+me\s+know\b.*\bwhere\b.*\bstands?\b/.test(normalized)
@@ -3408,6 +3420,26 @@ export function isObjectivePhraseVendor(value: string): boolean {
     || /\b(?:how|where|what|which|why)\s+(?:is|are|does|do|should|can)\b/.test(normalized)
     || /\b(?:is|are)\s+it\s+(?:standing|doing|performing)\b/.test(normalized)
     || /\b(?:cars?|vehicles?|evs?)\s+in\s+(?:the\s+)?[a-z]+(?:\s+[a-z]+)?\s+market\b/.test(normalized);
+}
+
+export function smartphoneBrandDiscoveryInstructions(prompt: string, requested: string[]): string | undefined {
+  const concrete = requested.filter((name) => !isObjectivePhraseVendor(name));
+  if (!hasSmartphoneContext(prompt) || !requested.some(isObjectivePhraseVendor) || concrete.length !== 1) return;
+  const identity = resolveEntityIdentity({ rawOption: concrete[0]!, userQuery: prompt });
+  if (identity.entityType !== "brand" || identity.decisionDomain !== "Smartphones") return;
+  return `This is a smartphone BRAND-level comparison, not a phone-model selection. Preserve ${concrete[0]} exactly and replace only generic competitor objectives with distinct current smartphone brands relevant to the requested market. Return brands only, never handset models, editions, aliases of the anchor, categories or placeholders. Use official brand smartphone portfolio pages for selectionRoles. No individual smartphone model has been requested or selected.`;
+}
+
+export function preserveSmartphoneBrandDiscoveryOptions(
+  prompt: string,
+  requested: string[],
+  discovered: string[],
+  targetCount = discoveryTargetCount(requested, prompt),
+): string[] {
+  return preserveConcreteDiscoveryOptions(requested, discovered.filter((name) => {
+    const identity = resolveEntityIdentity({ rawOption: name, userQuery: prompt });
+    return identity.entityType === "brand" && identity.decisionDomain === "Smartphones";
+  }), targetCount);
 }
 
 export function preserveConcreteDiscoveryOptions(
@@ -4374,7 +4406,7 @@ export function uniqueHighestScoreVendor(
 export function uniqueHighestDeterministicWeightedVendor(
   analysis: Pick<AnalysisPayload, "vendorScores">,
 ): { vendor: string; score: number } | null {
-  const rows = (analysis.vendorScores ?? []).filter(isEligibleForDeterministicRanking);
+  const rows = (analysis.vendorScores ?? []).filter((row) => isEligibleForDeterministicRanking(row));
   const deterministicCriteria = new Set(
     WEIGHTED_CRITERIA
       .map(({ criterion }) => criterion)
@@ -4412,6 +4444,7 @@ function stableOptionNameCompare(left: string, right: string): number {
 
 function isEligibleForDeterministicRanking(
   vendor: AnalysisPayload["vendorScores"][number],
+  allowUnresolvedGates = false,
 ): boolean {
   const row = vendor as AnalysisPayload["vendorScores"][number] & {
     marketRelevance?: {
@@ -4421,7 +4454,8 @@ function isEligibleForDeterministicRanking(
     };
   };
   return row.qualificationStatus !== "NOT_QUALIFIED"
-    && !row.qualificationGates?.some((gate) => gate.mandatory && gate.status === "FAIL")
+    && !row.qualificationGates?.some((gate) => gate.mandatory
+      && (allowUnresolvedGates ? gate.status === "FAIL" : gate.status !== "PASS"))
     && row.marketEligibility?.status !== "INELIGIBLE"
     && row.marketRelevance?.participationStatus !== "INELIGIBLE"
     && row.marketRelevance?.demographicRelevanceStatus !== "NOT_RELEVANT"
@@ -4771,21 +4805,14 @@ export function assertCanonicalComparisonConsistency(
   }
 }
 
-function authoritativeComparisonPrompt(prompt: string): string {
-  const normalized = prompt.replace(/\s+/g, " ").trim();
-  const generatedOriginalRequest = normalized.search(/\boriginal\s+request\s*:/i);
-  if (generatedOriginalRequest < 0) return normalized;
-
-  // "Original request:" is metadata added by the review UI. Once that review
-  // text is edited, the clause before the marker is the new user-authored
-  // source of truth. Parsing the metadata again lets an older option list win
-  // through the parser's intentional later-chain precedence.
-  const editedRequest = normalized.slice(0, generatedOriginalRequest).trim();
-  return editedRequest.length >= 8 ? editedRequest : normalized;
+/** A labelled comparison aspect is context, not part of the last option's name. */
+export function aspectCriterionSuffix(prompt: string): string | undefined {
+  const value = prompt.match(/(?:^|\s)(?:aspect|criterion)\s*:[ \t]*([^\n?.;]+)/i)?.[1]?.trim();
+  return value && value.length <= 80 ? value : undefined;
 }
 
 export function parsePrompt(prompt: string) {
-  const normalized = authoritativeComparisonPrompt(prompt);
+  const normalized = authoritativeComparisonPrompt(prompt).replace(/\s+/g, " ").trim();
   const comparedOption = (value: string): string => cleanVendorName(value)
     .replace(/^(?:equivalent|current)\s+(?=(?:mahindra|tata|dell|lenovo|hp)\b)/i, "")
     .replace(/\s+as\s+(?:luxury\s+retail\s+franchise|replacements?)\b.*$/i, "")
@@ -4801,10 +4828,9 @@ export function parsePrompt(prompt: string) {
       /^(?:on|by|based\s+on)\b/i.test(candidate)
       || /^(?:the\s+)?(?:vehicles?|cars?|options?|products?|services?|vendors?|providers?)\s+(?:on|by|based\s+on|according\s+to)\b/i.test(candidate)
     ) return [];
-    const hasListDelimiter = /,|\/|\b(?:vs\.?|versus|and|or)\b/i.test(value);
+    const hasListDelimiter = /,|\/|\b(?:vs\.?|versus|and|or|against|with)\b/i.test(value);
     if (!hasListDelimiter) return [];
-    const options = value
-      .split(/\s*(?:,|\/|\bvs\.?\b|\bversus\b|\band\b|\bor\b)\s*/i)
+    const options = splitExplicitComparisonOptions(value)
       .map(comparedOption)
       .filter((option) => option && !isPlaceholderVendor(option)
         && !/^(?:authorised|authorized)[- ]store\s+investment\s+opportunities$/i.test(option));
@@ -4813,16 +4839,18 @@ export function parsePrompt(prompt: string) {
       ? []
       : options;
   };
-  const chosenCandidate = normalized.match(
-    /\b(?:choose|include|use|shortlist)\s+(.+?)(?=\.\s|\?|;\s|$)/i,
-  );
+  const chosenCandidate = normalized.match(new RegExp(
+    String.raw`\b(?:choose|include|use|shortlist)\s+(.+?)${COMPARISON_CLAUSE_END}`, "iu",
+  ));
   // "Use https://..." supplies evidence, not a replacement vendor shortlist.
-  const chosen = chosenCandidate && !/^(?:https?:\/\/|(?:the\s+)?(?:supplied|provided|following)\s+(?:urls?|links?|sources?))/i.test(chosenCandidate[1] ?? "")
+  const chosen = chosenCandidate
+    && !isComparisonMetadataInstruction(chosenCandidate[1] ?? "")
+    && !/^(?:https?:\/\/|(?:the\s+)?(?:supplied|provided|following)\s+(?:urls?|links?|sources?))/i.test(chosenCandidate[1] ?? "")
     ? chosenCandidate
     : null;
-  const againstList = normalized.match(
-    /\bcompare\s+(.+?)\s+(?:against|againt)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why|the\s+key\s+factors?)\b|$)/i,
-  );
+  const againstList = normalized.match(new RegExp(
+    String.raw`\bcompare\s+(.+?)\s+(?:against|againt)\s+(.+?)${COMPARISON_CLAUSE_END}`, "iu",
+  ));
   const manufacturerList = normalized.match(
     /\b(?:models?|vehicles?|cars?)\s+from\s+(.+?)(?=\s+available\b|\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
   );
@@ -4830,13 +4858,13 @@ export function parsePrompt(prompt: string) {
     /\b(?:across|among|against|from)\s+(.+?)(?=\.\s|\?|;\s|\s+(?:which|for|with|when|provide|recommend|why)\b|$)/i,
   );
   const comparedLists = Array.from(normalized.matchAll(
-    /\bcompare\s+(.+?)(?=\s+(?:for|in|within|on|when|which|among|across|against|based\s+on|using)\b|[?;]|\.(?=\s|[A-Z]|$)|$)/gi,
+    /\bcompare\s+(.+?)(?=\s+(?:aspect|criterion)\s*:|\s+(?:for|in|within|on|when|which|among|across|against|based\s+on|using)\b|[?;]|\.(?=\s|$)|$)/gi,
   ));
   const comparedList = comparedLists[0];
-  const comparisonChains = comparedLists
-    .map((match, index) => ({
+  const comparisonChains = explicitComparisonChains(normalized)
+    .map(({ names, index }) => ({
       index,
-      vendors: splitComparisonOptions(match[1] ?? ""),
+      vendors: splitComparisonOptions(names.join(" vs ")),
     }))
     .filter(({ vendors }) => vendors.length >= 2)
     .sort((left, right) => right.vendors.length - left.vendors.length || right.index - left.index);
@@ -4846,8 +4874,11 @@ export function parsePrompt(prompt: string) {
     ?? manufacturerList?.[1]
     ?? list?.[1]
     ?? (comparedList?.[1]?.includes(",") ? comparedList[1] : undefined);
-  const listedVendors = comparisonChainVendors.length >= 2
-    ? comparisonChainVendors
+  const chosenVendors = chosen ? splitComparisonOptions(chosen[1] ?? "") : [];
+  const listedVendors = chosenVendors.length >= 2
+    ? chosenVendors
+    : comparisonChainVendors.length >= 2
+      ? comparisonChainVendors
     : explicitList
       ?.split(/\s*,\s*|\s*,?\s+and\s+/i)
       .map(comparedOption)
@@ -4855,9 +4886,9 @@ export function parsePrompt(prompt: string) {
   const betweenPair = normalized.match(
     /\b(?:compare|comparing|comparison\s+(?:of|between))?.*?\bbetween\s+(.+?)\s+(?:and|ang)\s+(.+?)(?=\s+(?:for|in|within|among|across|when)\b|[?.!,]|$)/i,
   );
-  const withPair = normalized.match(
-    /\bcompare\s+([^?.!]+?)\s+with\s+(.+?)(?=\s+for\s+(?:my|our|a|an|the)\b|[?.!,]|$)/i,
-  );
+  const withPair = normalized.match(new RegExp(
+    String.raw`\bcompare\s+(.+?)\s+with\s+(.+?)${COMPARISON_CLAUSE_END}`, "iu",
+  ));
   const domainWithPair = normalized.match(
     /\bcompare\s+((?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+)\s+with\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?!,]|\.\s|$)/i,
   );
@@ -4877,10 +4908,10 @@ export function parsePrompt(prompt: string) {
     /\bwhich\s+(?:one\s+)?is\s+(?:better|best)\s*[:,-]?\s*(.+?)\s+(?:or|versus|vs\.?)\s+(.+?)(?=\s+(?:for|in|within|when|because|to)\b|[?.!,]|$)/i,
   );
   const directPair = normalized.match(
-    /^(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?=\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
+    /^(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?=\s+(?:aspect|criterion)\s*:|\s+(?:for|in|within|when|which|because|to)\b|[?.!,]|$)/i,
   );
   const genericPair = normalized.match(
-    /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against|againt)\s+(.+?)(?=\s+(?:for|in|within|on|among|across|when|which|because|to|the\s+key\s+factors?)\b|[?.!,]|$)/i,
+    /\b(?:compare|comparing|comparison\s+between)\s+(.+?)\s+(?:vs\.?|versus|or|and|against|againt)\s+(.+?)(?=\s+(?:aspect|criterion)\s*:|\s+(?:for|in|within|on|among|across|when|which|because|to|the\s+key\s+factors?)\b|[?.!,]|$)/i,
   );
   const pair = purchaseChannelPair
     ? [purchaseChannelPair[0], purchaseChannelPair[2], purchaseChannelPair[3]]
@@ -4900,14 +4931,16 @@ export function parsePrompt(prompt: string) {
     .filter(Boolean)
     .map((value) => comparedOption(value as string));
   const pairStartsBeforeChosenList = Boolean(
-    pair === withPair
+     pair === withPair
     && chosen
+     && chosenVendors.length < 2
     && typeof chosen.index === "number"
     && normalized.indexOf(withPair?.[0] ?? "") < chosen.index,
   );
   const shouldPreferPair = Boolean(
     pair
-    && ((betweenPair && listedVendors.length <= 2) || !hasExplicitVendorList || pairStartsBeforeChosenList),
+    && ((betweenPair && (listedVendors.length <= 2 || explicitComparisonChains(normalized)[0]?.descriptive))
+      || !hasExplicitVendorList || pairStartsBeforeChosenList),
   );
   let vendors = Array.from(
     new Set((
@@ -5347,7 +5380,7 @@ export function validateComparisonContext(
   vendors: string[],
   selectedMarket?: ResearchMarketCode,
 ): ComparisonContext {
-  const normalized = prompt.toLowerCase();
+  const normalized = normalizeComparisonSubjectContext(prompt).toLowerCase();
   const hasKnownAutomotiveManufacturerPair = vendors.length >= 2
     && vendors.every((vendor) => AUTOMOTIVE_MANUFACTURER_ONLY.test(normalizeAutomotivePortfolioLabel(vendor)));
   const hasVehicleBrandPair = /\b(?:tesla|byd)\b/.test(normalized)
@@ -5392,6 +5425,8 @@ export function validateComparisonContext(
         : []
     ),
     { label: "Computers and laptops", pattern: laptopDecision ? /(?:)/ : /\b(?:computers?|laptops?|notebooks?|workstations?|macbooks?|chromebooks?)\b/ },
+    { label: "Smartphones", pattern: /\b(?:smartphones?|mobile\s+phones?|cell\s+phones?)\b/ },
+    { label: "Online Shopping", pattern: /\b(?:shopping|e-?commerce|online\s+(?:retail|marketplaces?)|marketplaces?|e-?bay)\b/ },
     { label: "CRM", pattern: /\b(?:crm|salesforce|customer relationship)\b/ },
     { label: "Customer support", pattern: dealershipDecision ? /(?!)/ : /\b(?:customer support|help desk|shared inbox|customer service|after.?sales support)\b/ },
     { label: "Work management", pattern: /\b(?:project management|task management|work management|collaboration)\b/ },
@@ -5434,7 +5469,7 @@ export function validateComparisonContext(
   const bankBrands = /\b(?:westpac|cba|commonwealth bank|macquarie|nab|suncorp|anz|bankwest|ing|bendigo bank|bank|credit union)\b/i;
   const automotiveBrands = /\b(?:car\s*dekho|cardekho(?:\.com)?|tesla|byd|toyota|ford|hyundai|kia|volvo|bmw|mercedes|mg|mahindra|tata)\b/i;
   const technologyBrands = /\b(?:apple|hp|microsoft|google|samsung|dell|lenovo|asus|acer)\b/i;
-  const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon)\b/i;
+  const retailBrands = /\b(?:jb hi-?fi|officeworks|harvey norman|amazon|e-?bay)\b/i;
   const investmentBrands = /\b(?:vanguard|betashares|ishares)\b/i;
   const industryMatches = [
     ...(isInsuranceDecision ? [namesAustralianInsurer || isAustralianMarket ? "Australian insurance" : "Insurance"] : []),
@@ -5520,7 +5555,7 @@ export function validateComparisonContext(
     };
   }
   const explicitMarkets = explicitPromptMarketCodes(prompt);
-  if (selectedMarket && explicitMarkets.length && !explicitMarkets.includes(selectedMarket)) {
+  if (selectedMarket && explicitMarkets.some((market) => market !== selectedMarket)) {
     return {
       valid: false,
       segment,
@@ -7983,7 +8018,7 @@ export function selectScoringPrecedence(
   analysis: AnalysisPayload,
   userWeights: ComparisonWeight[] | null = null,
 ): ScoringPrecedenceDecision | null {
-  const vendors = analysis.vendorScores.filter(isEligibleForDeterministicRanking);
+  const vendors = analysis.vendorScores.filter((row) => isEligibleForDeterministicRanking(row));
   if (vendors.length < 2) return null;
   const names = vendors.map((vendor) => vendor.vendor);
   const comparableCriterion = (criterion: string) => comparableCriterionScores(vendors, criterion);
@@ -13171,6 +13206,7 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
       const requestedManufacturers = [...input.vendors];
       const concreteRequestedOptions = requestedManufacturers.filter((vendor) => !isObjectivePhraseVendor(vendor));
       const objectiveRequestedOptions = requestedManufacturers.filter(isObjectivePhraseVendor);
+      const smartphoneBrandInstructions = smartphoneBrandDiscoveryInstructions(input.prompt, requestedManufacturers);
       const hasAmbiguousMahindraXuv = objectiveRequestedOptions.some((option) => /^Mahindra\s+XUV$/i.test(option));
       const isTitanWatchPortfolioDiscovery = input.market === "IN"
         && concreteRequestedOptions.length === 1
@@ -13295,14 +13331,17 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
           input: [
             {
               role: "system",
-              content: "Select a concrete product shortlist before a detailed comparison. Return only one valid JSON object. Use exact, publicly available product or service names, not categories, objectives, market descriptions, parent companies, trims, or placeholders. For an unspecified manufacturer-level request, enumerate the current local portfolio first, assess the credible cross-manufacturer pairings, and then select; do not assume that closest body style is automatically the best decision pair.",
+              content: smartphoneBrandInstructions
+                ? `Select a concrete brand shortlist before a detailed comparison. Return only one valid JSON object. ${smartphoneBrandInstructions}`
+                : "Select a concrete product shortlist before a detailed comparison. Return only one valid JSON object. Use exact, publicly available product or service names, not categories, objectives, market descriptions, parent companies, trims, or placeholders. For an unspecified manufacturer-level request, enumerate the current local portfolio first, assess the credible cross-manufacturer pairings, and then select; do not assume that closest body style is automatically the best decision pair.",
             },
             {
               role: "user",
               content: JSON.stringify({
                 prompt: input.prompt,
                 numberOfProducts: requestedCount,
-                instructions: isDealershipComparison
+                instructions: smartphoneBrandInstructions
+                  ?? (isDealershipComparison
                   ? `Choose exactly ${requestedCount} unique authorised motor-vehicle dealerships that are genuinely comparable for this local buying-and-servicing decision. Preserve these named dealerships exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only the generic competitor phrases with current dealerships serving the same metropolitan area and selling or servicing the same vehicle brand, Toyota in this request. Compare dealership businesses and their sales, service, parts, finance, warranty support, customer experience, and location convenience—not Toyota vehicle models, manufacturers, marketplaces, or unrelated dealer groups. Verify every selected dealership using its official local dealer website or the manufacturer's official dealer locator. Return the official dealership homepage in selectionRoles.`
                   : hasAmbiguousMahindraXuv
                     ? `Resolve the explicitly named but ambiguous Mahindra XUV model family before scoring. Preserve every other exact model named by the user. Choose exactly one current Mahindra XUV model family sold in the stated local market that is genuinely comparable with the preserved vehicle, using the user's criteria and intended use. Verify it on an official local Mahindra product page. Never silently treat "XUV" as a specific model, choose a trim, or choose a model from another manufacturer. If current official evidence cannot support one defensible resolution, fail with an actionable request for the user to specify the intended XUV model.`
@@ -13314,9 +13353,9 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
                   ? `Choose exactly one current Battery-as-a-Service vehicle from each supplied brand (${input.vendors.join(", ")}). Preserve the brand order. Use exact model names and verify that each selected model currently offers BaaS in the stated market. These are the ranked shortlist.`
                   : isBrandLevelModelSelection
                     ? `First enumerate every current ${isElectricVehicleModelSelection ? "battery-electric vehicle" : "vehicle"} model family offered locally by each supplied manufacturer (${input.vendors.join(", ")}), using official local sources. Then assess credible cross-manufacturer pairings against the user's requested criteria, intended use, price/value, capability, technology generation, ownership considerations, and evidence availability. Treat like-for-like body style, segment, seating, and price as comparability factors, not an automatic winner. Choose exactly one model from each manufacturer only after this portfolio assessment, preserving manufacturer order. Return exact model-family names, never trims, grades, packs, or variants. Explain why this pairing creates the most decision-useful holistic comparison and identify material alternative pairings with their trade-offs. Verify current availability in the stated market. ${isElectricVehicleModelSelection ? "Do not select petrol, diesel, hybrid, or plug-in-hybrid models." : /\bdiesel\b/i.test(input.prompt) ? "Select only current diesel vehicles; do not substitute petrol, electric, or hybrid models." : ""}`
-                    : `Choose exactly ${requestedCount} unique products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. Never return an expanded name, acronym, edition, module, or alias of a preserved option as a competitor. Use web search to identify current alternatives and verify each exact product name from an official product page. When the request names multiple product lenses such as DXP and DAM, cover those lenses deliberately: include a broad platform peer and a focused specialist alternative when that produces the most decision-useful shortlist, and explain each option's role. A standalone DAM must be primarily marketed as a digital asset management product; do not label a DXP, CMS, content hub, or DAM module as the standalone DAM slot. Its officialUrl must be the vendor's exact DAM product page and contain DAM or digital-asset-management in the URL. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`,
+                    : `Choose exactly ${requestedCount} unique products that best fit the stated decision. Preserve these concrete options exactly: ${concreteRequestedOptions.join(", ") || "none"}. Replace only these generic objective phrases with concrete current competitors: ${objectiveRequestedOptions.join(" | ") || "none"}. Never return an expanded name, acronym, edition, module, or alias of a preserved option as a competitor. Use web search to identify current alternatives and verify each exact product name from an official product page. When the request names multiple product lenses such as DXP and DAM, cover those lenses deliberately: include a broad platform peer and a focused specialist alternative when that produces the most decision-useful shortlist, and explain each option's role. A standalone DAM must be primarily marketed as a digital asset management product; do not label a DXP, CMS, content hub, or DAM module as the standalone DAM slot. Its officialUrl must be the vendor's exact DAM product page and contain DAM or digital-asset-management in the URL. These are the ranked shortlist. Also return one or two credible outside-shortlist alternatives with a concise rationale and material trade-offs. Do not include alternatives in vendors.`),
                 shape: {
-                  vendors: Array.from({ length: requestedCount }, (_, index) => `Exact product ${index + 1} name`),
+                  vendors: Array.from({ length: requestedCount }, (_, index) => `Exact ${smartphoneBrandInstructions ? "smartphone brand" : "product"} ${index + 1} name`),
                   candidatesByManufacturer: openEndedElectricVehicleBrandDiscovery
                     ? {
                         [concreteRequestedOptions[0]]: [{
@@ -13556,6 +13595,10 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
               normalizeDiscoveredVendors(rawDiscoveredVendors),
               requestedCount,
             )
+        : smartphoneBrandInstructions
+          ? preserveSmartphoneBrandDiscoveryOptions(
+              input.prompt, requestedManufacturers, normalizeDiscoveredVendors(rawDiscoveredVendors), requestedCount,
+            )
         : preserveConcreteDiscoveryOptions(
             requestedManufacturers,
             normalizeDiscoveredVendors(rawDiscoveredVendors),
@@ -13567,7 +13610,8 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
         && !isBrandLevelModelSelection
         && !openEndedElectricVehicleBrandDiscovery
         && !isTitanWatchPortfolioDiscovery
-        && !isDealershipComparison;
+        && !isDealershipComparison
+        && !smartphoneBrandInstructions;
       if (
         isSingleAnchorOpenEndedDiscovery
         && !governedRegistryDiscovery
@@ -13657,7 +13701,9 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
           || !hasRequiredDiscoveryLensCoverage(input.prompt, discovery, discoveredVendors)
         )
       ) {
-        const repairSystem = isBrandLevelModelSelection
+        const repairSystem = smartphoneBrandInstructions
+          ? `Repair the brand shortlist into one valid JSON object with exactly ${requestedCount} unique brands. ${smartphoneBrandInstructions}`
+          : isBrandLevelModelSelection
           ? "Repair the product-selection draft into one valid JSON object. Return exactly one current model-family name per supplied manufacturer in the original manufacturer order. Never return trims, grades, packs, placeholders, or duplicate models. Preserve the portfolio-based holistic selection rationale and credible alternatives from the draft."
           : hasAmbiguousMahindraXuv
             ? "Repair the vehicle-selection draft into one valid JSON object. Preserve every exact model named by the user and replace Mahindra XUV with exactly one current, locally sold, genuinely comparable Mahindra XUV model family verified on an official local Mahindra product page. Never choose a trim, a non-Mahindra model, or silently leave the ambiguous XUV label unresolved."
@@ -13761,6 +13807,10 @@ async function buildAnalysisUncached(input: AnalysisInput): Promise<AnalysisPayl
                     concreteRequestedOptions[0],
                     normalizeDiscoveredVendors(rawDiscoveredVendors),
                     requestedCount,
+                  )
+              : smartphoneBrandInstructions
+                ? preserveSmartphoneBrandDiscoveryOptions(
+                    input.prompt, requestedManufacturers, normalizeDiscoveredVendors(rawDiscoveredVendors), requestedCount,
                   )
               : preserveConcreteDiscoveryOptions(
                   requestedManufacturers,
@@ -16510,8 +16560,9 @@ export function isMarketEligibilityScoreable(
 /** Reuse the registered decision policy when eligible modelled rows share a comparable scorecard. */
 export function rankEligibleModelledScores<T extends AnalysisPayload["vendorScores"][number]>(
   rows: T[],
+  allowUnresolvedGates = false,
 ): { ranked: T[]; tied: boolean; tieBreakReason: string } {
-  const eligibleRows = rows.filter(isEligibleForDeterministicRanking);
+  const eligibleRows = rows.filter((row) => isEligibleForDeterministicRanking(row, allowUnresolvedGates));
   const stable = [...eligibleRows].sort((left, right) =>
     right.score - left.score
     || stableOptionNameCompare(left.vendor, right.vendor));
@@ -17493,13 +17544,6 @@ export async function buildResearchedDecisionModeAnalysis(
     }
     const result = cloneAnalysis(preliminary);
     result.sourceAvailability = researchAvailability(retrievalResults);
-    const unrankedUnknownOptions = [...marketEligibility.entries()]
-      .filter(([, eligibility]) => eligibility.status === "UNKNOWN" && !resolvedComparablePair)
-      .map(([key]) => input.vendors.find((option) => marketEligibilityKey(option) === key))
-      .filter((option): option is string => Boolean(option));
-    const unrankedNote = unrankedUnknownOptions.length
-      ? `UNKNOWN options are left unranked and are not treated as unavailable: ${unrankedUnknownOptions.join(", ")}.`
-      : undefined;
     result.contextAssumptions = [
       ...(result.contextAssumptions ?? []).filter((assumption) => (
         !/source-free Decision Mode|no source lookup|research has not yet run|Decision Mode research status:/i.test(assumption)
@@ -17507,9 +17551,8 @@ export async function buildResearchedDecisionModeAnalysis(
       "Decision Mode research status: partial",
       ...(geographicUncertaintyNote() ? [geographicUncertaintyNote()!] : []),
       note,
-      ...(unrankedNote ? [unrankedNote] : []),
-      ...(resolvedComparablePair && [...marketEligibility.values()].some(({ status }) => status === "UNKNOWN")
-        ? ["Identity-resolved comparable options remain rankable while market availability is NOT_ASSESSED; no verified local availability is claimed."]
+      ...([...marketEligibility.values()].some(({ status }) => status === "UNKNOWN")
+        ? ["Decision Mode: market availability not verified"]
         : []),
       ...(marketEligibility.size ? [
         "UNKNOWN market eligibility remains distinct from INELIGIBLE; missing or timed-out research is not proof of unavailability.",
@@ -17528,10 +17571,6 @@ export async function buildResearchedDecisionModeAnalysis(
         : {}),
       ...(marketRelevanceFor(vendor.vendor)?.participationStatus === "INELIGIBLE"
         || marketEligibilityFor(vendor.vendor)?.status === "INELIGIBLE"
-        || marketEligibilityFor(vendor.vendor)?.status === "UNKNOWN"
-          && !resolvedComparablePair
-          && !input.demographicContext
-          && !budgetConstraintFromPrompt(input.prompt, input.market)
         || (marketEligibilityFor(vendor.vendor)?.status === "CLOSING"
           && input.includeClosingProducts !== true)
         ? {
@@ -17565,11 +17604,10 @@ export async function buildResearchedDecisionModeAnalysis(
           : "Targeted research was unavailable for this report; no source-based market-share claim is made."}`,
       },
     }));
-    result.executiveSummary = `${result.executiveSummary} ${geographicUncertaintyNote() ?? ""} ${note} ${unrankedNote ?? ""}`.trim();
-    result.recommendationReason = `${result.recommendationReason} ${geographicUncertaintyNote() ?? ""} ${note} ${unrankedNote ?? ""}`.trim();
+    result.executiveSummary = `${result.executiveSummary} ${geographicUncertaintyNote() ?? ""} ${note}`.trim();
+    result.recommendationReason = `${result.recommendationReason} ${geographicUncertaintyNote() ?? ""} ${note}`.trim();
     result.insights = [
       ...result.insights,
-      ...(unrankedNote ? [unrankedNote] : []),
       ...(geographicUncertaintyNote() ? [geographicUncertaintyNote()!] : []),
       ...decisionModeResearchContextInsights(retrievalResults),
       ...[...marketEligibility.values()]
@@ -17611,15 +17649,13 @@ export async function buildResearchedDecisionModeAnalysis(
             && (!relevance || marketRelevanceAllowsScoring(vendor.vendor))
             && (
             isMarketEligibilityScoreable(status, input.includeClosingProducts)
-            || Boolean(input.demographicContext)
-              && status === "UNKNOWN"
-              && marketRelevanceAllowsScoring(vendor.vendor)
+            || status === "UNKNOWN"
           );
         }).sort((left, right) => right.score - left.score);
         if (eligibleRows.length >= 2 && eligibleRows[0]!.score > eligibleRows[1]!.score) {
           result.recommendation = eligibleRows[0]!.vendor;
           result.score = eligibleRows[0]!.score;
-          result.recommendationReason = `${result.recommendationReason} UNKNOWN options are left unranked; at least two eligible options remain.`;
+          result.recommendationReason = `${result.recommendationReason} Unknown market availability is not evidence of ineligibility; this provisional ranking does not verify availability.`;
         } else {
           result.recommendation = "INSUFFICIENT_DATA";
           result.score = 0;
@@ -17629,20 +17665,16 @@ export async function buildResearchedDecisionModeAnalysis(
       const rankedEligible = result.vendorScores.filter((vendor) => {
         const status = marketEligibilityFor(vendor.vendor)?.status;
         const relevance = marketRelevanceFor(vendor.vendor);
-        return isEligibleForDeterministicRanking(vendor)
+        return isEligibleForDeterministicRanking(vendor, true)
           && status !== undefined
           && (!relevance || marketRelevanceAllowsScoring(vendor.vendor))
           && (isMarketEligibilityScoreable(status, input.includeClosingProducts)
-            || status === "UNKNOWN" && (
-              input.demographicContext
-                ? marketRelevanceAllowsScoring(vendor.vendor)
-                : resolvedComparablePair
-            ))
+            || status === "UNKNOWN")
           && Number.isFinite(vendor.score)
           && (vendor.weightedScores ?? []).some((row) => Number.isFinite(row.score));
       });
       if (rankedEligible.length >= 2) {
-        const ranking = rankEligibleModelledScores(rankedEligible);
+        const ranking = rankEligibleModelledScores(rankedEligible, true);
         const winner = ranking.ranked[0]!;
         const tied = ranking.tied;
         const rankedNames = new Set(rankedEligible.map((vendor) => vendor.vendor));
@@ -17928,87 +17960,9 @@ export async function buildResearchedDecisionModeAnalysis(
         }),
     ]));
     let assessed = assess();
-    const unresolved = options.filter((option) => (
-      assessed.get(canonicalEntityId(option))?.status === "UNKNOWN"
-    ));
-    const eligibilityPriorities = [
-      `current ${eligibilityMarketName} ${eligibilityProduct} availability for new customers`,
-      `${eligibilityProduct} accepting new applications or customers; open or closed`,
-      "available to buy or order, subscribe, and restrictions for existing customers",
-    ];
-    if (unresolved.length && selectedResearchMarket && eligibilityProduct !== "Exact product/service not specified"
-      && !input.signal?.aborted && decisionModeResearchDeadline(input) - Date.now() > 1_000) {
-      const eligibilityStartedAt = Date.now();
-      const discover = dependencies.discoverSources ?? discoverSearchApiSources;
-      if (searchApiConfigured() || dependencies.discoverSources !== undefined) {
-        try {
-          const urls = await withinDecisionModeResearchBudget(
-            input,
-            Math.min(
-              dependencies.stageTimeoutsMs?.discovery ?? RESEARCH_RESILIENCE.stageTimeoutMs,
-              RESEARCH_RESILIENCE.searchRequestTimeoutMs,
-            ),
-            (signal) => discover(
-              unresolved,
-              eligibilityProduct,
-              selectedResearchMarket,
-              eligibilityMarketName,
-              eligibilityPriorities,
-              process.env.SEARCHAPI_API_KEY ?? "",
-              undefined,
-              signal,
-            ),
-            { operationName: "market_eligibility_search", maxAttempts: RESEARCH_RESILIENCE.maxSearchAttempts },
-          );
-          await retrieveCandidates(urls, "ELIGIBILITY_SEARCH");
-          lastDiscoveryProvider = "ELIGIBILITY_SEARCH";
-        } catch (error) {
-          searchTimedOut ||= isDecisionModeResearchTimeout(input, error);
-          searchProviderUnavailable ||= !searchTimedOut;
-        }
-      }
-      assessed = assess();
-      const stillUnresolved = options.filter((option) => (
-        assessed.get(canonicalEntityId(option))?.status === "UNKNOWN"
-      ));
-      const discoverKeyless = dependencies.discoverKeylessSources
-        ?? (Object.keys(dependencies).length === 0 ? discoverFirecrawlSources : undefined);
-      if (stillUnresolved.length && selectedResearchMarket
-        && eligibilityProduct !== "Exact product/service not specified"
-        && discoverKeyless && !input.signal?.aborted
-        && decisionModeResearchDeadline(input) - Date.now() > 1_000) {
-        try {
-          const urls = await withinDecisionModeResearchBudget(
-            input,
-            Math.min(
-              dependencies.stageTimeoutsMs?.firecrawlSearch ?? RESEARCH_RESILIENCE.stageTimeoutMs,
-              RESEARCH_RESILIENCE.searchRequestTimeoutMs,
-            ),
-            (signal) => discoverKeyless(
-              stillUnresolved,
-              eligibilityProduct,
-              selectedResearchMarket,
-              eligibilityMarketName,
-              eligibilityPriorities,
-              signal,
-            ),
-            { operationName: "market_eligibility_fallback_search", maxAttempts: RESEARCH_RESILIENCE.maxSearchAttempts },
-          );
-          await retrieveCandidates(urls, "ELIGIBILITY_FIRECRAWL");
-          if (urls.length) lastDiscoveryProvider = "ELIGIBILITY_FIRECRAWL";
-        } catch (error) {
-          searchTimedOut ||= isDecisionModeResearchTimeout(input, error);
-          searchProviderUnavailable ||= !searchTimedOut;
-        }
-      }
-      assessed = assess();
-      console.info("decision_mode_market_eligibility_discovery", {
-        market: eligibilityMarketName,
-        product: eligibilityProduct,
-        unresolvedCount: stillUnresolved.length,
-        elapsedMs: Date.now() - eligibilityStartedAt,
-      });
-    }
+    // Ordinary Decision Mode does not run a market-proof search before the
+    // comparison. Existing documents still establish explicit failures; new
+    // sources discovered during comparative research can update this assessment.
     for (const [providerKey, status] of assessed) {
       const option = options.find((candidate) => canonicalEntityId(candidate) === providerKey);
       if (option) marketEligibility.set(marketEligibilityKey(option), status);
@@ -18044,11 +17998,7 @@ export async function buildResearchedDecisionModeAnalysis(
         && (!relevance || marketRelevanceAllowsScoring(option))
         && (
         isMarketEligibilityScoreable(status, input.includeClosingProducts)
-        || status === "UNKNOWN" && (
-          input.demographicContext
-            ? marketRelevanceAllowsScoring(option)
-            : resolvedComparablePair
-        )
+        || status === "UNKNOWN"
       );
     });
     if (scoreableOptions.length === 0) {
@@ -18703,11 +18653,9 @@ export async function buildResearchedDecisionModeAnalysis(
       : "Bounded, priority-targeted research completed for scored lenses. The retrieved pages and excerpts are research context, not verified evidence or an exhaustive source audit.",
     "Ratings informed by page excerpts remain comparative model estimates, not verified measurements or complete product facts.",
     ...(marketEligibility.size ? [
-      ...(resolvedComparablePair && [...marketEligibility.values()].some(({ status }) => status === "UNKNOWN")
-        ? ["Identity-resolved comparable options remain rankable while market availability is NOT_ASSESSED; no verified local availability is claimed."]
-        : [...marketEligibility.values()].some(({ status }) => status === "UNKNOWN")
-          ? ["Market eligibility and supporting evidence verification are separate statuses; UNKNOWN options are unranked and do not prevent comparison between at least two established eligible options."]
-          : []),
+      ...([...marketEligibility.values()].some(({ status }) => status === "UNKNOWN")
+        ? ["Decision Mode: market availability not verified"]
+        : []),
       ...([...marketEligibility.values()].some(({ basis }) => basis === "KNOWN_OFFERING")
         ? ["Eligibility based on a known offering is not official-document verification; new-application acceptance is explicitly UNVERIFIED."]
         : []),
@@ -18795,14 +18743,14 @@ export async function buildResearchedDecisionModeAnalysis(
   if (partialResearch && !budgetConstraintFromPrompt(input.prompt, input.market)) {
     const scoreableRows = enriched.vendorScores.filter((vendor) => {
       const eligibility = marketEligibilityFor(vendor.vendor);
-      return isEligibleForDeterministicRanking(vendor)
+      return isEligibleForDeterministicRanking(vendor, true)
         && (!eligibility || isMarketEligibilityScoreable(eligibility.status, input.includeClosingProducts)
-        || resolvedComparablePair && eligibility.status === "UNKNOWN")
+        || eligibility.status === "UNKNOWN")
         && Number.isFinite(vendor.score)
         && (vendor.weightedScores ?? []).some((row) => Number.isFinite(row.score));
     });
     if (scoreableRows.length >= 2) {
-      const ranking = rankEligibleModelledScores(scoreableRows);
+      const ranking = rankEligibleModelledScores(scoreableRows, true);
       const winner = ranking.ranked[0]!;
       const rankedNames = new Set(scoreableRows.map(({ vendor }) => normalizeComparisonOptionName(vendor)));
       enriched.vendorScores = [
@@ -18814,7 +18762,7 @@ export async function buildResearchedDecisionModeAnalysis(
       if (ranking.tied) {
         enriched.insights.push("Eligible scoreable options with tied partial model scores are ranked deterministically; the tie-break reflects neither verified evidence nor a factual advantage.");
       }
-      const availabilityCaveat = resolvedComparablePair && [...marketEligibility.values()].some(({ status }) => status === "UNKNOWN")
+      const availabilityCaveat = [...marketEligibility.values()].some(({ status }) => status === "UNKNOWN")
         ? " Market availability is NOT_ASSESSED; no verified local availability is claimed."
         : "";
       applyConditionalModelledWinnerCaveat(

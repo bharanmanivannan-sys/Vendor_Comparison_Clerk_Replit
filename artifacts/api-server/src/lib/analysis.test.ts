@@ -193,6 +193,7 @@ import {
   validatedQualitativeLensDecision,
   sourceMatchesResearchMarket,
   uniqueHighestDeterministicWeightedVendor,
+  uniqueHighestScoreVendor,
   userSuppliedSourceInstructions,
   UNVERIFIABLE_WINNER_NOTE,
   validateFinalEvidenceUrls,
@@ -222,6 +223,16 @@ test("legacy decision adapter reads historical labels without changing audit pay
   assert.deepEqual(report, before);
   assert.equal("score" in migrated, false);
   assert.equal("winner" in migrated, false);
+});
+
+test("deterministic score recovery cannot bypass an unresolved mandatory gate", () => {
+  const rows = [
+    { vendor: "Alpha", score: 95, qualificationGates: [{ gate: "Market availability", mandatory: true, status: "UNKNOWN" }] },
+    { vendor: "Beta", score: 80, qualificationGates: [{ gate: "Market availability", mandatory: true, status: "PASS" }] },
+  ];
+  assert.deepEqual(uniqueHighestScoreVendor(rows), { vendor: "Beta", score: 80 });
+  rows[1]!.qualificationGates[0]!.status = "UNKNOWN";
+  assert.equal(uniqueHighestScoreVendor(rows), null);
 });
 
 test("current analysis producers contain no historical no-winner wording", () => {

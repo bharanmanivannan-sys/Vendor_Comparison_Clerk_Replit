@@ -7,6 +7,7 @@ import {
   type ResolvedEntityIdentity,
 } from "./entityIdentity";
 import { priorSoftwareIdentity } from "./softwareIdentity";
+import { isCompetitorObjective } from "./comparisonPromptGrammar";
 import OpenAI from "openai";
 
 export type OptionClassificationType =
@@ -387,8 +388,12 @@ export function comparisonPreflightClassification(
 
   const comparisonType = comparisonTypeFor(names, optionClassifications);
   const domains = new Set(optionClassifications.map(({ decisionDomain }) => decisionDomain).filter(Boolean));
-  const inferredDomain = optionClassifications.every(({ canonicalIdentity }) => Boolean(canonicalIdentity))
-    ? inferComparisonDomain(optionClassifications.map(({ canonicalIdentity }) => canonicalIdentity!))
+  // An internal competitor-discovery slot supplies no entity or competing
+  // domain. Scope it from the grounded anchor, without marking it resolved.
+  const concreteClassifications = optionClassifications.filter(({ name }) => !isCompetitorObjective(name));
+  const inferredDomain = concreteClassifications.length > 0
+    && concreteClassifications.every(({ canonicalIdentity }) => Boolean(canonicalIdentity))
+    ? inferComparisonDomain(concreteClassifications.map(({ canonicalIdentity }) => canonicalIdentity!))
     : {};
   const decisionDomain = inferredDomain.decisionDomain
     ?? (domains.size === 1 ? [...domains][0] : undefined);

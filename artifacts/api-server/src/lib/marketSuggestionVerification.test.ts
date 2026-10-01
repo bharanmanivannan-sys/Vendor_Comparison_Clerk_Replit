@@ -64,6 +64,33 @@ const request = (
   ...overrides,
 });
 
+test("verification diagnostics distinguish provider failure from an ordinary evidence gap", async () => {
+  const failures: string[] = [];
+  const base = request({ candidates: [{ ...candidate, sourceUrls: [] }] });
+  const missing = await verifyMarketSuggestions(base, {
+    searchApiConfigured: () => true,
+    searchApiCoolingDown: () => false,
+    discoverCachedPublisherUrls: async () => [],
+    discover: async () => [],
+    retrieve: async () => [],
+    onVerificationFailure: (name) => { failures.push(name); },
+  });
+  assert.equal(missing[0]?.marketStatus, "NOT_VERIFIED");
+  assert.equal(failures.length, 0);
+  const unavailable = await verifyMarketSuggestions(base, {
+    searchApiConfigured: () => true,
+    searchApiCoolingDown: () => false,
+    discoverCachedPublisherUrls: async () => [],
+    discover: async () => { throw new Error("Provider capacity exhausted"); },
+    retrieve: async () => [],
+    onVerificationFailure: (name) => { failures.push(name); },
+  });
+  assert.equal(unavailable[0]?.marketStatus, "NOT_VERIFIED");
+  assert.deepEqual(unavailable[0]?.evidence, []);
+  assert.deepEqual(failures, ["Tanishq"]);
+  assert.notEqual(unavailable[0]?.marketStatus, "VERIFIED_NOT_RELEVANT");
+});
+
 test("verifies exact current publisher evidence scoped to Sydney and physical retail", async () => {
   const doc = document("Published: 2026-01-15\nTanishq offers jewellery to jewellery customers at its Sydney store in Australia.");
   const result = await verifyMarketSuggestions(request(), dependencies({ [doc.url]: doc }));
